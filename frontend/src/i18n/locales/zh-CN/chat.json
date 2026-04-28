@@ -1,0 +1,38 @@
+{
+  "empty": {
+    "title": "Hermes 能为您做什么？",
+    "subtitle": "开始对话或选择下方的示例"
+  },
+  "suggestions": {
+    "files": "分析项目文件",
+    "files_msg": "列出所有 Python 文件并解释它们的用途",
+    "schedule": "创建计划任务",
+    "schedule_msg": "帮我设置一个每天运行的计划任务",
+    "plan": "创建执行计划",
+    "plan_msg": "将以下任务分解为步骤"
+  },
+  "thinking": "思考中...",
+  "composer": {
+    "placeholder": "向 Hermes 发送消息...",
+    "attach": "附加文件",
+    "send": "发送消息",
+    "stop": "停止生成",
+    "drop_files": "拖放文件以附加"
+  },
+  "approval": {
+    "title": "需要批准命令",
+    "once": "允许一次",
+    "session": "本次会话允许",
+    "always": "始终允许",
+    "deny": "拒绝"
+  },
+  "clarify": {
+    "title": "问题",
+    "submit": "继续",
+    "other": "其他..."
+  },
+  "messages": {
+    "copy": "复制",
+    "copied": "已复制！"
+  }
+}

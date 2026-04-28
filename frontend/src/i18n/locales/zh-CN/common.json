@@ -1,0 +1,131 @@
+{
+  "app": {
+    "title": "Hermes WebUI",
+    "loading": "加载中...",
+    "error": "错误"
+  },
+  "common": {
+    "loading": "加载中...",
+    "save": "保存",
+    "saving": "保存中...",
+    "cancel": "取消",
+    "delete": "删除",
+    "edit": "编辑",
+    "create": "创建",
+    "confirm_delete": "确定要删除吗？"
+  },
+  "tabs": {
+    "chat": "对话",
+    "chat_title": "对话历史",
+    "tasks": "任务",
+    "tasks_title": "计划任务",
+    "skills": "技能",
+    "skills_title": "代理能力",
+    "memory": "记忆",
+    "memory_title": "已学偏好",
+    "workspaces": "工作区",
+    "workspaces_title": "项目目录",
+    "profiles": "配置",
+    "profiles_title": "配置文件",
+    "todos": "待办",
+    "todos_title": "任务管理"
+  },
+  "sessions": {
+    "new_conversation": "新对话",
+    "filter": "筛选对话...",
+    "empty": "暂无对话",
+    "no_results": "无匹配对话",
+    "pinned": "已固定",
+    "today": "今天",
+    "yesterday": "昨天",
+    "this_week": "本周",
+    "this_month": "本月",
+    "older": "更早",
+    "active_session": "当前对话",
+    "confirm_delete": "确定删除此对话？",
+    "actions": "更多操作",
+    "rename": "重命名",
+    "delete": "删除",
+    "pin": "固定",
+    "unpin": "取消固定"
+  },
+  "settings": {
+    "preferences": "设置与偏好"
+  },
+  "workspace": {
+    "title": "工作区",
+    "files": "文件",
+    "hide_panel": "隐藏工作区面板",
+    "show_panel": "显示工作区面板",
+    "parent_dir": "返回上级目录",
+    "new_file": "新建文件",
+    "new_folder": "新建文件夹",
+    "refresh": "刷新",
+    "close_preview": "关闭预览",
+    "close": "关闭"
+  },
+  "tasks": {
+    "scheduled_jobs": "定时任务",
+    "new_job": "新任务",
+    "create_job": "创建任务",
+    "confirm_delete": "确定删除此任务？",
+    "empty": "暂无定时任务",
+    "run_now": "立即运行",
+    "pause": "暂停",
+    "resume": "恢复"
+  },
+  "skills": {
+    "search": "搜索技能...",
+    "new": "新技能",
+    "save": "保存",
+    "create": "创建",
+    "confirm_delete": "确定删除此技能？",
+    "empty": "暂无技能",
+    "no_results": "无匹配技能",
+    "edit": "编辑技能"
+  },
+  "memory": {
+    "user": "个人记忆",
+    "project": "项目记忆",
+    "edit": "编辑",
+    "empty": "空",
+    "no_memory": "暂无记忆内容",
+    "placeholder": "输入记忆内容..."
+  },
+  "workspaces": {
+    "title": "工作区",
+    "desc": "为你的会话添加并切换工作区。",
+    "add": "添加",
+    "empty": "暂无工作区",
+    "path_placeholder": "工作区路径（如 /home/user/project）",
+    "name_placeholder": "显示名称（可选）",
+    "confirm_remove": "确定移除此工作区？"
+  },
+  "profiles": {
+    "title": "配置",
+    "new": "新配置",
+    "active": "当前",
+    "default": "默认",
+    "switch": "切换",
+    "create": "创建",
+    "clone_config": "从当前配置克隆",
+    "clone_active": "从当前配置克隆",
+    "confirm_delete": "确定删除此配置？",
+    "empty": "暂无配置"
+  },
+  "todos": {
+    "title": "待办事项",
+    "new": "新任务",
+    "empty": "暂无待办",
+    "placeholder": "输入任务描述..."
+  },
+  "chat": {
+    "input_placeholder": "输入消息...",
+    "send": "发送",
+    "stop": "停止",
+    "regenerate": "重新生成",
+    "clear": "清空",
+    "new_chat": "新对话",
+    "thinking": "思考中..."
+  }
+}

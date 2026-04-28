@@ -1,0 +1,38 @@
+{
+  "empty": {
+    "title": "How can Hermes help you?",
+    "subtitle": "Start a conversation or select an example below"
+  },
+  "suggestions": {
+    "files": "Analyze project files",
+    "files_msg": "List all Python files and explain their purpose",
+    "schedule": "Schedule a task",
+    "schedule_msg": "Help me set up a scheduled task that runs daily",
+    "plan": "Create an execution plan",
+    "plan_msg": "Break down the following task into steps"
+  },
+  "thinking": "Thinking...",
+  "composer": {
+    "placeholder": "Message Hermes...",
+    "attach": "Attach files",
+    "send": "Send message",
+    "stop": "Stop generating",
+    "drop_files": "Drop files to attach"
+  },
+  "approval": {
+    "title": "Command Approval Required",
+    "once": "Approve once",
+    "session": "Approve for session",
+    "always": "Always allow",
+    "deny": "Deny"
+  },
+  "clarify": {
+    "title": "Question",
+    "submit": "Continue",
+    "other": "Other..."
+  },
+  "messages": {
+    "copy": "Copy",
+    "copied": "Copied!"
+  }
+}

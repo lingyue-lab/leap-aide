@@ -1,0 +1,203 @@
+import { create } from 'zustand';
+import type { FileNode, DirEntry, Workspace } from '@/types';
+
+interface WorkspaceState {
+  currentDir: string;
+  entries: FileNode[];
+  gitInfo?: { branch?: string; modified?: number };
+  loading: boolean;
+  previewPath: string | null;
+  previewContent: string | null;
+  previewType: 'text' | 'image' | 'markdown' | 'binary' | null;
+  previewLoading: boolean;
+  previewDirty: boolean;
+  previewEditing: boolean;
+  workspaces: Workspace[];
+  lastWorkspace: string | null;
+  currentWorkspace: string | null;
+  
+  // Actions
+  loadDir: (path: string) => Promise<void>;
+  setPreview: (path: string | null) => Promise<void>;
+  updatePreviewContent: (content: string) => void;
+  setPreviewEditing: (editing: boolean) => void;
+  setPreviewDirty: (dirty: boolean) => void;
+  savePreview: () => Promise<void>;
+  loadWorkspaces: () => Promise<void>;
+  selectWorkspace: (path: string) => Promise<void>;
+  addWorkspace: (path: string, displayName?: string) => Promise<void>;
+  removeWorkspace: (path: string) => Promise<void>;
+}
+
+export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
+  currentDir: '.',
+  entries: [],
+  gitInfo: undefined,
+  loading: false,
+  previewPath: null,
+  previewContent: null,
+  previewType: null,
+  previewLoading: false,
+  previewDirty: false,
+  previewEditing: false,
+  workspaces: [],
+  lastWorkspace: null,
+  currentWorkspace: null,
+
+  loadDir: async (path) => {
+    set({ loading: true });
+    try {
+      const response = await fetch(
+        `/api/workspace/list?path=${encodeURIComponent(path)}`,
+        { credentials: 'include' }
+      );
+      if (!response.ok) throw new Error('Failed to load directory');
+      const data: DirEntry = await response.json();
+      set({
+        currentDir: data.path,
+        entries: data.entries.sort((a, b) => {
+          if (a.is_dir !== b.is_dir) return b.is_dir ? 1 : -1;
+          return a.name.localeCompare(b.name);
+        }),
+        gitInfo: data.git,
+        loading: false,
+      });
+    } catch (err) {
+      set({ loading: false });
+      throw err;
+    }
+  },
+
+  setPreview: async (path) => {
+    if (!path) {
+      set({
+        previewPath: null,
+        previewContent: null,
+        previewType: null,
+        previewDirty: false,
+        previewEditing: false,
+      });
+      return;
+    }
+
+    set({ previewLoading: true, previewPath: path });
+    try {
+      const response = await fetch(
+        `/api/workspace/file?path=${encodeURIComponent(path)}`,
+        { credentials: 'include' }
+      );
+      if (!response.ok) {
+        set({ previewType: 'binary', previewLoading: false });
+        return;
+      }
+
+      const content = await response.text();
+
+      let previewType: WorkspaceState['previewType'] = 'text';
+      const ext = path.split('.').pop()?.toLowerCase() || '';
+      
+      if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) {
+        previewType = 'image';
+      } else if (['md', 'markdown', 'mdx'].includes(ext)) {
+        previewType = 'markdown';
+      }
+
+      set({
+        previewContent: content,
+        previewType,
+        previewLoading: false,
+        previewDirty: false,
+        previewEditing: false,
+      });
+    } catch (err) {
+      set({
+        previewType: 'binary',
+        previewLoading: false,
+      });
+    }
+  },
+
+  updatePreviewContent: (content) => set({ previewContent: content, previewDirty: true }),
+
+  setPreviewEditing: (editing) => set({ previewEditing: editing }),
+
+  setPreviewDirty: (dirty) => set({ previewDirty: dirty }),
+
+  savePreview: async () => {
+    const { previewPath, previewContent } = get();
+    if (!previewPath || previewContent === null) return;
+
+    try {
+      const response = await fetch('/api/workspace/file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: previewPath, content: previewContent }),
+        credentials: 'include',
+      });
+      if (!response.ok) throw new Error('Failed to save file');
+      set({ previewDirty: false });
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  loadWorkspaces: async () => {
+    try {
+      const response = await fetch('/api/workspaces', { credentials: 'include' });
+      if (!response.ok) throw new Error('Failed to load workspaces');
+      const data = await response.json();
+      set({ workspaces: data.workspaces || [], lastWorkspace: data.last_workspace, currentWorkspace: data.last_workspace });
+    } catch (err) {
+      // Fail silently
+    }
+  },
+
+  selectWorkspace: async (path) => {
+    try {
+      await fetch('/api/workspace', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path }),
+        credentials: 'include',
+      });
+      set({ lastWorkspace: path, currentWorkspace: path, currentDir: '.' });
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  addWorkspace: async (path: string, displayName?: string) => {
+    try {
+      const response = await fetch('/api/workspaces/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path, display_name: displayName }),
+        credentials: 'include',
+      });
+      if (!response.ok) throw new Error('Failed to add workspace');
+      const data = await response.json();
+      set({ workspaces: data.workspaces || [] });
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  removeWorkspace: async (path: string) => {
+    try {
+      await fetch('/api/workspaces/remove', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path }),
+        credentials: 'include',
+      });
+      const { workspaces, currentWorkspace } = get();
+      const newWorkspaces = workspaces.filter(w => w.path !== path);
+      set({ workspaces: newWorkspaces });
+      if (currentWorkspace === path) {
+        set({ currentWorkspace: null });
+      }
+    } catch (err) {
+      throw err;
+    }
+  },
+}));

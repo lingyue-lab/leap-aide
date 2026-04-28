@@ -1,0 +1,131 @@
+{
+  "app": {
+    "title": "Hermes WebUI",
+    "loading": "Loading...",
+    "error": "Error"
+  },
+  "common": {
+    "loading": "Loading...",
+    "save": "Save",
+    "saving": "Saving...",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "create": "Create",
+    "confirm_delete": "Are you sure you want to delete this?"
+  },
+  "tabs": {
+    "chat": "Chat",
+    "chat_title": "Conversation history",
+    "tasks": "Tasks",
+    "tasks_title": "Scheduled tasks",
+    "skills": "Skills",
+    "skills_title": "Agent capabilities",
+    "memory": "Memory",
+    "memory_title": "Learned preferences",
+    "workspaces": "Workspaces",
+    "workspaces_title": "Project directories",
+    "profiles": "Profiles",
+    "profiles_title": "Configuration profiles",
+    "todos": "To-dos",
+    "todos_title": "Task management"
+  },
+  "sessions": {
+    "new_conversation": "New conversation",
+    "filter": "Filter conversations...",
+    "empty": "No conversations yet",
+    "no_results": "No matching conversations",
+    "pinned": "Pinned",
+    "today": "Today",
+    "yesterday": "Yesterday",
+    "this_week": "This week",
+    "this_month": "This month",
+    "older": "Older",
+    "active_session": "Active conversation",
+    "confirm_delete": "Delete this conversation?",
+    "actions": "More actions",
+    "rename": "Rename",
+    "delete": "Delete",
+    "pin": "Pin",
+    "unpin": "Unpin"
+  },
+  "settings": {
+    "preferences": "Settings & Preferences"
+  },
+  "workspace": {
+    "title": "Workspace",
+    "files": "Files",
+    "hide_panel": "Hide workspace panel",
+    "show_panel": "Show workspace panel",
+    "parent_dir": "Go to parent directory",
+    "new_file": "New file",
+    "new_folder": "New folder",
+    "refresh": "Refresh",
+    "close_preview": "Close preview",
+    "close": "Close"
+  },
+  "tasks": {
+    "scheduled_jobs": "Scheduled Jobs",
+    "new_job": "New Job",
+    "create_job": "Create Job",
+    "confirm_delete": "Delete this job?",
+    "empty": "No scheduled jobs",
+    "run_now": "Run now",
+    "pause": "Pause",
+    "resume": "Resume"
+  },
+  "skills": {
+    "search": "Search skills...",
+    "new": "New Skill",
+    "save": "Save",
+    "create": "Create",
+    "confirm_delete": "Delete this skill?",
+    "empty": "No skills",
+    "no_results": "No matching skills",
+    "edit": "Edit skill"
+  },
+  "memory": {
+    "user": "Personal Memory",
+    "project": "Project Memory",
+    "edit": "Edit",
+    "empty": "Empty",
+    "no_memory": "No memory content",
+    "placeholder": "Enter memory content..."
+  },
+  "workspaces": {
+    "title": "Workspaces",
+    "desc": "Add and switch workspaces for your sessions.",
+    "add": "Add",
+    "empty": "No workspaces added",
+    "path_placeholder": "Workspace path (e.g. /home/user/project)",
+    "name_placeholder": "Display name (optional)",
+    "confirm_remove": "Remove this workspace?"
+  },
+  "profiles": {
+    "title": "Profiles",
+    "new": "New Profile",
+    "active": "active",
+    "default": "default",
+    "switch": "Switch",
+    "create": "Create",
+    "clone_config": "Clone config from active profile",
+    "clone_active": "Clone from active",
+    "confirm_delete": "Delete this profile?",
+    "empty": "No profiles"
+  },
+  "todos": {
+    "title": "To-dos",
+    "new": "New task",
+    "empty": "No tasks yet",
+    "placeholder": "Enter task description..."
+  },
+  "chat": {
+    "input_placeholder": "Type a message...",
+    "send": "Send",
+    "stop": "Stop",
+    "regenerate": "Regenerate",
+    "clear": "Clear",
+    "new_chat": "New Chat",
+    "thinking": "Thinking..."
+  }
+}

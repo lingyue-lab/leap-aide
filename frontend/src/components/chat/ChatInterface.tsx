@@ -1,0 +1,153 @@
+import { useRef, useCallback, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
+import { useChatStore } from '@/stores/useChatStore';
+import { useSessionStore } from '@/stores/useSessionStore';
+import { useChatStream } from '@/hooks/useChatStream';
+import ChatMessages from './ChatMessages';
+import ChatComposer from './ChatComposer';
+import ApprovalCard from '@/components/dialogs/ApprovalCard';
+import ClarifyCard from '@/components/dialogs/ClarifyCard';
+import { useTranslation } from 'react-i18next';
+
+interface ChatInterfaceProps {
+  sessionId?: string | null;
+}
+
+export default function ChatInterface({ sessionId: propSessionId }: ChatInterfaceProps) {
+  const { sessionId: routeSessionId } = useParams<{ sessionId: string }>();
+  const sessionId = propSessionId || routeSessionId || null;
+  
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const { currentSession, loadSession } = useSessionStore();
+  const { messages, busy, activeStreamId, setMessages, setToolCalls } = useChatStore();
+  const { startStream, cancelStream, streaming } = useChatStream();
+  
+  // Reset chat when sessionId changes
+  useEffect(() => {
+    if (sessionId) {
+      useChatStore.getState().reset();
+      loadSession(sessionId).then(() => {
+        // Sync messages and tool_calls from session to chat store
+        const session = useSessionStore.getState().currentSession;
+        if (session?.messages) {
+          setMessages(session.messages);
+        }
+        if (session?.tool_calls) {
+          setToolCalls(session.tool_calls);
+        }
+      });
+    }
+  }, [sessionId, loadSession, setMessages, setToolCalls]);
+
+  const scrollToBottom = useCallback(() => {
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+    }
+  }, []);
+
+  const handleSend = useCallback(async (text: string) => {
+    if (!sessionId || !text.trim()) return;
+    const model = currentSession?.model || 'anthropic/claude-sonnet-4-5';
+    await startStream(sessionId, text, model, currentSession?.workspace);
+    scrollToBottom();
+  }, [sessionId, currentSession, startStream, scrollToBottom]);
+
+  const handleCancel = useCallback(() => {
+    if (activeStreamId) {
+      cancelStream(activeStreamId);
+    }
+  }, [activeStreamId, cancelStream]);
+
+  // Auto-scroll on new messages
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages.length, scrollToBottom]);
+
+  if (!sessionId) {
+    return <EmptyState />;
+  }
+
+  return (
+    <div className="chat-interface">
+      <ChatMessages
+        ref={scrollContainerRef}
+        messages={messages}
+        streaming={streaming}
+      />
+      
+      <ChatComposer
+        onSend={handleSend}
+        onCancel={handleCancel}
+        busy={busy}
+        streaming={streaming}
+      />
+      
+      <ApprovalCard />
+      <ClarifyCard />
+    </div>
+  );
+}
+
+function EmptyState() {
+  const { createSession } = useSessionStore();
+  const { t } = useTranslation('chat');
+
+  const handleSuggestion = async (_msg: string) => {
+    const session = await createSession();
+    if (session) {
+      // Navigate to new session and send message
+      // TODO: Navigate and auto-send _msg
+    }
+  };
+
+  return (
+    <div className="empty-state">
+      <div className="empty-logo">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="80" height="80" aria-label="Hermes caduceus">
+          <defs>
+            <linearGradient id="hermes-gold-empty" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" style={{ stopColor: '#F5C542', stopOpacity: 1 }} />
+              <stop offset="100%" style={{ stopColor: '#D4961C', stopOpacity: 1 }} />
+            </linearGradient>
+          </defs>
+          <rect x="30" y="10" width="4" height="46" rx="2" fill="url(#hermes-gold-empty)" />
+          <path d="M30 18 C24 14, 14 14, 10 18 C14 16, 22 16, 28 20" fill="#F5C542" opacity="0.9" />
+          <path d="M30 22 C26 19, 18 19, 14 22 C18 20, 24 20, 28 24" fill="#D4961C" opacity="0.8" />
+          <path d="M34 18 C40 14, 50 14, 54 18 C50 16, 42 16, 36 20" fill="#F5C542" opacity="0.9" />
+          <path d="M34 22 C38 19, 46 19, 50 22 C46 20, 40 20, 36 24" fill="#D4961C" opacity="0.8" />
+          <path d="M32 48 C22 44, 20 38, 26 34 C20 36, 18 42, 24 46 C18 40, 22 30, 30 28 C24 32, 22 38, 28 42" fill="none" stroke="#F5C542" strokeWidth="2.5" strokeLinecap="round" />
+          <path d="M32 48 C42 44, 44 38, 38 34 C44 36, 46 42, 40 46 C46 40, 42 30, 34 28 C40 32, 42 38, 36 42" fill="none" stroke="#D4961C" strokeWidth="2.5" strokeLinecap="round" />
+          <circle cx="32" cy="10" r="4" fill="#F5C542" />
+          <circle cx="32" cy="10" r="2" fill="#FFF8E1" opacity="0.7" />
+        </svg>
+      </div>
+      <h2>{t('empty.title')}</h2>
+      <p>{t('empty.subtitle')}</p>
+      <div className="suggestion-grid">
+        <button className="suggestion" data-msg={t('suggestions.files_msg')} onClick={() => handleSuggestion(t('suggestions.files_msg'))}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+          </svg>
+          <span>{t('suggestions.files')}</span>
+        </button>
+        <button className="suggestion" data-msg={t('suggestions.schedule_msg')} onClick={() => handleSuggestion(t('suggestions.schedule_msg'))}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+            <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
+            <line x1="9" y1="12" x2="15" y2="12" />
+            <line x1="9" y1="16" x2="12" y2="16" />
+          </svg>
+          <span>{t('suggestions.schedule')}</span>
+        </button>
+        <button className="suggestion" data-msg={t('suggestions.plan_msg')} onClick={() => handleSuggestion(t('suggestions.plan_msg'))}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6" />
+            <line x1="8" y1="2" x2="8" y2="18" />
+            <line x1="16" y1="6" x2="16" y2="22" />
+          </svg>
+          <span>{t('suggestions.plan')}</span>
+        </button>
+      </div>
+    </div>
+  );
+}
