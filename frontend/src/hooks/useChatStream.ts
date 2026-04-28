@@ -44,14 +44,6 @@ export function useChatStream() {
       _ts: Date.now() / 1000,
     });
     
-    // Add placeholder assistant message
-    addMessage({
-      role: 'assistant',
-      content: '',
-      _ts: Date.now() / 1000,
-      _live: true,
-    });
-    
     setBusy(true);
 
     try {
@@ -70,7 +62,20 @@ export function useChatStream() {
       const es = chatService.createSSEConnection(stream_id);
       eventSourceRef.current = es;
 
-      // Handle events
+      // message_start: backend signals a new assistant message boundary.
+      // Each message_start creates a new assistant message row.
+      // Subsequent token events are appended to this row via appendToLastMessage.
+      es.addEventListener('message_start', () => {
+        addMessage({
+          role: 'assistant',
+          content: '',
+          _ts: Date.now() / 1000,
+          _live: true,
+        });
+      });
+
+      // Handle token events: append to current assistant message row
+      // Tokens are appended to the row created by the latest message_start event.
       es.addEventListener('token', (e: MessageEvent) => {
         const data = JSON.parse(e.data);
         appendToLastMessage(data.text);
@@ -90,6 +95,20 @@ export function useChatStream() {
         const tid = data.tid || `live-${data.name}-${Date.now()}`;
         
         console.log('[SSE] tool event:', { name: data.name, tid, args: data.args });
+        
+        // Ensure an assistant message row exists before adding tool_use block.
+        // If the model triggers a tool call before emitting any text tokens,
+        // there may be no assistant message yet (message_start hasn't fired).
+        const currentMessages = useChatStore.getState().messages;
+        const hasAssistantMsg = currentMessages.some(m => m.role === 'assistant');
+        if (!hasAssistantMsg) {
+          addMessage({
+            role: 'assistant',
+            content: '',
+            _ts: Date.now() / 1000,
+            _live: true,
+          });
+        }
         
         // Add tool_use block to the last assistant message
         const toolUseBlock: ContentBlock = {
@@ -154,14 +173,10 @@ export function useChatStream() {
           is_error: data.is_error,
         });
         
-        // Sprint 15: Add new assistant message placeholder for continuation
-        // Each assistant response (including after tool calls) should be a separate block
-        addMessage({
-          role: 'assistant',
-          content: '',
-          _ts: Date.now() / 1000,
-          _live: true,
-        });
+        // tool_complete resets message_started on the backend,
+        // so the next token will trigger a new message_start event
+        // and create a new assistant message row on the frontend.
+        // No need to create a placeholder here — message_start handles it.
       });
 
       es.addEventListener('approval', (e: MessageEvent) => {
@@ -254,8 +269,7 @@ export function useChatStream() {
           }
         }
         
-        // Update last assistant message with error
-        appendToLastMessage('');
+        // Add error message as a new row
         addMessage({
           role: 'assistant',
           content: errorMsg,
@@ -279,16 +293,12 @@ export function useChatStream() {
         es.close();
         setBusy(false);
         
-        // Add error message if not already added
-        const lastMsg = messages[messages.length - 1];
-        if (lastMsg?.role === 'assistant' && !lastMsg.content) {
-          appendToLastMessage('');
-          addMessage({
-            role: 'assistant',
-            content: '**Error:** Connection lost',
-            _ts: Date.now() / 1000,
-          });
-        }
+        // Add error message
+        addMessage({
+          role: 'assistant',
+          content: '**Error:** Connection lost',
+          _ts: Date.now() / 1000,
+        });
       });
 
       es.addEventListener('cancel', () => {

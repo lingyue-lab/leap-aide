@@ -67,14 +67,49 @@ export const useChatStore = create<ChatState>((set) => ({
     // Always append to the newest assistant message to handle multiple tool call cycles
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role === 'assistant') {
-        const currentContent = typeof messages[i].content === 'string' 
-          ? messages[i].content 
-          : '';
-        messages[i] = {
-          ...messages[i],
-          content: currentContent + token,
-          _live: true,  // Mark as live during streaming
-        };
+        const currentContent = messages[i].content;
+        if (typeof currentContent === 'string') {
+          // Simple string content: append token directly
+          messages[i] = {
+            ...messages[i],
+            content: currentContent + token,
+            _live: true,
+          };
+        } else if (Array.isArray(currentContent)) {
+          // ContentBlock[] content: append token to the last text block
+          // This preserves tool_use blocks and other structured content
+          const blocks = [...currentContent as ContentBlock[]];
+          // Find the last text block to append to
+          let lastTextIdx = -1;
+          for (let j = blocks.length - 1; j >= 0; j--) {
+            if (blocks[j].type === 'text') {
+              lastTextIdx = j;
+              break;
+            }
+          }
+          if (lastTextIdx >= 0) {
+            // Append to existing text block
+            blocks[lastTextIdx] = {
+              ...blocks[lastTextIdx],
+              text: (blocks[lastTextIdx].text || '') + token,
+            };
+          } else {
+            // No text block found — create a new one
+            blocks.push({ type: 'text', text: token });
+          }
+          messages[i] = {
+            ...messages[i],
+            content: blocks,
+            _live: true,
+          };
+        } else {
+          // Null/undefined content — start as string
+          messages[i] = {
+            ...messages[i],
+            content: token,
+            _live: true,
+          };
+        }
         break;
       }
     }

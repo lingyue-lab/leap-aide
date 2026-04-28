@@ -1304,6 +1304,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             _token_sent = False  # tracks whether any streamed tokens were sent
             _reasoning_text = ''  # accumulates reasoning/thinking trace for persistence
             _live_tool_calls = []  # tool progress fallback when final messages omit tool IDs
+            _message_started = False  # tracks whether current assistant message row has been started
 
             # Throttle: emit metering events at most every 100 ms so the TPS label
             # feels live during fast token streams without flooding the SSE channel.
@@ -1319,9 +1320,15 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 put('metering', stats)
 
             def on_token(text):
-                nonlocal _token_sent
+                nonlocal _token_sent, _message_started
                 if text is None:
                     return  # end-of-stream sentinel
+                # Emit 'message_start' at the beginning of each assistant message
+                # This tells the frontend to create a new message row.
+                # Boundaries: first token of stream, and first token after tool_complete.
+                if not _message_started:
+                    _message_started = True
+                    put('message_start', {})
                 _token_sent = True
                 # Accumulate partial text so cancel_stream() can persist it (#893)
                 if stream_id in STREAM_PARTIAL_TEXT:
@@ -1347,7 +1354,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             _checkpoint_activity = [0]
 
             def on_tool(*cb_args, **cb_kwargs):
-                nonlocal _reasoning_text
+                nonlocal _reasoning_text, _message_started
                 event_type = None
                 name = None
                 preview = None
@@ -1423,6 +1430,8 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         'duration': cb_kwargs.get('duration'),
                         'is_error': bool(cb_kwargs.get('is_error', False)),
                     })
+                    # Reset message_started so the next token creates a new message row
+                    _message_started = False
                     return
 
             _AIAgent = _get_ai_agent()
