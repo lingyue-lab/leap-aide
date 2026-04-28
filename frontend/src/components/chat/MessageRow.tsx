@@ -293,11 +293,6 @@ export default function MessageRow({ message, messages = [], toolCalls = [], isS
     return map;
   }, [toolCalls]);
 
-  // Handle tool role messages separately
-  if (message.role === 'tool') {
-    return <ToolMessageRow message={message} messages={messages} toolCallMap={toolCallMap} />;
-  }
-
   // Extract reasoning/thinking text from message (align with ui.js logic)
   const { thinkingText, strippedContent } = useMemo(() => {
     let thinkingText = '';
@@ -406,7 +401,12 @@ export default function MessageRow({ message, messages = [], toolCalls = [], isS
     });
     
     return elements.length > 0 ? <>{elements}</> : null;
-  }, [message.content, message.role, isStreaming, toolCallMap]);
+  }, [message.content, message.role, isStreaming, toolCallMap, strippedContent]);
+
+  // Handle tool role messages separately - after all hooks are called
+  if (message.role === 'tool') {
+    return <ToolMessageRow message={message} messages={messages} toolCallMap={toolCallMap} />;
+  }
 
   return (
     <div 
