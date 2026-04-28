@@ -250,6 +250,8 @@ def main() -> int:
         )
 
     health_url = f"http://{args.host}:{args.port}/health"
+    if args.host == "0.0.0.0":
+        health_url = f"http://localhost:{args.port}/health"
     if not wait_for_health(health_url):
         raise RuntimeError(
             f"Web UI did not become healthy at {health_url}. "
