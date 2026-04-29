@@ -32,6 +32,7 @@ from api.metering import meter
 # interleave their os.environ writes. This global lock serializes the env
 # save/restore around the entire agent run.
 _ENV_LOCK = threading.Lock()
+_REASONING_SEP_MARK = "<|reasoning_sep|>"
 
 # Lazy import to avoid circular deps -- hermes-agent is on sys.path via api/config.py
 try:
@@ -1310,6 +1311,12 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             # feels live during fast token streams without flooding the SSE channel.
             _metering_last_emit = [time.monotonic() - 1]  # fire immediately on first token
 
+            def _append_reasoning_text(text):
+                nonlocal _reasoning_text
+                if _reasoning_text is not None and _reasoning_text != '':
+                    _reasoning_text += f"\n{_REASONING_SEP_MARK}\n"
+                _reasoning_text += str(text)
+
             def _emit_metering():
                 now = time.monotonic()
                 if now - _metering_last_emit[0] < 0.1:
@@ -1338,11 +1345,11 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 meter().record_token(stream_id, len(STREAM_PARTIAL_TEXT[stream_id]))
                 _emit_metering()
 
+            # For streaming chat, invoked when reasoning token is arrived.
             def on_reasoning(text):
-                nonlocal _reasoning_text
                 if text is None:
                     return
-                _reasoning_text += str(text)
+                _append_reasoning_text(text)
                 put('reasoning', {'text': str(text)})
                 # Track reasoning tokens in the meter so TPS reflects all AI output
                 meter().record_reasoning(stream_id, len(_reasoning_text))
@@ -1354,7 +1361,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             _checkpoint_activity = [0]
 
             def on_tool(*cb_args, **cb_kwargs):
-                nonlocal _reasoning_text, _message_started
+                nonlocal _message_started
                 event_type = None
                 name = None
                 preview = None
@@ -1371,10 +1378,12 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                     name = cb_args[0]
                     event_type = 'tool.started'
 
+                # When streaming chat is finished, hermes agent would extract total reasoning text (at most 500 charactors) and push them here.
+                # The content of on_tool/on_token/on_reasoning maybe same.
                 if event_type in ('reasoning.available', '_thinking'):
                     reason_text = preview if event_type == 'reasoning.available' else name
                     if reason_text:
-                        _reasoning_text += str(reason_text)
+                        _append_reasoning_text(reason_text)
                         put('reasoning', {'text': str(reason_text)})
                         meter().record_reasoning(stream_id, len(_reasoning_text))
                         _emit_metering()

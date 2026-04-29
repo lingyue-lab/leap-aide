@@ -42,11 +42,15 @@ export const useChatStore = create<ChatState>((set) => ({
   lastUsage: null,
   abortController: null,
 
-  setMessages: (messages) => set({ messages, toolCalls: [] }),
+  setMessages: (messages) => {
+    return set({ messages, toolCalls: [] });
+  },
 
-  addMessage: (message) => set((state) => ({
-    messages: [...state.messages, message],
-  })),
+  addMessage: (message) => {
+    return set((state) => ({
+      messages: [...state.messages, message],
+    }));
+  },
 
   updateLastMessage: (content, reasoning) => set((state) => {
     const messages = [...state.messages];
@@ -61,77 +65,81 @@ export const useChatStore = create<ChatState>((set) => ({
     return { messages };
   }),
 
-  appendToLastMessage: (token) => set((state) => {
-    const messages = [...state.messages];
-    // Sprint 15: Find the last assistant message (may not be the last message if tool messages exist)
-    // Always append to the newest assistant message to handle multiple tool call cycles
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'assistant') {
-        const currentContent = messages[i].content;
-        if (typeof currentContent === 'string') {
-          // Simple string content: append token directly
-          messages[i] = {
-            ...messages[i],
-            content: currentContent + token,
-            _live: true,
-          };
-        } else if (Array.isArray(currentContent)) {
-          // ContentBlock[] content: append token to the last text block
-          // This preserves tool_use blocks and other structured content
-          const blocks = [...currentContent as ContentBlock[]];
-          // Find the last text block to append to
-          let lastTextIdx = -1;
-          for (let j = blocks.length - 1; j >= 0; j--) {
-            if (blocks[j].type === 'text') {
-              lastTextIdx = j;
-              break;
+  appendToLastMessage: (token) => {
+    return set((state) => {
+      const messages = [...state.messages];
+      // Sprint 15: Find the last assistant message (may not be the last message if tool messages exist)
+      // Always append to the newest assistant message to handle multiple tool call cycles
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === 'assistant') {
+          const currentContent = messages[i].content;
+          if (typeof currentContent === 'string') {
+            // Simple string content: append token directly
+            messages[i] = {
+              ...messages[i],
+              content: currentContent + token,
+              _live: true,
+            };
+          } else if (Array.isArray(currentContent)) {
+            // ContentBlock[] content: append token to the last text block
+            // This preserves tool_use blocks and other structured content
+            const blocks = [...currentContent as ContentBlock[]];
+            // Find the last text block to append to
+            let lastTextIdx = -1;
+            for (let j = blocks.length - 1; j >= 0; j--) {
+              if (blocks[j].type === 'text') {
+                lastTextIdx = j;
+                break;
+              }
             }
-          }
-          if (lastTextIdx >= 0) {
-            // Append to existing text block
-            blocks[lastTextIdx] = {
-              ...blocks[lastTextIdx],
-              text: (blocks[lastTextIdx].text || '') + token,
+            if (lastTextIdx >= 0) {
+              // Append to existing text block
+              blocks[lastTextIdx] = {
+                ...blocks[lastTextIdx],
+                text: (blocks[lastTextIdx].text || '') + token,
+              };
+            } else {
+              // No text block found — create a new one
+              blocks.push({ type: 'text', text: token });
+            }
+            messages[i] = {
+              ...messages[i],
+              content: blocks,
+              _live: true,
             };
           } else {
-            // No text block found — create a new one
-            blocks.push({ type: 'text', text: token });
+            // Null/undefined content — start as string
+            messages[i] = {
+              ...messages[i],
+              content: token,
+              _live: true,
+            };
           }
-          messages[i] = {
-            ...messages[i],
-            content: blocks,
-            _live: true,
-          };
-        } else {
-          // Null/undefined content — start as string
-          messages[i] = {
-            ...messages[i],
-            content: token,
-            _live: true,
-          };
+          break;
         }
-        break;
       }
-    }
-    return { messages };
-  }),
+      return { messages };
+    });
+  },
 
-  appendReasoning: (text) => set((state) => {
-    const messages = [...state.messages];
-    // Sprint 15: Find the last assistant message (may not be the last message)
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'assistant') {
-        const currentReasoning = messages[i].reasoning || '';
-        messages[i] = {
-          ...messages[i],
-          reasoning: currentReasoning + text,
-          _live: true,
-        };
-        break;
+  appendReasoning: (text) => {
+    return set((state) => {
+      const messages = [...state.messages];
+      // Sprint 15: Find the last assistant message (may not be the last message)
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === 'assistant') {
+          const currentReasoning = messages[i].reasoning || '';
+          messages[i] = {
+            ...messages[i],
+            reasoning: currentReasoning + text,
+            _live: true,
+          };
+          break;
+        }
       }
-    }
-    return { messages };
-  }),
+      return { messages };
+    });
+  },
 
   appendContentBlock: (block) => set((state) => {
     const messages = [...state.messages];

@@ -133,6 +133,76 @@ function JsonOutputDisplay({ content }: { content: string }) {
   }
 }
 
+// Reasoning message row - renders as an independent msg-row, collapsed by default
+function ReasoningMessageRow({ thinkingText }: { thinkingText: string }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="msg-row reasoning-message">
+      <div className="reasoning-header" onClick={() => setExpanded(!expanded)}>
+        <div className="msg-role reasoning">
+          <div className="role-icon reasoning">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z" />
+              <path d="M10 21h4" />
+              <path d="M9 17h6" />
+            </svg>
+          </div>
+          <span>Reasoning</span>
+        </div>
+        <span className="reasoning-toggle">{expanded ? '▼' : '▶'}</span>
+      </div>
+      {expanded && (
+        <div className="msg-body msg-reasoning-body">
+          {thinkingText.split('<|reasoning_sep|>').map((block, idx) => (
+            <div key={idx} className="reasoning-block">
+              <div dangerouslySetInnerHTML={{ __html: renderMarkdown(block.trim()) }} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Extract reasoning/thinking text from a message
+export function extractThinkingText(message: Message): string {
+  let thinkingText = '';
+  let content: string | ContentBlock[] = message.content || '';
+
+  // 1. Extract thinking/reasoning blocks from structured content (Claude extended thinking, o3)
+  if (Array.isArray(content)) {
+    const blocks = content as ContentBlock[];
+    thinkingText = blocks
+      .filter(b => b && (b.type === 'thinking' || b.type === 'reasoning'))
+      .map(b => b.thinking || b.reasoning || b.text || '')
+      .filter(t => t)
+      .join('\n\n');
+  }
+
+  // 2. Check top-level reasoning field (Hermes format)
+  if (!thinkingText && message.reasoning) {
+    thinkingText = message.reasoning;
+  }
+
+  // 3. Parse inline thinking tags from plain text
+  if (!thinkingText && typeof content === 'string') {
+    const thinkMatches = [...content.matchAll(/ Phili([\s\S]*?)<\/think>/g)];
+    if (thinkMatches.length > 0) {
+      thinkingText = thinkMatches.map(m => m[1].trim()).filter(t => t).join('\n\n');
+    }
+    if (!thinkingText) {
+      const gemmaMatches = [...content.matchAll(/<\|channel>thought\n([\s\S]*?)<channel\|>/g)];
+      if (gemmaMatches.length > 0) {
+        thinkingText = gemmaMatches.map(m => m[1].trim()).filter(t => t).join('\n\n');
+      }
+    }
+  }
+
+  return thinkingText;
+}
+
+export { ReasoningMessageRow };
+
 
 
 function ToolMessageRow({ message, messages, toolCallMap }: { message: Message; messages: Message[]; toolCallMap: Map<string, ToolCall> }) {
@@ -293,8 +363,8 @@ export default function MessageRow({ message, messages = [], toolCalls = [], isS
     return map;
   }, [toolCalls]);
 
-  // Extract reasoning/thinking text from message (align with ui.js logic)
-  const { thinkingText, strippedContent } = useMemo(() => {
+  // Extract stripped content (thinking/reasoning is rendered as separate ReasoningMessageRow)
+  const { strippedContent } = useMemo(() => {
     let thinkingText = '';
     // Sprint 15: Handle null content
     let content: string | ContentBlock[] = message.content || '';
@@ -436,16 +506,6 @@ export default function MessageRow({ message, messages = [], toolCalls = [], isS
           </div>
         )}
       </div>
-      
-      {/* Reasoning/thinking display - align with ui.js logic */}
-      {thinkingText && message.role === 'assistant' && (
-        <div className="msg-reasoning">
-          <details>
-            <summary>Thinking...</summary>
-            <div dangerouslySetInnerHTML={{ __html: renderMarkdown(thinkingText) }} />
-          </details>
-        </div>
-      )}
     </div>
   );
 }

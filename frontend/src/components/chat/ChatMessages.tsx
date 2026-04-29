@@ -1,6 +1,6 @@
 import React, { forwardRef, useEffect, useRef } from 'react';
 import type { Message } from '@/types';
-import MessageRow from './MessageRow';
+import MessageRow, { ReasoningMessageRow, extractThinkingText } from './MessageRow';
 import { useChatStore } from '@/stores/useChatStore';
 
 interface ChatMessagesProps {
@@ -116,6 +116,25 @@ const ChatMessages = forwardRef<HTMLDivElement, ChatMessagesProps>(
                     }
                   }
                   
+                  // Render reasoning row if applicable
+                  const thinkingText = extractThinkingText(message);
+                  if (thinkingText) {
+                    result.push(
+                      <div key={`reasoning-sep-${i}`} className="msg-row hermes-separator reasoning-separator">
+                        <div className="msg-role assistant">
+                          <div className="role-icon assistant">H</div>
+                          <span>Hermes</span>
+                        </div>
+                      </div>
+                    );
+                    result.push(
+                      <ReasoningMessageRow
+                        key={`reasoning-${i}`}
+                        thinkingText={thinkingText}
+                      />
+                    );
+                  }
+
                   // Render assistant message
                   result.push(
                     <MessageRow

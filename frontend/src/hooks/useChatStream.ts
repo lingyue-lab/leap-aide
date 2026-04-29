@@ -65,7 +65,7 @@ export function useChatStream() {
       // message_start: backend signals a new assistant message boundary.
       // Each message_start creates a new assistant message row.
       // Subsequent token events are appended to this row via appendToLastMessage.
-      es.addEventListener('message_start', () => {
+      es.addEventListener('message_start', (e: MessageEvent) => {
         addMessage({
           role: 'assistant',
           content: '',
@@ -93,9 +93,7 @@ export function useChatStream() {
         
         // Use tid from backend, or generate a fallback
         const tid = data.tid || `live-${data.name}-${Date.now()}`;
-        
-        console.log('[SSE] tool event:', { name: data.name, tid, args: data.args });
-        
+
         // Ensure an assistant message row exists before adding tool_use block.
         // If the model triggers a tool call before emitting any text tokens,
         // there may be no assistant message yet (message_start hasn't fired).
