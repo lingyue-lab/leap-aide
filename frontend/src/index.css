@@ -1037,6 +1037,21 @@
     border-left: 2px solid rgba(232, 160, 48, 0.4);
   }
 
+  .session-pin-indicator {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: var(--gold, #e8a030);
+    opacity: 0.85;
+    margin-right: 4px;
+    line-height: 1;
+  }
+
+  .session-pin-indicator svg {
+    display: block;
+  }
+
   .session-title {
     flex: 1;
     overflow: hidden;

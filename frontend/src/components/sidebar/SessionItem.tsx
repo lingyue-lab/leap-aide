@@ -128,6 +128,14 @@ export default function SessionItem({ session, isActive, onClick }: SessionItemP
     >
       <div className="session-text">
         <div className="session-title-row">
+          {session.pinned && (
+            <span className="session-pin-indicator" title={t('sessions.pinned')}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+                <path d="M16 1L23 8L17.5 13.5L17.5 16L13.5 16L12 17.5L12 20L10 20L10 17.5L8.5 16L6.5 16L6.5 13.5C4.5 13.5 2 11 1 8L8.5 8L16 1Z" />
+                <line x1="8" y1="16" x2="2" y2="22" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+            </span>
+          )}
           {isEditing ? (
             <input
               ref={inputRef}
@@ -141,9 +149,6 @@ export default function SessionItem({ session, isActive, onClick }: SessionItemP
             />
           ) : (
             <span className="session-title">{session.title}</span>
-          )}
-          {session.pinned && (
-            <span className="session-pin-indicator" title={t('sessions.pinned')}>📌</span>
           )}
           {/* Background streaming indicator — shown only when NOT the active session */}
           {bgStreaming && !isActive && (
