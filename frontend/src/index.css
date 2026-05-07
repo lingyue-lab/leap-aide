@@ -1054,6 +1054,43 @@
     text-overflow: ellipsis;
   }
 
+  .session-actions {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+  }
+
+  .session-actions-trigger {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: var(--muted);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s, background 0.15s, color 0.15s;
+  }
+
+  .session-item:hover .session-actions-trigger,
+  .session-item.active .session-actions-trigger,
+  .session-actions-trigger.active {
+    opacity: 1;
+  }
+
+  .session-actions-trigger:hover,
+  .session-actions-trigger.active {
+    background: var(--hover-bg);
+    color: var(--text);
+  }
+
   /* Nav tabs */
   .nav-tabs {
     display: flex;
