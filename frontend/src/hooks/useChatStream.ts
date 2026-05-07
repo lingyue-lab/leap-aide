@@ -1,30 +1,97 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect } from 'react';
 import { chatService } from '@/services/api';
 import { useChatStore } from '@/stores/useChatStore';
 import { useSessionStore } from '@/stores/useSessionStore';
-import type { ContentBlock } from '@/types';
+import * as StreamManager from '@/stores/streamManager';
+import type { SessionStreamState } from '@/stores/streamManager';
 
+/**
+ * useChatStream
+ *
+ * Thin React adapter over the global StreamManager.
+ *
+ * - startStream: starts a background SSE stream via StreamManager.
+ *   The stream continues even if the user switches sessions.
+ * - cancelStream: cancels a stream (closes EventSource + calls backend).
+ * - The hook subscribes to StreamManager changes and syncs them into
+ *   useChatStore via updateSessionCache, so:
+ *     • background sessions accumulate tokens in their cache slice
+ *     • the active (displayed) session is updated live in the store
+ */
 export function useChatStream() {
-  const eventSourceRef = useRef<EventSource | null>(null);
-  
-  const {
-    addMessage,
-    appendToLastMessage,
-    appendReasoning,
-    appendContentBlock,
-    updateToolMessage,
-    addToolCall,
-    updateToolCall,
-    setMessages,
-    setToolCalls,
-    setBusy,
-    setAbortController,
-    setLastUsage,
-    messages,
-  } = useChatStore();
-  
+  const { updateSessionCache, setActiveStreamId } = useChatStore();
   const { updateCurrentSession, loadSession } = useSessionStore();
 
+  // ── Subscribe to StreamManager events ──────────────────────────────────────
+  useEffect(() => {
+    const unsubscribe = StreamManager.subscribe(
+      (sessionId: string, state: SessionStreamState) => {
+        // Push the latest stream state into the store cache for that session.
+        // updateSessionCache is smart: if sessionId === _currentSessionId it
+        // also updates the live messages/busy/etc. shown on screen.
+        updateSessionCache(sessionId, {
+          messages: state.messages,
+          toolCalls: state.toolCalls,
+          busy: state.busy,
+          activeStreamId: state.streaming ? state.streamId : null,
+          lastUsage: state.lastUsage ?? null,
+        });
+
+        // When a stream finishes and it's the active session, reload from
+        // backend to get the fully-persisted version (tool outputs etc.)
+        if (!state.streaming && state.completedAt) {
+          const currentId = useSessionStore.getState().currentSessionId;
+          if (currentId === sessionId) {
+            loadSession(sessionId).then(() => {
+              const session = useSessionStore.getState().currentSession;
+              if (session?.messages) {
+                useChatStore.getState().setMessages(session.messages);
+              }
+              if (session?.tool_calls) {
+                useChatStore.getState().setToolCalls(session.tool_calls);
+              }
+            });
+          }
+        }
+      }
+    );
+
+    // Handle title updates from StreamManager (custom window event)
+    const onTitle = (e: Event) => {
+      const { sessionId, title } = (e as CustomEvent).detail;
+      const currentId = useSessionStore.getState().currentSessionId;
+      if (currentId === sessionId) {
+        updateCurrentSession({ title });
+      }
+      // Update the session list entry regardless
+      useSessionStore.getState().updateSessionListTitle?.(sessionId, title);
+    };
+    window.addEventListener('bg-stream-title', onTitle);
+
+    // When any background stream finishes, play notification sound
+    const onDone = (e: Event) => {
+      window.dispatchEvent(new CustomEvent('chat-complete'));
+      // Clean up the stream state after a short delay (keep for a bit so UI
+      // can show the final state before clearing)
+      const { sessionId } = (e as CustomEvent).detail;
+      setTimeout(() => {
+        // Only clear if no new stream started for this session
+        const s = StreamManager.getSessionStreamState(sessionId);
+        if (s && !s.streaming) {
+          StreamManager.clearSessionStream(sessionId);
+        }
+      }, 5000);
+    };
+    window.addEventListener('bg-stream-done', onDone);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener('bg-stream-title', onTitle);
+      window.removeEventListener('bg-stream-done', onDone);
+    };
+  }, [updateSessionCache, updateCurrentSession, loadSession]);
+
+  // ── startStream ────────────────────────────────────────────────────────────
   const startStream = useCallback(async (
     sessionId: string,
     message: string,
@@ -32,311 +99,76 @@ export function useChatStream() {
     workspace?: string,
     attachments?: string[]
   ) => {
-    // Create abort controller
-    const abortController = new AbortController();
-    setAbortController(abortController);
-    
-    // Add user message
-    addMessage({
+    const store = useChatStore.getState();
+
+    // Optimistically add the user message to the live display
+    store.addMessage({
       role: 'user',
       content: message,
       attachments,
       _ts: Date.now() / 1000,
     });
-    
-    setBusy(true);
+    store.setBusy(true);
 
     try {
-      // Start chat
+      // Start the chat on the backend
       const { stream_id } = await chatService.startChat(
-        sessionId,
-        message,
-        model,
-        workspace,
-        attachments
+        sessionId, message, model, workspace, attachments
       );
-      
-      useChatStore.getState().setActiveStreamId(stream_id);
 
-      // Create SSE connection
-      const es = chatService.createSSEConnection(stream_id);
-      eventSourceRef.current = es;
+      // Record active stream id on the store (for cancel button)
+      setActiveStreamId(stream_id);
 
-      // message_start: backend signals a new assistant message boundary.
-      // Each message_start creates a new assistant message row.
-      // Subsequent token events are appended to this row via appendToLastMessage.
-      es.addEventListener('message_start', (e: MessageEvent) => {
-        addMessage({
-          role: 'assistant',
-          content: '',
-          _ts: Date.now() / 1000,
-          _live: true,
-        });
-      });
+      // Snapshot messages BEFORE the user message we just added above.
+      // StreamManager will prepend the user message itself.
+      const currentMessages = useChatStore.getState().messages;
+      const seedMessages = currentMessages.slice(0, currentMessages.length - 1);
 
-      // Handle token events: append to current assistant message row
-      // Tokens are appended to the row created by the latest message_start event.
-      es.addEventListener('token', (e: MessageEvent) => {
-        const data = JSON.parse(e.data);
-        appendToLastMessage(data.text);
-      });
-
-      es.addEventListener('reasoning', (e: MessageEvent) => {
-        const data = JSON.parse(e.data);
-        appendReasoning(data.text);
-      });
-
-      // Tool call starts - add tool_use block to last assistant message
-      es.addEventListener('tool', (e: MessageEvent) => {
-        const data = JSON.parse(e.data) as { name: string; preview?: string; args?: Record<string, unknown>; tid?: string };
-        if (data.name === 'clarify') return;
-        
-        // Use tid from backend, or generate a fallback
-        const tid = data.tid || `live-${data.name}-${Date.now()}`;
-
-        // Ensure an assistant message row exists before adding tool_use block.
-        // If the model triggers a tool call before emitting any text tokens,
-        // there may be no assistant message yet (message_start hasn't fired).
-        const currentMessages = useChatStore.getState().messages;
-        const hasAssistantMsg = currentMessages.some(m => m.role === 'assistant');
-        if (!hasAssistantMsg) {
-          addMessage({
-            role: 'assistant',
-            content: '',
-            _ts: Date.now() / 1000,
-            _live: true,
-          });
-        }
-        
-        // Add tool_use block to the last assistant message
-        const toolUseBlock: ContentBlock = {
-          type: 'tool_use',
-          id: tid,
-          name: data.name,
-          input: data.args || {},
-        };
-        appendContentBlock(toolUseBlock);
-        
-        // Sprint 15: Also update toolCalls store for immediate display
-        addToolCall({
-          name: data.name,
-          tid: tid,
-          args: data.args || {},
-          snippet: '',
-          done: false,
-          preview: data.preview || '',
-        });
-        
-        // Add a placeholder tool message (role='tool') for the result
-        addMessage({
-          role: 'tool',
-          content: '',
-          tool_call_id: tid,
-          tool_name: data.name,
-          _ts: Date.now() / 1000,
-          _live: true,
-        });
-      });
-
-      // Tool call completes - update the tool message with result
-      es.addEventListener('tool_complete', (e: MessageEvent) => {
-        const data = JSON.parse(e.data) as { name: string; tid?: string; output?: string; preview?: string; duration?: number; is_error?: boolean };
-        if (data.name === 'clarify') return;
-        
-        console.log('[SSE] tool_complete event full:', JSON.stringify(data, null, 2));
-        
-        // tid should be provided by backend
-        const tid = data.tid;
-        if (!tid) {
-          console.warn('[SSE] tool_complete event missing tid');
-          return;
-        }
-        
-        // Get output from the event data
-        const output = data.output || data.preview || '';
-        
-        console.log('[SSE] updating tool message:', { tid, output: output.substring(0, 100) + '...' });
-        
-        // Update the tool message with the result
-        updateToolMessage(tid, {
-          content: output,
-          _live: false,
-        });
-        
-        // Sprint 15: Also update toolCalls store
-        updateToolCall(tid, {
-          snippet: output.substring(0, 200),
-          done: true,
-          duration: data.duration,
-          is_error: data.is_error,
-        });
-        
-        // tool_complete resets message_started on the backend,
-        // so the next token will trigger a new message_start event
-        // and create a new assistant message row on the frontend.
-        // No need to create a placeholder here — message_start handles it.
-      });
-
-      es.addEventListener('approval', (e: MessageEvent) => {
-        const data = JSON.parse(e.data);
-        // Handle approval request - show approval card
-        data._session_id = sessionId;
-        // Trigger approval UI
-        window.dispatchEvent(new CustomEvent('approval-required', { detail: data }));
-      });
-
-      es.addEventListener('clarify', (e: MessageEvent) => {
-        const data = JSON.parse(e.data);
-        // Handle clarify request - show clarify card
-        data._session_id = sessionId;
-        window.dispatchEvent(new CustomEvent('clarify-required', { detail: data }));
-      });
-
-      es.addEventListener('title', (e: MessageEvent) => {
-        const data = JSON.parse(e.data);
-        updateCurrentSession({ title: data.title });
-      });
-
-      es.addEventListener('done', (e: MessageEvent) => {
-        const data = JSON.parse(e.data);
-        es.close();
-        
-        // Update session with final data
-        updateCurrentSession({
-          messages: data.session?.messages || messages,
-          input_tokens: data.session?.input_tokens,
-          output_tokens: data.session?.output_tokens,
-          estimated_cost: data.session?.estimated_cost,
-        });
-        
-        if (data.usage) {
-          setLastUsage(data.usage);
-        }
-        
-        setBusy(false);
-        setAbortController(null);
-        useChatStore.getState().setActiveStreamId(null);
-        
-        // Play notification sound
-        window.dispatchEvent(new CustomEvent('chat-complete'));
-        
-        // Sprint 15: Reload session to get complete tool call outputs
-        // The SSE stream may have incomplete tool result data
-        loadSession(sessionId).then(() => {
-          const session = useSessionStore.getState().currentSession;
-          if (session?.messages) {
-            setMessages(session.messages);
-          }
-          if (session?.tool_calls) {
-            setToolCalls(session.tool_calls);
-          }
-        });
-      });
-
-      es.addEventListener('stream_end', () => {
-        es.close();
-      });
-
-      es.addEventListener('compressed', (e: MessageEvent) => {
-        // Show compression notice
-        const data = JSON.parse(e.data);
-        addMessage({
-          role: 'assistant',
-          content: `*[${data.message || 'Context compressed'}]*`,
-          _ts: Date.now() / 1000,
-        });
-      });
-
-      es.addEventListener('apperror', (e: MessageEvent) => {
-        const data = JSON.parse(e.data);
-        es.close();
-        
-        // Add error message
-        const isRateLimit = data.type === 'rate_limit';
-        const isNoResponse = data.type === 'no_response';
-        let errorMsg = data.message;
-        
-        if (isRateLimit) {
-          errorMsg = `**Rate limit reached:** ${data.message}`;
-        } else if (isNoResponse) {
-          errorMsg = '**No response received.** Check your API key and model selection.';
-        } else {
-          errorMsg = `**Error:** ${data.message}`;
-          if (data.hint) {
-            errorMsg += `\n\n*${data.hint}*`;
-          }
-        }
-        
-        // Add error message as a new row
-        addMessage({
-          role: 'assistant',
-          content: errorMsg,
-          _ts: Date.now() / 1000,
-        });
-        
-        setBusy(false);
-        setAbortController(null);
-      });
-
-      es.addEventListener('warning', (e: MessageEvent) => {
-        const data = JSON.parse(e.data);
-        // Show warning toast
-        window.dispatchEvent(new CustomEvent('show-toast', { 
-          detail: { message: data.message, duration: 4000 } 
-        }));
-      });
-
-      es.addEventListener('error', () => {
-        // Handle error - attempt reconnect
-        es.close();
-        setBusy(false);
-        
-        // Add error message
-        addMessage({
-          role: 'assistant',
-          content: '**Error:** Connection lost',
-          _ts: Date.now() / 1000,
-        });
-      });
-
-      es.addEventListener('cancel', () => {
-        es.close();
-        setBusy(false);
-        addMessage({
-          role: 'assistant',
-          content: '*Task cancelled.*',
-          _ts: Date.now() / 1000,
-        });
-      });
+      // Hand off to the global StreamManager.
+      // It opens the EventSource, accumulates all tokens into the session cache,
+      // and keeps running even after the user navigates to another session.
+      StreamManager.startBackgroundStream(
+        sessionId,
+        stream_id,
+        { role: 'user', content: message, attachments, _ts: Date.now() / 1000 },
+        seedMessages
+      );
 
     } catch (err) {
-      setBusy(false);
-      setAbortController(null);
-      
-      // Handle errors
+      store.setBusy(false);
+      store.setAbortController(null);
       const errorMsg = (err as Error).message || 'Unknown error';
-      addMessage({
+      store.addMessage({
         role: 'assistant',
         content: `**Error:** ${errorMsg}`,
         _ts: Date.now() / 1000,
       });
     }
-  }, [addMessage, appendToLastMessage, appendReasoning, appendContentBlock, updateToolMessage, setBusy, setAbortController, setLastUsage, updateCurrentSession, messages]);
+  }, [setActiveStreamId]);
 
+  // ── cancelStream ──────────────────────────────────────────────────────────
   const cancelStream = useCallback(async (streamId: string) => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
+    // Find which session owns this stream
+    const sessionId = StreamManager.getActiveSessionIds().find((sid) => {
+      const s = StreamManager.getSessionStreamState(sid);
+      return s?.streamId === streamId;
+    });
+
+    if (sessionId) {
+      StreamManager.stopBackgroundStream(sessionId);
     }
-    
+
     try {
       await chatService.cancelStream(streamId);
     } catch {
       // Ignore cancel errors
     }
-    
-    setBusy(false);
-    setAbortController(null);
-  }, [setBusy, setAbortController]);
 
-  return { startStream, cancelStream, streaming: useChatStore.getState().busy };
+    useChatStore.getState().setBusy(false);
+    useChatStore.getState().setAbortController(null);
+  }, []);
+
+  const busy = useChatStore((s) => s.busy);
+
+  return { startStream, cancelStream, streaming: busy };
 }

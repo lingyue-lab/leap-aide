@@ -4,6 +4,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { zhCN, enUS } from 'date-fns/locale';
 import type { SessionListItem } from '@/types';
 import { useSessionStore } from '@/stores/useSessionStore';
+import { isSessionStreaming, subscribe as subscribeStream } from '@/stores/streamManager';
 
 interface SessionItemProps {
   session: SessionListItem;
@@ -18,6 +19,8 @@ export default function SessionItem({ session, isActive, onClick }: SessionItemP
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(session.title);
   const [menuOpen, setMenuOpen] = useState(false);
+  /** True when this session has a live background stream */
+  const [bgStreaming, setBgStreaming] = useState(() => isSessionStreaming(session.session_id));
   const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
   
   const inputRef = useRef<HTMLInputElement>(null);
@@ -36,6 +39,16 @@ export default function SessionItem({ session, isActive, onClick }: SessionItemP
   useEffect(() => {
     setEditTitle(session.title);
   }, [session.title]);
+
+  // Subscribe to StreamManager to reflect background streaming state
+  useEffect(() => {
+    const unsub = subscribeStream((sid) => {
+      if (sid === session.session_id) {
+        setBgStreaming(isSessionStreaming(session.session_id));
+      }
+    });
+    return unsub;
+  }, [session.session_id]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -108,7 +121,7 @@ export default function SessionItem({ session, isActive, onClick }: SessionItemP
 
   return (
     <div
-      className={`session-item ${isActive ? 'active' : ''}`}
+      className={`session-item ${isActive ? 'active' : ''} ${bgStreaming && !isActive ? 'bg-streaming' : ''}`}
       onClick={isEditing ? undefined : onClick}
       onContextMenu={handleContextMenu}
       data-session-id={session.session_id}
@@ -131,6 +144,10 @@ export default function SessionItem({ session, isActive, onClick }: SessionItemP
           )}
           {session.pinned && (
             <span className="session-pin-indicator" title={t('sessions.pinned')}>📌</span>
+          )}
+          {/* Background streaming indicator — shown only when NOT the active session */}
+          {bgStreaming && !isActive && (
+            <span className="session-bg-streaming-dot" title="Running in background" />
           )}
         </div>
         <div className="session-meta">{relativeTime}</div>

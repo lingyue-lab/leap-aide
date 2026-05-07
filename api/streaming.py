@@ -1396,13 +1396,18 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         args_snap[k] = s2[:120] + ('...' if len(s2) > 120 else '')
 
                 if event_type in (None, 'tool.started'):
+                    # Generate a unique tid for this tool call
+                    import time
+                    tid = f"tool-{name}-{int(time.time() * 1000)}-{len(_live_tool_calls)}"
                     _live_tool_calls.append({
                         'name': name,
+                        'tid': tid,  # Store tid for later matching in tool.completed
                         'args': args if isinstance(args, dict) else {},
                     })
                     put('tool', {
                         'event_type': event_type or 'tool.started',
                         'name': name,
+                        'tid': tid,  # Include tid in the event for frontend
                         'preview': preview,
                         'args': args_snap,
                     })
@@ -1420,6 +1425,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                     return
 
                 if event_type == 'tool.completed':
+                    tid_for_event = ''  # Initialize tid
                     for live_tc in reversed(_live_tool_calls):
                         if live_tc.get('done'):
                             continue
@@ -1427,6 +1433,8 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                             live_tc['done'] = True
                             live_tc['duration'] = cb_kwargs.get('duration')
                             live_tc['is_error'] = bool(cb_kwargs.get('is_error', False))
+                            # Extract tid to include in the event for frontend tracking
+                            tid_for_event = live_tc.get('tid', '')
                             break
                     # Signal the checkpoint thread that new work has completed (Issue #765).
                     # Each completed tool call is a meaningful unit of progress worth persisting.
@@ -1434,6 +1442,8 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                     put('tool_complete', {
                         'event_type': event_type,
                         'name': name,
+                        'tid': tid_for_event,  # Include tid for frontend to match tool message
+                        'output': preview,  # Tool result output from preview parameter
                         'preview': preview,
                         'args': args_snap,
                         'duration': cb_kwargs.get('duration'),

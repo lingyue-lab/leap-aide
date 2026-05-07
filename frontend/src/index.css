@@ -1016,6 +1016,27 @@
     color: var(--gold);
   }
 
+  /* Background-streaming indicator dot (pulsing) */
+  .session-bg-streaming-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--gold, #e8a030);
+    flex-shrink: 0;
+    animation: bg-stream-pulse 1.4s ease-in-out infinite;
+  }
+
+  @keyframes bg-stream-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.75); }
+  }
+
+  /* Slightly dim non-active bg-streaming sessions so the dot stands out */
+  .session-item.bg-streaming:not(.active) {
+    border-left: 2px solid rgba(232, 160, 48, 0.4);
+  }
+
   .session-title {
     flex: 1;
     overflow: hidden;
@@ -1452,9 +1473,14 @@
   /* Approval card */
   .approval-card {
     display: none;
+    position: fixed;
+    bottom: 80px;
+    left: 50%;
+    transform: translateX(-50%);
     max-width: 780px;
-    margin: 0 auto 0;
-    padding: 0 20px 12px;
+    width: min(780px, calc(100vw - 480px));
+    padding: 0;
+    z-index: 100;
   }
 
   .approval-card.visible {
@@ -1580,9 +1606,14 @@
   /* Clarify card */
   .clarify-card {
     display: none;
+    position: fixed;
+    bottom: 80px;
+    left: 50%;
+    transform: translateX(-50%);
     max-width: 680px;
-    margin: 4px 0 2px 40px;
+    width: min(680px, calc(100vw - 480px));
     padding: 0;
+    z-index: 100;
   }
 
   .clarify-card.visible {

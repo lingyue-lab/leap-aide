@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { useChatStore } from '@/stores/useChatStore';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { useChatStream } from '@/hooks/useChatStream';
+import * as StreamManager from '@/stores/streamManager';
 import ChatMessages from './ChatMessages';
 import ChatComposer from './ChatComposer';
 import ApprovalCard from '@/components/dialogs/ApprovalCard';
@@ -18,33 +19,83 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
   const sessionId = propSessionId || routeSessionId || null;
   
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const prevSessionIdRef = useRef<string | null>(null);
   const { currentSession, loadSession } = useSessionStore();
   const { messages, busy, activeStreamId, setMessages, setToolCalls } = useChatStore();
   const { startStream, cancelStream, streaming } = useChatStream();
   
-  // Reset chat when sessionId changes
+  // ── Session switch logic ────────────────────────────────────────────────────
   useEffect(() => {
-    if (sessionId) {
-      useChatStore.getState().reset();
-      loadSession(sessionId).then(() => {
-        // Sync messages and tool_calls from session to chat store
-        const session = useSessionStore.getState().currentSession;
-        if (session?.messages) {
-          setMessages(session.messages);
-        }
-        if (session?.tool_calls) {
-          setToolCalls(session.tool_calls);
-        }
-      });
+    const prevId = prevSessionIdRef.current;
+    prevSessionIdRef.current = sessionId;
+    
+    if (!sessionId) return;
+    if (prevId === sessionId) return;
+
+    // Tell the store which session is "current" so updateSessionCache knows
+    // whether to update live state or just the cache.
+    useChatStore.getState().setCurrentSessionId(sessionId);
+
+    // ── Switching AWAY from prevId ──────────────────────────────────────────
+    if (prevId && prevId !== sessionId) {
+      // Save whatever is currently displayed into the cache for prevId.
+      // If prevId has a live background stream its cache will keep being
+      // updated by useChatStream's StreamManager subscriber — so when we
+      // come back we'll see the latest tokens automatically.
+      useChatStore.getState().saveToCache(prevId);
+
+      // NOTE: we do NOT cancel the stream here. The backend stream for prevId
+      // keeps running in the background. StreamManager continues to accumulate
+      // tokens into the cache slot for prevId.
     }
+
+    // ── Switching TO sessionId ──────────────────────────────────────────────
+
+    // 1. Check if there is a live background stream for this session.
+    const bgState = StreamManager.getSessionStreamState(sessionId);
+    if (bgState) {
+      // Restore from the most up-to-date StreamManager state (not the older cache).
+      useChatStore.getState().setMessages(bgState.messages);
+      useChatStore.getState().setToolCalls(bgState.toolCalls);
+      useChatStore.setState({
+        busy: bgState.busy,
+        activeStreamId: bgState.streaming ? bgState.streamId : null,
+      });
+      return;
+    }
+
+    // 2. Try restoring from the normal session cache (e.g., a non-streaming session
+    //    we visited before).
+    const cached = useChatStore.getState().restoreFromCache(sessionId);
+    if (cached) {
+      return;
+    }
+
+    // 3. No cache at all — load from backend.
+    useChatStore.getState().reset();
+    loadSession(sessionId).then(() => {
+      const session = useSessionStore.getState().currentSession;
+      if (session?.messages) {
+        setMessages(session.messages);
+      }
+      if (session?.tool_calls) {
+        setToolCalls(session.tool_calls);
+      }
+    });
   }, [sessionId, loadSession, setMessages, setToolCalls]);
 
+  // ── Auto-scroll ─────────────────────────────────────────────────────────────
   const scrollToBottom = useCallback(() => {
     if (scrollContainerRef.current) {
       scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
     }
   }, []);
 
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages.length, scrollToBottom]);
+
+  // ── Send / Cancel ────────────────────────────────────────────────────────────
   const handleSend = useCallback(async (text: string) => {
     if (!sessionId || !text.trim()) return;
     const model = currentSession?.model || 'anthropic/claude-sonnet-4-5';
@@ -57,11 +108,6 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
       cancelStream(activeStreamId);
     }
   }, [activeStreamId, cancelStream]);
-
-  // Auto-scroll on new messages
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages.length, scrollToBottom]);
 
   if (!sessionId) {
     return <EmptyState />;
@@ -95,7 +141,6 @@ function EmptyState() {
   const handleSuggestion = async (_msg: string) => {
     const session = await createSession();
     if (session) {
-      // Navigate to new session and send message
       // TODO: Navigate and auto-send _msg
     }
   };

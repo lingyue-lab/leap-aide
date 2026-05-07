@@ -1,6 +1,14 @@
 import { create } from 'zustand';
 import type { Message, ToolCall, UsageInfo, ContentBlock } from '@/types';
 
+interface SessionCache {
+  messages: Message[];
+  toolCalls: ToolCall[];
+  busy: boolean;
+  activeStreamId: string | null;
+  lastUsage: UsageInfo | null;
+}
+
 interface ChatState {
   messages: Message[];
   toolCalls: ToolCall[];  // Keep for backward compatibility, but prefer messages
@@ -9,6 +17,10 @@ interface ChatState {
   pendingFiles: File[];
   lastUsage: UsageInfo | null;
   abortController: AbortController | null;
+  // Per-session state cache to preserve data across session switches
+  _sessionCache: Map<string, SessionCache>;
+  // Current session ID tracked by chat store (to know which cache slot to use)
+  _currentSessionId: string | null;
   
   // Actions
   setMessages: (messages: Message[]) => void;
@@ -31,6 +43,16 @@ interface ChatState {
   setLastUsage: (usage: UsageInfo | null) => void;
   setAbortController: (controller: AbortController | null) => void;
   reset: () => void;
+  // Session cache actions
+  saveToCache: (sessionId: string) => void;
+  restoreFromCache: (sessionId: string) => SessionCache | null;
+  clearCache: (sessionId: string) => void;
+  setCurrentSessionId: (id: string | null) => void;
+  /**
+   * Directly overwrite the cached messages for a background session.
+   * Called by StreamManager subscriber when the active session changes.
+   */
+  updateSessionCache: (sessionId: string, patch: Partial<SessionCache>) => void;
 }
 
 export const useChatStore = create<ChatState>((set) => ({
@@ -41,6 +63,8 @@ export const useChatStore = create<ChatState>((set) => ({
   pendingFiles: [],
   lastUsage: null,
   abortController: null,
+  _sessionCache: new Map<string, SessionCache>(),
+  _currentSessionId: null,
 
   setMessages: (messages) => {
     return set({ messages, toolCalls: [] });
@@ -217,5 +241,73 @@ export const useChatStore = create<ChatState>((set) => ({
     pendingFiles: [],
     lastUsage: null,
     abortController: null,
+  }),
+
+  // Save current chat state into per-session cache
+  saveToCache: (sessionId: string) => set((state) => {
+    const cache: SessionCache = {
+      messages: state.messages,
+      toolCalls: state.toolCalls,
+      busy: state.busy,
+      activeStreamId: state.activeStreamId,
+      lastUsage: state.lastUsage,
+    };
+    const newCache = new Map(state._sessionCache);
+    newCache.set(sessionId, cache);
+    return { _sessionCache: newCache };
+  }),
+
+  // Restore chat state from per-session cache (returns null if no cache exists)
+  restoreFromCache: (sessionId: string): SessionCache | null => {
+    const state = useChatStore.getState() as ChatState;
+    const cache = state._sessionCache.get(sessionId) as SessionCache | undefined;
+    if (cache) {
+      set({
+        messages: cache.messages,
+        toolCalls: cache.toolCalls,
+        busy: cache.busy,
+        activeStreamId: cache.activeStreamId,
+        lastUsage: cache.lastUsage,
+        _currentSessionId: sessionId,
+      });
+      return cache;
+    }
+    return null;
+  },
+
+  // Clear cache for a specific session (e.g., after stream completes and data is loaded from backend)
+  clearCache: (sessionId: string) => set((state) => {
+    const newCache = new Map(state._sessionCache);
+    newCache.delete(sessionId);
+    return { _sessionCache: newCache };
+  }),
+
+  setCurrentSessionId: (id: string | null) => set({ _currentSessionId: id }),
+
+  // Patch the cache for a background session without affecting current display
+  updateSessionCache: (sessionId: string, patch: Partial<SessionCache>) => set((state) => {
+    const existing = state._sessionCache.get(sessionId);
+    const updated: SessionCache = {
+      messages: existing?.messages ?? [],
+      toolCalls: existing?.toolCalls ?? [],
+      busy: existing?.busy ?? false,
+      activeStreamId: existing?.activeStreamId ?? null,
+      lastUsage: existing?.lastUsage ?? null,
+      ...patch,
+    };
+    const newCache = new Map(state._sessionCache);
+    newCache.set(sessionId, updated);
+    // If this session is currently displayed, also update live state
+    if (state._currentSessionId === sessionId) {
+      return {
+        _sessionCache: newCache,
+        messages: updated.messages,
+        toolCalls: updated.toolCalls,
+        busy: updated.busy,
+        activeStreamId: updated.activeStreamId,
+        lastUsage: updated.lastUsage,
+      };
+    }
+    return { _sessionCache: newCache };
   }),
 }));

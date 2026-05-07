@@ -18,6 +18,8 @@ interface SessionState {
   pinSession: (id: string, pinned: boolean) => Promise<void>;
   clearSession: (id: string) => Promise<void>;
   updateCurrentSession: (session: Partial<Session>) => void;
+  /** Update only the title in the sidebar session list (for live title push from StreamManager) */
+  updateSessionListTitle: (sessionId: string, title: string) => void;
 }
 
 export const useSessionStore = create<SessionState>((set) => ({
@@ -175,6 +177,14 @@ export const useSessionStore = create<SessionState>((set) => ({
       currentSession: state.currentSession
         ? { ...state.currentSession, ...updates }
         : null,
+    }));
+  },
+
+  updateSessionListTitle: (sessionId: string, title: string) => {
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.session_id === sessionId ? { ...s, title } : s
+      ),
     }));
   },
 }));

@@ -61,10 +61,8 @@ export const chatService = {
   },
 
   cancelStream: async (streamId: string) => {
-    return api('/api/chat/cancel', {
-      method: 'POST',
-      body: JSON.stringify({ stream_id: streamId }),
-    });
+    // Use GET with query param (routes.py line 1048-1053)
+    return api(`/api/chat/cancel?stream_id=${encodeURIComponent(streamId)}`);
   },
 };
 
