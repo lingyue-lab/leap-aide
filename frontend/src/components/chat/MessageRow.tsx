@@ -133,8 +133,48 @@ function JsonOutputDisplay({ content }: { content: string }) {
   }
 }
 
+// Check if a message is a context compaction reference message
+export function isContextCompactionMessage(message: Message): boolean {
+  if (message.role === 'tool') return false;
+  const c = message.content || '';
+  const text = typeof c === 'string'
+    ? c
+    : Array.isArray(c)
+      ? (c as ContentBlock[]).filter(b => b.type === 'text').map(b => b.text || '').join('')
+      : '';
+  return /^\s*\[context compaction/i.test(text) || /^\s*context compaction/i.test(text);
+}
+
+// Context compaction reference card - collapsed by default
+export function ContextCompactionMessageRow({ message }: { message: Message }) {
+  const [expanded, setExpanded] = useState(false);
+  const c = message.content || '';
+  const text = typeof c === 'string'
+    ? c
+    : Array.isArray(c)
+      ? (c as ContentBlock[]).filter(b => b.type === 'text').map(b => b.text || '').join('')
+      : '';
+  const previewLines = text.split(/\n+/).filter(Boolean).slice(0, 2).join(' ');
+
+  return (
+    <div className="msg-row context-compaction-message">
+      <div className="context-compaction-header" onClick={() => setExpanded(!expanded)}>
+        <span className="context-compaction-icon">★</span>
+        <span className="context-compaction-title">Context Compaction</span>
+        <span className="context-compaction-preview">Reference Only · {previewLines}</span>
+        <span className="reasoning-toggle">{expanded ? '▼' : '▶'}</span>
+      </div>
+      {expanded && (
+        <div className="msg-body context-compaction-body">
+          <pre className="context-compaction-pre">{text}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Reasoning message row - renders as an independent msg-row, collapsed by default
-function ReasoningMessageRow({ thinkingText }: { thinkingText: string }) {
+export function ReasoningMessageRow({ thinkingText }: { thinkingText: string }) {
   const [expanded, setExpanded] = useState(false);
   return (
     <div className="msg-row reasoning-message">
@@ -200,8 +240,6 @@ export function extractThinkingText(message: Message): string {
 
   return thinkingText;
 }
-
-export { ReasoningMessageRow };
 
 
 

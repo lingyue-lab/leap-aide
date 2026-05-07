@@ -1384,6 +1384,99 @@
     background: rgba(138, 101, 32, 0.04);
   }
 
+  /* Context compaction reference card */
+  .context-compaction-message {
+    padding: 4px 0;
+    padding-left: 30px;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .context-compaction-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text);
+    width: 100%;
+    border-radius: 6px;
+    background: rgba(201, 168, 76, 0.06);
+    border: 1px solid rgba(201, 168, 76, 0.12);
+    transition: background 0.15s, border-color 0.15s;
+    box-sizing: border-box;
+    user-select: none;
+  }
+
+  .context-compaction-header:hover {
+    background: rgba(201, 168, 76, 0.1);
+    border-color: rgba(201, 168, 76, 0.2);
+  }
+
+  .context-compaction-icon {
+    font-size: 13px;
+    color: var(--gold);
+    flex-shrink: 0;
+  }
+
+  .context-compaction-title {
+    font-weight: 500;
+    color: var(--gold);
+    flex-shrink: 0;
+  }
+
+  .context-compaction-preview {
+    color: var(--muted);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .context-compaction-body {
+    font-size: 13px;
+    line-height: 1.65;
+    color: var(--text);
+    padding-top: 4px;
+    flex: 1;
+    min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .context-compaction-pre {
+    background: rgba(201, 168, 76, 0.04);
+    border: 1px solid rgba(201, 168, 76, 0.15);
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: auto;
+  }
+
+  /* Light theme context compaction overrides */
+  :root[data-theme="light"] .context-compaction-header {
+    background: rgba(138, 101, 32, 0.06);
+    border-color: rgba(138, 101, 32, 0.12);
+  }
+
+  :root[data-theme="light"] .context-compaction-header:hover {
+    background: rgba(138, 101, 32, 0.1);
+    border-color: rgba(138, 101, 32, 0.2);
+  }
+
+  :root[data-theme="light"] .context-compaction-pre {
+    border-color: rgba(138, 101, 32, 0.15);
+    background: rgba(138, 101, 32, 0.04);
+  }
+
   /* Tool card */
   .tool-card {
     border-radius: 10px;

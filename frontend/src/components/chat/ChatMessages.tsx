@@ -1,6 +1,6 @@
 import React, { forwardRef, useEffect, useRef } from 'react';
 import type { Message } from '@/types';
-import MessageRow, { ReasoningMessageRow, extractThinkingText } from './MessageRow';
+import MessageRow, { ReasoningMessageRow, extractThinkingText, isContextCompactionMessage, ContextCompactionMessageRow } from './MessageRow';
 import { useChatStore } from '@/stores/useChatStore';
 
 interface ChatMessagesProps {
@@ -96,6 +96,17 @@ const ChatMessages = forwardRef<HTMLDivElement, ChatMessagesProps>(
                 // For assistant messages, collect following tool messages
                 if (message.role === 'assistant') {
                   renderedIndices.add(i);
+
+                  // Check for context compaction message - render as collapsed card
+                  if (isContextCompactionMessage(message)) {
+                    result.push(
+                      <ContextCompactionMessageRow
+                        key={`compaction-${i}`}
+                        message={message}
+                      />
+                    );
+                    continue;
+                  }
                   
                   // Collect tool_call_ids from this assistant message
                   const toolCallIds = new Set<string>();
