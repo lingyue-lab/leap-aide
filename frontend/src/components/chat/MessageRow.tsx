@@ -524,14 +524,10 @@ export default function MessageRow({ message, messages = [], toolCalls = [], isS
     return elements.length > 0 ? <>{elements}</> : null;
   }, [message.content, message.role, isStreaming, toolCallMap, strippedContent]);
 
-  // Handle tool role messages separately - after all hooks are called
-  if (message.role === 'tool') {
-    return <ToolMessageRow message={message} messages={messages} toolCallMap={toolCallMap} />;
-  }
-
   const msgBodyRef = useRef<HTMLDivElement>(null);
 
   // Inject copy buttons into <pre> elements after render
+  // (runs after all hooks to comply with Rules of Hooks)
   useEffect(() => {
     const container = msgBodyRef.current;
     if (!container) return;
@@ -571,6 +567,11 @@ export default function MessageRow({ message, messages = [], toolCalls = [], isS
       pre.appendChild(btn);
     });
   });
+
+  // Handle tool role messages separately - after all hooks are called
+  if (message.role === 'tool') {
+    return <ToolMessageRow message={message} messages={messages} toolCallMap={toolCallMap} />;
+  }
 
   return (
     <div 
