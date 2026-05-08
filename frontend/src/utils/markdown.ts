@@ -1,5 +1,6 @@
 import katex from 'katex';
 import Prism from 'prismjs';
+import 'prismjs/themes/prism-tomorrow.css';
 import 'prismjs/components/prism-javascript';
 import 'prismjs/components/prism-typescript';
 import 'prismjs/components/prism-python';
@@ -11,196 +12,248 @@ import 'prismjs/components/prism-css';
 import 'prismjs/components/prism-go';
 import 'prismjs/components/prism-rust';
 
-// Stash/restore patterns for protecting content during processing
-const STASH_PATTERNS = {
-  fence: /(`{3,})(\w*)\n([\s\S]*?)\1/g,
-  inlineCode: /`([^`\n]+)`/g,
-  mathBlock: /\$\$([\s\S]+?)\$\$/g,
-  mathInline: /\$([^\s$][^$]*?[^\s$])\$/g,
-  media: /~~M:(\w+):(\d+)~~/g,
-  link: /\[([^\]]*)\]\(([^)]+)\)/g,
-};
+// Use non-printable control chars as stash delimiters - safe from markdown processing
+const STASH_PREFIX = '\x02';
+const STASH_SUFFIX = '\x03';
 
-const STASH_KEY = '___STASH___';
-const stashMap: Map<string, string> = new Map();
-let stashCounter = 0;
+interface StashState {
+  map: Map<string, string>;
+  counter: number;
+}
 
-function stash(content: string): string {
-  const key = `${STASH_KEY}${stashCounter++}___`;
-  stashMap.set(key, content);
+function createStash(): StashState {
+  return { map: new Map(), counter: 0 };
+}
+
+function stashPut(state: StashState, content: string): string {
+  const key = `${STASH_PREFIX}${state.counter++}${STASH_SUFFIX}`;
+  state.map.set(key, content);
   return key;
 }
 
-function restore(html: string): string {
+// Single pass restore - no loops, no recursion
+function restore(state: StashState, html: string): string {
+  if (state.map.size === 0) return html;
   let result = html;
-  stashMap.forEach((value, key) => {
-    result = result.replace(key, value);
+  state.map.forEach((value, key) => {
+    result = result.split(key).join(value);
   });
   return result;
+}
+
+function escapeHTML(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 function decodeHTMLEntities(text: string): string {
-  const entities: Record<string, string> = {
-    '&#60;': '<',
-    '&#62;': '>',
-    '&#x3C;': '<',
-    '&#x3E;': '>',
-    '&lt;': '<',
-    '&gt;': '>',
-    '&amp;': '&',
-    '&quot;': '"',
-    '&#39;': "'",
-    '&nbsp;': ' ',
+  const map: Record<string, string> = {
+    '&lt;': '<', '&gt;': '>', '&amp;': '&',
+    '&quot;': '"', '&#39;': "'", '&nbsp;': ' ',
+    '&#60;': '<', '&#62;': '>', '&#x3C;': '<', '&#x3E;': '>',
   };
-  
   let result = text;
-  Object.entries(entities).forEach(([entity, char]) => {
+  for (const [entity, char] of Object.entries(map)) {
     result = result.split(entity).join(char);
+  }
+  return result;
+}
+
+function protectCodeBlocks(state: StashState, text: string): string {
+  return text.replace(/(`{3,}|~{3,})(\w*)\n([\s\S]*?)\1/g, (_, _ticks, lang, code) => {
+    const langAttr = (lang || 'text').trim();
+    // Remove trailing newline before closing fence
+    const trimmedCode = code.endsWith('\n') ? code.slice(0, -1) : code;
+    let highlighted: string;
+    try {
+      const grammar = Prism.languages[langAttr];
+      highlighted = grammar
+        ? Prism.highlight(trimmedCode, grammar, langAttr)
+        : escapeHTML(trimmedCode);
+    } catch {
+      highlighted = escapeHTML(trimmedCode);
+    }
+    const html = `<pre class="language-${langAttr}"><code class="language-${langAttr}">${highlighted}</code></pre>`;
+    return stashPut(state, html);
+  });
+}
+
+function protectInlineCode(state: StashState, text: string): string {
+  return text.replace(/`([^`\n]+)`/g, (_, code) => {
+    return stashPut(state, `<code class="inline-code">${escapeHTML(code)}</code>`);
+  });
+}
+
+function processMathBlocks(state: StashState, text: string): string {
+  // Display math
+  let result = text.replace(/\$\$([\s\S]+?)\$\$/g, (_, math) => {
+    try {
+      return stashPut(state, `<div class="katex-block">${katex.renderToString(math, { displayMode: true })}</div>`);
+    } catch {
+      return stashPut(state, `<div class="katex-block katex-error">${escapeHTML(math)}</div>`);
+    }
+  });
+  // Inline math
+  result = result.replace(/\$([^\s$][^$]*?[^\s$])\$/g, (_, math) => {
+    try {
+      return stashPut(state, `<span class="katex-inline">${katex.renderToString(math, { displayMode: false })}</span>`);
+    } catch {
+      return stashPut(state, `<span class="katex-inline katex-error">${escapeHTML(math)}</span>`);
+    }
   });
   return result;
 }
 
-function protectCodeBlocks(text: string): string {
-  // Protect fenced code blocks
-  return text.replace(STASH_PATTERNS.fence, (_, _ticks, lang, code) => {
-    const escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    return stash(`<pre><code class="language-${lang || 'text'}">${escaped}</code></pre>`);
-  });
-}
-
-function protectInlineCode(text: string): string {
-  return text.replace(STASH_PATTERNS.inlineCode, (_, code) => {
-    const escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    return stash(`<code>${escaped}</code>`);
-  });
-}
-
-function processMathBlocks(text: string): string {
-  // Display math $$...$$
-  let result = text.replace(STASH_PATTERNS.mathBlock, (_, math) => {
-    try {
-      return stash(`<div class="katex-block">${katex.renderToString(math, { displayMode: true })}</div>`);
-    } catch {
-      return stash(`<div class="katex-block katex-error">$${math}$</div>`);
-    }
-  });
-  
-  // Inline math $...$
-  result = result.replace(STASH_PATTERNS.mathInline, (_, math) => {
-    try {
-      return stash(`<span class="katex-inline">${katex.renderToString(math, { displayMode: false })}</span>`);
-    } catch {
-      return stash(`<span class="katex-inline katex-error">$${math}$</span>`);
-    }
-  });
-  
-  return result;
-}
-
-function processCodeBlocks(html: string): string {
-  // Apply syntax highlighting to code blocks
-  return html.replace(/<pre><code class="language-(\w+)">([\s\S]*?)<\/code><\/pre>/g, (_, lang, code) => {
-    const decodedCode = decodeURIComponent(code);
-    try {
-      const grammar = Prism.languages[lang] || Prism.languages.text;
-      const highlighted = Prism.highlight(decodedCode, grammar, lang);
-      return `<pre class="language-${lang}"><code class="language-${lang}">${highlighted}</code></pre>`;
-    } catch {
-      return `<pre class="language-${lang}"><code class="language-${lang}">${code}</code></pre>`;
-    }
-  });
-}
-
-function processInlineMarkdown(text: string): string {
-  let result = text;
-  
-  // Headers
-  result = result.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-  result = result.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-  result = result.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-  
-  // Bold and italic
-  result = result.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
-  result = result.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  result = result.replace(/\*(.+?)\*/g, '<em>$1</em>');
-  result = result.replace(/___(.+?)___/g, '<strong><em>$1</em></strong>');
-  result = result.replace(/__(.+?)__/g, '<strong>$1</strong>');
-  result = result.replace(/_(.+?)_/g, '<em>$1</em>');
-  
-  // Strikethrough
-  result = result.replace(/~~(.+?)~~/g, '<del>$1</del>');
-  
-  // Blockquotes
-  result = result.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
-  
-  // Horizontal rule
-  result = result.replace(/^---$/gm, '<hr />');
-  
-  // Unordered lists
-  result = result.replace(/^- (.+)$/gm, '<li>$1</li>');
-  result = result.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
-  
-  // Ordered lists
-  result = result.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
-  
+// Inline formatting - applied to text segments only
+function applyInlineFormatting(text: string): string {
+  let r = text;
+  // Images before links
+  r = r.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" loading="lazy" />');
   // Links
-  result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-  
-  // Images
-  result = result.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" loading="lazy" />');
-  
-  // Line breaks and paragraphs
-  result = result.split('\n\n').map(para => {
-    if (para.trim() && !para.startsWith('<')) {
-      return `<p>${para.replace(/\n/g, '<br />')}</p>`;
+  r = r.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  // Bold+italic
+  r = r.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+  // Bold
+  r = r.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  r = r.replace(/__(.+?)__/g, '<strong>$1</strong>');
+  // Italic
+  r = r.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+  r = r.replace(/_([^_\n]+)_/g, '<em>$1</em>');
+  // Strikethrough
+  r = r.replace(/~~(.+?)~~/g, '<del>$1</del>');
+  return r;
+}
+
+function processMarkdownLines(text: string): string {
+  const lines = text.split('\n');
+  const out: string[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Stash token (code block placeholder) - output as-is
+    if (line.startsWith(STASH_PREFIX)) {
+      out.push(line);
+      i++;
+      continue;
     }
-    return para;
-  }).join('\n');
-  
-  return result;
+
+    // Headings
+    let m = line.match(/^(#{1,6})\s+(.+)$/);
+    if (m) {
+      const level = m[1].length;
+      out.push(`<h${level}>${applyInlineFormatting(m[2])}</h${level}>`);
+      i++;
+      continue;
+    }
+
+    // Horizontal rule
+    if (/^(\*{3,}|-{3,}|_{3,})$/.test(line.trim())) {
+      out.push('<hr />');
+      i++;
+      continue;
+    }
+
+    // Blockquote
+    if (line.startsWith('> ')) {
+      const quoteLines: string[] = [];
+      while (i < lines.length && lines[i].startsWith('> ')) {
+        quoteLines.push(lines[i].slice(2));
+        i++;
+      }
+      out.push(`<blockquote>${processMarkdownLines(quoteLines.join('\n'))}</blockquote>`);
+      continue;
+    }
+
+    // Unordered list
+    if (/^[-*+] /.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && /^[-*+] /.test(lines[i])) {
+        items.push(`<li>${applyInlineFormatting(lines[i].replace(/^[-*+] /, ''))}</li>`);
+        i++;
+      }
+      out.push(`<ul>${items.join('')}</ul>`);
+      continue;
+    }
+
+    // Ordered list
+    if (/^\d+\.\s+/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\d+\.\s+/.test(lines[i])) {
+        items.push(`<li>${applyInlineFormatting(lines[i].replace(/^\d+\.\s+/, ''))}</li>`);
+        i++;
+      }
+      out.push(`<ol>${items.join('')}</ol>`);
+      continue;
+    }
+
+    // Empty line
+    if (line.trim() === '') {
+      out.push('');
+      i++;
+      continue;
+    }
+
+    // Paragraph: collect consecutive "plain" lines
+    const paraLines: string[] = [];
+    while (
+      i < lines.length &&
+      lines[i].trim() !== '' &&
+      !lines[i].startsWith(STASH_PREFIX) &&
+      !/^#{1,6}\s/.test(lines[i]) &&
+      !/^[-*+] /.test(lines[i]) &&
+      !/^\d+\.\s/.test(lines[i]) &&
+      !lines[i].startsWith('> ') &&
+      !/^(\*{3,}|-{3,}|_{3,})$/.test(lines[i].trim())
+    ) {
+      paraLines.push(lines[i]);
+      i++;
+    }
+    if (paraLines.length > 0) {
+      const inner = paraLines.map(l => applyInlineFormatting(l)).join('<br />');
+      out.push(`<p>${inner}</p>`);
+    }
+  }
+
+  return out.join('\n');
 }
 
 function sanitizeHTML(html: string): string {
-  // Remove any script tags or dangerous content
-  let result = html.replace(/<script[\s\S]*?<\/script>/gi, '');
-  result = result.replace(/on\w+="[^"]*"/gi, '');
-  result = result.replace(/javascript:/gi, '');
-  return result;
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/\son\w+="[^"]*"/gi, '')
+    .replace(/javascript:/gi, '');
 }
 
 export function renderMarkdown(raw: string): string {
   if (!raw) return '';
-  
-  // Clear stash
-  stashMap.clear();
-  stashCounter = 0;
-  
-  let html = raw;
-  
-  // 1. Decode HTML entities
-  html = decodeHTMLEntities(html);
-  
-  // 2. Protect code blocks
-  html = protectCodeBlocks(html);
-  
+
+  const state = createStash();
+
+  // 1. Decode pre-escaped HTML entities
+  let html = decodeHTMLEntities(raw);
+
+  // 2. Protect fenced code blocks (syntax highlighted)
+  html = protectCodeBlocks(state, html);
+
   // 3. Protect inline code
-  html = protectInlineCode(html);
-  
-  // 4. Process math blocks
-  html = processMathBlocks(html);
-  
-  // 5. Process inline markdown
-  html = processInlineMarkdown(html);
-  
-  // 6. Apply syntax highlighting
-  html = processCodeBlocks(html);
-  
-  // 7. Restore protected content
-  html = restore(html);
-  
-  // 8. Sanitize
+  html = protectInlineCode(state, html);
+
+  // 4. Protect math
+  html = processMathBlocks(state, html);
+
+  // 5. Process markdown structure
+  html = processMarkdownLines(html);
+
+  // 6. Restore stashed content (single pass, safe)
+  html = restore(state, html);
+
+  // 7. Sanitize
   html = sanitizeHTML(html);
-  
+
   return html;
 }
 

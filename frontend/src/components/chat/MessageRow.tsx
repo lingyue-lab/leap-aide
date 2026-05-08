@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import type { Message, ContentBlock, ToolCall } from '@/types';
 import { renderMarkdown } from '@/utils/markdown';
 
@@ -377,6 +377,19 @@ function ToolMessageRow({ message, messages, toolCallMap }: { message: Message; 
   );
 }
 
+function fallbackCopy(text: string) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.top = '-9999px';
+  ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  try { document.execCommand('copy'); } catch { /* ignore */ }
+  document.body.removeChild(ta);
+}
+
 export default function MessageRow({ message, messages = [], toolCalls = [], isStreaming }: MessageRowProps) {
   const roleClass = message.role === 'user' 
     ? 'msg-role user' 
@@ -516,6 +529,49 @@ export default function MessageRow({ message, messages = [], toolCalls = [], isS
     return <ToolMessageRow message={message} messages={messages} toolCallMap={toolCallMap} />;
   }
 
+  const msgBodyRef = useRef<HTMLDivElement>(null);
+
+  // Inject copy buttons into <pre> elements after render
+  useEffect(() => {
+    const container = msgBodyRef.current;
+    if (!container) return;
+    const pres = container.querySelectorAll<HTMLElement>('pre[class*="language-"]');
+    pres.forEach(pre => {
+      if (pre.querySelector('.code-copy-btn')) return; // already added
+      const code = pre.querySelector('code');
+      if (!code) return;
+      const btn = document.createElement('button');
+      btn.className = 'code-copy-btn';
+      btn.title = 'Copy';
+      btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+      btn.addEventListener('click', () => {
+        const text = code.textContent || '';
+        const copyIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+        const checkIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+        const onSuccess = () => {
+          btn.innerHTML = checkIcon;
+          btn.classList.add('copied');
+          setTimeout(() => {
+            btn.innerHTML = copyIcon;
+            btn.classList.remove('copied');
+          }, 2000);
+        };
+        // Clipboard API requires HTTPS; fall back to execCommand for HTTP
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(text).then(onSuccess).catch(() => {
+            fallbackCopy(text);
+            onSuccess();
+          });
+        } else {
+          fallbackCopy(text);
+          onSuccess();
+        }
+      });
+      pre.style.position = 'relative';
+      pre.appendChild(btn);
+    });
+  });
+
   return (
     <div 
       className={`msg-row${message.role === 'user' ? ' user-message' : ''}`}
@@ -528,7 +584,7 @@ export default function MessageRow({ message, messages = [], toolCalls = [], isS
         <span>{roleText}</span>
       </div>
       
-      <div className="msg-body">
+      <div className="msg-body" ref={msgBodyRef}>
         {content}
         
         {message.attachments && message.attachments.length > 0 && (
