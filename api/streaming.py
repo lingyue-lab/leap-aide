@@ -1888,11 +1888,13 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         'message': 'Context auto-compressed to continue the conversation',
                     })
 
-                # Stamp 'timestamp' on any messages that don't have one yet
-                _now = time.time()
+                # Stamp 'timestamp' on any new messages that don't have one yet.
+                # Only process messages added in this turn (not in _previous_messages)
+                # to avoid overwriting different-time messages with a single shared timestamp.
+                _prev_msg_ids = {id(m) for m in _previous_messages}
                 for _m in s.messages:
-                    if isinstance(_m, dict) and not _m.get('timestamp') and not _m.get('_ts'):
-                        _m['timestamp'] = int(_now)
+                    if id(_m) not in _prev_msg_ids and isinstance(_m, dict) and not _m.get('timestamp') and not _m.get('_ts'):
+                        _m['timestamp'] = int(time.time())
                 # Only auto-generate title when still default; preserves user renames
                 if s.title == 'Untitled' or s.title == 'New Chat' or not s.title:
                     s.title = title_from(s.messages, s.title)

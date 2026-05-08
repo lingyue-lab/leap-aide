@@ -69,6 +69,18 @@ const ChatMessages = forwardRef<HTMLDivElement, ChatMessagesProps>(
       streaming
     ]);
 
+    // Sort messages by timestamp; when timestamps are equal, preserve original order.
+    const sortedMessages = React.useMemo(() => {
+      const indexed = messages.map((m, i) => ({ m, i }));
+      indexed.sort((a, b) => {
+        const tsA = a.m._ts ?? a.m.timestamp ?? 0;
+        const tsB = b.m._ts ?? b.m.timestamp ?? 0;
+        if (tsA !== tsB) return tsA - tsB;
+        return a.i - b.i;
+      });
+      return indexed.map(({ m }) => m);
+    }, [messages]);
+
     return (
       <div
         ref={scrollRef}
@@ -88,10 +100,10 @@ const ChatMessages = forwardRef<HTMLDivElement, ChatMessagesProps>(
               const renderedIndices = new Set<number>();
               const result: React.ReactNode[] = [];
               
-              for (let i = 0; i < messages.length; i++) {
+              for (let i = 0; i < sortedMessages.length; i++) {
                 if (renderedIndices.has(i)) continue;
                 
-                const message = messages[i];
+                const message = sortedMessages[i];
                 
                 // For assistant messages, collect following tool messages
                 if (message.role === 'assistant') {
@@ -151,18 +163,18 @@ const ChatMessages = forwardRef<HTMLDivElement, ChatMessagesProps>(
                     <MessageRow
                       key={`msg-${i}`}
                       message={message}
-                      messages={messages}
+                      messages={sortedMessages}
                       toolCalls={toolCalls}
-                      isStreaming={streaming && i === messages.length - 1}
+                      isStreaming={streaming && i === sortedMessages.length - 1}
                       onFileOpen={onFileOpen}
                     />
                   );
                   
                   // Collect following tool messages until next non-tool message
-                  const isStreamingAssistant = streaming && i === messages.length - 1;
+                  const isStreamingAssistant = streaming && i === sortedMessages.length - 1;
                   
-                  for (let j = i + 1; j < messages.length; j++) {
-                    const nextMsg = messages[j];
+                  for (let j = i + 1; j < sortedMessages.length; j++) {
+                    const nextMsg = sortedMessages[j];
                     if (nextMsg.role !== 'tool') break;
                     
                     const tcId = nextMsg.tool_call_id || '';
@@ -181,7 +193,7 @@ const ChatMessages = forwardRef<HTMLDivElement, ChatMessagesProps>(
                         <MessageRow
                           key={`msg-${j}`}
                           message={nextMsg}
-                          messages={messages}
+                          messages={sortedMessages}
                           toolCalls={toolCalls}
                           isStreaming={false}
                           onFileOpen={onFileOpen}
@@ -207,7 +219,7 @@ const ChatMessages = forwardRef<HTMLDivElement, ChatMessagesProps>(
                     <MessageRow
                       key={`msg-${i}`}
                       message={message}
-                      messages={messages}
+                      messages={sortedMessages}
                       toolCalls={toolCalls}
                       isStreaming={false}
                       onFileOpen={onFileOpen}
@@ -220,7 +232,7 @@ const ChatMessages = forwardRef<HTMLDivElement, ChatMessagesProps>(
                     <MessageRow
                       key={`msg-${i}`}
                       message={message}
-                      messages={messages}
+                      messages={sortedMessages}
                       toolCalls={toolCalls}
                       isStreaming={false}
                       onFileOpen={onFileOpen}
