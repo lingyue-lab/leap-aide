@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, startTransition } from 'react';
 import { chatService } from '@/services/api';
 import { useChatStore } from '@/stores/useChatStore';
 import { useSessionStore } from '@/stores/useSessionStore';
@@ -26,32 +26,44 @@ export function useChatStream() {
   useEffect(() => {
     const unsubscribe = StreamManager.subscribe(
       (sessionId: string, state: SessionStreamState) => {
-        // Push the latest stream state into the store cache for that session.
-        // updateSessionCache is smart: if sessionId === _currentSessionId it
-        // also updates the live messages/busy/etc. shown on screen.
-        updateSessionCache(sessionId, {
-          messages: state.messages,
-          toolCalls: state.toolCalls,
-          busy: state.busy,
-          activeStreamId: state.streaming ? state.streamId : null,
-          lastUsage: state.lastUsage ?? null,
-        });
+        // Important state changes (stream start/end/error) update synchronously
+        const isImportantUpdate = !state.streaming || state.completedAt != null;
 
-        // When a stream finishes and it's the active session, reload from
-        // backend to get the fully-persisted version (tool outputs etc.)
-        if (!state.streaming && state.completedAt) {
-          const currentId = useSessionStore.getState().currentSessionId;
-          if (currentId === sessionId) {
-            loadSession(sessionId).then(() => {
-              const session = useSessionStore.getState().currentSession;
-              if (session?.messages) {
-                useChatStore.getState().setMessages(session.messages);
-              }
-              if (session?.tool_calls) {
-                useChatStore.getState().setToolCalls(session.tool_calls);
-              }
-            });
+        const doUpdate = () => {
+          updateSessionCache(sessionId, {
+            messages: state.messages,
+            toolCalls: state.toolCalls,
+            busy: state.busy,
+            activeStreamId: state.streaming ? state.streamId : null,
+            lastUsage: state.lastUsage ?? null,
+          });
+
+          // When a stream finishes and it's the active session, reload from
+          // backend to get the fully-persisted version (tool outputs etc.)
+          if (!state.streaming && state.completedAt) {
+            const currentId = useSessionStore.getState().currentSessionId;
+            if (currentId === sessionId) {
+              loadSession(sessionId).then(() => {
+                const session = useSessionStore.getState().currentSession;
+                if (session?.messages) {
+                  useChatStore.getState().setMessages(session.messages);
+                }
+                if (session?.tool_calls) {
+                  useChatStore.getState().setToolCalls(session.tool_calls);
+                }
+              });
+            }
           }
+        };
+
+        if (isImportantUpdate) {
+          // Sync update for important events (stream done/error/start)
+          doUpdate();
+        } else {
+          // Use startTransition for token updates — allows React to interrupt
+          // this render if higher-priority work comes in (user interaction etc.)
+          // This is the key fix: prevents token updates from blocking the main thread
+          startTransition(doUpdate);
         }
       }
     );

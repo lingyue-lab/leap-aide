@@ -1,5 +1,5 @@
-import React, { forwardRef, useEffect, useRef } from 'react';
-import type { Message } from '@/types';
+import React, { forwardRef, useEffect, useRef, useMemo } from 'react';
+import type { Message, ToolCall } from '@/types';
 import MessageRow, { ReasoningMessageRow, extractThinkingText, isContextCompactionMessage, ContextCompactionMessageRow } from './MessageRow';
 import { useChatStore } from '@/stores/useChatStore';
 
@@ -9,11 +9,15 @@ interface ChatMessagesProps {
   onFileOpen?: (path: string) => void;
 }
 
-const ChatMessages = forwardRef<HTMLDivElement, ChatMessagesProps>(
+// Stable selector: only re-render when toolCalls array reference changes
+// Zustand's `set()` with same-reference check will avoid unnecessary re-renders
+const selectToolCalls = (s: { toolCalls: ToolCall[] }) => s.toolCalls;
+
+const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
   ({ messages, streaming, onFileOpen }, ref) => {
     const innerRef = useRef<HTMLDivElement>(null);
     const scrollRef = ref || innerRef;
-    const toolCalls = useChatStore((s) => s.toolCalls);
+    const toolCalls = useChatStore(selectToolCalls);
 
     // Auto-scroll logic
     const _scrollPinned = useRef(true);
@@ -45,29 +49,25 @@ const ChatMessages = forwardRef<HTMLDivElement, ChatMessagesProps>(
     }, [messages.length, scrollRef]);
 
     // Auto-scroll during streaming when content updates
+    // Use a ref to track last content length to avoid triggering on every token
+    const lastContentLenRef = useRef(0);
     useEffect(() => {
       if (!streaming || !_scrollPinned.current) return;
       const el = scrollRef as React.RefObject<HTMLDivElement>;
       if (!el.current) return;
 
-      // Use requestAnimationFrame for smooth scrolling during streaming
-      const scrollToBottom = () => {
-        if (el.current) {
-          el.current.scrollTo({
-            top: el.current.scrollHeight,
-            behavior: 'smooth'
-          });
-        }
-      };
+      // Only scroll if content length changed by at least 50 chars (reduce thrashing)
+      const lastMsg = messages[messages.length - 1];
+      const contentLen = typeof lastMsg?.content === 'string' 
+        ? lastMsg.content.length 
+        : JSON.stringify(lastMsg?.content || '').length;
+      
+      if (Math.abs(contentLen - lastContentLenRef.current) < 50) return;
+      lastContentLenRef.current = contentLen;
 
-      // Scroll on next frame to ensure DOM has updated
-      requestAnimationFrame(scrollToBottom);
-    }, [
-      // Track content and reasoning changes of the last assistant message during streaming
-      streaming ? messages[messages.length - 1]?.content : null,
-      streaming ? messages[messages.length - 1]?.reasoning : null,
-      streaming
-    ]);
+      // Use instant scroll during streaming to avoid thrashing from repeated smooth animations
+      el.current.scrollTop = el.current.scrollHeight;
+    }, [streaming, messages]);
 
     // Sort messages by timestamp; when timestamps are equal, preserve original order.
     const sortedMessages = React.useMemo(() => {
@@ -81,6 +81,18 @@ const ChatMessages = forwardRef<HTMLDivElement, ChatMessagesProps>(
       return indexed.map(({ m }) => m);
     }, [messages]);
 
+    // Helper: get local date string "M月D日" from a unix timestamp (seconds)
+    const getLocalDateLabel = (ts: number): string => {
+      const d = new Date(ts * 1000);
+      return `${d.getMonth() + 1}月${d.getDate()}日`;
+    };
+
+    // Helper: get local date key "YYYY-MM-DD" for deduplication
+    const getLocalDateKey = (ts: number): string => {
+      const d = new Date(ts * 1000);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    };
+
     return (
       <div
         ref={scrollRef}
@@ -93,17 +105,32 @@ const ChatMessages = forwardRef<HTMLDivElement, ChatMessagesProps>(
             <div style={{ display: 'none' }} id="emptyState" />
           )}
           
-          <div id="msgInner" style={{ maxWidth: '800px', margin: '0 auto', width: '100%', padding: '0 24px' }}>
-            {(() => {
+          <div id="msgInner" style={{ width: '100%', padding: '0' }}>
+            {useMemo(() => {
               // Sprint 15: Each tool message should be preceded by Hermes separator
               // to show that Hermes triggered the tool call
               const renderedIndices = new Set<number>();
               const result: React.ReactNode[] = [];
+              let lastDateKey = '';
               
               for (let i = 0; i < sortedMessages.length; i++) {
                 if (renderedIndices.has(i)) continue;
                 
                 const message = sortedMessages[i];
+                const msgTs = message._ts ?? message.timestamp ?? 0;
+
+                // Insert date separator when the day changes
+                if (msgTs) {
+                  const dateKey = getLocalDateKey(msgTs);
+                  if (dateKey !== lastDateKey) {
+                    lastDateKey = dateKey;
+                    result.push(
+                      <div key={`date-sep-${dateKey}`} className="msg-date-sep">
+                        <span>{getLocalDateLabel(msgTs)}</span>
+                      </div>
+                    );
+                  }
+                }
                 
                 // For assistant messages, collect following tool messages
                 if (message.role === 'assistant') {
@@ -111,6 +138,14 @@ const ChatMessages = forwardRef<HTMLDivElement, ChatMessagesProps>(
 
                   // Check for context compaction message - render as collapsed card
                   if (isContextCompactionMessage(message)) {
+                    result.push(
+                      <div key={`compaction-sep-${i}`} className="msg-row hermes-separator compaction-separator">
+                        <div className="msg-role assistant">
+                          <div className="role-icon assistant">H</div>
+                          <span>Hermes</span>
+                        </div>
+                      </div>
+                    );
                     result.push(
                       <ContextCompactionMessageRow
                         key={`compaction-${i}`}
@@ -242,13 +277,12 @@ const ChatMessages = forwardRef<HTMLDivElement, ChatMessagesProps>(
               }
               
               return result;
-            })()}
+            }, [sortedMessages, streaming, toolCalls, onFileOpen])}
           </div>
         </div>
       </div>
     );
-  }
-);
+  }));
 
 ChatMessages.displayName = 'ChatMessages';
 

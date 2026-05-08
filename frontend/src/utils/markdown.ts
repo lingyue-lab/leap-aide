@@ -48,32 +48,35 @@ function escapeHTML(text: string): string {
     .replace(/>/g, '&gt;');
 }
 
-function decodeHTMLEntities(text: string): string {
-  const map: Record<string, string> = {
-    '&lt;': '<', '&gt;': '>', '&amp;': '&',
-    '&quot;': '"', '&#39;': "'", '&nbsp;': ' ',
-    '&#60;': '<', '&#62;': '>', '&#x3C;': '<', '&#x3E;': '>',
-  };
-  let result = text;
-  for (const [entity, char] of Object.entries(map)) {
-    result = result.split(entity).join(char);
-  }
-  return result;
-}
+// Maximum characters for syntax highlighting; longer code blocks render as plain text
+const MAX_HIGHLIGHT_LENGTH = 3000;
 
-function protectCodeBlocks(state: StashState, text: string): string {
+function protectCodeBlocks(state: StashState, text: string, skipHighlight: boolean = false): string {
+  // Guard: if an unclosed code fence exists on a large input, the regex will
+  // backtrack catastrophically (ReDoS). Skip code-block processing in that case.
+  const openFences = (text.match(/^(`{3,}|~{3,})\w*/gm) || []).length;
+  const closeFences = (text.match(/^(`{3,}|~{3,})$/gm) || []).length;
+  if (openFences > closeFences && text.length > 500) {
+    return text;
+  }
+
   return text.replace(/(`{3,}|~{3,})(\w*)\n([\s\S]*?)\1/g, (_, _ticks, lang, code) => {
     const langAttr = (lang || 'text').trim();
     // Remove trailing newline before closing fence
     const trimmedCode = code.endsWith('\n') ? code.slice(0, -1) : code;
     let highlighted: string;
-    try {
-      const grammar = Prism.languages[langAttr];
-      highlighted = grammar
-        ? Prism.highlight(trimmedCode, grammar, langAttr)
-        : escapeHTML(trimmedCode);
-    } catch {
+    // Skip expensive syntax highlighting during streaming or for very long code blocks
+    if (skipHighlight || trimmedCode.length > MAX_HIGHLIGHT_LENGTH) {
       highlighted = escapeHTML(trimmedCode);
+    } else {
+      try {
+        const grammar = Prism.languages[langAttr];
+        highlighted = grammar
+          ? Prism.highlight(trimmedCode, grammar, langAttr)
+          : escapeHTML(trimmedCode);
+      } catch {
+        highlighted = escapeHTML(trimmedCode);
+      }
     }
     const html = `<pre class="language-${langAttr}"><code class="language-${langAttr}">${highlighted}</code></pre>`;
     return stashPut(state, html);
@@ -87,22 +90,33 @@ function protectInlineCode(state: StashState, text: string): string {
 }
 
 function processMathBlocks(state: StashState, text: string): string {
-  // Display math
-  let result = text.replace(/\$\$([\s\S]+?)\$\$/g, (_, math) => {
-    try {
-      return stashPut(state, `<div class="katex-block">${katex.renderToString(math, { displayMode: true })}</div>`);
-    } catch {
-      return stashPut(state, `<div class="katex-block katex-error">${escapeHTML(math)}</div>`);
-    }
-  });
-  // Inline math
-  result = result.replace(/\$([^\s$][^$]*?[^\s$])\$/g, (_, math) => {
-    try {
-      return stashPut(state, `<span class="katex-inline">${katex.renderToString(math, { displayMode: false })}</span>`);
-    } catch {
-      return stashPut(state, `<span class="katex-inline katex-error">${escapeHTML(math)}</span>`);
-    }
-  });
+  // Guard: only process $$ if they appear in balanced pairs (even count).
+  // An odd number means an unclosed delimiter which causes catastrophic backtracking.
+  const ddCount = (text.match(/\$\$/g) || []).length;
+  let result = text;
+
+  if (ddCount >= 2 && ddCount % 2 === 0) {
+    result = result.replace(/\$\$([\s\S]+?)\$\$/g, (_, math) => {
+      try {
+        return stashPut(state, `<div class="katex-block">${katex.renderToString(math, { displayMode: true })}</div>`);
+      } catch {
+        return stashPut(state, `<div class="katex-block katex-error">${escapeHTML(math)}</div>`);
+      }
+    });
+  }
+
+  // Inline math — only when at least two $ signs remain
+  const dollarCount = (result.match(/\$/g) || []).length;
+  if (dollarCount >= 2) {
+    result = result.replace(/\$([^\s$][^$]*?[^\s$])\$/g, (_, math) => {
+      try {
+        return stashPut(state, `<span class="katex-inline">${katex.renderToString(math, { displayMode: false })}</span>`);
+      } catch {
+        return stashPut(state, `<span class="katex-inline katex-error">${escapeHTML(math)}</span>`);
+      }
+    });
+  }
+
   return result;
 }
 
@@ -126,12 +140,30 @@ function applyInlineFormatting(text: string): string {
   return r;
 }
 
-function processMarkdownLines(text: string): string {
+const MAX_LINES = 2000;
+const MAX_RECURSION_DEPTH = 5;
+
+function processMarkdownLines(text: string, _depth: number = 0): string {
+  if (_depth > MAX_RECURSION_DEPTH) {
+    return escapeHTML(text);
+  }
+
   const lines = text.split('\n');
+  if (lines.length > MAX_LINES) {
+    lines.length = MAX_LINES;
+  }
+
   const out: string[] = [];
   let i = 0;
+  let safetyCounter = 0;
 
   while (i < lines.length) {
+    safetyCounter++;
+    if (safetyCounter > MAX_LINES * 3) {
+      break;
+    }
+
+    const prevI = i;
     const line = lines[i];
 
     // Stash token (code block placeholder) - output as-is
@@ -142,7 +174,7 @@ function processMarkdownLines(text: string): string {
     }
 
     // Headings
-    let m = line.match(/^(#{1,6})\s+(.+)$/);
+    const m = line.match(/^(#{1,6})\s+(.+)$/);
     if (m) {
       const level = m[1].length;
       out.push(`<h${level}>${applyInlineFormatting(m[2])}</h${level}>`);
@@ -164,7 +196,8 @@ function processMarkdownLines(text: string): string {
         quoteLines.push(lines[i].slice(2));
         i++;
       }
-      out.push(`<blockquote>${processMarkdownLines(quoteLines.join('\n'))}</blockquote>`);
+      out.push(`<blockquote>${processMarkdownLines(quoteLines.join('\n'), _depth + 1)}</blockquote>`);
+      if (i === prevI) { i++; }
       continue;
     }
 
@@ -176,6 +209,7 @@ function processMarkdownLines(text: string): string {
         i++;
       }
       out.push(`<ul>${items.join('')}</ul>`);
+      if (i === prevI) { i++; }
       continue;
     }
 
@@ -187,6 +221,7 @@ function processMarkdownLines(text: string): string {
         i++;
       }
       out.push(`<ol>${items.join('')}</ol>`);
+      if (i === prevI) { i++; }
       continue;
     }
 
@@ -215,6 +250,10 @@ function processMarkdownLines(text: string): string {
     if (paraLines.length > 0) {
       const inner = paraLines.map(l => applyInlineFormatting(l)).join('<br />');
       out.push(`<p>${inner}</p>`);
+    } else {
+      // Force advance to prevent infinite loop on unhandled lines
+      out.push(escapeHTML(line));
+      i++;
     }
   }
 
@@ -228,30 +267,44 @@ function sanitizeHTML(html: string): string {
     .replace(/javascript:/gi, '');
 }
 
-export function renderMarkdown(raw: string): string {
+// Escape HTML in text content (not inside code blocks which are already stashed)
+function escapeHTMLInText(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+export function renderMarkdown(raw: string, skipHighlight: boolean = false): string {
   if (!raw) return '';
+
+  // Hard limit on input size to prevent regex from hanging on very large inputs
+  const MAX_INPUT = 100_000;
+  if (raw.length > MAX_INPUT) {
+    raw = raw.slice(0, MAX_INPUT) + '\n\n*(content truncated for display)*';
+  }
 
   const state = createStash();
 
-  // 1. Decode pre-escaped HTML entities
-  let html = decodeHTMLEntities(raw);
+  // 1. Protect fenced code blocks first (before any HTML escaping)
+  let html = protectCodeBlocks(state, raw, skipHighlight);
 
-  // 2. Protect fenced code blocks (syntax highlighted)
-  html = protectCodeBlocks(state, html);
-
-  // 3. Protect inline code
+  // 2. Protect inline code
   html = protectInlineCode(state, html);
 
-  // 4. Protect math
+  // 3. Protect math blocks
   html = processMathBlocks(state, html);
+
+  // 4. Escape HTML in remaining text (not in stashed code blocks)
+  html = escapeHTMLInText(html);
 
   // 5. Process markdown structure
   html = processMarkdownLines(html);
 
-  // 6. Restore stashed content (single pass, safe)
+  // 6. Restore stashed content (code blocks, inline code, math)
   html = restore(state, html);
 
-  // 7. Sanitize
+  // 7. Final sanitization (remove any script tags that might have slipped through)
   html = sanitizeHTML(html);
 
   return html;

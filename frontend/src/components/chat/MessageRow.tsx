@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, memo } from 'react';
 import type { Message, ContentBlock, ToolCall } from '@/types';
 import { renderMarkdown } from '@/utils/markdown';
 
@@ -146,7 +146,7 @@ export function isContextCompactionMessage(message: Message): boolean {
 }
 
 // Context compaction reference card - collapsed by default
-export function ContextCompactionMessageRow({ message }: { message: Message }) {
+export const ContextCompactionMessageRow = memo(function ContextCompactionMessageRow({ message }: { message: Message }) {
   const [expanded, setExpanded] = useState(false);
   const c = message.content || '';
   const text = typeof c === 'string'
@@ -171,10 +171,14 @@ export function ContextCompactionMessageRow({ message }: { message: Message }) {
       )}
     </div>
   );
-}
+});
+const MessageRow = memo(MessageRowComponent);
+MessageRow.displayName = 'MessageRow';
+
+export default MessageRow;
 
 // Reasoning message row - renders as an independent msg-row, collapsed by default
-export function ReasoningMessageRow({ thinkingText }: { thinkingText: string }) {
+export const ReasoningMessageRow = memo(function ReasoningMessageRow({ thinkingText }: { thinkingText: string }) {
   const [expanded, setExpanded] = useState(false);
   return (
     <div className="msg-row reasoning-message">
@@ -202,7 +206,7 @@ export function ReasoningMessageRow({ thinkingText }: { thinkingText: string }) 
       )}
     </div>
   );
-}
+});
 
 // Extract reasoning/thinking text from a message
 export function extractThinkingText(message: Message): string {
@@ -373,6 +377,15 @@ function ToolMessageRow({ message, messages, toolCallMap }: { message: Message; 
           </div>
         </div>
       )}
+      {(() => {
+        const ts = message._ts ?? message.timestamp;
+        if (!ts) return null;
+        const d = new Date(ts * 1000);
+        const hh = String(d.getHours()).padStart(2, '0');
+        const mm = String(d.getMinutes()).padStart(2, '0');
+        const ss = String(d.getSeconds()).padStart(2, '0');
+        return <div className="msg-timestamp">{hh}:{mm}:{ss}</div>;
+      })()}
     </div>
   );
 }
@@ -390,7 +403,7 @@ function fallbackCopy(text: string) {
   document.body.removeChild(ta);
 }
 
-export default function MessageRow({ message, messages = [], toolCalls = [], isStreaming }: MessageRowProps) {
+function MessageRowComponent({ message, messages = [], toolCalls = [], isStreaming }: MessageRowProps) {
   const roleClass = message.role === 'user' 
     ? 'msg-role user' 
     : message.role === 'tool'
@@ -458,6 +471,36 @@ export default function MessageRow({ message, messages = [], toolCalls = [], isS
     return { thinkingText, strippedContent: content };
   }, [message.content, message.reasoning]);
 
+  // Throttle markdown rendering during streaming to avoid performance issues
+  // Cache rendered HTML and only re-render at most every 150ms during streaming
+  const mdCacheRef = useRef<{ content: string; html: string }>({ content: '', html: '' });
+  const lastRenderTimeRef = useRef(0);
+  
+  const getRenderedMarkdown = (text: string): string => {
+    // For non-streaming, always render fresh with highlighting
+    if (!isStreaming) {
+      return renderMarkdown(text, false);
+    }
+    
+    // During streaming, use cached result if content hasn't changed
+    if (mdCacheRef.current.content === text) {
+      return mdCacheRef.current.html;
+    }
+    
+    // Throttle: only re-render at most every 150ms during streaming
+    const now = Date.now();
+    if (now - lastRenderTimeRef.current < 150) {
+      // Return cached result, but schedule a render for later
+      return mdCacheRef.current.html || renderMarkdown(text, true);
+    }
+    
+    lastRenderTimeRef.current = now;
+    // Skip syntax highlighting during streaming for performance
+    const html = renderMarkdown(text, true);
+    mdCacheRef.current = { content: text, html };
+    return html;
+  };
+
   const content = useMemo(() => {
     // If original content was a string, use strippedContent (with thinking tags removed)
     if (typeof message.content === 'string') {
@@ -469,7 +512,7 @@ export default function MessageRow({ message, messages = [], toolCalls = [], isS
         return <span className="msg-placeholder">...</span>;
       }
       return (
-        <span dangerouslySetInnerHTML={{ __html: renderMarkdown(strippedContent as string) }} />
+        <span dangerouslySetInnerHTML={{ __html: getRenderedMarkdown(strippedContent as string) }} />
       );
     }
     
@@ -496,7 +539,7 @@ export default function MessageRow({ message, messages = [], toolCalls = [], isS
         elements.push(
           <span 
             key={`text-${lastKey++}`} 
-            dangerouslySetInnerHTML={{ __html: renderMarkdown(combinedText) }} 
+            dangerouslySetInnerHTML={{ __html: getRenderedMarkdown(combinedText) }} 
           />
         );
       }
@@ -526,9 +569,21 @@ export default function MessageRow({ message, messages = [], toolCalls = [], isS
 
   const msgBodyRef = useRef<HTMLDivElement>(null);
 
+  // Track content hash for effect dependency (avoid object reference issues)
+  const contentHash = useMemo(() => {
+    if (typeof message.content === 'string') {
+      return message.content;
+    }
+    if (Array.isArray(message.content)) {
+      return JSON.stringify(message.content);
+    }
+    return '';
+  }, [message.content]);
+
   // Inject copy buttons into <pre> elements after render
-  // (runs after all hooks to comply with Rules of Hooks)
+  // Skip during streaming — content changes too rapidly for copy buttons to be useful
   useEffect(() => {
+    if (isStreaming) return;
     const container = msgBodyRef.current;
     if (!container) return;
     const pres = container.querySelectorAll<HTMLElement>('pre[class*="language-"]');
@@ -566,7 +621,7 @@ export default function MessageRow({ message, messages = [], toolCalls = [], isS
       pre.style.position = 'relative';
       pre.appendChild(btn);
     });
-  });
+  }, [contentHash, isStreaming]); // Re-run when streaming finishes to inject copy buttons
 
   // Handle tool role messages separately - after all hooks are called
   if (message.role === 'tool') {
@@ -601,6 +656,15 @@ export default function MessageRow({ message, messages = [], toolCalls = [], isS
           </div>
         )}
       </div>
+      {(() => {
+        const ts = message._ts ?? message.timestamp;
+        if (!ts) return null;
+        const d = new Date(ts * 1000);
+        const hh = String(d.getHours()).padStart(2, '0');
+        const mm = String(d.getMinutes()).padStart(2, '0');
+        const ss = String(d.getSeconds()).padStart(2, '0');
+        return <div className="msg-timestamp">{hh}:{mm}:{ss}</div>;
+      })()}
     </div>
   );
 }

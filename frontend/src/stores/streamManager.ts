@@ -46,12 +46,38 @@ const _sessionStates = new Map<string, SessionStreamState>();
 /** Change listeners */
 const _listeners = new Set<ChangeListener>();
 
+/** Throttle rapid notifications to avoid overwhelming React renders */
+const _pendingNotifies = new Map<string, number>(); // sessionId → setTimeout ID
+const NOTIFY_INTERVAL_MS = 150; // ~6-7 updates/sec during streaming (balanced: smooth enough for UX, safe for render budget)
+
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 function _notify(sessionId: string) {
   const state = _sessionStates.get(sessionId);
   if (!state) return;
   _listeners.forEach((fn) => fn(sessionId, state));
+}
+
+/** Throttled notification: accumulates state changes and notifies at most every NOTIFY_INTERVAL_MS.
+ *  Used for rapid events (token, reasoning) to prevent render storms. */
+function _notifyThrottled(sessionId: string) {
+  if (_pendingNotifies.has(sessionId)) return; // already scheduled
+  const timerId = setTimeout(() => {
+    _pendingNotifies.delete(sessionId);
+    _notify(sessionId);
+  }, NOTIFY_INTERVAL_MS);
+  _pendingNotifies.set(sessionId, timerId);
+}
+
+/** Immediate notification: cancels any pending throttled notification and fires right away.
+ *  Used for important events (message_start, done, error, etc.) */
+function _notifyImmediate(sessionId: string) {
+  const pending = _pendingNotifies.get(sessionId);
+  if (pending) {
+    clearTimeout(pending);
+    _pendingNotifies.delete(sessionId);
+  }
+  _notify(sessionId);
 }
 
 function _getOrCreateState(sessionId: string, streamId: string, initialMessages: Message[]): SessionStreamState {
@@ -169,7 +195,7 @@ export function startBackgroundStream(
     if (!s) return;
     const newMsg: Message = { role: 'assistant', content: '', _ts: Date.now() / 1000, _live: true };
     _sessionStates.set(sessionId, { ...s, messages: [...s.messages, newMsg] });
-    _notify(sessionId);
+    _notifyImmediate(sessionId);
   });
 
   es.addEventListener('token', (e: MessageEvent) => {
@@ -177,7 +203,7 @@ export function startBackgroundStream(
     if (!s) return;
     const { text } = JSON.parse(e.data);
     _sessionStates.set(sessionId, { ...s, messages: _appendToLastAssistant(s.messages, text) });
-    _notify(sessionId);
+    _notifyThrottled(sessionId);
   });
 
   es.addEventListener('reasoning', (e: MessageEvent) => {
@@ -185,7 +211,7 @@ export function startBackgroundStream(
     if (!s) return;
     const { text } = JSON.parse(e.data);
     _sessionStates.set(sessionId, { ...s, messages: _appendReasoningToLast(s.messages, text) });
-    _notify(sessionId);
+    _notifyThrottled(sessionId);
   });
 
   es.addEventListener('tool', (e: MessageEvent) => {
@@ -215,7 +241,7 @@ export function startBackgroundStream(
       name: data.name, tid, args: data.args || {}, snippet: '', done: false, preview: data.preview || '',
     };
     _sessionStates.set(sessionId, { ...s, messages: msgs, toolCalls: [...s.toolCalls, newToolCall] });
-    _notify(sessionId);
+    _notifyImmediate(sessionId);
   });
 
   es.addEventListener('tool_complete', (e: MessageEvent) => {
@@ -231,7 +257,7 @@ export function startBackgroundStream(
       tc.tid === tid ? { ...tc, snippet: output.substring(0, 200), done: true, duration: data.duration, is_error: data.is_error } : tc
     );
     _sessionStates.set(sessionId, { ...s, messages: msgs, toolCalls });
-    _notify(sessionId);
+    _notifyImmediate(sessionId);
   });
 
   es.addEventListener('compressed', (e: MessageEvent) => {
@@ -244,7 +270,7 @@ export function startBackgroundStream(
       _ts: Date.now() / 1000,
     };
     _sessionStates.set(sessionId, { ...s, messages: [...s.messages, msg] });
-    _notify(sessionId);
+    _notifyImmediate(sessionId);
   });
 
   es.addEventListener('title', (e: MessageEvent) => {
@@ -266,7 +292,7 @@ export function startBackgroundStream(
       completedAt: Date.now(),
       lastUsage: data.usage || null,
     });
-    _notify(sessionId);
+    _notifyImmediate(sessionId);
     // Notify UI that this session's stream is done (for sound / badge)
     window.dispatchEvent(new CustomEvent('bg-stream-done', { detail: { sessionId, streamId } }));
   });
@@ -277,7 +303,7 @@ export function startBackgroundStream(
     const s = _sessionStates.get(sessionId);
     if (s) {
       _sessionStates.set(sessionId, { ...s, streaming: false, busy: false });
-      _notify(sessionId);
+      _notifyImmediate(sessionId);
     }
   });
 
@@ -296,7 +322,7 @@ export function startBackgroundStream(
       ...s, busy: false, streaming: false, completedAt: Date.now(), error: errorMsg,
       messages: [...s.messages, errMsgObj],
     });
-    _notify(sessionId);
+    _notifyImmediate(sessionId);
   });
 
   es.addEventListener('error', () => {
@@ -309,7 +335,7 @@ export function startBackgroundStream(
       ...s, busy: false, streaming: false, completedAt: Date.now(), error: errMsg,
       messages: [...s.messages, { role: 'assistant', content: errMsg, _ts: Date.now() / 1000 }],
     });
-    _notify(sessionId);
+    _notifyImmediate(sessionId);
   });
 
   es.addEventListener('cancel', () => {
@@ -321,7 +347,7 @@ export function startBackgroundStream(
       ...s, busy: false, streaming: false, completedAt: Date.now(),
       messages: [...s.messages, { role: 'assistant', content: '*Task cancelled.*', _ts: Date.now() / 1000 }],
     });
-    _notify(sessionId);
+    _notifyImmediate(sessionId);
     window.dispatchEvent(new CustomEvent('bg-stream-done', { detail: { sessionId, streamId } }));
   });
 
@@ -360,6 +386,12 @@ export function stopBackgroundStream(sessionId: string): void {
 export function clearSessionStream(sessionId: string): void {
   stopBackgroundStream(sessionId);
   _sessionStates.delete(sessionId);
+  // Cancel any pending throttled notification before immediate notify
+  const pending = _pendingNotifies.get(sessionId);
+  if (pending) {
+    clearTimeout(pending);
+    _pendingNotifies.delete(sessionId);
+  }
   _notify(sessionId);
 }
 

@@ -299,14 +299,14 @@ export const useChatStore = create<ChatState>((set) => ({
     newCache.set(sessionId, updated);
     // If this session is currently displayed, also update live state
     if (state._currentSessionId === sessionId) {
-      return {
-        _sessionCache: newCache,
-        messages: updated.messages,
-        toolCalls: updated.toolCalls,
-        busy: updated.busy,
-        activeStreamId: updated.activeStreamId,
-        lastUsage: updated.lastUsage,
-      };
+      // Only include fields that actually changed to minimize React re-renders
+      const liveUpdate: Partial<ChatState> = { _sessionCache: newCache };
+      if (updated.messages !== state.messages) liveUpdate.messages = updated.messages;
+      if (updated.toolCalls !== state.toolCalls) liveUpdate.toolCalls = updated.toolCalls;
+      if (updated.busy !== state.busy) liveUpdate.busy = updated.busy;
+      if (updated.activeStreamId !== state.activeStreamId) liveUpdate.activeStreamId = updated.activeStreamId;
+      if (updated.lastUsage !== state.lastUsage) liveUpdate.lastUsage = updated.lastUsage;
+      return liveUpdate;
     }
     return { _sessionCache: newCache };
   }),

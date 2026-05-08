@@ -23,7 +23,7 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
   const { currentSession, loadSession } = useSessionStore();
   const { messages, busy, activeStreamId, setMessages, setToolCalls } = useChatStore();
   const { startStream, cancelStream, streaming } = useChatStream();
-  
+
   // ── Session switch logic ────────────────────────────────────────────────────
   useEffect(() => {
     const prevId = prevSessionIdRef.current;
@@ -55,9 +55,10 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
     const bgState = StreamManager.getSessionStreamState(sessionId);
     if (bgState) {
       // Restore from the most up-to-date StreamManager state (not the older cache).
-      useChatStore.getState().setMessages(bgState.messages);
-      useChatStore.getState().setToolCalls(bgState.toolCalls);
+      // Batch into single state update to avoid multiple re-renders
       useChatStore.setState({
+        messages: bgState.messages,
+        toolCalls: bgState.toolCalls,
         busy: bgState.busy,
         activeStreamId: bgState.streaming ? bgState.streamId : null,
       });

@@ -510,6 +510,45 @@
     box-sizing: border-box;
   }
 
+  /* Date separator */
+  .msg-date-sep {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 16px 0 8px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+  }
+
+  .msg-date-sep::before,
+  .msg-date-sep::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  /* Timestamp below each message */
+  .msg-timestamp {
+    font-size: 10px;
+    color: var(--muted);
+    opacity: 0.5;
+    margin-top: 4px;
+    padding-left: 30px;
+    letter-spacing: 0.02em;
+  }
+
+  .msg-row.user-message .msg-timestamp {
+    color: rgba(255, 255, 255, 0.55);
+    opacity: 1;
+  }
+
+  .msg-row.tool-message .msg-timestamp {
+    padding-left: 0;
+  }
+
   /* Sprint 15: Hermes separator for tool calls */
   .msg-row.hermes-separator {
     padding: 4px 0;
@@ -541,6 +580,23 @@
     margin-top: 4px;
     margin-bottom: 0;
     border-bottom: none;
+  }
+
+  /* Context compaction separator - distinct gold accent */
+  .msg-row.compaction-separator {
+    padding: 6px 0 4px;
+    margin-top: 8px;
+  }
+
+  .msg-row.compaction-separator .msg-role {
+    font-size: 11px;
+    opacity: 1;
+    color: var(--gold);
+  }
+
+  .msg-row.compaction-separator .role-icon.assistant {
+    background: linear-gradient(135deg, #F5C542, #D4961C);
+    color: #1a1a2e;
   }
 
   .msg-row.reasoning-separator .msg-role {
