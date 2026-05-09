@@ -636,6 +636,8 @@
     border-radius: 12px;
     margin: 8px 0;
     padding: 12px 16px;
+    width: 75%;
+    margin-left: auto;
   }
 
   .msg-row.user-message .msg-role {
@@ -650,6 +652,8 @@
 
   .msg-row.user-message .msg-body {
     color: #ffffff;
+    overflow-wrap: break-word;
+    word-break: break-word;
   }
 
   .msg-row.user-message .msg-body a {
