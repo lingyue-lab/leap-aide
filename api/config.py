@@ -1824,6 +1824,68 @@ _INDEX_HTML_PATH = REPO_ROOT / "static" / "index.html"
 LOCK = threading.Lock()
 SESSIONS_MAX = 100
 CHAT_LOCK = threading.Lock()
+class ReplayableStream:
+    """Fan-out SSE stream with full event history for page-refresh replay.
+
+    Replaces the plain queue.Queue in STREAMS so that:
+    - Multiple SSE consumers (tabs) can subscribe without stealing each other's events.
+    - A reconnecting client can retrieve all past events via replay() and then
+      join the live feed seamlessly.
+
+    Thread-safety: all mutable state is protected by a single internal lock.
+    Memory: _history is capped at MAX_HISTORY entries (oldest are evicted).
+    """
+    MAX_HISTORY = 2000
+
+    def __init__(self):
+        import queue as _queue
+        self._history: list[tuple[str, dict]] = []
+        self._subscribers: list[_queue.Queue] = []
+        self._lock = threading.Lock()
+        self._done = False
+
+    def put(self, event: str, data: dict) -> None:  # noqa: D401
+        """Write one event to history and fan-out to all live subscribers."""
+        import queue as _queue
+        with self._lock:
+            if len(self._history) >= self.MAX_HISTORY:
+                self._history.pop(0)
+            self._history.append((event, data))
+            if event in ('done', 'stream_end', 'error', 'cancel', 'apperror'):
+                self._done = True
+            for sq in list(self._subscribers):
+                try:
+                    sq.put_nowait((event, data))
+                except _queue.Full:
+                    pass  # slow consumer — drop the event rather than block
+
+    def subscribe(self) -> 'queue.Queue':  # type: ignore[name-defined]
+        """Register a new SSE consumer and return a dedicated queue."""
+        import queue as _queue
+        sq: _queue.Queue = _queue.Queue()
+        with self._lock:
+            self._subscribers.append(sq)
+        return sq
+
+    def unsubscribe(self, sq: 'queue.Queue') -> None:  # type: ignore[name-defined]
+        """Remove a consumer queue (called from the SSE handler's finally block)."""
+        with self._lock:
+            try:
+                self._subscribers.remove(sq)
+            except ValueError:
+                pass  # already removed
+
+    def replay(self) -> list[tuple[str, dict]]:
+        """Return a thread-safe snapshot of all events produced so far."""
+        with self._lock:
+            return list(self._history)
+
+    def is_done(self) -> bool:
+        """True once a terminal event (done/cancel/error/stream_end) was put."""
+        with self._lock:
+            return self._done
+
+
 STREAMS: dict = {}
 STREAMS_LOCK = threading.Lock()
 CANCEL_FLAGS: dict = {}

@@ -54,6 +54,15 @@ export const chatService = {
     return new EventSource(url, { withCredentials: true });
   },
 
+  createReplaySSEConnection: (streamId: string): EventSource => {
+    // Connects to the replay endpoint which first sends all past events
+    // (replay_start → <history> → replay_end) then continues with live events.
+    // Used when reconnecting after a page refresh so the user sees all tokens
+    // that were already produced before the refresh.
+    const url = `/api/chat/stream/replay?stream_id=${encodeURIComponent(streamId)}`;
+    return new EventSource(url, { withCredentials: true });
+  },
+
   checkStreamStatus: async (streamId: string) => {
     return api<{ active: boolean; session_id?: string }>(
       `/api/chat/stream/status?stream_id=${encodeURIComponent(streamId)}`

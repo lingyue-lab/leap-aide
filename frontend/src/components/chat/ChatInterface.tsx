@@ -4,6 +4,7 @@ import { useChatStore } from '@/stores/useChatStore';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { useChatStream } from '@/hooks/useChatStream';
 import * as StreamManager from '@/stores/streamManager';
+import { chatService } from '@/services/api';
 import ChatMessages from './ChatMessages';
 import ChatComposer from './ChatComposer';
 import ApprovalCard from '@/components/dialogs/ApprovalCard';
@@ -74,7 +75,7 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
 
     // 3. No cache at all — load from backend.
     useChatStore.getState().reset();
-    loadSession(sessionId).then(() => {
+    loadSession(sessionId).then(async () => {
       const session = useSessionStore.getState().currentSession;
       if (session?.messages) {
         setMessages(session.messages);
@@ -82,6 +83,41 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
       if (session?.tool_calls) {
         setToolCalls(session.tool_calls);
       }
+
+      // ── Reconnect streaming after page refresh ─────────────────────────────
+      // After a full page reload the in-memory StreamManager is empty, but the
+      // backend may still have an active stream for this session.  Detect it via
+      // active_stream_id / pending_user_message returned by GET /api/session,
+      // verify the stream is still alive, and re-attach the SSE connection.
+      const activeStreamId = session?.active_stream_id;
+      const pendingMsg = session?.pending_user_message;
+      if (activeStreamId && pendingMsg) {
+        try {
+          const status = await chatService.checkStreamStatus(activeStreamId);
+          if (status.active) {
+            // Re-attach to the running stream.  Seed with already-persisted messages
+            // so the user sees the conversation history + the pending user turn.
+            StreamManager.reconnectStream(
+              sessionId,
+              activeStreamId,
+              pendingMsg,
+              session?.messages ?? []
+            );
+            // Sync busy / activeStreamId into ChatStore live state immediately
+            // so the Cancel button and streaming indicators appear right away.
+            useChatStore.setState({
+              busy: true,
+              activeStreamId,
+            });
+          }
+          // If !status.active: stream already finished — persisted messages are
+          // already loaded above, nothing else to do.
+        } catch {
+          // checkStreamStatus failed (network error, etc.) — silently ignore and
+          // show whatever messages we already loaded from the DB.
+        }
+      }
+      // ──────────────────────────────────────────────────────────────────────
     });
   }, [sessionId, loadSession, setMessages, setToolCalls]);
 

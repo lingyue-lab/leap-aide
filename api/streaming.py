@@ -1169,7 +1169,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
         if cancel_event.is_set() and event not in ('cancel', 'error'):
             return
         try:
-            q.put_nowait((event, data))
+            q.put(event, data)  # ReplayableStream.put() writes to history + fans out to subscribers
         except Exception:
             logger.debug("Failed to put event to queue")
 
@@ -2296,11 +2296,12 @@ def cancel_stream(stream_id: str) -> bool:
         except Exception:
             logger.debug("Failed to clear clarify prompt during cancel")
 
-        # Put a cancel sentinel into the queue so the SSE handler wakes up
+        # Put a cancel sentinel into the stream so the SSE handler wakes up and
+        # the event is recorded in the replay history for any reconnecting client.
         q = streams.get(stream_id)
         if q:
             try:
-                q.put_nowait(('cancel', {'message': 'Cancelled by user'}))
+                q.put('cancel', {'message': 'Cancelled by user'})
             except Exception:
                 logger.debug("Failed to put cancel event to queue")
 

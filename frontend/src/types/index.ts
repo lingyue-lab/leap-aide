@@ -10,6 +10,8 @@ export interface Session {
   updated_at?: number;
   tool_calls?: ToolCall[];
   active_stream_id?: string | null;
+  pending_user_message?: string | null;
+  pending_attachments?: string[];
   pinned?: boolean;
   input_tokens?: number;
   output_tokens?: number;

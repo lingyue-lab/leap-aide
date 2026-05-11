@@ -11,6 +11,8 @@
  *  - All SSE events are written into a per-session SessionStreamState.
  *  - Components subscribe to changes via the `subscribe` / `unsubscribe` API.
  *  - ChatInterface restores from the buffer when switching back to a session.
+ *  - reconnectStream() allows re-attaching to an existing backend stream after
+ *    a page refresh, using the stream_id returned by GET /api/session.
  */
 
 import type { Message, ToolCall, UsageInfo, ContentBlock } from '@/types';
@@ -164,32 +166,11 @@ function _updateToolMessage(messages: Message[], toolCallId: string, updates: Pa
   );
 }
 
-// ── Public API ────────────────────────────────────────────────────────────────
-
 /**
- * Start a background stream for sessionId.
- * initialMessages should be the current chat history BEFORE the new user message is added.
+ * Attach all SSE event listeners to the given EventSource.
+ * Shared by startBackgroundStream() and reconnectStream() to avoid duplication.
  */
-export function startBackgroundStream(
-  sessionId: string,
-  streamId: string,
-  userMessage: Message,
-  initialMessages: Message[]
-): void {
-  // Close any previous stream for this session
-  stopBackgroundStream(sessionId);
-
-  // Seed the state with existing history + the new user message
-  const seedMessages = [...initialMessages, userMessage];
-  const state = _getOrCreateState(sessionId, streamId, seedMessages);
-  _sessionStates.set(sessionId, { ...state, streamId, busy: true, streaming: true, completedAt: null, error: null, messages: seedMessages, toolCalls: [] });
-
-  // Open SSE connection
-  const es = chatService.createSSEConnection(streamId);
-  _eventSources.set(streamId, es);
-
-  // ── Event Handlers ─────────────────────────────────────────────────────────
-
+function _attachEventListeners(es: EventSource, sessionId: string, streamId: string): void {
   es.addEventListener('message_start', () => {
     const s = _sessionStates.get(sessionId);
     if (!s) return;
@@ -367,6 +348,113 @@ export function startBackgroundStream(
     const data = JSON.parse(e.data);
     window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: data.message, duration: 4000 } }));
   });
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/**
+ * Start a background stream for sessionId.
+ * initialMessages should be the current chat history BEFORE the new user message is added.
+ */
+export function startBackgroundStream(
+  sessionId: string,
+  streamId: string,
+  userMessage: Message,
+  initialMessages: Message[]
+): void {
+  // Close any previous stream for this session
+  stopBackgroundStream(sessionId);
+
+  // Seed the state with existing history + the new user message
+  const seedMessages = [...initialMessages, userMessage];
+  const state = _getOrCreateState(sessionId, streamId, seedMessages);
+  _sessionStates.set(sessionId, { ...state, streamId, busy: true, streaming: true, completedAt: null, error: null, messages: seedMessages, toolCalls: [] });
+
+  // Open SSE connection
+  const es = chatService.createSSEConnection(streamId);
+  _eventSources.set(streamId, es);
+
+  // Attach all event handlers (shared logic)
+  _attachEventListeners(es, sessionId, streamId);
+
+  _notify(sessionId);
+}
+
+/**
+ * Reconnect to an existing backend stream after a page refresh.
+ *
+ * Unlike startBackgroundStream(), this does NOT start a new backend run —
+ * it uses the /api/chat/stream/replay endpoint which:
+ *   1. Sends a 'replay_start' event with the count of historical events
+ *   2. Replays all past events (token, tool, tool_complete, etc.) in order
+ *   3. Sends a 'replay_end' event to mark the boundary
+ *   4. Continues with any new live events from here on
+ *
+ * This means the user sees all tokens produced before the page refresh,
+ * seamlessly followed by any new tokens still arriving.
+ *
+ * Call this when GET /api/session returns a non-null active_stream_id AND
+ * GET /api/chat/stream/status confirms that stream is still alive.
+ *
+ * @param sessionId         The session being reconnected.
+ * @param streamId          The stream_id from session.active_stream_id.
+ * @param pendingUserMsg    The user message text that triggered the stream.
+ * @param existingMessages  Messages already persisted in the DB (history before the pending turn).
+ */
+export function reconnectStream(
+  sessionId: string,
+  streamId: string,
+  pendingUserMsg: string,
+  existingMessages: Message[]
+): void {
+  // Close any pre-existing stream/state for this session
+  stopBackgroundStream(sessionId);
+
+  // Build the seed: persisted history + the pending user message (optimistic UI).
+  // replay_start will reset this to the same baseline before replaying history events.
+  const userMsg: Message = {
+    role: 'user',
+    content: pendingUserMsg,
+    _ts: Date.now() / 1000,
+  };
+  const seedMessages = [...existingMessages, userMsg];
+
+  _sessionStates.set(sessionId, {
+    sessionId,
+    streamId,
+    messages: seedMessages,
+    toolCalls: [],
+    busy: true,
+    lastUsage: null,
+    streaming: true,
+    completedAt: null,
+    error: null,
+  });
+
+  // Use the replay endpoint so we get all past events before live ones
+  const es = chatService.createReplaySSEConnection(streamId);
+  _eventSources.set(streamId, es);
+
+  // replay_start: reset messages back to baseline so replayed events rebuild them cleanly
+  es.addEventListener('replay_start', () => {
+    const s = _sessionStates.get(sessionId);
+    if (!s) return;
+    _sessionStates.set(sessionId, {
+      ...s,
+      messages: [...existingMessages, userMsg],
+      toolCalls: [],
+    });
+    _notifyImmediate(sessionId);
+  });
+
+  // replay_end: boundary marker between replayed and live events — no state change needed
+  es.addEventListener('replay_end', () => {
+    // Could surface a visual indicator here if desired
+  });
+
+  // All regular SSE events (message_start, token, tool, done, error, etc.) are handled
+  // identically whether they are replayed or live — the frontend just renders them.
+  _attachEventListeners(es, sessionId, streamId);
 
   _notify(sessionId);
 }

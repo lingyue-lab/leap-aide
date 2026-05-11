@@ -75,6 +75,7 @@ from api.config import (
     get_reasoning_status,
     set_reasoning_display,
     set_reasoning_effort,
+    ReplayableStream,
 )
 from api.helpers import (
     require,
@@ -1054,6 +1055,9 @@ def handle_get(handler, parsed) -> bool:
 
     if parsed.path == "/api/chat/stream":
         return _handle_sse_stream(handler, parsed)
+
+    if parsed.path == "/api/chat/stream/replay":
+        return _handle_sse_stream_replay(handler, parsed)
 
     if parsed.path == '/api/sessions/gateway/stream':
         return _handle_gateway_sse_stream(handler, parsed)
@@ -2080,19 +2084,89 @@ def _handle_sse_stream(handler, parsed):
     handler.send_header("X-Accel-Buffering", "no")
     handler.send_header("Connection", "keep-alive")
     handler.end_headers()
+    # Each SSE consumer gets its own dedicated queue via fan-out subscription.
+    # This allows multiple tabs to connect to the same stream without stealing
+    # each other's events (replaced the old single queue.Queue approach).
+    sq = q.subscribe()
     try:
         while True:
             try:
-                event, data = q.get(timeout=30)
+                event, data = sq.get(timeout=30)
             except queue.Empty:
                 handler.wfile.write(b": heartbeat\n\n")
                 handler.wfile.flush()
                 continue
             _sse(handler, event, data)
-            if event in ("stream_end", "error", "cancel"):
+            if event in ("stream_end", "error", "cancel", "apperror", "done"):
                 break
     except (BrokenPipeError, ConnectionResetError):
         pass
+    finally:
+        q.unsubscribe(sq)
+    return True
+
+
+def _handle_sse_stream_replay(handler, parsed):
+    """SSE endpoint that replays all past events then streams live events.
+
+    Used by the frontend after a page refresh so the user sees all tokens
+    that were already produced before the refresh, followed seamlessly by
+    any new tokens still arriving from the backend agent.
+
+    Protocol:
+      1. 'replay_start'  {"count": N}   — N past events will follow
+      2. <all past events replayed in order>
+      3. 'replay_end'    {}             — replay complete; live events follow
+      4. <live events from here on>
+
+    If the stream already ended before the client connected, only the replay
+    phase is sent (no live phase needed).
+    """
+    stream_id = parse_qs(parsed.query).get("stream_id", [""])[0]
+    q = STREAMS.get(stream_id)
+    if q is None:
+        return j(handler, {"error": "stream not found"}, status=404)
+    handler.send_response(200)
+    handler.send_header("Content-Type", "text/event-stream; charset=utf-8")
+    handler.send_header("Cache-Control", "no-cache")
+    handler.send_header("X-Accel-Buffering", "no")
+    handler.send_header("Connection", "keep-alive")
+    handler.end_headers()
+    # Subscribe BEFORE taking the history snapshot to ensure no live events
+    # slip through the gap between snapshot and subscribe.
+    sq = q.subscribe()
+    try:
+        # Phase 1: replay history snapshot
+        history = q.replay()
+        _sse(handler, 'replay_start', {'count': len(history)})
+        already_done = False
+        for event, data in history:
+            _sse(handler, event, data)
+            if event in ('done', 'stream_end', 'error', 'cancel', 'apperror'):
+                already_done = True
+                break
+        if already_done:
+            return True
+
+        _sse(handler, 'replay_end', {})
+
+        # Phase 2: live events (if stream is still running)
+        if q.is_done():
+            return True
+        while True:
+            try:
+                event, data = sq.get(timeout=30)
+            except queue.Empty:
+                handler.wfile.write(b": heartbeat\n\n")
+                handler.wfile.flush()
+                continue
+            _sse(handler, event, data)
+            if event in ("stream_end", "error", "cancel", "apperror", "done"):
+                break
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+    finally:
+        q.unsubscribe(sq)
     return True
 
 
@@ -2751,7 +2825,7 @@ def _handle_btw(handler, body):
     stream_id = uuid.uuid4().hex
     ephemeral.active_stream_id = stream_id
     ephemeral.save()
-    q = queue.Queue()
+    q = ReplayableStream()
     with STREAMS_LOCK:
         STREAMS[stream_id] = q
     from api.background import track_btw
@@ -2791,7 +2865,7 @@ def _handle_background(handler, body):
     stream_id = uuid.uuid4().hex
     bg.active_stream_id = stream_id
     bg.save()
-    q = queue.Queue()
+    q = ReplayableStream()
     with STREAMS_LOCK:
         STREAMS[stream_id] = q
     task_id = uuid.uuid4().hex[:8]
@@ -2890,7 +2964,7 @@ def _handle_chat_start(handler, body):
         s.pending_started_at = time.time()
         s.save()
     set_last_workspace(workspace)
-    q = queue.Queue()
+    q = ReplayableStream()
     with STREAMS_LOCK:
         STREAMS[stream_id] = q
     thr = threading.Thread(
