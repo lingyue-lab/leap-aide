@@ -326,10 +326,20 @@
     background: var(--sidebar);
     border-right: 1px solid var(--border);
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     flex-shrink: 0;
     overflow: hidden;
     position: relative;
+  }
+
+  /* Sidebar content area (right of activity bar) */
+  .sidebar-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-width: 0;
+    border-left: 1px solid var(--border);
   }
 
   /* Sidebar section */
@@ -1257,22 +1267,22 @@
     white-space: nowrap;
   }
 
-  /* Nav tabs */
+  /* Nav tabs — vertical activity bar */
   .nav-tabs {
     display: flex;
-    border-bottom: 1px solid var(--border);
+    flex-direction: column;
     flex-shrink: 0;
-    padding: 12px 8px;
+    width: 48px;
+    padding: 8px 0;
     gap: 2px;
-    /* Consistent height with topbar */
-    height: 53px;
-    box-sizing: border-box;
     align-items: center;
+    background: var(--sidebar);
   }
 
   .nav-tab {
-    flex: 1;
-    padding: 14px 4px;
+    width: 40px;
+    height: 40px;
+    padding: 0;
     font-size: 20px;
     text-align: center;
     cursor: pointer;
@@ -1280,16 +1290,19 @@
     border: none;
     background: none;
     transition: color 0.15s;
-    border-bottom: 2px solid transparent;
+    border-left: 2px solid transparent;
     white-space: nowrap;
     position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
+    border-radius: 6px;
+    flex-shrink: 0;
   }
 
   .nav-tab:hover {
     color: var(--text);
+    background: rgba(255, 255, 255, 0.06);
   }
 
   .nav-tab.active {
@@ -1299,13 +1312,13 @@
   .nav-tab.active::before {
     content: '';
     position: absolute;
-    bottom: 0;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 20px;
-    height: 2px;
+    left: -2px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 2px;
+    height: 20px;
     background: var(--blue);
-    border-radius: 2px 2px 0 0;
+    border-radius: 0 2px 2px 0;
   }
 
   /* Panel view */
@@ -2224,6 +2237,7 @@
   border-top: 1px solid var(--border);
   margin-top: auto;
 }
+
 
 .hermes-launch-btn {
   display: flex;
