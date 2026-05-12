@@ -4,6 +4,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { zhCN, enUS } from 'date-fns/locale';
 import type { SessionListItem } from '@/types';
 import { useSessionStore } from '@/stores/useSessionStore';
+import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 import { isSessionStreaming, subscribe as subscribeStream } from '@/stores/streamManager';
 
 interface SessionItemProps {
@@ -14,11 +15,13 @@ interface SessionItemProps {
 
 export default function SessionItem({ session, isActive, onClick }: SessionItemProps) {
   const { t, i18n } = useTranslation('common');
-  const { renameSession, deleteSession, pinSession } = useSessionStore();
+  const { renameSession, deleteSession, pinSession, assignWorkspace } = useSessionStore();
+  const { workspaces } = useWorkspaceStore();
   
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(session.title);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [showWorkspaceMenu, setShowWorkspaceMenu] = useState(false);
   /** True when this session has a live background stream */
   const [bgStreaming, setBgStreaming] = useState(() => isSessionStreaming(session.session_id));
   const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
@@ -73,12 +76,25 @@ export default function SessionItem({ session, isActive, onClick }: SessionItemP
         left: rect.left + window.scrollX,
       });
     }
+    setShowWorkspaceMenu(false);
     setMenuOpen(true);
   };
 
   const handleStartEdit = () => {
     setIsEditing(true);
     setMenuOpen(false);
+  };
+
+  const handleAssignWorkspace = () => {
+    setShowWorkspaceMenu((prev) => !prev);
+  };
+
+  const handleSelectWorkspace = async (workspacePath: string) => {
+    try {
+      await assignWorkspace(session.session_id, workspacePath);
+    } catch (err) {
+      console.error('Failed to assign workspace:', err);
+    }
   };
 
   const handleSaveEdit = async () => {
@@ -111,6 +127,7 @@ export default function SessionItem({ session, isActive, onClick }: SessionItemP
 
   const handlePin = async () => {
     setMenuOpen(false);
+    setShowWorkspaceMenu(false);
     await pinSession(session.session_id, !session.pinned);
   };
 
@@ -184,6 +201,7 @@ export default function SessionItem({ session, isActive, onClick }: SessionItemP
             position: 'fixed',
             top: menuPosition.top,
             left: menuPosition.left,
+            minWidth: showWorkspaceMenu ? 220 : 140,
           }}
         >
           <button className="session-action-opt" onClick={handleStartEdit}>
@@ -204,6 +222,46 @@ export default function SessionItem({ session, isActive, onClick }: SessionItemP
               </span>
             </span>
           </button>
+          <button className="session-action-opt" onClick={handleAssignWorkspace}>
+            <span className="ws-opt-action">
+              <svg className="ws-opt-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              </svg>
+              <span className="ws-opt-name">{t('sessions.assign_workspace')}</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginLeft: 'auto', opacity: 0.5 }}>
+                <polyline points={showWorkspaceMenu ? '18 15 12 9 6 15' : '9 18 15 12 9 6'}/>
+              </svg>
+            </span>
+          </button>
+          {showWorkspaceMenu && (
+            <div className="session-workspace-submenu">
+              {workspaces.length === 0 ? (
+                <div className="session-workspace-empty">{t('workspaces.empty')}</div>
+              ) : (
+                workspaces.map((ws) => (
+                  <button
+                    key={ws.path}
+                    className="session-action-opt"
+                    onClick={() => handleSelectWorkspace(ws.path)}
+                  >
+                    <span className="ws-opt-action">
+                      <svg className="ws-opt-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                      </svg>
+                      <span className="ws-opt-name ws-opt-name--ellipsis">
+                        {ws.display_name || ws.name}
+                      </span>
+                      {session.workspace === ws.path && (
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ marginLeft: 'auto', flexShrink: 0, opacity: 0.6 }}>
+                          <polyline points="20 6 9 17 4 12"/>
+                        </svg>
+                      )}
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+          )}
           <button className="session-action-opt danger" onClick={handleDelete}>
             <span className="ws-opt-action">
               <svg className="ws-opt-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

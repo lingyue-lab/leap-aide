@@ -1250,6 +1250,45 @@
     background: rgba(224, 92, 92, 0.12);
   }
 
+  /* Workspace submenu (inline, below Assign Workspace button) */
+  .session-workspace-submenu {
+    border-top: 1px solid var(--border);
+    margin-top: 2px;
+    padding-top: 2px;
+    /* Distinct background tint to separate submenu from parent menu */
+    background: rgba(0, 0, 0, 0.18);
+    border-radius: 0 0 6px 6px;
+    padding-bottom: 2px;
+  }
+
+  .session-workspace-empty {
+    font-size: 12px;
+    color: var(--muted);
+    padding: 6px 14px;
+    font-style: italic;
+  }
+
+  /* Each workspace option inside the submenu: indent + subtle tint */
+  .session-workspace-submenu .session-action-opt {
+    padding-left: 20px;  /* indent to visually nest under parent */
+    font-size: 12px;
+    color: var(--muted);
+    border-radius: 4px;
+  }
+
+  .session-workspace-submenu .session-action-opt:hover {
+    background: var(--hover-bg);
+    color: var(--text);
+  }
+
+  /* Ellipsis for long workspace names in submenu */
+  .ws-opt-name--ellipsis {
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .ws-opt-action {
     display: flex;
     align-items: center;
@@ -2405,6 +2444,56 @@
   font-weight: 500;
   cursor: pointer;
   user-select: none;
+}
+
+/* Workspace group header — more prominent than generic date headers */
+.session-ws-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  margin-top: 4px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.01em;
+  background: rgba(255, 255, 255, 0.055);
+  border-left: 2px solid var(--accent);
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.12s;
+}
+
+.session-ws-header:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.session-ws-caret {
+  flex-shrink: 0;
+  opacity: 0.6;
+  transition: transform 0.18s ease;
+}
+
+.session-ws-header.collapsed .session-ws-caret {
+  transform: rotate(-90deg);
+}
+
+.session-ws-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-ws-count {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 0 5px;
+  min-width: 18px;
+  text-align: center;
 }
 
 .session-date-caret {

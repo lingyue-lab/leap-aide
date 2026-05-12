@@ -1746,6 +1746,25 @@ def handle_post(handler, parsed) -> bool:
             s.save()
         return j(handler, {"ok": True, "session": s.compact()})
 
+    # ── Session assign workspace (POST) ──
+    if parsed.path == "/api/session/workspace":
+        try:
+            require(body, "session_id", "workspace")
+        except ValueError as e:
+            return bad(handler, str(e))
+        try:
+            s = get_session(body["session_id"])
+        except KeyError:
+            return bad(handler, "Session not found", 404)
+        try:
+            new_ws = str(resolve_trusted_workspace(body["workspace"]))
+        except ValueError as e:
+            return bad(handler, str(e))
+        with _get_session_agent_lock(body["session_id"]):
+            s.workspace = new_ws
+            s.save()
+        return j(handler, {"ok": True, "session": s.compact()})
+
     # ── Session archive (POST) ──
     if parsed.path == "/api/session/archive":
         try:

@@ -24,6 +24,7 @@ export interface SessionListItem {
   created_at: number;
   updated_at?: number;
   pinned?: boolean;
+  workspace?: string;
 }
 
 // types/message.ts - 消息相关类型定义

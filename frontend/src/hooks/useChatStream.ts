@@ -51,6 +51,10 @@ export function useChatStream() {
                 if (session?.tool_calls) {
                   useChatStore.getState().setToolCalls(session.tool_calls);
                 }
+                // Sync the sidebar session list title from the reloaded session
+                if (session?.title) {
+                  useSessionStore.getState().updateSessionListTitle?.(sessionId, session.title);
+                }
               });
             }
           }

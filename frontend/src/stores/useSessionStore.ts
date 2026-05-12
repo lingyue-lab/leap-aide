@@ -10,7 +10,7 @@ interface SessionState {
   
   // Actions
   loadSessions: () => Promise<void>;
-  createSession: () => Promise<Session>;
+  createSession: (workspace?: string) => Promise<Session>;
   selectSession: (id: string | null) => void;
   loadSession: (id: string) => Promise<void>;
   renameSession: (id: string, title: string) => Promise<void>;
@@ -20,6 +20,8 @@ interface SessionState {
   updateCurrentSession: (session: Partial<Session>) => void;
   /** Update only the title in the sidebar session list (for live title push from StreamManager) */
   updateSessionListTitle: (sessionId: string, title: string) => void;
+  /** Assign (or switch) the workspace path for a session */
+  assignWorkspace: (id: string, workspace: string) => Promise<void>;
 }
 
 export const useSessionStore = create<SessionState>((set) => ({
@@ -42,12 +44,12 @@ export const useSessionStore = create<SessionState>((set) => ({
     }
   },
 
-  createSession: async () => {
+  createSession: async (workspace?: string) => {
     try {
       const response = await fetch('/api/session/new', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify(workspace ? { workspace } : {}),
         credentials: 'include',
       });
       if (!response.ok) throw new Error('Failed to create session');
@@ -59,6 +61,7 @@ export const useSessionStore = create<SessionState>((set) => ({
             title: session.title,
             created_at: session.created_at,
             pinned: false,
+            workspace: session.workspace,
           },
           ...state.sessions,
         ],
@@ -185,6 +188,28 @@ export const useSessionStore = create<SessionState>((set) => ({
       sessions: state.sessions.map((s) =>
         s.session_id === sessionId ? { ...s, title } : s
       ),
+    }));
+  },
+
+  assignWorkspace: async (id, workspace) => {
+    const response = await fetch('/api/session/workspace', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: id, workspace }),
+      credentials: 'include',
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error((data as { error?: string }).error || 'Failed to assign workspace');
+    }
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.session_id === id ? { ...s, workspace } : s
+      ),
+      currentSession:
+        state.currentSession?.session_id === id
+          ? { ...state.currentSession, workspace }
+          : state.currentSession,
     }));
   },
 }));

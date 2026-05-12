@@ -264,8 +264,9 @@ function _attachEventListeners(es: EventSource, sessionId: string, streamId: str
     const s = _sessionStates.get(sessionId);
     if (!s) return;
     const data = JSON.parse(e.data);
-    es.close();
-    _eventSources.delete(streamId);
+    // Do NOT close the EventSource here — the backend may still send a `title`
+    // event after `done` (async title generation). The EventSource will be
+    // closed when `stream_end` arrives (which is always emitted after title).
     _sessionStates.set(sessionId, {
       ...s,
       busy: false,
@@ -279,6 +280,7 @@ function _attachEventListeners(es: EventSource, sessionId: string, streamId: str
   });
 
   es.addEventListener('stream_end', () => {
+    // Close the EventSource now that all post-done events (e.g. title) have been sent
     es.close();
     _eventSources.delete(streamId);
     const s = _sessionStates.get(sessionId);

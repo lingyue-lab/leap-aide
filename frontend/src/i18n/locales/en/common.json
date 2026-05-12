@@ -47,7 +47,10 @@
     "rename": "Rename",
     "delete": "Delete",
     "pin": "Pin",
-    "unpin": "Unpin"
+    "unpin": "Unpin",
+    "assign_workspace": "Assign Workspace",
+    "workspace_assigned": "Workspace assigned",
+    "no_workspace": "No Workspace"
   },
   "settings": {
     "preferences": "Settings & Preferences"

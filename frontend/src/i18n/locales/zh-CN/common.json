@@ -47,7 +47,10 @@
     "rename": "重命名",
     "delete": "删除",
     "pin": "固定",
-    "unpin": "取消固定"
+    "unpin": "取消固定",
+    "assign_workspace": "分配工作区",
+    "workspace_assigned": "工作区已分配",
+    "no_workspace": "未分配工作区"
   },
   "settings": {
     "preferences": "设置与偏好"
