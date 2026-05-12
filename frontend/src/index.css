@@ -551,7 +551,7 @@
   }
 
   .msg-row.user-message .msg-timestamp {
-    color: rgba(255, 255, 255, 0.55);
+    color: var(--muted);
     opacity: 1;
   }
 
@@ -640,48 +640,50 @@
     50% { opacity: 0.8; }
   }
 
-  /* User message with distinct blue background and white text */
+  /* User message - subtle blue tint consistent with theme palette */
   .msg-row.user-message {
-    background: linear-gradient(135deg, #3b82f6, #2563eb);
+    background: color-mix(in srgb, var(--blue) 18%, var(--surface));
+    border: 1px solid color-mix(in srgb, var(--blue) 25%, transparent);
     border-radius: 12px;
     margin: 8px 0;
     padding: 12px 16px;
-    width: 75%;
+    max-width: 75%;
+    width: fit-content;
     margin-left: auto;
   }
 
   .msg-row.user-message .msg-role {
-    color: rgba(255, 255, 255, 0.85);
+    color: var(--blue);
   }
 
   .msg-row.user-message .role-icon.user {
-    background: rgba(255, 255, 255, 0.2);
-    color: #ffffff;
-    border: 1px solid rgba(255, 255, 255, 0.3);
+    background: color-mix(in srgb, var(--blue) 22%, transparent);
+    color: var(--blue);
+    border: 1px solid color-mix(in srgb, var(--blue) 35%, transparent);
   }
 
   .msg-row.user-message .msg-body {
-    color: #ffffff;
+    color: var(--text);
     overflow-wrap: break-word;
     word-break: break-word;
   }
 
   .msg-row.user-message .msg-body a {
-    color: rgba(255, 255, 255, 0.9);
+    color: var(--blue);
   }
 
   .msg-row.user-message .msg-body code {
-    background: rgba(255, 255, 255, 0.15);
-    color: #ffffff;
+    background: color-mix(in srgb, var(--blue) 12%, transparent);
+    color: var(--text);
   }
 
   .msg-row.user-message .msg-body pre {
-    background: rgba(0, 0, 0, 0.2);
-    border-color: rgba(255, 255, 255, 0.15);
+    background: rgba(0, 0, 0, 0.25);
+    border-color: color-mix(in srgb, var(--blue) 18%, transparent);
   }
 
   .msg-row.user-message .msg-body pre code {
-    color: rgba(255, 255, 255, 0.95);
+    color: var(--text);
   }
 
   .msg-role {
@@ -695,7 +697,7 @@
   }
 
   .msg-role.user {
-    color: rgba(124, 185, 255, 0.65);
+    color: color-mix(in srgb, var(--blue) 65%, var(--muted));
   }
 
   .msg-role.assistant {
@@ -2671,6 +2673,12 @@
   line-height: 1.5;
   width: 100%;
   box-sizing: border-box;
+}
+
+.tool-output-waiting {
+  color: var(--muted);
+  font-style: italic;
+  opacity: 0.6;
 }
 
 .json-field {

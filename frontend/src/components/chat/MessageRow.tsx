@@ -115,6 +115,13 @@ function formatJsonValue(value: unknown, depth: number = 0): React.ReactNode {
 
 // Parse and format JSON output - always show raw JSON
 function JsonOutputDisplay({ content }: { content: string }) {
+  if (!content) {
+    return (
+      <div className="json-output">
+        <span className="tool-output-waiting">Waiting for update...</span>
+      </div>
+    );
+  }
   try {
     const parsed = JSON.parse(content);
     // Always show the raw JSON with formatting
