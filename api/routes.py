@@ -1103,11 +1103,29 @@ def handle_get(handler, parsed) -> bool:
 
     # ── Skills API (GET) ──
     if parsed.path == "/api/skills":
-        from tools.skills_tool import skills_list as _skills_list
+        from tools.skills_tool import skills_list as _skills_list, SKILLS_DIR
 
         raw = _skills_list()
         data = json.loads(raw) if isinstance(raw, str) else raw
-        return j(handler, {"skills": data.get("skills", [])})
+
+        # Build a frontmatter-name -> dir_name mapping so frontend can call skill_view correctly
+        dir_name_map: dict = {}
+        import re as _re_skill
+        if SKILLS_DIR.exists():
+            for _skill_md in SKILLS_DIR.rglob("SKILL.md"):
+                try:
+                    _text = _skill_md.read_text(encoding="utf-8", errors="ignore")[:1000]
+                    _m = _re_skill.search(r'^name:\s*["\']?(.+?)["\']?\s*$', _text, _re_skill.MULTILINE)
+                    _fm_name = _m.group(1).strip() if _m else _skill_md.parent.name
+                    dir_name_map[_fm_name] = _skill_md.parent.name
+                except Exception:
+                    pass
+
+        skills = data.get("skills", [])
+        for skill in skills:
+            skill["dir_name"] = dir_name_map.get(skill["name"], skill["name"])
+
+        return j(handler, {"skills": skills})
 
     if parsed.path == "/api/skills/content":
         from tools.skills_tool import skill_view as _skill_view, SKILLS_DIR

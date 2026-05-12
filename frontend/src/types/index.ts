@@ -226,6 +226,7 @@ export interface CronCreateRequest {
 
 export interface Skill {
   name: string;
+  dir_name?: string;
   label: string;
   description?: string;
   category?: string;

@@ -1,5 +1,6 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
+import { useSkillStore } from '@/stores/useSkillStore';
 import type { NavPanel } from '@/types';
 
 interface NavTabsProps {
@@ -16,6 +17,9 @@ interface TabConfig {
 
 export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
   const { t } = useTranslation('common');
+  const clearSelection = useSkillStore((s) => s.clearSelection);
+  const setSkillsTabActive = useSkillStore((s) => s.setSkillsTabActive);
+  const cancelEditing = useSkillStore((s) => s.cancelEditing);
 
   const tabs: TabConfig[] = [
     {
@@ -103,7 +107,16 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
   ];
 
   const switchPanel = (panel: NavPanel) => {
+    cancelEditing();
     onPanelChange(panel);
+    if (panel === 'skills') {
+      setSkillsTabActive(true);
+    } else {
+      setSkillsTabActive(false);
+      if (panel === 'chat') {
+        clearSelection();
+      }
+    }
     // Hide all panel views
     document.querySelectorAll('.panel-view').forEach(el => {
       el.classList.remove('active');

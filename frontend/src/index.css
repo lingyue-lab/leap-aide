@@ -2885,4 +2885,135 @@
   font-size: 11px;
 }
 
+/* ─── Skill Detail: Markdown prose styling ─── */
+.skill-detail .prose {
+  line-height: 1.7;
+}
+
+.skill-detail .prose h1 {
+  font-size: 1.5em;
+  font-weight: 700;
+  margin: 1.2em 0 0.6em;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.3em;
+}
+
+.skill-detail .prose h2 {
+  font-size: 1.3em;
+  font-weight: 600;
+  margin: 1em 0 0.5em;
+  border-bottom: 1px solid var(--border2);
+  padding-bottom: 0.2em;
+}
+
+.skill-detail .prose h3 {
+  font-size: 1.15em;
+  font-weight: 600;
+  margin: 0.8em 0 0.4em;
+}
+
+.skill-detail .prose h4,
+.skill-detail .prose h5,
+.skill-detail .prose h6 {
+  font-size: 1em;
+  font-weight: 600;
+  margin: 0.6em 0 0.3em;
+}
+
+.skill-detail .prose p {
+  margin: 0.6em 0;
+}
+
+.skill-detail .prose ul,
+.skill-detail .prose ol {
+  margin: 0.5em 0;
+  padding-left: 1.5em;
+}
+
+.skill-detail .prose li {
+  margin: 0.25em 0;
+}
+
+.skill-detail .prose blockquote {
+  border-left: 3px solid var(--blue);
+  padding-left: 14px;
+  color: var(--muted);
+  font-style: italic;
+  margin: 0.8em 0;
+}
+
+.skill-detail .prose hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1em 0;
+}
+
+.skill-detail .prose a {
+  color: var(--blue);
+  text-decoration: underline;
+}
+
+.skill-detail .prose strong {
+  font-weight: 700;
+}
+
+.skill-detail .prose em {
+  font-style: italic;
+}
+
+/* ─── Skill Detail: Code blocks ─── */
+.skill-detail .prose pre {
+  background: color-mix(in srgb, var(--border) 60%, transparent);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin: 0.8em 0;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.skill-detail .prose pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.skill-detail .prose .inline-code {
+  background: color-mix(in srgb, var(--border) 80%, transparent);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 0.85em;
+  font-family: var(--font-mono, monospace);
+  color: var(--accent);
+}
+
+/* ─── Skill Detail: Tables ─── */
+.skill-detail .prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8em 0;
+  font-size: 0.9em;
+}
+
+.skill-detail .prose table th {
+  background: color-mix(in srgb, var(--border) 70%, transparent);
+  font-weight: 600;
+  text-align: left;
+  padding: 8px 12px;
+  border: 1px solid var(--border2);
+}
+
+.skill-detail .prose table td {
+  padding: 6px 12px;
+  border: 1px solid var(--border2);
+}
+
+.skill-detail .prose table tr:hover td {
+  background: color-mix(in srgb, var(--border) 30%, transparent);
+}
+
+
 

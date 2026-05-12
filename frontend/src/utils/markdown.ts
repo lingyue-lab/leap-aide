@@ -54,14 +54,16 @@ const MAX_HIGHLIGHT_LENGTH = 3000;
 function protectCodeBlocks(state: StashState, text: string, skipHighlight: boolean = false): string {
   // Guard: if an unclosed code fence exists on a large input, the regex will
   // backtrack catastrophically (ReDoS). Skip code-block processing in that case.
-  const openFences = (text.match(/^(`{3,}|~{3,})\w*/gm) || []).length;
-  const closeFences = (text.match(/^(`{3,}|~{3,})$/gm) || []).length;
-  if (openFences > closeFences && text.length > 500) {
+  // Count ALL fence lines (open and close). An odd total means there's an unclosed fence.
+  const totalFences = (text.match(/^(`{3,}|~{3,})[^\n]*$/gm) || []).length;
+  if (totalFences % 2 !== 0 && text.length > 500) {
     return text;
   }
 
-  return text.replace(/(`{3,}|~{3,})(\w*)\n([\s\S]*?)\1/g, (_, _ticks, lang, code) => {
-    const langAttr = (lang || 'text').trim();
+  // Changed (\w*) to ([^\n]*) so info strings like `terminal(command=...)` are matched
+  return text.replace(/(`{3,}|~{3,})([^\n]*)\n([\s\S]*?)\1/g, (_, _ticks, infoStr, code) => {
+    // Language is the first word of the info string (CommonMark spec)
+    const langAttr = (infoStr.trim().split(/\s+/)[0] || 'text').trim();
     // Remove trailing newline before closing fence
     const trimmedCode = code.endsWith('\n') ? code.slice(0, -1) : code;
     let highlighted: string;
@@ -142,6 +144,22 @@ function applyInlineFormatting(text: string): string {
 
 const MAX_LINES = 2000;
 const MAX_RECURSION_DEPTH = 5;
+
+// --- Table helpers ---
+function isTableRow(line: string): boolean {
+  return /^\|.*\|$/.test(line.trim()) && line.trim().split('|').length >= 3;
+}
+
+function isTableSeparator(line: string): boolean {
+  return /^\|[\s:]*-+[\s:]*\|/.test(line.trim());
+}
+
+function parseTableRow(line: string): string[] {
+  const trimmed = line.trim();
+  // Remove leading and trailing pipes, then split
+  const inner = trimmed.slice(1, trimmed.length - 1);
+  return inner.split('|').map(cell => cell.trim());
+}
 
 function processMarkdownLines(text: string, _depth: number = 0): string {
   if (_depth > MAX_RECURSION_DEPTH) {
@@ -225,6 +243,23 @@ function processMarkdownLines(text: string, _depth: number = 0): string {
       continue;
     }
 
+    // Table: starts with a pipe-row, followed by a separator row
+    if (isTableRow(line) && i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
+      const headerCells = parseTableRow(line);
+      i++; // skip header row
+      i++; // skip separator row
+      const bodyRows: string[][] = [];
+      while (i < lines.length && isTableRow(lines[i])) {
+        bodyRows.push(parseTableRow(lines[i]));
+        i++;
+      }
+      const headerHtml = headerCells.map(c => `<th>${applyInlineFormatting(c)}</th>`).join('');
+      const bodyHtml = bodyRows.map(row => `<tr>${row.map(c => `<td>${applyInlineFormatting(c)}</td>`).join('')}</tr>`).join('');
+      out.push(`<table><thead><tr>${headerHtml}</tr></thead><tbody>${bodyHtml}</tbody></table>`);
+      if (i === prevI) { i++; }
+      continue;
+    }
+
     // Empty line
     if (line.trim() === '') {
       out.push('');
@@ -242,7 +277,8 @@ function processMarkdownLines(text: string, _depth: number = 0): string {
       !/^[-*+] /.test(lines[i]) &&
       !/^\d+\.\s/.test(lines[i]) &&
       !lines[i].startsWith('> ') &&
-      !/^(\*{3,}|-{3,}|_{3,})$/.test(lines[i].trim())
+      !/^(\*{3,}|-{3,}|_{3,})$/.test(lines[i].trim()) &&
+      !isTableRow(lines[i])
     ) {
       paraLines.push(lines[i]);
       i++;
@@ -284,10 +320,15 @@ export function renderMarkdown(raw: string, skipHighlight: boolean = false): str
     raw = raw.slice(0, MAX_INPUT) + '\n\n*(content truncated for display)*';
   }
 
+  // Strip YAML frontmatter (--- ... ---) before rendering.
+  // Frontmatter backticks inside description/other fields confuse the fence counter.
+  // Use a precise pattern: must start at position 0, lines between the two --- delimiters.
+  const textToRender = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '');
+
   const state = createStash();
 
   // 1. Protect fenced code blocks first (before any HTML escaping)
-  let html = protectCodeBlocks(state, raw, skipHighlight);
+  let html = protectCodeBlocks(state, textToRender, skipHighlight);
 
   // 2. Protect inline code
   html = protectInlineCode(state, html);

@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { skillsService } from '@/services/api';
+import { useSkillStore } from '@/stores/useSkillStore';
 import type { Skill } from '@/types';
 
 export default function SkillsPanel() {
   const { t } = useTranslation('common');
-  const [skills, setSkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -13,20 +13,50 @@ export default function SkillsPanel() {
   const [editingSkill, setEditingSkill] = useState<Skill | null>(null);
   const [formError, setFormError] = useState('');
 
+  const selectedSkill = useSkillStore((s) => s.selectedSkill);
+  const selectSkill = useSkillStore((s) => s.selectSkill);
+  const cancelEditing = useSkillStore((s) => s.cancelEditing);
+  const skillsTabActive = useSkillStore((s) => s.skillsTabActive);
+  const storeSkills = useSkillStore((s) => s.skills);
+  const loadSkillsFromStore = useSkillStore((s) => s.loadSkills);
+
   // Form state
   const [formName, setFormName] = useState('');
   const [formCategory, setFormCategory] = useState('');
   const [formContent, setFormContent] = useState('');
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     loadSkills();
   }, []);
 
+  useEffect(() => {
+    if (storeSkills.length > 0 && !selectedSkill) {
+      selectSkill(storeSkills[0]);
+    }
+  }, [storeSkills]);
+
+  useEffect(() => {
+    if (skillsTabActive && storeSkills.length > 0) {
+      const firstSkill = storeSkills[0];
+      const firstCat = firstSkill.category || 'Uncategorized';
+      // Collapse all groups, only expand the one containing the first skill
+      const allCats = Array.from(new Set(storeSkills.map((s) => s.category || 'Uncategorized')));
+      const collapsed: Record<string, boolean> = {};
+      for (const cat of allCats) {
+        collapsed[cat] = cat !== firstCat;
+      }
+      setCollapsedGroups(collapsed);
+      if (!selectedSkill) {
+        selectSkill(firstSkill);
+      }
+    }
+  }, [skillsTabActive]);
+
   const loadSkills = async () => {
     try {
       setLoading(true);
-      const data = await skillsService.list();
-      setSkills(data.skills);
+      await loadSkillsFromStore();
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load skills');
@@ -35,6 +65,7 @@ export default function SkillsPanel() {
     }
   };
 
+  const skills = storeSkills;
   const filteredSkills = skills.filter((skill) => {
     if (!searchQuery.trim()) return true;
     const query = searchQuery.toLowerCase();
@@ -45,6 +76,86 @@ export default function SkillsPanel() {
       (skill.description && skill.description.toLowerCase().includes(query))
     );
   });
+
+  // Group skills by category
+  const groupedSkills: Record<string, Skill[]> = {};
+  for (const skill of filteredSkills) {
+    const cat = skill.category || 'Uncategorized';
+    if (!groupedSkills[cat]) groupedSkills[cat] = [];
+    groupedSkills[cat].push(skill);
+  }
+  const sortedCategories = Object.keys(groupedSkills).sort((a, b) => {
+    if (a === 'Uncategorized') return 1;
+    if (b === 'Uncategorized') return -1;
+    return a.localeCompare(b);
+  });
+
+  const toggleGroup = (cat: string) => {
+    setCollapsedGroups((prev) => ({ ...prev, [cat]: !prev[cat] }));
+  };
+
+  const renderSkillGroups = () => {
+    return sortedCategories.map((cat) => (
+      <div key={cat} className="skill-group">
+        {sortedCategories.length > 1 && (
+          <div
+            className="skill-group-header flex items-center gap-1.5 px-2 py-1.5 text-xs font-semibold cursor-pointer select-none sticky top-0 z-10"
+            style={{
+              color: 'var(--foreground)',
+              background: 'color-mix(in srgb, var(--border) 80%, transparent)',
+              borderBottom: '1px solid var(--border)',
+              borderTop: '1px solid var(--border2)',
+            }}
+            onClick={() => toggleGroup(cat)}
+          >
+            <svg
+              width="10" height="10" viewBox="0 0 10 6"
+              className={`transition-transform flex-shrink-0 ${collapsedGroups[cat] ? '-rotate-90' : ''}`}
+              style={{ opacity: 0.7 }}
+            >
+              <path d="M1 1 L5 5 L9 1" fill="none" stroke="currentColor" strokeWidth="1.5" />
+            </svg>
+            <span className="uppercase tracking-wider">{cat}</span>
+            <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--border)] text-[var(--muted)]">
+              {groupedSkills[cat].length}
+            </span>
+          </div>
+        )}
+        {!collapsedGroups[cat] && groupedSkills[cat].map((skill) => {
+          const isSelected = selectedSkill?.name === skill.name;
+          return (
+            <div
+              key={skill.name}
+              className={`skill-item p-2 pl-4 border-b border-[var(--border2)] cursor-pointer transition-colors ${
+                isSelected
+                  ? 'bg-[var(--hover-bg)]'
+                  : 'hover:bg-[color-mix(in_srgb,var(--hover-bg)_50%,transparent)]'
+              }`}
+              onClick={() => { cancelEditing(); selectSkill(skill); }}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="skill-name text-sm font-medium">
+                    {skill.label || skill.name}
+                  </span>
+                  {skill.category && sortedCategories.length === 1 && (
+                    <span className="text-xs text-[var(--muted)] bg-[var(--border)] px-1.5 py-0.5 rounded">
+                      {skill.category}
+                    </span>
+                  )}
+                </div>
+                {skill.description && (
+                  <div className="text-xs text-[var(--muted)] mt-1 line-clamp-2">
+                    {skill.description}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    ));
+  };
 
   const toggleForm = (skill?: Skill) => {
     if (skill) {
@@ -78,29 +189,6 @@ export default function SkillsPanel() {
       toggleForm();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Failed to save skill');
-    }
-  };
-
-  const handleDelete = async (name: string) => {
-    if (!confirm(t('skills.confirm_delete') || 'Delete this skill?')) return;
-    try {
-      await skillsService.delete(name);
-      loadSkills();
-    } catch (err) {
-      console.error('Failed to delete skill:', err);
-    }
-  };
-
-  const handleEdit = async (skill: Skill) => {
-    try {
-      const data = await skillsService.getContent(skill.name);
-      setEditingSkill(skill);
-      setFormName(skill.name);
-      setFormCategory(skill.category || '');
-      setFormContent(data.content);
-      setShowForm(true);
-    } catch (err) {
-      console.error('Failed to load skill content:', err);
     }
   };
 
@@ -186,53 +274,7 @@ export default function SkillsPanel() {
             {searchQuery ? (t('skills.no_results') || 'No matching skills') : (t('skills.empty') || 'No skills')}
           </div>
         )}
-        {filteredSkills.map((skill) => (
-          <div
-            key={skill.name}
-            className="skill-item p-2 border-b border-[var(--border2)] hover:bg-[var(--hover-bg)]"
-          >
-            <div className="flex items-start justify-between">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="skill-name text-sm font-medium">
-                    {skill.label || skill.name}
-                  </span>
-                  {skill.category && (
-                    <span className="text-xs text-[var(--muted)] bg-[var(--border)] px-1.5 py-0.5 rounded">
-                      {skill.category}
-                    </span>
-                  )}
-                </div>
-                {skill.description && (
-                  <div className="text-xs text-[var(--muted)] mt-1 line-clamp-2">
-                    {skill.description}
-                  </div>
-                )}
-              </div>
-              <div className="flex items-center gap-1 ml-2 flex-shrink-0">
-                <button
-                  className="icon-btn"
-                  onClick={() => handleEdit(skill)}
-                  title="Edit"
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                  </svg>
-                </button>
-                <button
-                  className="icon-btn text-[var(--accent)]"
-                  onClick={() => handleDelete(skill.name)}
-                  title="Delete"
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <line x1="18" y1="6" x2="6" y2="18" />
-                    <line x1="6" y1="6" x2="18" y2="18" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-          </div>
-        ))}
+        {renderSkillGroups()}
       </div>
     </div>
   );

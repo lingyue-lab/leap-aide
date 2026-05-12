@@ -2,6 +2,9 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
+import { useSkillStore } from '@/stores/useSkillStore';
+import SkillDetail from '@/components/skills/SkillDetail';
+
 
 interface MainContentProps {
   children: React.ReactNode;
@@ -14,6 +17,16 @@ export default function MainContent({ children }: MainContentProps) {
   const { currentSession } = useSessionStore();
   useWorkspaceStore();
   const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false);
+
+  const selectedSkill = useSkillStore((s) => s.selectedSkill);
+
+  if (selectedSkill) {
+    return (
+      <main className="main">
+        <SkillDetail />
+      </main>
+    );
+  }
 
   const title = currentSession?.title || 'Hermes';
   
