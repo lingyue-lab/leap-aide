@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { skillsService } from '@/services/api';
 import { useSkillStore } from '@/stores/useSkillStore';
 import type { Skill } from '@/types';
 
@@ -9,22 +8,16 @@ export default function SkillsPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [showForm, setShowForm] = useState(false);
-  const [editingSkill, setEditingSkill] = useState<Skill | null>(null);
-  const [formError, setFormError] = useState('');
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
 
   const selectedSkill = useSkillStore((s) => s.selectedSkill);
   const selectSkill = useSkillStore((s) => s.selectSkill);
+  const clearSelection = useSkillStore((s) => s.clearSelection);
   const cancelEditing = useSkillStore((s) => s.cancelEditing);
   const skillsTabActive = useSkillStore((s) => s.skillsTabActive);
   const storeSkills = useSkillStore((s) => s.skills);
   const loadSkillsFromStore = useSkillStore((s) => s.loadSkills);
-
-  // Form state
-  const [formName, setFormName] = useState('');
-  const [formCategory, setFormCategory] = useState('');
-  const [formContent, setFormContent] = useState('');
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const setShowNewSkillForm = useSkillStore((s) => s.setShowNewSkillForm);
 
   useEffect(() => {
     loadSkills();
@@ -71,7 +64,7 @@ export default function SkillsPanel() {
     const query = searchQuery.toLowerCase();
     return (
       skill.name.toLowerCase().includes(query) ||
-      skill.label.toLowerCase().includes(query) ||
+      (skill.label && skill.label.toLowerCase().includes(query)) ||
       (skill.category && skill.category.toLowerCase().includes(query)) ||
       (skill.description && skill.description.toLowerCase().includes(query))
     );
@@ -157,41 +150,6 @@ export default function SkillsPanel() {
     ));
   };
 
-  const toggleForm = (skill?: Skill) => {
-    if (skill) {
-      setEditingSkill(skill);
-      setFormName(skill.name);
-      setFormCategory(skill.category || '');
-      setFormContent(skill.content || '');
-    } else {
-      setEditingSkill(null);
-      setFormName('');
-      setFormCategory('');
-      setFormContent('');
-    }
-    setShowForm(!showForm);
-    setFormError('');
-  };
-
-  const handleSubmit = async () => {
-    if (!formName.trim()) {
-      setFormError('Skill name is required');
-      return;
-    }
-    if (!formContent.trim()) {
-      setFormError('Skill content is required');
-      return;
-    }
-
-    try {
-      await skillsService.save(formName.trim(), formContent, formCategory.trim() || undefined);
-      loadSkills();
-      toggleForm();
-    } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Failed to save skill');
-    }
-  };
-
   if (loading) {
     return (
       <div className="p-3 text-center text-[var(--muted)] text-sm">
@@ -213,56 +171,11 @@ export default function SkillsPanel() {
         />
         <button
           className="cron-btn run text-xs px-2 py-1"
-          onClick={() => toggleForm()}
+          onClick={() => { cancelEditing(); clearSelection(); setShowNewSkillForm(true); }}
         >
-          + {t('skills.new') || 'New Skill'}
+          +
         </button>
       </div>
-
-      {/* Create/Edit Form */}
-      {showForm && (
-        <div className="skill-form p-2 border-b border-[var(--border)]">
-          <input
-            type="text"
-            placeholder="Skill name (e.g. my-skill)"
-            value={formName}
-            onChange={(e) => setFormName(e.target.value)}
-            className="w-full mb-2 px-2 py-1 text-sm bg-[rgba(255,255,255,0.05)] border border-[var(--border2)] rounded"
-            disabled={!!editingSkill}
-          />
-          <input
-            type="text"
-            placeholder="Category (optional, e.g. devops)"
-            value={formCategory}
-            onChange={(e) => setFormCategory(e.target.value)}
-            className="w-full mb-2 px-2 py-1 text-sm bg-[rgba(255,255,255,0.05)] border border-[var(--border2)] rounded"
-          />
-          <textarea
-            rows={6}
-            placeholder="SKILL.md content (YAML frontmatter + markdown body)"
-            value={formContent}
-            onChange={(e) => setFormContent(e.target.value)}
-            className="w-full mb-2 px-2 py-1 text-sm bg-[rgba(255,255,255,0.05)] border border-[var(--border2)] rounded font-mono text-xs resize-vertical"
-          />
-          <div className="flex gap-2">
-            <button
-              className="cron-btn run flex-1 text-xs py-1"
-              onClick={handleSubmit}
-            >
-              {editingSkill ? (t('skills.save') || 'Save') : (t('skills.create') || 'Create')}
-            </button>
-            <button
-              className="cron-btn flex-1 text-xs py-1"
-              onClick={() => toggleForm()}
-            >
-              {t('common.cancel') || 'Cancel'}
-            </button>
-          </div>
-          {formError && (
-            <div className="text-xs text-[var(--accent)] mt-2">{formError}</div>
-          )}
-        </div>
-      )}
 
       {/* Skills List */}
       <div className="skills-list flex-1 overflow-y-auto">

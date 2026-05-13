@@ -335,6 +335,35 @@ export const skillsService = {
       }
     );
   },
+
+  importDir: async (
+    skillName: string,
+    category: string | undefined,
+    files: { path: string; file: File }[],
+    overwrite = false
+  ): Promise<{ ok?: boolean; name?: string; file_count?: number; conflict?: boolean }> => {
+    const formData = new FormData();
+    formData.append('skill_name', skillName);
+    if (category) formData.append('category', category);
+    formData.append('overwrite', overwrite ? 'true' : 'false');
+    files.forEach(({ path, file }, i) => {
+      formData.append(`file_${i}`, file);
+      formData.append(`path_${i}`, path);
+    });
+    const response = await fetch('/api/skills/import', {
+      method: 'POST',
+      body: formData,
+      credentials: 'include',
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 409 && data.conflict) {
+      return { conflict: true, name: data.name };
+    }
+    if (!response.ok) {
+      throw { message: data.message || `HTTP ${response.status}`, status: response.status };
+    }
+    return data;
+  },
 };
 
 // Memory API 服务

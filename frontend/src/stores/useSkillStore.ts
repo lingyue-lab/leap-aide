@@ -9,6 +9,7 @@ interface SkillState {
   loadingContent: boolean;
   skillsTabActive: boolean;
   isEditing: boolean;
+  showNewSkillForm: boolean;
 
   loadSkills: () => Promise<void>;
   selectSkill: (skill: Skill) => Promise<void>;
@@ -17,6 +18,7 @@ interface SkillState {
   setSkillsTabActive: (active: boolean) => void;
   setIsEditing: (editing: boolean) => void;
   cancelEditing: () => void;
+  setShowNewSkillForm: (v: boolean) => void;
 }
 
 export const useSkillStore = create<SkillState>((set) => ({
@@ -27,6 +29,7 @@ export const useSkillStore = create<SkillState>((set) => ({
   loadingContent: false,
   skillsTabActive: false,
   isEditing: false,
+  showNewSkillForm: false,
 
   loadSkills: async () => {
     set({ loadingSkills: true });
@@ -44,7 +47,7 @@ export const useSkillStore = create<SkillState>((set) => ({
   },
 
   selectSkill: async (skill) => {
-    set({ selectedSkill: skill, selectedSkillContent: null, loadingContent: true });
+    set({ selectedSkill: skill, selectedSkillContent: null, loadingContent: true, showNewSkillForm: false });
     try {
       const lookupName = skill.dir_name || skill.name;
       const response = await fetch(
@@ -79,6 +82,10 @@ export const useSkillStore = create<SkillState>((set) => ({
   },
 
   cancelEditing: () => {
-    set({ isEditing: false });
+    set({ isEditing: false, showNewSkillForm: false });
+  },
+
+  setShowNewSkillForm: (v) => {
+    set({ showNewSkillForm: v });
   },
 }));

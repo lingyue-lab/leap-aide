@@ -1251,6 +1251,9 @@ def handle_post(handler, parsed) -> bool:
     if parsed.path == "/api/transcribe":
         return handle_transcribe(handler)
 
+    if parsed.path == "/api/skills/import":
+        return _handle_skill_import(handler)
+
     body = read_body(handler)
 
     if parsed.path == "/api/session/new":
@@ -3865,6 +3868,92 @@ def _handle_skill_file_save(handler, body):
         return bad(handler, "File not found", 404)
     target.write_text(body["content"], encoding="utf-8")
     return j(handler, {"ok": True, "path": file_rel})
+
+
+def _handle_skill_import(handler):
+    """Import a skill directory uploaded as multipart/form-data.
+
+    Form fields:
+      skill_name  – target skill name (will be slugified)
+      category    – optional category subdirectory
+      overwrite   – "true" to overwrite an existing skill directory
+      file_0 … file_N  – binary file content
+      path_0 … path_N  – corresponding relative path within the skill directory
+    """
+    import shutil as _shutil
+    from api.upload import parse_multipart
+    from tools.skills_tool import SKILLS_DIR
+
+    content_type = handler.headers.get('Content-Type', '')
+    content_length = int(handler.headers.get('Content-Length', 0) or 0)
+
+    # No hard cap for skill imports (binary assets can be large); use 500 MB guard.
+    _MAX_IMPORT = 500 * 1024 * 1024
+    if content_length > _MAX_IMPORT:
+        return bad(handler, f'Upload too large (max 500 MB)', 413)
+
+    try:
+        fields, files = parse_multipart(handler.rfile, content_type, content_length)
+    except Exception as exc:
+        return bad(handler, f'Failed to parse upload: {exc}', 400)
+
+    # ── Validate metadata fields ──
+    skill_name = fields.get('skill_name', '').strip().lower().replace(' ', '-')
+    if not skill_name or '/' in skill_name or '..' in skill_name:
+        return bad(handler, 'Invalid skill name', 400)
+
+    category = fields.get('category', '').strip()
+    if category and ('/' in category or '..' in category):
+        return bad(handler, 'Invalid category', 400)
+
+    overwrite = fields.get('overwrite', 'false').lower() == 'true'
+
+    # ── Resolve target directory ──
+    if category:
+        skill_dir = SKILLS_DIR / category / skill_name
+    else:
+        skill_dir = SKILLS_DIR / skill_name
+
+    try:
+        skill_dir.resolve().relative_to(SKILLS_DIR.resolve())
+    except ValueError:
+        return bad(handler, 'Invalid skill path', 400)
+
+    # ── Conflict detection ──
+    if skill_dir.exists() and not overwrite:
+        return j(handler, {'conflict': True, 'name': skill_name}, status=409)
+
+    # ── Wipe existing directory when overwriting ──
+    if skill_dir.exists() and overwrite:
+        _shutil.rmtree(str(skill_dir))
+
+    # ── Write files ──
+    file_count = 0
+    i = 0
+    while f'file_{i}' in files:
+        _filename, file_bytes = files[f'file_{i}']
+        rel_path = fields.get(f'path_{i}', '').strip()
+        i += 1
+
+        if not rel_path:
+            continue
+
+        # Security: reject path traversal
+        parts = rel_path.replace('\\', '/').split('/')
+        if not all(p and p != '..' for p in parts) or rel_path.startswith('/'):
+            continue
+
+        target = (skill_dir / rel_path).resolve()
+        try:
+            target.relative_to(skill_dir.resolve())
+        except ValueError:
+            continue  # path escaped skill_dir — skip silently
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(file_bytes)
+        file_count += 1
+
+    return j(handler, {'ok': True, 'name': skill_name, 'file_count': file_count})
 
 
 def _handle_memory_write(handler, body):

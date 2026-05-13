@@ -117,15 +117,6 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
         clearSelection();
       }
     }
-    // Hide all panel views
-    document.querySelectorAll('.panel-view').forEach(el => {
-      el.classList.remove('active');
-    });
-    // Show the selected panel
-    const panelEl = document.getElementById(`panel${panel.charAt(0).toUpperCase() + panel.slice(1)}`);
-    if (panelEl) {
-      panelEl.classList.add('active');
-    }
   };
 
   return (

@@ -46,31 +46,31 @@ export default function Sidebar({ width = 300, onResizeStart, onOpenSettings }: 
         <NavTabs activePanel={activePanel} onPanelChange={setActivePanel} />
         
         <div className="sidebar-content">
-          <div className="panel-view active" id="panelChat">
+        <div className={`panel-view ${activePanel === 'chat' ? 'active' : ''}`} id="panelChat">
             <SessionList />
           </div>
           
-          <div className="panel-view" id="panelTasks">
+          <div className={`panel-view ${activePanel === 'tasks' ? 'active' : ''}`} id="panelTasks">
             <TasksPanel />
           </div>
           
-          <div className="panel-view" id="panelSkills">
+          <div className={`panel-view ${activePanel === 'skills' ? 'active' : ''}`} id="panelSkills">
             <SkillsPanel />
           </div>
           
-          <div className="panel-view" id="panelMemory">
+          <div className={`panel-view ${activePanel === 'memory' ? 'active' : ''}`} id="panelMemory">
             <MemoryPanel />
           </div>
           
-          <div className="panel-view" id="panelWorkspaces">
+          <div className={`panel-view ${activePanel === 'workspaces' ? 'active' : ''}`} id="panelWorkspaces">
             <WorkspacesPanel />
           </div>
           
-          <div className="panel-view" id="panelProfiles">
+          <div className={`panel-view ${activePanel === 'profiles' ? 'active' : ''}`} id="panelProfiles">
             <ProfilesPanel />
           </div>
           
-          <div className="panel-view" id="panelTodos">
+          <div className={`panel-view ${activePanel === 'todos' ? 'active' : ''}`} id="panelTodos">
             <TodosPanel />
           </div>
           

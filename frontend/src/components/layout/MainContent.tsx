@@ -4,6 +4,7 @@ import { useSessionStore } from '@/stores/useSessionStore';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 import { useSkillStore } from '@/stores/useSkillStore';
 import SkillDetail from '@/components/skills/SkillDetail';
+import SkillForm from '@/components/skills/SkillForm';
 
 
 interface MainContentProps {
@@ -19,8 +20,26 @@ export default function MainContent({ children }: MainContentProps) {
   const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false);
 
   const selectedSkill = useSkillStore((s) => s.selectedSkill);
+  const showNewSkillForm = useSkillStore((s) => s.showNewSkillForm);
+  const setShowNewSkillForm = useSkillStore((s) => s.setShowNewSkillForm);
+  const skillsTabActive = useSkillStore((s) => s.skillsTabActive);
 
-  if (selectedSkill) {
+  if (skillsTabActive && showNewSkillForm) {
+    return (
+      <main className="main">
+        <SkillForm
+          onSuccess={() => {
+            setShowNewSkillForm(false);
+            // Auto-select the most recently created skill (last in list after reload)
+            // loadSkills is called inside SkillForm before onSuccess, store is already updated
+          }}
+          onCancel={() => setShowNewSkillForm(false)}
+        />
+      </main>
+    );
+  }
+
+  if (skillsTabActive && selectedSkill) {
     return (
       <main className="main">
         <SkillDetail />
