@@ -235,6 +235,14 @@ export interface Skill {
   updated_at?: number;
 }
 
+export interface SkillFileNode {
+  name: string;
+  path: string;    // 相对于 skill 目录的路径
+  is_dir: boolean;
+  size?: number;
+  children?: SkillFileNode[];
+}
+
 // types/memory.ts - 记忆相关类型定义
 
 export interface MemorySection {

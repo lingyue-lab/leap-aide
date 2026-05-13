@@ -3016,4 +3016,45 @@
 }
 
 
+/* ─── Skill Files Drawer ─── */
+
+.skill-files-drawer {
+  width: 240px;
+  min-width: 180px;
+  border-left: 1px solid var(--border);
+  background: var(--sidebar-bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.skill-files-drawer .panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  background: var(--header-bg);
+  flex-shrink: 0;
+}
+
+.skill-file-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 14px;
+  color: var(--foreground);
+  border-radius: 3px;
+  transition: background 0.1s;
+  white-space: nowrap;
+}
+
+.skill-file-item:hover {
+  background: color-mix(in srgb, var(--hover-bg) 60%, transparent);
+}
+
 

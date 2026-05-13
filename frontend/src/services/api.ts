@@ -319,6 +319,22 @@ export const skillsService = {
       body: JSON.stringify({ name }),
     });
   },
+
+  getFiles: async (name: string) => {
+    return api<{ tree: import('@/types').SkillFileNode[]; skill_dir: string }>(
+      `/api/skills/files?${new URLSearchParams({ name })}`
+    );
+  },
+
+  saveFile: async (name: string, filePath: string, content: string) => {
+    return api<{ ok: boolean }>(
+      `/api/skills/content`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ name, file: filePath, content }),
+      }
+    );
+  },
 };
 
 // Memory API 服务

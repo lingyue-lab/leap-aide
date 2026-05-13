@@ -1165,6 +1165,53 @@ def handle_get(handler, parsed) -> bool:
             data["linked_files"] = {}
         return j(handler, data)
 
+    if parsed.path == "/api/skills/files":
+        from tools.skills_tool import SKILLS_DIR
+        from pathlib import Path as _Path
+        import re as _re_sf
+
+        qs = parse_qs(parsed.query)
+        name = qs.get("name", [""])[0]
+        if not name or _re_sf.search(r"[*?\[\]]", name):
+            return bad(handler, "name required or invalid", 400)
+        skill_dir = None
+        for p in SKILLS_DIR.rglob(name):
+            if p.is_dir():
+                skill_dir = p
+                break
+        if not skill_dir:
+            return bad(handler, "Skill not found", 404)
+
+        def _build_tree(base: _Path, rel: str = "") -> list:
+            result = []
+            try:
+                items = sorted(base.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))
+            except PermissionError:
+                return result
+            for item in items:
+                item_rel = f"{rel}/{item.name}" if rel else item.name
+                if item.is_dir():
+                    result.append({
+                        "name": item.name,
+                        "path": item_rel,
+                        "is_dir": True,
+                        "children": _build_tree(item, item_rel),
+                    })
+                else:
+                    try:
+                        size = item.stat().st_size
+                    except OSError:
+                        size = 0
+                    result.append({
+                        "name": item.name,
+                        "path": item_rel,
+                        "is_dir": False,
+                        "size": size,
+                    })
+            return result
+
+        return j(handler, {"tree": _build_tree(skill_dir), "skill_dir": str(skill_dir)})
+
     # ── Memory API (GET) ──
     if parsed.path == "/api/memory":
         return _handle_memory_read(handler)
@@ -1582,6 +1629,9 @@ def handle_post(handler, parsed) -> bool:
 
     if parsed.path == "/api/skills/delete":
         return _handle_skill_delete(handler, body)
+
+    if parsed.path == "/api/skills/content":
+        return _handle_skill_file_save(handler, body)
 
     # ── Memory (POST) ──
     if parsed.path == "/api/memory/write":
@@ -3781,6 +3831,40 @@ def _handle_skill_delete(handler, body):
     skill_dir = matches[0].parent
     shutil.rmtree(str(skill_dir))
     return j(handler, {"ok": True, "name": body["name"]})
+
+
+def _handle_skill_file_save(handler, body):
+    """Save an arbitrary file within a skill directory (used by SkillFilesDrawer)."""
+    try:
+        require(body, "name", "file", "content")
+    except ValueError as e:
+        return bad(handler, str(e))
+    from tools.skills_tool import SKILLS_DIR
+    import re as _re_sfs
+
+    name = body["name"].strip()
+    file_rel = body["file"].strip()
+    if not name or _re_sfs.search(r"[*?\[\]]", name):
+        return bad(handler, "Invalid skill name", 400)
+    # Reject obvious path traversal attempts early
+    if ".." in file_rel or file_rel.startswith("/"):
+        return bad(handler, "Invalid file path", 400)
+    skill_dir = None
+    for p in SKILLS_DIR.rglob(name):
+        if p.is_dir():
+            skill_dir = p
+            break
+    if not skill_dir:
+        return bad(handler, "Skill not found", 404)
+    target = (skill_dir / file_rel).resolve()
+    try:
+        target.relative_to(skill_dir.resolve())
+    except ValueError:
+        return bad(handler, "Invalid file path", 400)
+    if not target.exists() or not target.is_file():
+        return bad(handler, "File not found", 404)
+    target.write_text(body["content"], encoding="utf-8")
+    return j(handler, {"ok": True, "path": file_rel})
 
 
 def _handle_memory_write(handler, body):
