@@ -3800,7 +3800,7 @@ def _handle_skill_save(handler, body):
     skill_name = body["name"].strip().lower().replace(" ", "-")
     if not skill_name or "/" in skill_name or ".." in skill_name:
         return bad(handler, "Invalid skill name")
-    category = body.get("category", "").strip()
+    category = (body.get("category") or "").strip()
     if category and ("/" in category or ".." in category):
         return bad(handler, "Invalid category")
     from tools.skills_tool import SKILLS_DIR
