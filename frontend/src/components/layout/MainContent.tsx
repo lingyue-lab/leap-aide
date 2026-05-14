@@ -4,10 +4,12 @@ import { useSessionStore } from '@/stores/useSessionStore';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 import { useSkillStore } from '@/stores/useSkillStore';
 import { useCronStore } from '@/stores/useCronStore';
+import { useMemoryStore } from '@/stores/useMemoryStore';
 import SkillDetail from '@/components/skills/SkillDetail';
 import SkillForm from '@/components/skills/SkillForm';
 import TaskDetail from '@/components/tasks/TaskDetail';
 import TaskForm from '@/components/tasks/TaskForm';
+import MemoryDetail from '@/components/memory/MemoryDetail';
 
 
 interface MainContentProps {
@@ -33,6 +35,8 @@ export default function MainContent({ children }: MainContentProps) {
   const setShowNewJobForm = useCronStore((s) => s.setShowNewJobForm);
   const showEditJobForm = useCronStore((s) => s.showEditJobForm);
   const setShowEditJobForm = useCronStore((s) => s.setShowEditJobForm);
+
+  const memoryTabActive = useMemoryStore((s) => s.memoryTabActive);
 
   if (skillsTabActive && showNewSkillForm) {
     return (
@@ -84,6 +88,14 @@ export default function MainContent({ children }: MainContentProps) {
     return (
       <main className="main">
         <TaskDetail />
+      </main>
+    );
+  }
+
+  if (memoryTabActive) {
+    return (
+      <main className="main">
+        <MemoryDetail />
       </main>
     );
   }

@@ -368,14 +368,33 @@ export const skillsService = {
 
 // Memory API 服务
 export const memoryService = {
-  get: async () => {
-    return api<import('@/types').MemoryData>('/api/memory');
+  get: async (): Promise<import('@/types').MemoryData> => {
+    const raw = await api<{
+      memory: string;
+      user: string;
+      memory_mtime: number | null;
+      user_mtime: number | null;
+    }>('/api/memory');
+    return {
+      user_memory: {
+        section: 'memory',
+        content: raw.user ?? '',
+        updated_at: raw.user_mtime ?? undefined,
+      },
+      project_memory: {
+        section: 'project',
+        content: raw.memory ?? '',
+        updated_at: raw.memory_mtime ?? undefined,
+      },
+    };
   },
 
   write: async (section: 'memory' | 'project', content: string) => {
+    // backend uses 'memory' for MEMORY.md and 'user' for USER.md
+    const backendSection = section === 'project' ? 'memory' : 'user';
     return api('/api/memory/write', {
       method: 'POST',
-      body: JSON.stringify({ section, content }),
+      body: JSON.stringify({ section: backendSection, content }),
     });
   },
 };
