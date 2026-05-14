@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useSkillStore } from '@/stores/useSkillStore';
 import { useCronStore } from '@/stores/useCronStore';
 import { useMemoryStore } from '@/stores/useMemoryStore';
+import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 import type { NavPanel } from '@/types';
 
 interface NavTabsProps {
@@ -24,6 +25,7 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
   const cancelEditing = useSkillStore((s) => s.cancelEditing);
   const setTasksTabActive = useCronStore((s) => s.setTasksTabActive);
   const setMemoryTabActive = useMemoryStore((s) => s.setMemoryTabActive);
+  const setWorkspacesTabActive = useWorkspaceStore((s) => s.setWorkspacesTabActive);
 
   const tabs: TabConfig[] = [
     {
@@ -117,18 +119,27 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
       setSkillsTabActive(true);
       setTasksTabActive(false);
       setMemoryTabActive(false);
+      setWorkspacesTabActive(false);
     } else if (panel === 'tasks') {
       setSkillsTabActive(false);
       setTasksTabActive(true);
       setMemoryTabActive(false);
+      setWorkspacesTabActive(false);
     } else if (panel === 'memory') {
       setSkillsTabActive(false);
       setTasksTabActive(false);
       setMemoryTabActive(true);
+      setWorkspacesTabActive(false);
+    } else if (panel === 'workspaces') {
+      setSkillsTabActive(false);
+      setTasksTabActive(false);
+      setMemoryTabActive(false);
+      setWorkspacesTabActive(true);
     } else {
       setSkillsTabActive(false);
       setTasksTabActive(false);
       setMemoryTabActive(false);
+      setWorkspacesTabActive(false);
       if (panel === 'chat') {
         clearSelection();
       }

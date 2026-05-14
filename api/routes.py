@@ -967,6 +967,12 @@ def handle_get(handler, parsed) -> bool:
     if parsed.path == "/api/list":
         return _handle_list_dir(handler, parsed)
 
+    if parsed.path == "/api/workspace/list":
+        return _handle_workspace_list(handler, parsed)
+
+    if parsed.path == "/api/workspace/file":
+        return _handle_workspace_file_read(handler, parsed)
+
     if parsed.path == "/api/personalities":
         # Read personalities from config.yaml agent.personalities section
         # (matches hermes-agent CLI behavior, not filesystem SOUL.md approach)
@@ -1593,6 +1599,9 @@ def handle_post(handler, parsed) -> bool:
         return _handle_cron_resume(handler, body)
 
     # ── File ops (POST) ──
+    if parsed.path == "/api/workspace/file":
+        return _handle_workspace_file_write(handler, body)
+
     if parsed.path == "/api/file/delete":
         return _handle_file_delete(handler, body)
 
@@ -1617,6 +1626,13 @@ def handle_post(handler, parsed) -> bool:
 
     if parsed.path == "/api/workspaces/rename":
         return _handle_workspace_rename(handler, body)
+
+    if parsed.path == "/api/workspaces/select":
+        path_str = body.get("path", "").strip()
+        if not path_str:
+            return bad(handler, "path is required")
+        set_last_workspace(path_str)
+        return j(handler, {"ok": True, "last_workspace": path_str})
 
     # ── Approval (POST) ──
     if parsed.path == "/api/approval/respond":
@@ -3466,6 +3482,83 @@ def _handle_workspace_rename(handler, body):
         return bad(handler, "Workspace not found", 404)
     save_workspaces(wss)
     return j(handler, {"ok": True, "workspaces": wss})
+
+
+def _handle_workspace_list(handler, parsed):
+    """GET /api/workspace/list?path=<absolute_path>
+    List directory entries for a workspace path directly.
+    """
+    from urllib.parse import parse_qs as _pqs
+    qs = _pqs(parsed.query)
+    path_str = qs.get("path", [""])[0].strip()
+    if not path_str:
+        return bad(handler, "path is required")
+    target = Path(path_str).expanduser().resolve()
+    if _is_blocked_system_path(target):
+        return bad(handler, "Path not allowed", 403)
+    try:
+        entries = list_dir(target, ".")
+        # list_dir returns type='dir'|'file', prefix paths with absolute workspace path
+        abs_prefix = str(target)
+        for e in entries:
+            e["is_dir"] = (e.get("type") == "dir")
+            e["path"] = abs_prefix.rstrip("/") + "/" + e["path"]
+        git = None
+        try:
+            from api.workspace import git_info_for_workspace
+            git = git_info_for_workspace(target)
+        except Exception:
+            pass
+        return j(handler, {"entries": entries, "path": path_str, "git": git})
+    except (FileNotFoundError, ValueError) as exc:
+        return bad(handler, _sanitize_error(exc), 404)
+
+
+def _handle_workspace_file_read(handler, parsed):
+    """GET /api/workspace/file?path=<absolute_path>
+    Read a file by absolute path.
+    """
+    from urllib.parse import parse_qs as _pqs
+    qs = _pqs(parsed.query)
+    path_str = qs.get("path", [""])[0].strip()
+    if not path_str:
+        return bad(handler, "path is required")
+    target = Path(path_str).expanduser().resolve()
+    if _is_blocked_system_path(target):
+        return bad(handler, "Path not allowed", 403)
+    if not target.is_file():
+        return bad(handler, "Not a file", 404)
+    try:
+        from api.workspace import MAX_FILE_BYTES
+        size = target.stat().st_size
+        if size > MAX_FILE_BYTES:
+            return bad(handler, f"File too large ({size} bytes)", 413)
+        content = target.read_text(encoding="utf-8", errors="replace")
+        handler.send_response(200)
+        handler.send_header("Content-Type", "text/plain; charset=utf-8")
+        handler.end_headers()
+        handler.wfile.write(content.encode("utf-8"))
+    except OSError as exc:
+        return bad(handler, _sanitize_error(exc), 500)
+
+
+def _handle_workspace_file_write(handler, body):
+    """POST /api/workspace/file {path, content}
+    Write a file by absolute path.
+    """
+    path_str = (body.get("path") or "").strip()
+    content = body.get("content", "")
+    if not path_str:
+        return bad(handler, "path is required")
+    target = Path(path_str).expanduser().resolve()
+    if _is_blocked_system_path(target):
+        return bad(handler, "Path not allowed", 403)
+    try:
+        target.write_text(content, encoding="utf-8")
+        return j(handler, {"ok": True})
+    except OSError as exc:
+        return bad(handler, _sanitize_error(exc), 500)
+
 
 
 def _handle_approval_respond(handler, body):

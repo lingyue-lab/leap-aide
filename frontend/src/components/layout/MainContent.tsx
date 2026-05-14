@@ -10,6 +10,7 @@ import SkillForm from '@/components/skills/SkillForm';
 import TaskDetail from '@/components/tasks/TaskDetail';
 import TaskForm from '@/components/tasks/TaskForm';
 import MemoryDetail from '@/components/memory/MemoryDetail';
+import WorkspaceDetail from '@/components/workspace/WorkspaceDetail';
 
 
 interface MainContentProps {
@@ -37,6 +38,8 @@ export default function MainContent({ children }: MainContentProps) {
   const setShowEditJobForm = useCronStore((s) => s.setShowEditJobForm);
 
   const memoryTabActive = useMemoryStore((s) => s.memoryTabActive);
+
+  const workspacesTabActive = useWorkspaceStore((s) => s.workspacesTabActive);
 
   if (skillsTabActive && showNewSkillForm) {
     return (
@@ -96,6 +99,14 @@ export default function MainContent({ children }: MainContentProps) {
     return (
       <main className="main">
         <MemoryDetail />
+      </main>
+    );
+  }
+
+  if (workspacesTabActive) {
+    return (
+      <main className="main">
+        <WorkspaceDetail />
       </main>
     );
   }

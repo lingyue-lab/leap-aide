@@ -15,6 +15,7 @@ interface WorkspaceState {
   workspaces: Workspace[];
   lastWorkspace: string | null;
   currentWorkspace: string | null;
+  workspacesTabActive: boolean;
   
   // Actions
   loadDir: (path: string) => Promise<void>;
@@ -27,6 +28,7 @@ interface WorkspaceState {
   selectWorkspace: (path: string) => Promise<void>;
   addWorkspace: (path: string, displayName?: string) => Promise<void>;
   removeWorkspace: (path: string) => Promise<void>;
+  setWorkspacesTabActive: (active: boolean) => void;
 }
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
@@ -43,6 +45,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   workspaces: [],
   lastWorkspace: null,
   currentWorkspace: null,
+  workspacesTabActive: false,
 
   loadDir: async (path) => {
     set({ loading: true });
@@ -146,24 +149,45 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       const response = await fetch('/api/workspaces', { credentials: 'include' });
       if (!response.ok) throw new Error('Failed to load workspaces');
       const data = await response.json();
-      set({ workspaces: data.workspaces || [], lastWorkspace: data.last_workspace, currentWorkspace: data.last_workspace });
+      const lastWs: string | null = data.last_workspace || null;
+      set({ workspaces: data.workspaces || [], lastWorkspace: lastWs, currentWorkspace: lastWs });
+      if (lastWs) {
+        try {
+          await get().loadDir(lastWs);
+          const { entries } = get();
+          const firstFile = entries.find((e) => !e.is_dir);
+          if (firstFile) {
+            get().setPreview(firstFile.path).catch(() => {/* silent */});
+          }
+        } catch (_) {/* silent */}
+      }
     } catch (err) {
       // Fail silently
     }
   },
 
   selectWorkspace: async (path) => {
+    // Update local state immediately; backend call is best-effort
+    set({ lastWorkspace: path, currentWorkspace: path, currentDir: path, previewPath: null, previewContent: null, previewType: null });
     try {
-      await fetch('/api/workspace', {
+      await fetch('/api/workspaces/select', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path }),
         credentials: 'include',
       });
-      set({ lastWorkspace: path, currentWorkspace: path, currentDir: '.' });
-    } catch (err) {
-      throw err;
+    } catch (_err) {
+      // Fail silently - local state already updated
     }
+    // Load directory for selected workspace, then auto-preview first file
+    try {
+      await get().loadDir(path);
+      const { entries } = get();
+      const firstFile = entries.find((e) => !e.is_dir);
+      if (firstFile) {
+        get().setPreview(firstFile.path).catch(() => {/* silent */});
+      }
+    } catch (_) {/* silent */}
   },
 
   addWorkspace: async (path: string, displayName?: string) => {
@@ -200,4 +224,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       throw err;
     }
   },
+
+  setWorkspacesTabActive: (active) => set({ workspacesTabActive: active }),
 }));
