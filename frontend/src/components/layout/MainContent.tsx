@@ -3,8 +3,11 @@ import { useTranslation } from 'react-i18next';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 import { useSkillStore } from '@/stores/useSkillStore';
+import { useCronStore } from '@/stores/useCronStore';
 import SkillDetail from '@/components/skills/SkillDetail';
 import SkillForm from '@/components/skills/SkillForm';
+import TaskDetail from '@/components/tasks/TaskDetail';
+import TaskForm from '@/components/tasks/TaskForm';
 
 
 interface MainContentProps {
@@ -23,6 +26,13 @@ export default function MainContent({ children }: MainContentProps) {
   const showNewSkillForm = useSkillStore((s) => s.showNewSkillForm);
   const setShowNewSkillForm = useSkillStore((s) => s.setShowNewSkillForm);
   const skillsTabActive = useSkillStore((s) => s.skillsTabActive);
+
+  const tasksTabActive = useCronStore((s) => s.tasksTabActive);
+  const selectedJob = useCronStore((s) => s.selectedJob);
+  const showNewJobForm = useCronStore((s) => s.showNewJobForm);
+  const setShowNewJobForm = useCronStore((s) => s.setShowNewJobForm);
+  const showEditJobForm = useCronStore((s) => s.showEditJobForm);
+  const setShowEditJobForm = useCronStore((s) => s.setShowEditJobForm);
 
   if (skillsTabActive && showNewSkillForm) {
     return (
@@ -43,6 +53,37 @@ export default function MainContent({ children }: MainContentProps) {
     return (
       <main className="main">
         <SkillDetail />
+      </main>
+    );
+  }
+
+  if (tasksTabActive && showNewJobForm) {
+    return (
+      <main className="main">
+        <TaskForm
+          onSuccess={() => setShowNewJobForm(false)}
+          onCancel={() => setShowNewJobForm(false)}
+        />
+      </main>
+    );
+  }
+
+  if (tasksTabActive && showEditJobForm && selectedJob) {
+    return (
+      <main className="main">
+        <TaskForm
+          editJob={selectedJob}
+          onSuccess={() => setShowEditJobForm(false)}
+          onCancel={() => setShowEditJobForm(false)}
+        />
+      </main>
+    );
+  }
+
+  if (tasksTabActive && selectedJob) {
+    return (
+      <main className="main">
+        <TaskDetail />
       </main>
     );
   }

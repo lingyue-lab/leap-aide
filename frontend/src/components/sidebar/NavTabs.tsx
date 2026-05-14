@@ -1,6 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSkillStore } from '@/stores/useSkillStore';
+import { useCronStore } from '@/stores/useCronStore';
 import type { NavPanel } from '@/types';
 
 interface NavTabsProps {
@@ -20,6 +21,7 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
   const clearSelection = useSkillStore((s) => s.clearSelection);
   const setSkillsTabActive = useSkillStore((s) => s.setSkillsTabActive);
   const cancelEditing = useSkillStore((s) => s.cancelEditing);
+  const setTasksTabActive = useCronStore((s) => s.setTasksTabActive);
 
   const tabs: TabConfig[] = [
     {
@@ -111,8 +113,13 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
     onPanelChange(panel);
     if (panel === 'skills') {
       setSkillsTabActive(true);
+      setTasksTabActive(false);
+    } else if (panel === 'tasks') {
+      setSkillsTabActive(false);
+      setTasksTabActive(true);
     } else {
       setSkillsTabActive(false);
+      setTasksTabActive(false);
       if (panel === 'chat') {
         clearSelection();
       }

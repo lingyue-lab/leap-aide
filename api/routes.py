@@ -3258,7 +3258,17 @@ def _handle_cron_run(handler, body):
     job = get_job(job_id)
     if not job:
         return bad(handler, "Job not found", 404)
-    threading.Thread(target=run_job, args=(job,), daemon=True).start()
+
+    def _run_and_save(job):
+        try:
+            from cron.jobs import save_job_output, mark_job_run
+            success, output, final_response, error = run_job(job)
+            save_job_output(job["id"], output)
+            mark_job_run(job["id"], success, error)
+        except Exception as e:
+            logger.warning("Manual run_job failed for %s: %s", job.get("id"), e)
+
+    threading.Thread(target=_run_and_save, args=(job,), daemon=True).start()
     return j(handler, {"ok": True, "job_id": job_id, "status": "triggered"})
 
 

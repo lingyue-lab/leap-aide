@@ -200,17 +200,26 @@ export interface NavTab {
 
 // types/cron.ts - 定时任务相关类型定义
 
+export interface CronSchedule {
+  kind: string;
+  minutes: number;
+  display: string;
+}
+
 export interface CronJob {
   id: string;
   name?: string;
-  schedule: string;
+  schedule: string | CronSchedule;
   prompt: string;
   deliver: 'local' | 'discord' | 'telegram';
   skills?: string[];
   enabled: boolean;
   created_at?: number;
   last_run?: number;
+  last_run_at?: string | number;
+  next_run_at?: string | number | null;
   last_output?: string;
+  last_status?: string;
   error?: string;
 }
 

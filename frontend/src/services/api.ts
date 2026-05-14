@@ -252,35 +252,35 @@ export const cronService = {
   update: async (jobId: string, updates: Partial<import('@/types').CronJob>) => {
     return api('/api/crons/update', {
       method: 'POST',
-      body: JSON.stringify({ id: jobId, ...updates }),
+      body: JSON.stringify({ job_id: jobId, ...updates }),
     });
   },
 
   delete: async (jobId: string) => {
     return api('/api/crons/delete', {
       method: 'POST',
-      body: JSON.stringify({ id: jobId }),
+      body: JSON.stringify({ job_id: jobId }),
     });
   },
 
   run: async (jobId: string) => {
     return api('/api/crons/run', {
       method: 'POST',
-      body: JSON.stringify({ id: jobId }),
+      body: JSON.stringify({ job_id: jobId }),
     });
   },
 
   pause: async (jobId: string) => {
     return api('/api/crons/pause', {
       method: 'POST',
-      body: JSON.stringify({ id: jobId }),
+      body: JSON.stringify({ job_id: jobId }),
     });
   },
 
   resume: async (jobId: string) => {
     return api('/api/crons/resume', {
       method: 'POST',
-      body: JSON.stringify({ id: jobId }),
+      body: JSON.stringify({ job_id: jobId }),
     });
   },
 
