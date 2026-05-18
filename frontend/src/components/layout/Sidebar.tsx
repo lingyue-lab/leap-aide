@@ -5,7 +5,6 @@ import SessionList from '@/components/sidebar/SessionList';
 import TasksPanel from '@/components/sidebar/TasksPanel';
 import SkillsPanel from '@/components/sidebar/SkillsPanel';
 import MemoryPanel from '@/components/sidebar/MemoryPanel';
-import ProfilesPanel from '@/components/sidebar/ProfilesPanel';
 import WorkspacesPanel from '@/components/sidebar/WorkspacesPanel';
 import TodosPanel from '@/components/sidebar/TodosPanel';
 import type { NavPanel } from '@/types';
@@ -64,10 +63,6 @@ export default function Sidebar({ width = 300, onResizeStart, onOpenSettings }: 
           
           <div className={`panel-view ${activePanel === 'workspaces' ? 'active' : ''}`} id="panelWorkspaces">
             <WorkspacesPanel />
-          </div>
-          
-          <div className={`panel-view ${activePanel === 'profiles' ? 'active' : ''}`} id="panelProfiles">
-            <ProfilesPanel />
           </div>
           
           <div className={`panel-view ${activePanel === 'todos' ? 'active' : ''}`} id="panelTodos">

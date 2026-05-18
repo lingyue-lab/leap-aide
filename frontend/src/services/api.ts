@@ -399,40 +399,4 @@ export const memoryService = {
   },
 };
 
-// Profiles API 服务
-export const profilesService = {
-  list: async () => {
-    return api<{ profiles: import('@/types').Profile[]; active: string }>('/api/profiles');
-  },
 
-  getActive: async () => {
-    return api<{ name: string; path: string }>('/api/profile/active');
-  },
-
-  switch: async (name: string) => {
-    return api('/api/profile/switch', {
-      method: 'POST',
-      body: JSON.stringify({ name }),
-    });
-  },
-
-  create: async (
-    name: string,
-    clone_from?: string,
-    clone_config?: boolean,
-    base_url?: string,
-    api_key?: string
-  ) => {
-    return api('/api/profile/create', {
-      method: 'POST',
-      body: JSON.stringify({ name, clone_from, clone_config, base_url, api_key }),
-    });
-  },
-
-  delete: async (name: string) => {
-    return api('/api/profile/delete', {
-      method: 'POST',
-      body: JSON.stringify({ name }),
-    });
-  },
-};

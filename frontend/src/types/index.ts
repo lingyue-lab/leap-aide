@@ -189,7 +189,7 @@ export interface UsageInfo {
 
 // types/nav.ts - 导航相关类型定义
 
-export type NavPanel = 'chat' | 'tasks' | 'skills' | 'memory' | 'workspaces' | 'profiles' | 'todos';
+export type NavPanel = 'chat' | 'tasks' | 'skills' | 'memory' | 'workspaces' | 'todos';
 
 export interface NavTab {
   panel: NavPanel;
@@ -263,18 +263,4 @@ export interface MemorySection {
 export interface MemoryData {
   user_memory?: MemorySection;
   project_memory?: MemorySection;
-}
-
-// types/profile.ts - 配置相关类型定义
-
-export interface Profile {
-  name: string;
-  path: string;
-  is_default: boolean;
-  is_active: boolean;
-  gateway_running: boolean;
-  model?: string;
-  provider?: string;
-  has_env: boolean;
-  skill_count: number;
 }

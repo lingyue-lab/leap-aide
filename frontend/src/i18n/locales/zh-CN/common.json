@@ -25,8 +25,6 @@
     "memory_title": "已学偏好",
     "workspaces": "工作区",
     "workspaces_title": "项目目录",
-    "profiles": "配置",
-    "profiles_title": "配置文件",
     "todos": "待办",
     "todos_title": "任务管理"
   },
@@ -103,18 +101,6 @@
     "path_placeholder": "工作区路径（如 /home/user/project）",
     "name_placeholder": "显示名称（可选）",
     "confirm_remove": "确定移除此工作区？"
-  },
-  "profiles": {
-    "title": "配置",
-    "new": "新配置",
-    "active": "当前",
-    "default": "默认",
-    "switch": "切换",
-    "create": "创建",
-    "clone_config": "从当前配置克隆",
-    "clone_active": "从当前配置克隆",
-    "confirm_delete": "确定删除此配置？",
-    "empty": "暂无配置"
   },
   "todos": {
     "title": "待办事项",
