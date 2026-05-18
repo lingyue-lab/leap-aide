@@ -228,11 +228,23 @@ function _attachEventListeners(es: EventSource, sessionId: string, streamId: str
   es.addEventListener('tool_complete', (e: MessageEvent) => {
     const s = _sessionStates.get(sessionId);
     if (!s) return;
-    const data = JSON.parse(e.data) as { name: string; tid?: string; output?: string; preview?: string; duration?: number; is_error?: boolean };
+    const data = JSON.parse(e.data) as {
+      name: string;
+      tid?: string;
+      output?: string;
+      preview?: string;
+      duration?: number;
+      is_error?: boolean;
+      todos?: Array<{ id: string; content: string; status: string }>;
+    };
     if (data.name === 'clarify') return;
     const tid = data.tid;
     if (!tid) return;
-    const output = data.output || data.preview || '';
+    // If the backend attached a full todos list (write_todo tool), use it as the
+    // tool message content so the TodosDrawer can parse it immediately during streaming.
+    const output = data.todos
+      ? JSON.stringify({ todos: data.todos })
+      : (data.output || data.preview || '');
     const msgs = _updateToolMessage(s.messages, tid, { content: output, _live: false });
     const toolCalls = s.toolCalls.map((tc) =>
       tc.tid === tid ? { ...tc, snippet: output.substring(0, 200), done: true, duration: data.duration, is_error: data.is_error } : tc

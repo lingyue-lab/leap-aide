@@ -105,8 +105,10 @@
   "todos": {
     "title": "To-dos",
     "new": "New task",
-    "empty": "No tasks yet",
-    "placeholder": "Enter task description..."
+    "empty": "No active tasks",
+    "placeholder": "Enter task description...",
+    "show_panel": "Show todos panel",
+    "hide_panel": "Hide todos panel"
   },
   "chat": {
     "input_placeholder": "Type a message...",

@@ -1426,6 +1426,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
 
                 if event_type == 'tool.completed':
                     tid_for_event = ''  # Initialize tid
+                    _todos_for_event = None  # Full todos list for write_todo tool
                     for live_tc in reversed(_live_tool_calls):
                         if live_tc.get('done'):
                             continue
@@ -1435,11 +1436,16 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                             live_tc['is_error'] = bool(cb_kwargs.get('is_error', False))
                             # Extract tid to include in the event for frontend tracking
                             tid_for_event = live_tc.get('tid', '')
+                            # For todo (write_todo): extract full (untruncated) todos list from args
+                            if name in ('write_todo', 'todo'):
+                                _tc_args = live_tc.get('args', {})
+                                if isinstance(_tc_args, dict) and isinstance(_tc_args.get('todos'), list):
+                                    _todos_for_event = _tc_args['todos']
                             break
                     # Signal the checkpoint thread that new work has completed (Issue #765).
                     # Each completed tool call is a meaningful unit of progress worth persisting.
                     _checkpoint_activity[0] += 1
-                    put('tool_complete', {
+                    _tool_complete_payload = {
                         'event_type': event_type,
                         'name': name,
                         'tid': tid_for_event,  # Include tid for frontend to match tool message
@@ -1448,7 +1454,10 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         'args': args_snap,
                         'duration': cb_kwargs.get('duration'),
                         'is_error': bool(cb_kwargs.get('is_error', False)),
-                    })
+                    }
+                    if _todos_for_event is not None:
+                        _tool_complete_payload['todos'] = _todos_for_event
+                    put('tool_complete', _tool_complete_payload)
                     # Reset message_started so the next token creates a new message row
                     _message_started = False
                     return

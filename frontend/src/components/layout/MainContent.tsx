@@ -11,6 +11,7 @@ import TaskDetail from '@/components/tasks/TaskDetail';
 import TaskForm from '@/components/tasks/TaskForm';
 import MemoryDetail from '@/components/memory/MemoryDetail';
 import WorkspaceDetail from '@/components/workspace/WorkspaceDetail';
+import TodosDrawer from '@/components/layout/TodosDrawer';
 
 
 interface MainContentProps {
@@ -23,7 +24,7 @@ export default function MainContent({ children }: MainContentProps) {
   const { t } = useTranslation('common');
   const { currentSession } = useSessionStore();
   useWorkspaceStore();
-  const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false);
+  const [todosPanelOpen, setTodosPanelOpen] = useState(false);
 
   const selectedSkill = useSkillStore((s) => s.selectedSkill);
   const showNewSkillForm = useSkillStore((s) => s.showNewSkillForm);
@@ -137,20 +138,29 @@ export default function MainContent({ children }: MainContentProps) {
         
         <div className="topbar-chips">
           <button
-            className={`chip workspace-toggle-btn ${workspacePanelOpen ? 'active' : ''}`}
-            onClick={() => setWorkspacePanelOpen(!workspacePanelOpen)}
-            title={workspacePanelOpen ? t('workspace.hide_panel') : t('workspace.show_panel')}
-            aria-pressed={workspacePanelOpen}
+            className={`chip workspace-toggle-btn ${todosPanelOpen ? 'active' : ''}`}
+            onClick={() => setTodosPanelOpen(!todosPanelOpen)}
+            title={todosPanelOpen ? t('todos.hide_panel') : t('todos.show_panel')}
+            aria-pressed={todosPanelOpen}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+              <rect x="3" y="5" width="6" height="6" rx="1" />
+              <path d="m3 17 2 2 4-4" />
+              <path d="M13 6h8" />
+              <path d="M13 12h8" />
+              <path d="M13 18h8" />
             </svg>
-            <span className="workspace-toggle-label">{t('workspace.files')}</span>
+            <span className="workspace-toggle-label">{t('todos.title')}</span>
           </button>
         </div>
       </div>
       
-      {children}
+      <div className={`main-with-right-panel ${todosPanelOpen ? 'right-panel-open' : ''}`}>
+        <div className="main-chat-area">
+          {children}
+        </div>
+        <TodosDrawer isOpen={todosPanelOpen} onClose={() => setTodosPanelOpen(false)} />
+      </div>
     </main>
   );
 }

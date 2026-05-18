@@ -189,7 +189,7 @@ export interface UsageInfo {
 
 // types/nav.ts - 导航相关类型定义
 
-export type NavPanel = 'chat' | 'tasks' | 'skills' | 'memory' | 'workspaces' | 'todos';
+export type NavPanel = 'chat' | 'tasks' | 'skills' | 'memory' | 'workspaces';
 
 export interface NavTab {
   panel: NavPanel;

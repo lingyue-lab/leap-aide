@@ -635,7 +635,12 @@
     animation: pulse 1.5s ease-in-out infinite;
   }
 
-  @keyframes pulse {
+  @keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes pulse {
     0%, 100% { opacity: 0.4; }
     50% { opacity: 0.8; }
   }
@@ -3055,6 +3060,149 @@
 
 .skill-file-item:hover {
   background: color-mix(in srgb, var(--hover-bg) 60%, transparent);
+}
+
+/* ── Shared panel styles (right-panel, todos-drawer, etc.) ─── */
+
+.panel-header {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.panel-header > span:first-child {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex-shrink: 2;
+}
+
+.panel-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.panel-icon-btn {
+  width: 24px;
+  height: 24px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 5px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.panel-icon-btn:hover {
+  background: var(--hover-bg);
+  color: var(--text);
+}
+
+/* ── Todos Drawer layout helpers ────────────────────────────── */
+
+/* Wraps the main chat area + TodosDrawer side-by-side */
+.main-with-right-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* The chat area fills remaining horizontal space */
+.main-chat-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Todos drawer: hidden by default, slides in on desktop */
+.todos-drawer {
+  width: 300px;
+  min-width: 220px;
+  max-width: 400px;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+/* Right panel (desktop): reuse existing .right-panel styles,
+   but inside .main-with-right-panel it becomes a flex sibling */
+.main-with-right-panel .right-panel {
+  position: static;
+  transform: none;
+  transition: width 0.25s ease, opacity 0.2s ease;
+  width: 0;
+  opacity: 0;
+  overflow: hidden;
+  border-left: none;
+}
+
+.main-with-right-panel .right-panel.open {
+  width: 300px;
+  opacity: 1;
+  border-left: 1px solid var(--border);
+}
+
+/* Panel header for Todos drawer */
+.todos-drawer-header {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  background: var(--header-bg, var(--surface));
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.todos-drawer-header .panel-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Mobile: Todos drawer becomes a fixed overlay */
+@media (max-width: 768px) {
+  .main-with-right-panel .right-panel {
+    position: fixed;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 300px !important;
+    transform: translateX(100%);
+    transition: transform 0.3s ease;
+    z-index: 100;
+    opacity: 1;
+    border-left: 1px solid var(--border);
+  }
+
+  .main-with-right-panel .right-panel.open {
+    transform: translateX(0);
+  }
 }
 
 
