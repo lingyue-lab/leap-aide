@@ -1206,6 +1206,7 @@
 
   .session-item:hover .session-actions-trigger,
   .session-item.active .session-actions-trigger,
+  .workspace-item:hover .session-actions-trigger,
   .session-actions-trigger.active {
     opacity: 1;
   }

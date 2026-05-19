@@ -11,6 +11,7 @@ import TaskDetail from '@/components/tasks/TaskDetail';
 import TaskForm from '@/components/tasks/TaskForm';
 import MemoryDetail from '@/components/memory/MemoryDetail';
 import WorkspaceDetail from '@/components/workspace/WorkspaceDetail';
+import WorkspaceForm from '@/components/workspace/WorkspaceForm';
 import TodosDrawer from '@/components/layout/TodosDrawer';
 
 
@@ -41,6 +42,8 @@ export default function MainContent({ children }: MainContentProps) {
   const memoryTabActive = useMemoryStore((s) => s.memoryTabActive);
 
   const workspacesTabActive = useWorkspaceStore((s) => s.workspacesTabActive);
+  const showNewWorkspaceForm = useWorkspaceStore((s) => s.showNewWorkspaceForm);
+  const setShowNewWorkspaceForm = useWorkspaceStore((s) => s.setShowNewWorkspaceForm);
 
   if (skillsTabActive && showNewSkillForm) {
     return (
@@ -100,6 +103,17 @@ export default function MainContent({ children }: MainContentProps) {
     return (
       <main className="main">
         <MemoryDetail />
+      </main>
+    );
+  }
+
+  if (workspacesTabActive && showNewWorkspaceForm) {
+    return (
+      <main className="main">
+        <WorkspaceForm
+          onSuccess={() => setShowNewWorkspaceForm(false)}
+          onCancel={() => setShowNewWorkspaceForm(false)}
+        />
       </main>
     );
   }

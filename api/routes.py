@@ -3427,7 +3427,7 @@ def _handle_create_dir(handler, body):
 
 def _handle_workspace_add(handler, body):
     path_str = body.get("path", "").strip()
-    name = body.get("name", "").strip()
+    name = (body.get("display_name") or body.get("name") or "").strip()
     auto_create = body.get("create", False)
     if not path_str:
         return bad(handler, "path is required")

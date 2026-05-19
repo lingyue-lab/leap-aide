@@ -28,7 +28,10 @@ interface WorkspaceState {
   selectWorkspace: (path: string) => Promise<void>;
   addWorkspace: (path: string, displayName?: string) => Promise<void>;
   removeWorkspace: (path: string) => Promise<void>;
+  renameWorkspace: (path: string, newName: string) => Promise<void>;
   setWorkspacesTabActive: (active: boolean) => void;
+  showNewWorkspaceForm: boolean;
+  setShowNewWorkspaceForm: (show: boolean) => void;
 }
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
@@ -46,6 +49,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   lastWorkspace: null,
   currentWorkspace: null,
   workspacesTabActive: false,
+  showNewWorkspaceForm: false,
 
   loadDir: async (path) => {
     set({ loading: true });
@@ -225,5 +229,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
   },
 
+  renameWorkspace: async (path: string, newName: string) => {
+    const response = await fetch('/api/workspaces/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, name: newName }),
+      credentials: 'include',
+    });
+    if (!response.ok) throw new Error('Failed to rename workspace');
+    const data = await response.json();
+    set({ workspaces: data.workspaces || [] });
+  },
+
   setWorkspacesTabActive: (active) => set({ workspacesTabActive: active }),
+  setShowNewWorkspaceForm: (show) => set({ showNewWorkspaceForm: show }),
 }));
