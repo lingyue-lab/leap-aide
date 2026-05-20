@@ -177,9 +177,16 @@ def wait_for_health(url: str, timeout: float = 25.0) -> bool:
     # Validate URL scheme to prevent file:// and other dangerous schemes
     if not url.startswith(("http://", "https://")):
         raise ValueError(f"Invalid health check URL: {url}")
+    # For https:// with self-signed certs, disable certificate verification.
+    _ctx = None
+    if url.startswith("https://"):
+        import ssl
+        _ctx = ssl.create_default_context()
+        _ctx.check_hostname = False
+        _ctx.verify_mode = ssl.CERT_NONE
     while time.time() < deadline:
         try:
-            with urllib.request.urlopen(url, timeout=2) as response:  # nosec B310
+            with urllib.request.urlopen(url, timeout=2, context=_ctx) as response:  # nosec B310
                 if b'"status": "ok"' in response.read():
                     return True
         except Exception:
@@ -252,16 +259,23 @@ def main() -> int:
     health_url = f"http://{args.host}:{args.port}/health"
     if args.host == "0.0.0.0":
         health_url = f"http://localhost:{args.port}/health"
+    # If TLS is enabled, switch health check and app URL to https://
+    _tls_cert = os.environ.get("HERMES_WEBUI_TLS_CERT", "").strip()
+    _tls_key  = os.environ.get("HERMES_WEBUI_TLS_KEY",  "").strip()
+    _tls_on   = bool(_tls_cert and _tls_key)
+    if _tls_on:
+        health_url = health_url.replace("http://", "https://")
     if not wait_for_health(health_url):
         raise RuntimeError(
             f"Web UI did not become healthy at {health_url}. "
             f"Check the log at {log_path}. Server PID: {proc.pid}"
         )
 
+    _scheme = "https" if _tls_on else "http"
     app_url = (
-        f"http://localhost:{args.port}"
+        f"{_scheme}://localhost:{args.port}"
         if args.host in ("127.0.0.1", "localhost")
-        else f"http://{args.host}:{args.port}"
+        else f"{_scheme}://{args.host}:{args.port}"
     )
     info(f"Web UI is ready: {app_url}")
     info(f"Log file: {log_path}")

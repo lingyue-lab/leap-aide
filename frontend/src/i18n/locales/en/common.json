@@ -28,7 +28,9 @@
     "todos": "To-dos",
     "todos_title": "Task management",
     "terminal": "Terminal",
-    "terminal_title": "Open terminal shell"
+    "terminal_title": "Open terminal shell",
+    "vnc": "VNC",
+    "vnc_title": "Remote desktop viewer"
   },
   "sessions": {
     "new_conversation": "New conversation",

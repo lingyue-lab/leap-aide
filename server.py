@@ -81,6 +81,14 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 return j(self, {'error': 'websocket upgrade required'}, status=426)
 
+            # ── WebSocket VNC proxy upgrade ────────────────────────────────────
+            if parsed.path == '/api/ws/vnc':
+                if self.headers.get('Upgrade', '').lower() == 'websocket':
+                    from api.vnc import handle_ws_vnc
+                    handle_ws_vnc(self)
+                    return
+                return j(self, {'error': 'websocket upgrade required'}, status=426)
+
             result = handle_get(self, parsed)
             if result is False:
                 return j(self, {'error': 'not found'}, status=404)

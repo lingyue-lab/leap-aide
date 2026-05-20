@@ -28,7 +28,9 @@
     "todos": "待办",
     "todos_title": "任务管理",
     "terminal": "终端",
-    "terminal_title": "打开终端 Shell"
+    "terminal_title": "打开终端 Shell",
+    "vnc": "VNC",
+    "vnc_title": "远程桌面"
   },
   "sessions": {
     "new_conversation": "新对话",

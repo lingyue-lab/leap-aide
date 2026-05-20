@@ -1423,7 +1423,6 @@ def handle_post(handler, parsed) -> bool:
             s.workspace = new_ws
             s.model = body.get("model", s.model)
             s.save()
-        set_last_workspace(new_ws)
         return j(handler, {"session": s.compact() | {"messages": s.messages}})
 
     if parsed.path == "/api/session/delete":
@@ -1850,6 +1849,7 @@ def handle_post(handler, parsed) -> bool:
         with _get_session_agent_lock(body["session_id"]):
             s.workspace = new_ws
             s.save()
+        set_last_workspace(new_ws)
         return j(handler, {"ok": True, "session": s.compact()})
 
     # ── Session skills binding (POST) ──
@@ -3095,7 +3095,6 @@ def _handle_chat_start(handler, body):
         s.pending_attachments = attachments
         s.pending_started_at = time.time()
         s.save()
-    set_last_workspace(workspace)
     q = ReplayableStream()
     with STREAMS_LOCK:
         STREAMS[stream_id] = q

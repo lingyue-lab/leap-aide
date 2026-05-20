@@ -6,6 +6,7 @@ import { useSkillStore } from '@/stores/useSkillStore';
 import { useCronStore } from '@/stores/useCronStore';
 import { useMemoryStore } from '@/stores/useMemoryStore';
 import { useTerminalStore } from '@/stores/useTerminalStore';
+import { useVncStore } from '@/stores/useVncStore';
 import SkillDetail from '@/components/skills/SkillDetail';
 import SkillForm from '@/components/skills/SkillForm';
 import TaskDetail from '@/components/tasks/TaskDetail';
@@ -17,6 +18,7 @@ import TodosDrawer from '@/components/layout/TodosDrawer';
 import SessionSkillsSelector from '@/components/chat/SessionSkillsSelector';
 import SkillsDrawer from '@/components/chat/SkillsDrawer';
 import TerminalView from '@/components/terminal/TerminalView';
+import VncView from '@/components/vnc/VncView';
 
 
 interface MainContentProps {
@@ -181,6 +183,8 @@ export default function MainContent({ children }: MainContentProps) {
   const selectTerminal = useTerminalStore((s) => s.selectTerminal);
   const addTerminal = useTerminalStore((s) => s.addTerminal);
 
+  const vncTabActive = useVncStore((s) => s.vncTabActive);
+
   return (
     <>
       {/* ─────────────────────────────────────────────────────────────────────
@@ -238,7 +242,7 @@ export default function MainContent({ children }: MainContentProps) {
       ──────────────────────────────────────────────────────────────────────── */}
       <main
         className="main"
-        style={{ display: terminalTabActive ? 'none' : undefined }}
+        style={{ display: terminalTabActive || vncTabActive ? 'none' : undefined }}
       >
         <NonTerminalContent
           todosPanelOpen={todosPanelOpen}
@@ -248,6 +252,18 @@ export default function MainContent({ children }: MainContentProps) {
         >
           {children}
         </NonTerminalContent>
+      </main>
+
+      {/* ─────────────────────────────────────────────────────────────────────
+          VNC area: ALWAYS mounted so the WebSocket stays alive on tab switch.
+          Visibility is controlled purely with CSS display.
+      ──────────────────────────────────────────────────────────────────────── */}
+      <main
+        className="main vnc-main"
+        style={{ display: vncTabActive ? 'flex' : 'none' }}
+        aria-hidden={!vncTabActive}
+      >
+        <VncView />
       </main>
     </>
   );

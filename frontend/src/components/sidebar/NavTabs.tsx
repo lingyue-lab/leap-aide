@@ -5,6 +5,7 @@ import { useCronStore } from '@/stores/useCronStore';
 import { useMemoryStore } from '@/stores/useMemoryStore';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 import { useTerminalStore } from '@/stores/useTerminalStore';
+import { useVncStore } from '@/stores/useVncStore';
 import type { NavPanel } from '@/types';
 
 interface NavTabsProps {
@@ -28,6 +29,7 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
   const setMemoryTabActive = useMemoryStore((s) => s.setMemoryTabActive);
   const setWorkspacesTabActive = useWorkspaceStore((s) => s.setWorkspacesTabActive);
   const setTerminalTabActive = useTerminalStore((s) => s.setTerminalTabActive);
+  const setVncTabActive = useVncStore((s) => s.setVncTabActive);
 
   const tabs: TabConfig[] = [
     {
@@ -98,6 +100,18 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
         </svg>
       ),
     },
+    {
+      panel: 'vnc',
+      labelKey: 'tabs.vnc',
+      titleKey: 'tabs.vnc_title',
+      icon: (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+          <line x1="8" y1="21" x2="16" y2="21" />
+          <line x1="12" y1="17" x2="12" y2="21" />
+        </svg>
+      ),
+    },
   ];
 
   const switchPanel = (panel: NavPanel) => {
@@ -109,36 +123,49 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
       setMemoryTabActive(false);
       setWorkspacesTabActive(false);
       setTerminalTabActive(false);
+      setVncTabActive(false);
     } else if (panel === 'tasks') {
       setSkillsTabActive(false);
       setTasksTabActive(true);
       setMemoryTabActive(false);
       setWorkspacesTabActive(false);
       setTerminalTabActive(false);
+      setVncTabActive(false);
     } else if (panel === 'memory') {
       setSkillsTabActive(false);
       setTasksTabActive(false);
       setMemoryTabActive(true);
       setWorkspacesTabActive(false);
       setTerminalTabActive(false);
+      setVncTabActive(false);
     } else if (panel === 'workspaces') {
       setSkillsTabActive(false);
       setTasksTabActive(false);
       setMemoryTabActive(false);
       setWorkspacesTabActive(true);
       setTerminalTabActive(false);
+      setVncTabActive(false);
     } else if (panel === 'terminal') {
       setSkillsTabActive(false);
       setTasksTabActive(false);
       setMemoryTabActive(false);
       setWorkspacesTabActive(false);
       setTerminalTabActive(true);
+      setVncTabActive(false);
+    } else if (panel === 'vnc') {
+      setSkillsTabActive(false);
+      setTasksTabActive(false);
+      setMemoryTabActive(false);
+      setWorkspacesTabActive(false);
+      setTerminalTabActive(false);
+      setVncTabActive(true);
     } else {
       setSkillsTabActive(false);
       setTasksTabActive(false);
       setMemoryTabActive(false);
       setWorkspacesTabActive(false);
       setTerminalTabActive(false);
+      setVncTabActive(false);
       if (panel === 'chat') {
         clearSelection();
       }
