@@ -6,6 +6,7 @@ import TasksPanel from '@/components/sidebar/TasksPanel';
 import SkillsPanel from '@/components/sidebar/SkillsPanel';
 import MemoryPanel from '@/components/sidebar/MemoryPanel';
 import WorkspacesPanel from '@/components/sidebar/WorkspacesPanel';
+import TerminalPanel from '@/components/sidebar/TerminalPanel';
 import type { NavPanel } from '@/types';
 
 interface SidebarProps {
@@ -62,6 +63,10 @@ export default function Sidebar({ width = 300, onResizeStart, onOpenSettings }: 
           
           <div className={`panel-view ${activePanel === 'workspaces' ? 'active' : ''}`} id="panelWorkspaces">
             <WorkspacesPanel />
+          </div>
+
+          <div className={`panel-view ${activePanel === 'terminal' ? 'active' : ''}`} id="panelTerminal">
+            <TerminalPanel />
           </div>
           
           <div className="sidebar-bottom">

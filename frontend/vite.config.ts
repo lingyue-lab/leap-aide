@@ -28,6 +28,7 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8888',
         changeOrigin: true,
+        ws: true,
         cookieDomainRewrite: '',
         headers: {
           'X-Forwarded-Host': 'localhost:8888',

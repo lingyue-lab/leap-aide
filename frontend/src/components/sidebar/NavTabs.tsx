@@ -4,6 +4,7 @@ import { useSkillStore } from '@/stores/useSkillStore';
 import { useCronStore } from '@/stores/useCronStore';
 import { useMemoryStore } from '@/stores/useMemoryStore';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
+import { useTerminalStore } from '@/stores/useTerminalStore';
 import type { NavPanel } from '@/types';
 
 interface NavTabsProps {
@@ -26,6 +27,7 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
   const setTasksTabActive = useCronStore((s) => s.setTasksTabActive);
   const setMemoryTabActive = useMemoryStore((s) => s.setMemoryTabActive);
   const setWorkspacesTabActive = useWorkspaceStore((s) => s.setWorkspacesTabActive);
+  const setTerminalTabActive = useTerminalStore((s) => s.setTerminalTabActive);
 
   const tabs: TabConfig[] = [
     {
@@ -85,6 +87,17 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
         </svg>
       ),
     },
+    {
+      panel: 'terminal',
+      labelKey: 'tabs.terminal',
+      titleKey: 'tabs.terminal_title',
+      icon: (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <polyline points="4 17 10 11 4 5" />
+          <line x1="12" y1="19" x2="20" y2="19" />
+        </svg>
+      ),
+    },
   ];
 
   const switchPanel = (panel: NavPanel) => {
@@ -95,26 +108,37 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
       setTasksTabActive(false);
       setMemoryTabActive(false);
       setWorkspacesTabActive(false);
+      setTerminalTabActive(false);
     } else if (panel === 'tasks') {
       setSkillsTabActive(false);
       setTasksTabActive(true);
       setMemoryTabActive(false);
       setWorkspacesTabActive(false);
+      setTerminalTabActive(false);
     } else if (panel === 'memory') {
       setSkillsTabActive(false);
       setTasksTabActive(false);
       setMemoryTabActive(true);
       setWorkspacesTabActive(false);
+      setTerminalTabActive(false);
     } else if (panel === 'workspaces') {
       setSkillsTabActive(false);
       setTasksTabActive(false);
       setMemoryTabActive(false);
       setWorkspacesTabActive(true);
+      setTerminalTabActive(false);
+    } else if (panel === 'terminal') {
+      setSkillsTabActive(false);
+      setTasksTabActive(false);
+      setMemoryTabActive(false);
+      setWorkspacesTabActive(false);
+      setTerminalTabActive(true);
     } else {
       setSkillsTabActive(false);
       setTasksTabActive(false);
       setMemoryTabActive(false);
       setWorkspacesTabActive(false);
+      setTerminalTabActive(false);
       if (panel === 'chat') {
         clearSelection();
       }

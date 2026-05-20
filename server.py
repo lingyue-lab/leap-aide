@@ -72,6 +72,15 @@ class Handler(BaseHTTPRequestHandler):
         try:
             parsed = urlparse(self.path)
             if not check_auth(self, parsed): return
+
+            # ── WebSocket terminal upgrade ─────────────────────────────────────
+            if parsed.path == '/api/ws/terminal':
+                if self.headers.get('Upgrade', '').lower() == 'websocket':
+                    from api.terminal import handle_ws_terminal
+                    handle_ws_terminal(self)
+                    return
+                return j(self, {'error': 'websocket upgrade required'}, status=426)
+
             result = handle_get(self, parsed)
             if result is False:
                 return j(self, {'error': 'not found'}, status=404)
