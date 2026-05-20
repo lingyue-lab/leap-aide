@@ -22,6 +22,8 @@ interface SessionState {
   updateSessionListTitle: (sessionId: string, title: string) => void;
   /** Assign (or switch) the workspace path for a session */
   assignWorkspace: (id: string, workspace: string) => Promise<void>;
+  /** Update the skill binding list for a session */
+  updateSessionSkills: (id: string, skills: string[] | null) => Promise<void>;
 }
 
 export const useSessionStore = create<SessionState>((set) => ({
@@ -209,6 +211,28 @@ export const useSessionStore = create<SessionState>((set) => ({
       currentSession:
         state.currentSession?.session_id === id
           ? { ...state.currentSession, workspace }
+          : state.currentSession,
+    }));
+  },
+
+  updateSessionSkills: async (id, skills) => {
+    const response = await fetch('/api/session/skills', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: id, skills: skills ?? [] }),
+      credentials: 'include',
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error((data as { error?: string }).error || 'Failed to update session skills');
+    }
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.session_id === id ? { ...s, skills } : s
+      ),
+      currentSession:
+        state.currentSession?.session_id === id
+          ? { ...state.currentSession, skills }
           : state.currentSession,
     }));
   },

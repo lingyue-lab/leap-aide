@@ -1852,6 +1852,32 @@ def handle_post(handler, parsed) -> bool:
             s.save()
         return j(handler, {"ok": True, "session": s.compact()})
 
+    # ── Session skills binding (POST) ──
+    if parsed.path == "/api/session/skills":
+        try:
+            require(body, "session_id", "skills")
+        except ValueError as e:
+            return bad(handler, str(e))
+        skills = body["skills"]
+        if not isinstance(skills, list):
+            return bad(handler, "skills must be a list")
+        import re as _re_sk
+        for _sk in skills:
+            if not isinstance(_sk, str) or not _sk or _re_sk.search(r'[/\\.]', _sk):
+                return bad(handler, f"Invalid skill name: {_sk!r}")
+        try:
+            s = get_session(body["session_id"])
+        except KeyError:
+            return bad(handler, "Session not found", 404)
+        with _get_session_agent_lock(body["session_id"]):
+            s.skills = skills
+            s.save()
+        # Clear agent cache so next message rebuilds with new skill list
+        from api.config import SESSION_AGENT_CACHE, SESSION_AGENT_CACHE_LOCK
+        with SESSION_AGENT_CACHE_LOCK:
+            SESSION_AGENT_CACHE.pop(body["session_id"], None)
+        return j(handler, {"ok": True, "skills": skills})
+
     # ── Session archive (POST) ──
     if parsed.path == "/api/session/archive":
         try:

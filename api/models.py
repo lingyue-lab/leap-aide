@@ -317,6 +317,7 @@ class Session:
                  pending_started_at=None,
                  compression_anchor_visible_idx=None,
                  compression_anchor_message_key=None,
+                 skills=None,
                  **kwargs):
         self.session_id = session_id or uuid.uuid4().hex[:12]
         self.title = title
@@ -335,6 +336,7 @@ class Session:
         self.estimated_cost = estimated_cost
         self.personality = personality
         self.active_stream_id = active_stream_id
+        self.skills = skills if isinstance(skills, list) else None
         self.pending_user_message = pending_user_message
         self.pending_attachments = pending_attachments or []
         self.pending_started_at = pending_started_at
@@ -356,7 +358,7 @@ class Session:
             'session_id', 'title', 'workspace', 'model', 'created_at', 'updated_at',
             'pinned', 'archived', 'project_id', 'profile',
             'input_tokens', 'output_tokens', 'estimated_cost',
-            'personality', 'active_stream_id',
+            'personality', 'active_stream_id', 'skills',
             'pending_user_message', 'pending_attachments', 'pending_started_at',
             'compression_anchor_visible_idx', 'compression_anchor_message_key',
         ]
@@ -448,6 +450,7 @@ class Session:
             'output_tokens': self.output_tokens,
             'estimated_cost': self.estimated_cost,
             'personality': self.personality,
+            'skills': self.skills,
             'compression_anchor_visible_idx': self.compression_anchor_visible_idx,
             'compression_anchor_message_key': self.compression_anchor_message_key,
             'active_stream_id': self.active_stream_id,

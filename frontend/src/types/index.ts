@@ -16,6 +16,7 @@ export interface Session {
   input_tokens?: number;
   output_tokens?: number;
   estimated_cost?: number | null;
+  skills?: string[] | null;
 }
 
 export interface SessionListItem {
@@ -25,6 +26,7 @@ export interface SessionListItem {
   updated_at?: number;
   pinned?: boolean;
   workspace?: string;
+  skills?: string[] | null;
 }
 
 // types/message.ts - 消息相关类型定义

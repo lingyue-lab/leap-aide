@@ -1110,6 +1110,47 @@ def _sse(handler, event, data):
     handler.wfile.flush()
 
 
+def _build_session_skills_block(skill_names: list) -> str:
+    """Build the content inside <available_skills> for a session-bound skill list.
+
+    Reads each skill's SKILL.md to extract the frontmatter name and description,
+    matching the format produced by build_skills_system_prompt().
+    Returns an empty string when skill_names is empty or all skills are missing.
+    """
+    if not skill_names:
+        return ''
+    try:
+        from tools.skills_tool import SKILLS_DIR
+        from agent.skill_utils import parse_frontmatter, extract_skill_description
+    except ImportError:
+        logger.debug('[webui] skill_utils not available for session skill binding')
+        return ''
+
+    lines = []
+    for name in skill_names:
+        try:
+            matches = list(SKILLS_DIR.rglob(f'{name}/SKILL.md'))
+            if not matches:
+                logger.warning('[webui] skill not found for session binding: %s', name)
+                continue
+            skill_md = matches[0]
+            raw = skill_md.read_text(encoding='utf-8')
+            fm, _ = parse_frontmatter(raw)
+            desc = extract_skill_description(fm)
+            frontmatter_name = fm.get('name', name)
+            if desc:
+                lines.append(f'    - {frontmatter_name}: {desc}')
+            else:
+                lines.append(f'    - {frontmatter_name}')
+        except Exception as _e:
+            logger.debug('[webui] Failed to read skill %s for session binding: %s', name, _e)
+            lines.append(f'    - {name}')
+
+    if not lines:
+        return ''
+    return '  session-skills:\n' + '\n'.join(lines)
+
+
 def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, attachments=None, *, ephemeral=False):
     """Run agent in background thread, writing SSE events to STREAMS[stream_id].
 
@@ -1590,6 +1631,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                     resolved_base_url or '',
                     resolved_provider or '',
                     sorted(_toolsets) if _toolsets else [],
+                    sorted(getattr(s, 'skills', None) or []),
                 ], sort_keys=True)
                 _agent_sig = _hashlib.sha256(_sig_blob.encode()).hexdigest()[:16]
 
@@ -1673,6 +1715,58 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             # Pass personality via ephemeral_system_prompt (agent's own mechanism)
             if _personality_prompt:
                 agent.ephemeral_system_prompt = _personality_prompt
+
+            # ── Per-session skill binding: replace <available_skills> block ──
+            # When a session has a skills list configured (not None), replace the
+            # <available_skills> block in _cached_system_prompt so only the bound
+            # skills appear in the model's index.  None = not configured (use
+            # full global index); [] = explicitly empty (remove block entirely).
+            _session_skills = getattr(s, 'skills', None)
+            if _session_skills is not None:
+                import re as _re_skills
+                # Ensure _cached_system_prompt is built before we modify it
+                if agent._cached_system_prompt is None:
+                    try:
+                        agent._cached_system_prompt = agent._build_system_prompt(workspace_system_msg)
+                    except Exception as _sp_err:
+                        logger.debug('[webui] _build_system_prompt failed for skill binding: %s', _sp_err)
+                if agent._cached_system_prompt:
+                    _skills_block_content = _build_session_skills_block(_session_skills)
+                    if _skills_block_content:
+                        _new_block = f'<available_skills>\n{_skills_block_content}\n</available_skills>'
+                        _replaced, _n = _re_skills.subn(
+                            r'<available_skills>.*?</available_skills>',
+                            _new_block,
+                            agent._cached_system_prompt,
+                            flags=_re_skills.DOTALL,
+                        )
+                        if _n > 0:
+                            agent._cached_system_prompt = _replaced
+                            logger.debug(
+                                '[webui] Replaced available_skills for session %s: %s',
+                                session_id, _session_skills,
+                            )
+                    else:
+                        # Empty skill list — remove the entire <available_skills> block
+                        agent._cached_system_prompt = _re_skills.sub(
+                            r'\n*<available_skills>.*?</available_skills>\n*',
+                            '\n',
+                            agent._cached_system_prompt,
+                            flags=_re_skills.DOTALL,
+                        )
+                        logger.debug(
+                            '[webui] Removed available_skills block for session %s (empty skill list)',
+                            session_id,
+                        )
+                    # Write back to SQLite so the filtered version is restored on restart
+                    if _session_db is not None:
+                        try:
+                            _session_db.update_system_prompt(session_id, agent._cached_system_prompt)
+                        except Exception as _sdb_err:
+                            logger.debug(
+                                '[webui] update_system_prompt for skill binding failed: %s', _sdb_err
+                            )
+
             _previous_messages = list(s.messages or [])
 
             # ── Periodic checkpoint during streaming (Issue #765) ──

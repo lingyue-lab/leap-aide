@@ -13,6 +13,8 @@ import MemoryDetail from '@/components/memory/MemoryDetail';
 import WorkspaceDetail from '@/components/workspace/WorkspaceDetail';
 import WorkspaceForm from '@/components/workspace/WorkspaceForm';
 import TodosDrawer from '@/components/layout/TodosDrawer';
+import SessionSkillsSelector from '@/components/chat/SessionSkillsSelector';
+import SkillsDrawer from '@/components/chat/SkillsDrawer';
 
 
 interface MainContentProps {
@@ -26,6 +28,7 @@ export default function MainContent({ children }: MainContentProps) {
   const { currentSession } = useSessionStore();
   useWorkspaceStore();
   const [todosPanelOpen, setTodosPanelOpen] = useState(false);
+  const [skillsPanelOpen, setSkillsPanelOpen] = useState(false);
 
   const selectedSkill = useSkillStore((s) => s.selectedSkill);
   const showNewSkillForm = useSkillStore((s) => s.showNewSkillForm);
@@ -151,6 +154,10 @@ export default function MainContent({ children }: MainContentProps) {
         </div>
         
         <div className="topbar-chips">
+          <SessionSkillsSelector
+            onClick={() => setSkillsPanelOpen((v) => !v)}
+            isOpen={skillsPanelOpen}
+          />
           <button
             className={`chip workspace-toggle-btn ${todosPanelOpen ? 'active' : ''}`}
             onClick={() => setTodosPanelOpen(!todosPanelOpen)}
@@ -169,10 +176,11 @@ export default function MainContent({ children }: MainContentProps) {
         </div>
       </div>
       
-      <div className={`main-with-right-panel ${todosPanelOpen ? 'right-panel-open' : ''}`}>
+      <div className={`main-with-right-panel ${todosPanelOpen || skillsPanelOpen ? 'right-panel-open' : ''}`}>
         <div className="main-chat-area">
           {children}
         </div>
+        <SkillsDrawer isOpen={skillsPanelOpen} onClose={() => setSkillsPanelOpen(false)} />
         <TodosDrawer isOpen={todosPanelOpen} onClose={() => setTodosPanelOpen(false)} />
       </div>
     </main>
