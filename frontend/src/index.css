@@ -4,55 +4,75 @@
 
 /* ── CSS Variables for Themes ── */
 :root {
-  /* Dark theme (default) */
-  --bg: #1a1a2e;
-  --sidebar: #16213e;
-  --border: rgba(255, 255, 255, 0.08);
-  --border2: rgba(255, 255, 255, 0.14);
-  --text: #e8e8f0;
-  --muted: #8888aa;
-  --accent: #e94560;
-  --blue: #7cb9ff;
-  --gold: #c9a84c;
-  --code-bg: #0d1117;
-  --surface: #1a2535;
-  --topbar-bg: rgba(22, 33, 62, 0.98);
-  --main-bg: rgba(26, 26, 46, 0.5);
-  --focus-ring: rgba(124, 185, 255, 0.35);
-  --focus-glow: rgba(124, 185, 255, 0.08);
-  --input-bg: rgba(255, 255, 255, 0.04);
+  /* Dark theme — VSCode Dark Modern */
+  --bg: #1f1f1f;
+  --sidebar: #181818;
+  --border: rgba(255, 255, 255, 0.09);
+  --border2: rgba(255, 255, 255, 0.17);
+  --text: #cccccc;
+  --muted: #9d9d9d;
+  --accent: #f85149;
+  --blue: #4daafc;
+  --gold: #e2c08d;
+  --code-bg: #2b2b2b;
+  --surface: #1f1f1f;
+  --topbar-bg: rgba(24, 24, 24, 0.98);
+  --main-bg: rgba(31, 31, 31, 0.5);
+  --focus-ring: rgba(0, 120, 212, 0.5);
+  --focus-glow: rgba(0, 120, 212, 0.15);
+  --input-bg: #313131;
   --hover-bg: rgba(255, 255, 255, 0.06);
-  --strong: #fff;
-  --em: #c9c9e8;
-  --code-text: #f0c27f;
+  --strong: #ffffff;
+  --em: #d0d0d0;
+  --code-text: #d0d0d0;
   --code-inline-bg: rgba(0, 0, 0, 0.35);
-  --pre-text: #e2e8f0;
+  --pre-text: #d0d0d0;
+  
+  /* Font size scaling - default medium */
+  --font-scale: 1;
+  --icon-scale: 1;
 }
 
-/* ── Light Theme ── */
+/* Font size variants */
+:root[data-font-size="small"] {
+  --font-scale: 0.8;
+  --icon-scale: 0.8;
+}
+
+:root[data-font-size="medium"] {
+  --font-scale: 1;
+  --icon-scale: 1;
+}
+
+:root[data-font-size="large"] {
+  --font-scale: 1.3;
+  --icon-scale: 1.3;
+}
+
+/* ── Light Theme — VSCode Light Modern ── */
 :root[data-theme="light"] {
-  --bg: #f0ede8;
-  --sidebar: #e4e0d8;
-  --border: rgba(0, 0, 0, 0.09);
-  --border2: rgba(0, 0, 0, 0.15);
-  --text: #2c2825;
-  --muted: #7a746a;
-  --accent: #b5451b;
-  --blue: #2d6fa3;
-  --gold: #8a6520;
-  --code-bg: #ddd8d0;
-  --surface: #e0dcd4;
-  --topbar-bg: rgba(228, 224, 216, 0.98);
-  --main-bg: rgba(240, 237, 232, 0.5);
-  --focus-ring: rgba(45, 111, 163, 0.35);
-  --focus-glow: rgba(45, 111, 163, 0.1);
-  --input-bg: rgba(0, 0, 0, 0.03);
-  --hover-bg: rgba(0, 0, 0, 0.05);
-  --strong: #1a1715;
-  --em: #5a544a;
-  --code-text: #8b4513;
+  --bg: #ffffff;
+  --sidebar: #f8f8f8;
+  --border: rgba(0, 0, 0, 0.1);
+  --border2: rgba(0, 0, 0, 0.16);
+  --text: #3b3b3b;
+  --muted: #616161;
+  --accent: #f85149;
+  --blue: #005fb8;
+  --gold: #895503;
+  --code-bg: #f8f8f8;
+  --surface: #ffffff;
+  --topbar-bg: rgba(248, 248, 248, 0.98);
+  --main-bg: rgba(255, 255, 255, 0.5);
+  --focus-ring: rgba(0, 95, 184, 0.4);
+  --focus-glow: rgba(0, 95, 184, 0.1);
+  --input-bg: #ffffff;
+  --hover-bg: rgba(0, 0, 0, 0.04);
+  --strong: #1f1f1f;
+  --em: #595959;
+  --code-text: #3b3b3b;
   --code-inline-bg: rgba(0, 0, 0, 0.06);
-  --pre-text: #2c2825;
+  --pre-text: #3b3b3b;
 }
 
 :root[data-theme="light"] ::-webkit-scrollbar-thumb {
@@ -68,23 +88,23 @@
 }
 
 :root[data-theme="light"] .msg-role.user {
-  color: #2d6fa3;
+  color: #005fb8;
 }
 
 :root[data-theme="light"] .msg-role.assistant {
-  color: #8a6520;
+  color: #895503;
 }
 
 :root[data-theme="light"] .role-icon.user {
-  background: rgba(45, 111, 163, 0.12);
-  color: #2d6fa3;
-  border-color: rgba(45, 111, 163, 0.25);
+  background: rgba(0, 95, 184, 0.1);
+  color: #005fb8;
+  border-color: rgba(0, 95, 184, 0.22);
 }
 
 :root[data-theme="light"] .role-icon.assistant {
-  background: rgba(138, 101, 32, 0.12);
-  color: #8a6520;
-  border-color: rgba(138, 101, 32, 0.25);
+  background: rgba(137, 85, 3, 0.1);
+  color: #895503;
+  border-color: rgba(137, 85, 3, 0.22);
 }
 
 /* ── Slate Theme ── */
@@ -111,10 +131,10 @@
   --pre-text: #d0d0d6;
 }
 
-/* ── Solarized Dark Theme ── */
+/* ── Solarized Dark Theme — VSCode Solarized Dark ── */
 :root[data-theme="solarized"] {
   --bg: #002b36;
-  --sidebar: #073642;
+  --sidebar: #00212b;
   --border: rgba(255, 255, 255, 0.08);
   --border2: rgba(255, 255, 255, 0.13);
   --text: #839496;
@@ -123,11 +143,13 @@
   --blue: #268bd2;
   --gold: #b58900;
   --code-bg: #073642;
-  --surface: #0a3c48;
-  --topbar-bg: rgba(7, 54, 66, 0.98);
+  --surface: #00212b;
+  --topbar-bg: rgba(0, 44, 57, 0.98);
   --main-bg: rgba(0, 43, 54, 0.5);
-  --focus-ring: rgba(38, 139, 210, 0.35);
-  --focus-glow: rgba(38, 139, 210, 0.08);
+  --focus-ring: rgba(42, 161, 152, 0.5);
+  --focus-glow: rgba(42, 161, 152, 0.12);
+  --input-bg: #003847;
+  --hover-bg: rgba(0, 68, 84, 0.6);
   --strong: #fdf6e3;
   --em: #93a1a1;
   --code-text: #cb4b16;
@@ -135,7 +157,7 @@
   --pre-text: #93a1a1;
 }
 
-/* ── Monokai Theme ── */
+/* ── Monokai Theme — VSCode Monokai ── */
 :root[data-theme="monokai"] {
   --bg: #272822;
   --sidebar: #1e1f1c;
@@ -144,22 +166,24 @@
   --text: #f8f8f2;
   --muted: #75715e;
   --accent: #f92672;
-  --blue: #66d9e8;
+  --blue: #66d9ef;
   --gold: #e6db74;
   --code-bg: #1e1f1c;
-  --surface: #2d2e28;
+  --surface: #1e1f1c;
   --topbar-bg: rgba(30, 31, 28, 0.98);
   --main-bg: rgba(39, 40, 34, 0.5);
-  --focus-ring: rgba(102, 217, 232, 0.35);
-  --focus-glow: rgba(102, 217, 232, 0.08);
+  --focus-ring: rgba(153, 148, 124, 0.5);
+  --focus-glow: rgba(153, 148, 124, 0.12);
+  --input-bg: #414339;
+  --hover-bg: rgba(62, 61, 50, 0.8);
   --strong: #f8f8f0;
-  --em: #a6a28c;
+  --em: #ccccc7;
   --code-text: #e6db74;
   --code-inline-bg: rgba(0, 0, 0, 0.3);
   --pre-text: #f8f8f2;
 }
 
-/* ── Nord Theme ── */
+/* ── Nord Theme — Based on official Nord color palette ── */
 :root[data-theme="nord"] {
   --bg: #2e3440;
   --sidebar: #272c36;
@@ -174,8 +198,10 @@
   --surface: #333a47;
   --topbar-bg: rgba(39, 44, 54, 0.98);
   --main-bg: rgba(46, 52, 64, 0.5);
-  --focus-ring: rgba(129, 161, 193, 0.35);
-  --focus-glow: rgba(129, 161, 193, 0.08);
+  --focus-ring: rgba(129, 161, 193, 0.45);
+  --focus-glow: rgba(129, 161, 193, 0.1);
+  --input-bg: #3b4252;
+  --hover-bg: rgba(255, 255, 255, 0.06);
   --strong: #eceff4;
   --em: #b8c0cc;
   --code-text: #a3be8c;
@@ -312,14 +338,15 @@
   /* Layout */
   .layout {
     display: flex;
-    width: 100%;
+    min-height: 0;
+    width: 100vw;
     height: 100vh;
     height: 100dvh;
-    min-height: 0;
   }
 
   /* Sidebar */
   .sidebar {
+    zoom: var(--app-zoom, 1);
     width: 300px;
     min-width: 200px;
     max-width: 500px;
@@ -418,6 +445,10 @@
     min-height: 0;
     background: var(--main-bg);
     box-sizing: border-box;
+  }
+  /* Zoom all main panels except VNC and Terminal (which use fixed-pixel rendering) */
+  .main:not(.vnc-main) {
+    zoom: var(--app-zoom, 1);
   }
 
   /* Terminal main area: no padding, Solarized Dark background */
@@ -1430,7 +1461,7 @@
     display: flex;
     flex-direction: column;
     min-width: 140px;
-    background: var(--sidebar-bg, #1e1e1e);
+    background: var(--sidebar);
     border: 1px solid var(--border);
     border-radius: 8px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
@@ -1472,7 +1503,7 @@
     margin-top: 2px;
     padding-top: 2px;
     /* Distinct background tint to separate submenu from parent menu */
-    background: rgba(0, 0, 0, 0.18);
+    background: var(--hover-bg);
     border-radius: 0 0 6px 6px;
     padding-bottom: 2px;
   }
@@ -1739,30 +1770,30 @@
     margin-bottom: 0;
   }
 
-  /* Light theme reasoning overrides */
+  /* Light theme reasoning overrides — VSCode Light Modern */
   :root[data-theme="light"] .msg-role.reasoning {
-    color: #8a6520;
+    color: #895503;
   }
 
   :root[data-theme="light"] .role-icon.reasoning {
-    background: rgba(138, 101, 32, 0.12);
-    color: #8a6520;
-    border-color: rgba(138, 101, 32, 0.25);
+    background: rgba(137, 85, 3, 0.1);
+    color: #895503;
+    border-color: rgba(137, 85, 3, 0.22);
   }
 
   :root[data-theme="light"] .reasoning-header {
-    background: rgba(138, 101, 32, 0.06);
-    border-color: rgba(138, 101, 32, 0.12);
+    background: rgba(137, 85, 3, 0.06);
+    border-color: rgba(137, 85, 3, 0.12);
   }
 
   :root[data-theme="light"] .reasoning-header:hover {
-    background: rgba(138, 101, 32, 0.1);
-    border-color: rgba(138, 101, 32, 0.2);
+    background: rgba(137, 85, 3, 0.1);
+    border-color: rgba(137, 85, 3, 0.2);
   }
 
   :root[data-theme="light"] .reasoning-block {
-    border-color: rgba(138, 101, 32, 0.15);
-    background: rgba(138, 101, 32, 0.04);
+    border-color: rgba(137, 85, 3, 0.15);
+    background: rgba(137, 85, 3, 0.04);
   }
 
   /* Context compaction reference card */
@@ -1842,20 +1873,20 @@
     overflow-x: auto;
   }
 
-  /* Light theme context compaction overrides */
+  /* Light theme context compaction overrides — VSCode Light Modern */
   :root[data-theme="light"] .context-compaction-header {
-    background: rgba(138, 101, 32, 0.06);
-    border-color: rgba(138, 101, 32, 0.12);
+    background: rgba(137, 85, 3, 0.06);
+    border-color: rgba(137, 85, 3, 0.12);
   }
 
   :root[data-theme="light"] .context-compaction-header:hover {
-    background: rgba(138, 101, 32, 0.1);
-    border-color: rgba(138, 101, 32, 0.2);
+    background: rgba(137, 85, 3, 0.1);
+    border-color: rgba(137, 85, 3, 0.2);
   }
 
   :root[data-theme="light"] .context-compaction-pre {
-    border-color: rgba(138, 101, 32, 0.15);
-    background: rgba(138, 101, 32, 0.04);
+    border-color: rgba(137, 85, 3, 0.15);
+    background: rgba(137, 85, 3, 0.04);
   }
 
   /* Tool card */
@@ -3468,7 +3499,9 @@
   background: #000;
 }
 
-/* Full-size wrapper — flex column so canvas fills remaining space */
+/* Full-size wrapper — flex column so canvas fills remaining space.
+   The wrapper's zoom/width/height are managed by VncView.tsx via inline
+   styles to neutralise the parent .layout's --app-zoom transform. */
 .vnc-view-wrapper {
   display: flex;
   flex-direction: column;
@@ -3693,4 +3726,10 @@
 }
 
 
+/* ─────────────────────────────────────────────────────────────────────────────
+   Font Size Scaling
+   Applied via --app-zoom CSS variable on :root, which drives zoom on .layout.
+   The data-font-size attribute is set for reference but zoom handles scaling.
+   Ratios: small = 0.8x | medium = 1x (default) | large = 1.3x
+   ───────────────────────────────────────────────────────────────────────────── */
 

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import i18n from '@/i18n/config';
 import type { Settings, Theme } from '@/types';
 
 interface SettingsState {
@@ -18,10 +19,10 @@ const defaultSettings: Settings = {
   send_key: 'enter',
   theme: 'dark',
   language: 'en',
+  font_size: 'medium',
   sound_enabled: true,
   notifications_enabled: false,
   show_token_usage: true,
-  bubble_layout: false,
   show_cli_sessions: false,
   sync_insights: false,
   check_updates: true,
@@ -39,7 +40,20 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const response = await fetch('/api/settings', { credentials: 'include' });
       if (!response.ok) throw new Error('Failed to load settings');
       const settings = await response.json();
-      set({ settings: { ...defaultSettings, ...settings }, loading: false });
+      const merged = { ...defaultSettings, ...settings };
+      set({ settings: merged, loading: false });
+
+      // Apply font size immediately after load
+      const fontSize = merged.font_size || 'medium';
+      document.documentElement.setAttribute('data-font-size', fontSize);
+      const zoomMap: Record<string, string> = { small: '0.8', medium: '1', large: '1.3' };
+      document.documentElement.style.setProperty('--app-zoom', zoomMap[fontSize] || '1');
+      localStorage.setItem('hermes-font-size', fontSize);
+
+      // Apply language immediately after load
+      if (merged.language) {
+        i18n.changeLanguage(merged.language);
+      }
     } catch (err) {
       set({ 
         settings: defaultSettings, 
@@ -62,6 +76,19 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       });
       if (!response.ok) throw new Error('Failed to save settings');
       set({ settings: newSettings });
+      
+      // Apply language change if language was updated
+      if (updates.language && updates.language !== currentSettings.language) {
+        i18n.changeLanguage(updates.language);
+      }
+      
+      // Apply font size change immediately
+      if (updates.font_size) {
+        document.documentElement.setAttribute('data-font-size', updates.font_size);
+        const zoomMap: Record<string, string> = { small: '0.8', medium: '1', large: '1.3' };
+        document.documentElement.style.setProperty('--app-zoom', zoomMap[updates.font_size] || '1');
+        localStorage.setItem('hermes-font-size', updates.font_size);
+      }
     } catch (err) {
       set({ error: (err as Error).message });
       throw err;
@@ -77,5 +104,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   setLanguage: (language) => {
     const currentSettings = get().settings || defaultSettings;
     set({ settings: { ...currentSettings, language } });
+    i18n.changeLanguage(language);
   },
 }));

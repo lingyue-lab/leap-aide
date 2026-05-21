@@ -1,14 +1,16 @@
+import { useTranslation } from 'react-i18next';
 import { useMemoryStore } from '@/stores/useMemoryStore';
 import type { MemoryFile } from '@/stores/useMemoryStore';
 
-const FILES: { key: MemoryFile; label: string; filename: string }[] = [
-  { key: 'memory', label: 'Personal Memory', filename: 'USER.md' },
-  { key: 'project', label: 'Project Memory', filename: 'MEMORY.md' },
-];
-
 export default function MemoryPanel() {
+  const { t } = useTranslation('common');
   const selectedFile = useMemoryStore((s) => s.selectedFile);
   const selectFile = useMemoryStore((s) => s.selectFile);
+
+  const FILES: { key: MemoryFile; label: string; filename: string }[] = [
+    { key: 'memory', label: t('memory.user'), filename: 'USER.md' },
+    { key: 'project', label: t('memory.project'), filename: 'MEMORY.md' },
+  ];
 
   return (
     <div className="memory-panel">
@@ -18,7 +20,7 @@ export default function MemoryPanel() {
         style={{ background: 'color-mix(in srgb, var(--border) 60%, transparent)' }}
       >
         <span className="text-xs font-bold uppercase tracking-wider text-[var(--muted)]">
-          Memories
+          {t('tabs.memory')}
         </span>
       </div>
 

@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useSettingsTabStore } from '@/stores/useSettingsTabStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
-import type { Settings, Theme, SendKey } from '@/types';
+import { useTheme } from '@/contexts/ThemeContext';
+import type { Settings, Theme, SendKey, FontSize } from '@/types';
 
 // ─── Reusable field components ────────────────────────────────────────────────
 
@@ -105,74 +107,93 @@ function TextInput({ value, onChange, placeholder }: { value: string; onChange: 
 
 // ─── Groups ────────────────────────────────────────────────────────────────────
 
-const THEMES: { value: Theme; label: string }[] = [
-  { value: 'dark',      label: 'Dark' },
-  { value: 'light',     label: 'Light' },
-  { value: 'system',    label: 'System' },
-  { value: 'slate',     label: 'Slate' },
-  { value: 'solarized', label: 'Solarized' },
-  { value: 'monokai',   label: 'Monokai' },
-  { value: 'nord',      label: 'Nord' },
-  { value: 'oled',      label: 'OLED Black' },
-];
-
-const LANGUAGES = [
-  { value: 'en',    label: 'English' },
-  { value: 'zh-CN', label: '中文 (简体)' },
-];
-
-const SEND_KEYS: { value: SendKey; label: string }[] = [
-  { value: 'enter',      label: 'Enter' },
-  { value: 'ctrl+enter', label: 'Ctrl + Enter' },
-];
-
 interface GroupProps {
   form: Partial<Settings>;
   set: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
 }
 
 function AppearanceGroup({ form, set }: GroupProps) {
+  const { t } = useTranslation();
+  const { setTheme } = useTheme();
+  
+  const THEMES: { value: Theme; label: string }[] = [
+    { value: 'dark',      label: t('settings.themes.dark') },
+    { value: 'light',     label: t('settings.themes.light') },
+    { value: 'system',    label: t('settings.themes.system') },
+    { value: 'slate',     label: t('settings.themes.slate') },
+    { value: 'solarized', label: t('settings.themes.solarized') },
+    { value: 'monokai',   label: t('settings.themes.monokai') },
+    { value: 'nord',      label: t('settings.themes.nord') },
+    { value: 'oled',      label: t('settings.themes.oled') },
+  ];
+
+  const LANGUAGES = [
+    { value: 'en',    label: 'English' },
+    { value: 'zh-CN', label: '中文 (简体)' },
+  ];
+
+  const FONT_SIZES: { value: FontSize; label: string }[] = [
+    { value: 'small',  label: t('settings.font_sizes.small') },
+    { value: 'medium', label: t('settings.font_sizes.medium') },
+    { value: 'large',  label: t('settings.font_sizes.large') },
+  ];
+
   return (
     <>
-      <FieldRow label="Theme" hint="Color scheme for the interface">
+      <FieldRow label={t('settings.fields.theme')} hint={t('settings.fields.theme_hint')}>
         <SelectField
           value={form.theme ?? 'dark'}
-          onChange={(v) => set('theme', v as Theme)}
+          onChange={(v) => {
+            const th = v as Theme;
+            set('theme', th);
+            setTheme(th);
+          }}
           options={THEMES}
         />
       </FieldRow>
-      <FieldRow label="Language" hint="Interface language">
+      <FieldRow label={t('settings.fields.language')} hint={t('settings.fields.language_hint')}>
         <SelectField
           value={form.language ?? 'en'}
           onChange={(v) => set('language', v)}
           options={LANGUAGES}
         />
       </FieldRow>
-      <FieldRow label="Bubble layout" hint="Show messages in chat bubbles instead of full-width">
-        <Toggle checked={form.bubble_layout ?? false} onChange={(v) => set('bubble_layout', v)} />
+      <FieldRow label={t('settings.fields.font_size')} hint={t('settings.fields.font_size_hint')}>
+        <SelectField
+          value={form.font_size ?? 'medium'}
+          onChange={(v) => set('font_size', v as FontSize)}
+          options={FONT_SIZES}
+        />
       </FieldRow>
     </>
   );
 }
 
 function ModelGroup({ form, set }: GroupProps) {
+  const { t } = useTranslation();
+  
+  const SEND_KEYS: { value: SendKey; label: string }[] = [
+    { value: 'enter',      label: t('settings.send_keys.enter') },
+    { value: 'ctrl+enter', label: t('settings.send_keys.ctrl_enter') },
+  ];
+
   return (
     <>
-      <FieldRow label="Default Model" hint="Model used for new conversations">
+      <FieldRow label={t('settings.fields.default_model')} hint={t('settings.fields.default_model_hint')}>
         <TextInput
           value={form.model ?? ''}
           onChange={(v) => set('model', v)}
           placeholder="e.g. anthropic/claude-sonnet-4-5"
         />
       </FieldRow>
-      <FieldRow label="Send Message Key" hint="Key combination to submit a message">
+      <FieldRow label={t('settings.fields.send_key')} hint={t('settings.fields.send_key_hint')}>
         <SelectField
           value={form.send_key ?? 'enter'}
           onChange={(v) => set('send_key', v as SendKey)}
           options={SEND_KEYS}
         />
       </FieldRow>
-      <FieldRow label="Bot Name" hint="Display name shown for the assistant">
+      <FieldRow label={t('settings.fields.bot_name')} hint={t('settings.fields.bot_name_hint')}>
         <TextInput
           value={form.bot_name ?? ''}
           onChange={(v) => set('bot_name', v)}
@@ -184,21 +205,22 @@ function ModelGroup({ form, set }: GroupProps) {
 }
 
 function NotificationsGroup({ form, set }: GroupProps) {
+  const { t } = useTranslation();
   return (
     <>
-      <FieldRow label="Sound effects" hint="Play sounds on message receive">
+      <FieldRow label={t('settings.fields.sound_effects')} hint={t('settings.fields.sound_effects_hint')}>
         <Toggle checked={form.sound_enabled ?? true} onChange={(v) => set('sound_enabled', v)} />
       </FieldRow>
-      <FieldRow label="Desktop notifications" hint="Show OS-level notifications">
+      <FieldRow label={t('settings.fields.desktop_notifications')} hint={t('settings.fields.desktop_notifications_hint')}>
         <Toggle checked={form.notifications_enabled ?? false} onChange={(v) => set('notifications_enabled', v)} />
       </FieldRow>
-      <FieldRow label="Show token usage" hint="Display token count and estimated cost">
+      <FieldRow label={t('settings.fields.show_token_usage')} hint={t('settings.fields.show_token_usage_hint')}>
         <Toggle checked={form.show_token_usage ?? true} onChange={(v) => set('show_token_usage', v)} />
       </FieldRow>
-      <FieldRow label="Show CLI sessions" hint="Include command-line sessions in the sidebar">
+      <FieldRow label={t('settings.fields.show_cli_sessions')} hint={t('settings.fields.show_cli_sessions_hint')}>
         <Toggle checked={form.show_cli_sessions ?? false} onChange={(v) => set('show_cli_sessions', v)} />
       </FieldRow>
-      <FieldRow label="Sync insights" hint="Enable cross-session insight syncing">
+      <FieldRow label={t('settings.fields.sync_insights')} hint={t('settings.fields.sync_insights_hint')}>
         <Toggle checked={form.sync_insights ?? false} onChange={(v) => set('sync_insights', v)} />
       </FieldRow>
     </>
@@ -206,25 +228,23 @@ function NotificationsGroup({ form, set }: GroupProps) {
 }
 
 function AboutGroup() {
+  const { t } = useTranslation();
   const { settings } = useSettingsStore();
   const version = (settings as (Settings & { webui_version?: string }) | null)?.webui_version;
 
   return (
     <>
-      <FieldRow label="Version">
+      <FieldRow label={t('settings.fields.version')}>
         <span style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'monospace' }}>
           {version ?? '—'}
         </span>
       </FieldRow>
-      <FieldRow label="Check for updates" hint="Automatically check for new versions">
-        <span style={{ fontSize: 12, color: 'var(--muted)' }}>Managed via settings</span>
+      <FieldRow label={t('settings.fields.check_updates')} hint={t('settings.fields.check_updates_hint')}>
+        <span style={{ fontSize: 12, color: 'var(--muted)' }}>{t('settings.fields.managed_via_settings')}</span>
       </FieldRow>
       <div style={{ marginTop: 20, padding: '14px', background: 'rgba(255,255,255,0.03)', borderRadius: 10, border: '1px solid var(--border)' }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Hermes WebUI</div>
-        <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }}>
-          An open-source web interface for AI coding assistants.<br />
-          Built with React + TypeScript + Python.
-        </div>
+        <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }} dangerouslySetInnerHTML={{ __html: t('settings.about_text') }} />
       </div>
     </>
   );
@@ -232,16 +252,10 @@ function AboutGroup() {
 
 // ─── Group label map ───────────────────────────────────────────────────────────
 
-const GROUP_LABELS: Record<string, string> = {
-  appearance: 'Appearance',
-  model: 'Model & Input',
-  notifications: 'Notifications',
-  about: 'About',
-};
-
 // ─── Main component ────────────────────────────────────────────────────────────
 
 export default function SettingsDetail() {
+  const { t } = useTranslation();
   const selectedGroup = useSettingsTabStore((s) => s.selectedGroup);
   const { settings, updateSettings, loadSettings } = useSettingsStore();
   const [form, setForm] = useState<Partial<Settings>>({});
@@ -288,8 +302,8 @@ export default function SettingsDetail() {
       {/* Header bar */}
       <div className="topbar">
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="topbar-title">{GROUP_LABELS[selectedGroup] ?? 'Settings'}</div>
-          <div className="topbar-meta">Settings &amp; Preferences</div>
+          <div className="topbar-title">{t(`settings.groups.${selectedGroup}`)}</div>
+          <div className="topbar-meta">{t('settings.preferences')}</div>
         </div>
         {!isAbout && (
           <div style={{ flexShrink: 0 }}>
@@ -308,7 +322,7 @@ export default function SettingsDetail() {
                 opacity: saving ? 0.7 : 1,
               }}
             >
-              {saving ? 'Saving…' : saved ? '✓ Saved' : 'Save'}
+              {saving ? t('settings.actions.saving') : saved ? t('settings.actions.saved') : t('settings.actions.save')}
             </button>
           </div>
         )}

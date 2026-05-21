@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useSettingsStore } from '@/stores/useSettingsStore';
+import { useTheme } from '@/contexts/ThemeContext';
 import type { Settings, Theme, SendKey } from '@/types';
 
 interface SettingsModalProps {
@@ -7,11 +8,11 @@ interface SettingsModalProps {
 }
 
 const THEMES: { value: Theme; label: string }[] = [
-  { value: 'dark',      label: 'Dark' },
-  { value: 'light',     label: 'Light' },
+  { value: 'dark',      label: 'Dark (VSCode Dark Modern)' },
+  { value: 'light',     label: 'Light (VSCode Light Modern)' },
   { value: 'system',    label: 'System' },
   { value: 'slate',     label: 'Slate' },
-  { value: 'solarized', label: 'Solarized' },
+  { value: 'solarized', label: 'Solarized Dark' },
   { value: 'monokai',   label: 'Monokai' },
   { value: 'nord',      label: 'Nord' },
   { value: 'oled',      label: 'OLED Black' },
@@ -24,6 +25,7 @@ const LANGUAGES = [
 
 export default function SettingsModal({ onClose }: SettingsModalProps) {
   const { settings, updateSettings, loadSettings } = useSettingsStore();
+  const { setTheme } = useTheme();
   const [form, setForm] = useState<Partial<Settings>>({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -128,7 +130,11 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
               <select
                 id="s-theme"
                 value={form.theme ?? 'dark'}
-                onChange={e => set('theme', e.target.value as Theme)}
+                onChange={e => {
+                  const t = e.target.value as Theme;
+                  set('theme', t);
+                  setTheme(t);
+                }}
               >
                 {THEMES.map(t => (
                   <option key={t.value} value={t.value}>{t.label}</option>
@@ -149,17 +155,6 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
               </select>
             </div>
 
-            <div className="settings-field" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <input
-                type="checkbox"
-                id="s-bubble"
-                checked={form.bubble_layout ?? false}
-                onChange={e => set('bubble_layout', e.target.checked)}
-              />
-              <label htmlFor="s-bubble" style={{ marginBottom: 0, textTransform: 'none', fontSize: 13, fontWeight: 500, color: 'var(--text)' }}>
-                Bubble chat layout
-              </label>
-            </div>
           </div>
 
           {/* Model & Input */}

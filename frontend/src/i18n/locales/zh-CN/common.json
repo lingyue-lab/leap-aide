@@ -29,7 +29,7 @@
     "todos_title": "任务管理",
     "terminal": "终端",
     "terminal_title": "打开终端 Shell",
-    "vnc": "VNC",
+    "vnc": "远程桌面",
     "vnc_title": "远程桌面"
   },
   "sessions": {
@@ -55,7 +55,71 @@
     "no_workspace": "未分配工作区"
   },
   "settings": {
-    "preferences": "设置与偏好"
+    "preferences": "设置与偏好",
+    "title": "设置",
+    "groups": {
+      "appearance": "外观",
+      "appearance_desc": "主题、语言、布局",
+      "model": "模型与输入",
+      "model_desc": "默认模型、发送键、机器人名称",
+      "notifications": "通知",
+      "notifications_desc": "声音、提醒、显示选项",
+      "about": "关于",
+      "about_desc": "版本、更新、信息"
+    },
+    "fields": {
+      "theme": "主题",
+      "theme_hint": "界面配色方案",
+      "language": "语言",
+      "language_hint": "界面语言",
+      "font_size": "字体大小",
+      "font_size_hint": "调整文字和图标尺寸，适配不同屏幕分辨率",
+      "default_model": "默认模型",
+      "default_model_hint": "新对话使用的模型",
+      "send_key": "发送消息快捷键",
+      "send_key_hint": "提交消息的按键组合",
+      "bot_name": "机器人名称",
+      "bot_name_hint": "助手显示的名称",
+      "sound_effects": "音效",
+      "sound_effects_hint": "收到消息时播放声音",
+      "desktop_notifications": "桌面通知",
+      "desktop_notifications_hint": "显示系统级通知",
+      "show_token_usage": "显示令牌使用量",
+      "show_token_usage_hint": "显示令牌计数和预估成本",
+      "show_cli_sessions": "显示 CLI 会话",
+      "show_cli_sessions_hint": "在侧边栏中包含命令行会话",
+      "sync_insights": "同步洞察",
+      "sync_insights_hint": "启用跨会话洞察同步",
+      "version": "版本",
+      "check_updates": "检查更新",
+      "check_updates_hint": "自动检查新版本",
+      "managed_via_settings": "通过设置管理"
+    },
+    "themes": {
+      "dark": "深色 (VSCode Dark Modern)",
+      "light": "浅色 (VSCode Light Modern)",
+      "system": "跟随系统",
+      "slate": "石板灰",
+      "solarized": "Solarized Dark",
+      "monokai": "Monokai",
+      "nord": "Nord",
+      "oled": "OLED 黑"
+    },
+    "send_keys": {
+      "enter": "Enter",
+      "ctrl_enter": "Ctrl + Enter"
+    },
+    "font_sizes": {
+      "small": "小",
+      "medium": "中",
+      "large": "大"
+    },
+    "actions": {
+      "save": "保存",
+      "saving": "保存中…",
+      "saved": "✓ 已保存"
+    },
+    "about_text": "一个开源的 AI 编程助手 Web 界面。<br />使用 React + TypeScript + Python 构建。"
   },
   "workspace": {
     "title": "工作区",

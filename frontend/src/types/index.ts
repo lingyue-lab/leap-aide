@@ -103,16 +103,17 @@ export interface DirEntry {
 
 export type SendKey = 'enter' | 'ctrl+enter';
 export type Theme = 'system' | 'dark' | 'light' | 'slate' | 'solarized' | 'monokai' | 'nord' | 'oled';
+export type FontSize = 'small' | 'medium' | 'large';
 
 export interface Settings {
   model: string;
   send_key: SendKey;
   theme: Theme;
   language: string;
+  font_size: FontSize;
   sound_enabled: boolean;
   notifications_enabled: boolean;
   show_token_usage: boolean;
-  bubble_layout: boolean;
   show_cli_sessions: boolean;
   sync_insights: boolean;
   check_updates: boolean;

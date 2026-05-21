@@ -1,8 +1,10 @@
 import { useRef, useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useTerminalStore } from '@/stores/useTerminalStore';
 import type { TerminalInstance } from '@/stores/useTerminalStore';
 
 export default function TerminalPanel() {
+  const { t } = useTranslation('common');
   const { terminals, activeTerminalId, addTerminal, removeTerminal, selectTerminal, renameTerminal } =
     useTerminalStore();
 
@@ -70,7 +72,7 @@ export default function TerminalPanel() {
       {/* Header */}
       <div className="flex items-center justify-between p-2 border-b border-[var(--border)]">
         <span className="text-xs font-bold uppercase tracking-wider text-[var(--muted)]">
-          Terminals
+          {t('tabs.terminal')}
         </span>
         <button
           className="session-actions-trigger"
@@ -156,7 +158,7 @@ export default function TerminalPanel() {
               <svg className="ws-opt-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
               </svg>
-              <span className="ws-opt-name">Rename</span>
+              <span className="ws-opt-name">{t('sessions.rename')}</span>
             </span>
           </button>
           <button
@@ -170,7 +172,7 @@ export default function TerminalPanel() {
               <svg className="ws-opt-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
               </svg>
-              <span className="ws-opt-name">Delete</span>
+              <span className="ws-opt-name">{t('sessions.delete')}</span>
             </span>
           </button>
         </div>

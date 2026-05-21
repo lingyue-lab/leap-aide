@@ -55,7 +55,71 @@
     "no_workspace": "No Workspace"
   },
   "settings": {
-    "preferences": "Settings & Preferences"
+    "preferences": "Settings & Preferences",
+    "title": "Settings",
+    "groups": {
+      "appearance": "Appearance",
+      "appearance_desc": "Theme, language, layout",
+      "model": "Model & Input",
+      "model_desc": "Default model, send key, bot name",
+      "notifications": "Notifications",
+      "notifications_desc": "Sound, alerts, display options",
+      "about": "About",
+      "about_desc": "Version, updates, info"
+    },
+    "fields": {
+      "theme": "Theme",
+      "theme_hint": "Color scheme for the interface",
+      "language": "Language",
+      "language_hint": "Interface language",
+      "font_size": "Font Size",
+      "font_size_hint": "Adjust text and icon size for different screen resolutions",
+      "default_model": "Default Model",
+      "default_model_hint": "Model used for new conversations",
+      "send_key": "Send Message Key",
+      "send_key_hint": "Key combination to submit a message",
+      "bot_name": "Bot Name",
+      "bot_name_hint": "Display name shown for the assistant",
+      "sound_effects": "Sound effects",
+      "sound_effects_hint": "Play sounds on message receive",
+      "desktop_notifications": "Desktop notifications",
+      "desktop_notifications_hint": "Show OS-level notifications",
+      "show_token_usage": "Show token usage",
+      "show_token_usage_hint": "Display token count and estimated cost",
+      "show_cli_sessions": "Show CLI sessions",
+      "show_cli_sessions_hint": "Include command-line sessions in the sidebar",
+      "sync_insights": "Sync insights",
+      "sync_insights_hint": "Enable cross-session insight syncing",
+      "version": "Version",
+      "check_updates": "Check for updates",
+      "check_updates_hint": "Automatically check for new versions",
+      "managed_via_settings": "Managed via settings"
+    },
+    "themes": {
+      "dark": "Dark (VSCode Dark Modern)",
+      "light": "Light (VSCode Light Modern)",
+      "system": "System",
+      "slate": "Slate",
+      "solarized": "Solarized Dark",
+      "monokai": "Monokai",
+      "nord": "Nord",
+      "oled": "OLED Black"
+    },
+    "send_keys": {
+      "enter": "Enter",
+      "ctrl_enter": "Ctrl + Enter"
+    },
+    "font_sizes": {
+      "small": "Small",
+      "medium": "Medium",
+      "large": "Large"
+    },
+    "actions": {
+      "save": "Save",
+      "saving": "Saving…",
+      "saved": "✓ Saved"
+    },
+    "about_text": "An open-source web interface for AI coding assistants.<br />Built with React + TypeScript + Python."
   },
   "workspace": {
     "title": "Workspace",

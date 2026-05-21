@@ -40,8 +40,10 @@ export default function Layout({ children }: LayoutProps) {
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
     if (!isResizing.current) return;
-    
-    const delta = e.clientX - startX.current;
+    // Divide delta by --app-zoom because sidebar has zoom applied;
+    // clientX is in screen pixels but sidebar width is in CSS (layout) pixels.
+    const zoom = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--app-zoom').trim()) || 1;
+    const delta = (e.clientX - startX.current) / zoom;
     const newWidth = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, startWidth.current + delta));
     setSidebarWidth(newWidth);
   }, []);

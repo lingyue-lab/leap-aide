@@ -44,6 +44,7 @@ export default function VncView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const rfbRef = useRef<RFBInstance | null>(null);
 
+
   const config = useVncStore((s) => s.config);
   const setConnected = useVncStore((s) => s.setConnected);
   const setConfig = useVncStore((s) => s.setConfig);

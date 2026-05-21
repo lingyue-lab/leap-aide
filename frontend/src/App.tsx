@@ -5,12 +5,19 @@ import Layout from './components/layout/Layout';
 import ChatInterface from './components/chat/ChatInterface';
 import { useSessionStore } from './stores/useSessionStore';
 import { useSettingsStore } from './stores/useSettingsStore';
+import { useTheme } from './contexts/ThemeContext';
 import { ProtectedRoute } from './contexts/AuthContext';
 
 function App() {
   const { i18n } = useTranslation();
   const { currentSessionId } = useSessionStore();
-  const { settings } = useSettingsStore();
+  const { settings, loadSettings } = useSettingsStore();
+  const { setTheme } = useTheme();
+
+  // Load settings on mount
+  React.useEffect(() => {
+    loadSettings();
+  }, []);
 
   // Apply language from settings
   React.useEffect(() => {
@@ -18,6 +25,22 @@ function App() {
       i18n.changeLanguage(settings.language);
     }
   }, [settings?.language, i18n]);
+
+  // Apply theme from server settings when they load
+  React.useEffect(() => {
+    if (settings?.theme) {
+      setTheme(settings.theme);
+    }
+  }, [settings?.theme]);
+
+  // Apply font size from settings
+  React.useEffect(() => {
+    const fontSize = settings?.font_size || 'medium';
+    document.documentElement.setAttribute('data-font-size', fontSize);
+    // Apply zoom to the root element for global scaling
+    const zoomMap: Record<string, string> = { small: '0.8', medium: '1', large: '1.3' };
+    document.documentElement.style.setProperty('--app-zoom', zoomMap[fontSize] || '1');
+  }, [settings?.font_size]);
 
   return (
     <ProtectedRoute>
