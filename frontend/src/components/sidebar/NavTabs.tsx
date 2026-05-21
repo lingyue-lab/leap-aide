@@ -6,6 +6,7 @@ import { useMemoryStore } from '@/stores/useMemoryStore';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 import { useTerminalStore } from '@/stores/useTerminalStore';
 import { useVncStore } from '@/stores/useVncStore';
+import { useSettingsTabStore } from '@/stores/useSettingsTabStore';
 import type { NavPanel } from '@/types';
 
 interface NavTabsProps {
@@ -30,6 +31,7 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
   const setWorkspacesTabActive = useWorkspaceStore((s) => s.setWorkspacesTabActive);
   const setTerminalTabActive = useTerminalStore((s) => s.setTerminalTabActive);
   const setVncTabActive = useVncStore((s) => s.setVncTabActive);
+  const setSettingsTabActive = useSettingsTabStore((s) => s.setSettingsTabActive);
 
   const tabs: TabConfig[] = [
     {
@@ -114,79 +116,74 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
     },
   ];
 
+  const clearAllTabStates = () => {
+    setSkillsTabActive(false);
+    setTasksTabActive(false);
+    setMemoryTabActive(false);
+    setWorkspacesTabActive(false);
+    setTerminalTabActive(false);
+    setVncTabActive(false);
+    setSettingsTabActive(false);
+  };
+
   const switchPanel = (panel: NavPanel) => {
     cancelEditing();
     onPanelChange(panel);
+    clearAllTabStates();
     if (panel === 'skills') {
       setSkillsTabActive(true);
-      setTasksTabActive(false);
-      setMemoryTabActive(false);
-      setWorkspacesTabActive(false);
-      setTerminalTabActive(false);
-      setVncTabActive(false);
     } else if (panel === 'tasks') {
-      setSkillsTabActive(false);
       setTasksTabActive(true);
-      setMemoryTabActive(false);
-      setWorkspacesTabActive(false);
-      setTerminalTabActive(false);
-      setVncTabActive(false);
     } else if (panel === 'memory') {
-      setSkillsTabActive(false);
-      setTasksTabActive(false);
       setMemoryTabActive(true);
-      setWorkspacesTabActive(false);
-      setTerminalTabActive(false);
-      setVncTabActive(false);
     } else if (panel === 'workspaces') {
-      setSkillsTabActive(false);
-      setTasksTabActive(false);
-      setMemoryTabActive(false);
       setWorkspacesTabActive(true);
-      setTerminalTabActive(false);
-      setVncTabActive(false);
     } else if (panel === 'terminal') {
-      setSkillsTabActive(false);
-      setTasksTabActive(false);
-      setMemoryTabActive(false);
-      setWorkspacesTabActive(false);
       setTerminalTabActive(true);
-      setVncTabActive(false);
     } else if (panel === 'vnc') {
-      setSkillsTabActive(false);
-      setTasksTabActive(false);
-      setMemoryTabActive(false);
-      setWorkspacesTabActive(false);
-      setTerminalTabActive(false);
       setVncTabActive(true);
-    } else {
-      setSkillsTabActive(false);
-      setTasksTabActive(false);
-      setMemoryTabActive(false);
-      setWorkspacesTabActive(false);
-      setTerminalTabActive(false);
-      setVncTabActive(false);
-      if (panel === 'chat') {
-        clearSelection();
-      }
+    } else if (panel === 'settings') {
+      setSettingsTabActive(true);
+    } else if (panel === 'chat') {
+      clearSelection();
     }
   };
 
   return (
     <div className="nav-tabs">
-      {tabs.map((tab) => (
+      {/* Main tabs */}
+      <div className="nav-tabs-main">
+        {tabs.map((tab) => (
+          <button
+            key={tab.panel}
+            className={`nav-tab ${activePanel === tab.panel ? 'active' : ''}`}
+            data-panel={tab.panel}
+            data-label={t(tab.labelKey)}
+            onClick={() => switchPanel(tab.panel)}
+            title={t(tab.titleKey)}
+            aria-label={t(tab.titleKey)}
+          >
+            {tab.icon}
+          </button>
+        ))}
+      </div>
+
+      {/* Settings tab pinned at bottom */}
+      <div className="nav-tabs-bottom">
         <button
-          key={tab.panel}
-          className={`nav-tab ${activePanel === tab.panel ? 'active' : ''}`}
-          data-panel={tab.panel}
-          data-label={t(tab.labelKey)}
-          onClick={() => switchPanel(tab.panel)}
-          title={t(tab.titleKey)}
-          aria-label={t(tab.titleKey)}
+          className={`nav-tab ${activePanel === 'settings' ? 'active' : ''}`}
+          data-panel="settings"
+          data-label={t('settings.preferences')}
+          onClick={() => switchPanel('settings')}
+          title={t('settings.preferences')}
+          aria-label={t('settings.preferences')}
         >
-          {tab.icon}
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
         </button>
-      ))}
+      </div>
     </div>
   );
 }

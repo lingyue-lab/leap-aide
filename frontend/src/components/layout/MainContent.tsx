@@ -7,6 +7,7 @@ import { useCronStore } from '@/stores/useCronStore';
 import { useMemoryStore } from '@/stores/useMemoryStore';
 import { useTerminalStore } from '@/stores/useTerminalStore';
 import { useVncStore } from '@/stores/useVncStore';
+import { useSettingsTabStore } from '@/stores/useSettingsTabStore';
 import SkillDetail from '@/components/skills/SkillDetail';
 import SkillForm from '@/components/skills/SkillForm';
 import TaskDetail from '@/components/tasks/TaskDetail';
@@ -19,6 +20,7 @@ import SessionSkillsSelector from '@/components/chat/SessionSkillsSelector';
 import SkillsDrawer from '@/components/chat/SkillsDrawer';
 import TerminalView from '@/components/terminal/TerminalView';
 import VncView from '@/components/vnc/VncView';
+import SettingsDetail from '@/components/settings/SettingsDetail';
 
 
 interface MainContentProps {
@@ -64,6 +66,8 @@ function NonTerminalContent({
   const workspacesTabActive = useWorkspaceStore((s) => s.workspacesTabActive);
   const showNewWorkspaceForm = useWorkspaceStore((s) => s.showNewWorkspaceForm);
   const setShowNewWorkspaceForm = useWorkspaceStore((s) => s.setShowNewWorkspaceForm);
+
+  const settingsTabActive = useSettingsTabStore((s) => s.settingsTabActive);
 
   // ── Non-chat content views ──────────────────────────────────────────────────
 
@@ -111,6 +115,9 @@ function NonTerminalContent({
   }
   if (workspacesTabActive) {
     return <WorkspaceDetail />;
+  }
+  if (settingsTabActive) {
+    return <SettingsDetail />;
   }
 
   // ── Default: chat view ──────────────────────────────────────────────────────

@@ -1532,6 +1532,26 @@
     gap: 2px;
     align-items: center;
     background: var(--sidebar);
+    justify-content: space-between;
+  }
+
+  .nav-tabs-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    align-items: center;
+    flex: 1;
+  }
+
+  .nav-tabs-bottom {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding-bottom: 4px;
+    border-top: 1px solid var(--border);
+    padding-top: 6px;
+    width: 100%;
   }
 
   .nav-tab {
@@ -2375,7 +2395,24 @@
   color: var(--blue);
 }
 
-/* ── Settings Panel ── */
+/* ── Settings Detail (main content panel) ── */
+.settings-detail {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+  height: 100%;
+}
+
+.settings-sidebar-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+  height: 100%;
+}
+
+/* ── Settings Modal (legacy overlay - kept for reference) ── */
 .settings-overlay {
   position: fixed;
   inset: 0;
