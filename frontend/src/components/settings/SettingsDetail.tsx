@@ -5,8 +5,8 @@ import Editor from '@monaco-editor/react';
 import { useSettingsTabStore } from '@/stores/useSettingsTabStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 import { useTheme } from '@/contexts/ThemeContext';
-import { configFileService } from '@/services/api';
-import type { Settings, Theme, SendKey, FontSize } from '@/types';
+import { configFileService, providersService } from '@/services/api';
+import type { Settings, Theme, SendKey, FontSize, Provider } from '@/types';
 
 // ─── Reusable field components ────────────────────────────────────────────────
 
@@ -174,7 +174,7 @@ function AppearanceGroup({ form, set }: GroupProps) {
 
 function ModelGroup({ form, set }: GroupProps) {
   const { t } = useTranslation();
-  
+
   const SEND_KEYS: { value: SendKey; label: string }[] = [
     { value: 'enter',      label: t('settings.send_keys.enter') },
     { value: 'ctrl+enter', label: t('settings.send_keys.ctrl_enter') },
@@ -182,13 +182,6 @@ function ModelGroup({ form, set }: GroupProps) {
 
   return (
     <>
-      <FieldRow label={t('settings.fields.default_model')} hint={t('settings.fields.default_model_hint')}>
-        <TextInput
-          value={form.model ?? ''}
-          onChange={(v) => set('model', v)}
-          placeholder="e.g. anthropic/claude-sonnet-4-5"
-        />
-      </FieldRow>
       <FieldRow label={t('settings.fields.send_key')} hint={t('settings.fields.send_key_hint')}>
         <SelectField
           value={form.send_key ?? 'enter'}
@@ -227,6 +220,246 @@ function NotificationsGroup({ form, set }: GroupProps) {
         <Toggle checked={form.sync_insights ?? false} onChange={(v) => set('sync_insights', v)} />
       </FieldRow>
     </>
+  );
+}
+
+// ─── Providers Group ──────────────────────────────────────────────────────────
+
+function ProviderRow({ provider }: { provider: Provider }) {
+  const { t } = useTranslation();
+  // has_key: key already stored — show masked display, input locked
+  // no key: input open, user can type and save directly
+  const MASKED = '••••••••••••••••';
+  const [apiKey, setApiKey] = useState('');
+  const [hasKey, setHasKey] = useState(provider.has_key);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
+
+  const flashFeedback = (type: 'ok' | 'err', msg: string) => {
+    setFeedback({ type, msg });
+    setTimeout(() => setFeedback(null), 3000);
+  };
+
+  const handleSave = async () => {
+    if (!apiKey.trim()) return;
+    setSaving(true);
+    try {
+      const res = await providersService.setKey(provider.id, apiKey.trim());
+      if (res.ok) {
+        flashFeedback('ok', t('settings.providers.saved'));
+        setApiKey('');
+        setHasKey(true);
+      } else {
+        flashFeedback('err', res.error ?? 'Failed');
+      }
+    } catch (e) {
+      flashFeedback('err', (e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      const res = await providersService.deleteKey(provider.id);
+      if (res.ok) {
+        flashFeedback('ok', t('settings.providers.cleared'));
+        setApiKey('');
+        setHasKey(false);
+      } else {
+        flashFeedback('err', res.error ?? 'Failed');
+      }
+    } catch (e) {
+      flashFeedback('err', (e as Error).message);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const keySourceBadge = () => {
+    if (provider.is_oauth) return null;
+    if (!hasKey) return { label: t('settings.providers.no_key'), color: 'var(--muted)' };
+    const src: Record<string, string> = {
+      env_file: '.env',
+      env_var: 'env',
+      config_yaml: 'config.yaml',
+      oauth: 'OAuth',
+    };
+    return { label: src[provider.key_source] ?? provider.key_source, color: '#4ade80' };
+  };
+
+  const badge = keySourceBadge();
+
+  return (
+    <div style={{
+      border: '1px solid var(--border2)',
+      borderRadius: 8,
+      marginBottom: 8,
+      overflow: 'hidden',
+    }}>
+      {/* Provider header row */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '10px 14px',
+        background: 'var(--surface)',
+      }}>
+        {/* Status dot */}
+        <span style={{
+          width: 8,
+          height: 8,
+          borderRadius: '50%',
+          background: hasKey ? '#4ade80' : 'var(--border2)',
+          flexShrink: 0,
+          border: `1px solid ${hasKey ? '#22c55e' : 'var(--border)'}`,
+        }} />
+        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', flex: 1 }}>
+          {provider.display_name}
+        </span>
+        {badge && (
+          <span style={{ fontSize: 11, color: badge.color, background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border2)', borderRadius: 4, padding: '1px 6px' }}>
+            {badge.label}
+          </span>
+        )}
+      </div>
+
+      {/* API key row — only for configurable providers */}
+      {provider.configurable && (
+        <div style={{ padding: '10px 14px', background: 'rgba(0,0,0,0.08)', display: 'flex', alignItems: 'center', gap: 8 }}>
+          {hasKey ? (
+            /* Has key: show masked display + clear button only */
+            <>
+              <span style={{
+                flex: 1,
+                padding: '5px 10px',
+                fontSize: 12,
+                fontFamily: 'monospace',
+                color: 'var(--muted)',
+                letterSpacing: 2,
+              }}>
+                {MASKED}
+              </span>
+
+              {/* Clear / delete icon */}
+              <button
+                onClick={handleDelete}
+                disabled={deleting}
+                title={t('settings.providers.clear_key')}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, color: '#f87171', flexShrink: 0, opacity: deleting ? 0.5 : 1 }}
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="3 6 5 6 21 6"/>
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                  <path d="M10 11v6"/>
+                  <path d="M14 11v6"/>
+                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                </svg>
+              </button>
+            </>
+          ) : (
+            /* No key: open input + save button */
+            <>
+              <input
+                type="text"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); }}
+                placeholder={t('settings.providers.enter_key')}
+                style={{
+                  flex: 1,
+                  padding: '5px 10px',
+                  borderRadius: 6,
+                  border: '1px solid var(--border2)',
+                  background: 'var(--input-bg)',
+                  color: 'var(--text)',
+                  fontSize: 12,
+                  fontFamily: 'monospace',
+                  minWidth: 0,
+                }}
+              />
+
+              {/* Save icon */}
+              <button
+                onClick={handleSave}
+                disabled={saving || !apiKey.trim()}
+                title={t('settings.providers.save_key')}
+                style={{ background: 'none', border: 'none', cursor: apiKey.trim() ? 'pointer' : 'not-allowed', padding: 4, color: apiKey.trim() ? 'var(--blue)' : 'var(--border2)', flexShrink: 0, opacity: saving ? 0.5 : 1 }}
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                  <polyline points="17 21 17 13 7 13 7 21"/>
+                  <polyline points="7 3 7 8 15 8"/>
+                </svg>
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Non-configurable hint */}
+      {!provider.configurable && (
+        <div style={{ padding: '6px 14px 8px', fontSize: 11, color: 'var(--muted)' }}>
+          {provider.is_oauth
+            ? t('settings.providers.oauth_hint')
+            : t('settings.providers.not_configurable_hint')}
+        </div>
+      )}
+
+      {/* Feedback message */}
+      {feedback && (
+        <div style={{ padding: '4px 14px 8px', fontSize: 11, color: feedback.type === 'ok' ? '#4ade80' : '#f87171' }}>
+          {feedback.msg}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProvidersGroup() {
+  const { t } = useTranslation();
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    providersService.getProviders()
+      .then((res) => setProviders(res.providers ?? []))
+      .catch((e) => setError((e as Error).message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 120, color: 'var(--muted)', fontSize: 13 }}>
+        {t('common.loading')}
+      </div>
+    );
+  }
+
+  if (error) {
+    return <div style={{ color: '#f87171', fontSize: 13 }}>{error}</div>;
+  }
+
+  // Sort: has_key first, then configurable, then alphabetical
+  const sorted = [...providers].sort((a, b) => {
+    if (a.has_key !== b.has_key) return a.has_key ? -1 : 1;
+    if (a.configurable !== b.configurable) return a.configurable ? -1 : 1;
+    return a.display_name.localeCompare(b.display_name);
+  });
+
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14, lineHeight: 1.5 }}>
+        {t('settings.providers.hint')}
+      </div>
+      {sorted.map((p) => (
+        <ProviderRow key={p.id} provider={p} />
+      ))}
+    </div>
   );
 }
 
@@ -416,6 +649,7 @@ export default function SettingsDetail() {
 
   const isAbout = selectedGroup === 'about';
   const isConfig = selectedGroup === 'config';
+  const isProviders = selectedGroup === 'providers';
 
   return (
     <div className="settings-detail">
@@ -427,7 +661,7 @@ export default function SettingsDetail() {
         </div>
 
         {/* Normal settings Save button */}
-        {!isAbout && !isConfig && (
+        {!isAbout && !isConfig && !isProviders && (
           <div style={{ flexShrink: 0 }}>
             {error && (
               <span style={{ fontSize: 12, color: '#f87171', marginRight: 12 }}>{error}</span>
@@ -507,6 +741,7 @@ export default function SettingsDetail() {
             {selectedGroup === 'model' && <ModelGroup form={form} set={setField} />}
             {selectedGroup === 'notifications' && <NotificationsGroup form={form} set={setField} />}
             {selectedGroup === 'about' && <AboutGroup />}
+            {selectedGroup === 'providers' && <ProvidersGroup />}
           </div>
         </div>
       )}

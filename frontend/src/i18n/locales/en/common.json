@@ -60,14 +60,16 @@
     "groups": {
       "appearance": "Appearance",
       "appearance_desc": "Theme, language, layout",
-      "model": "Model & Input",
-      "model_desc": "Default model, send key, bot name",
+      "model": "Input",
+      "model_desc": "Send key, bot name",
       "notifications": "Notifications",
       "notifications_desc": "Sound, alerts, display options",
       "about": "About",
       "about_desc": "Version, updates, info",
       "config": "Config File",
-      "config_desc": "Edit config.yaml directly"
+      "config_desc": "Edit config.yaml directly",
+      "providers": "Providers",
+      "providers_desc": "API keys for AI providers"
     },
     "fields": {
       "theme": "Theme",
@@ -121,7 +123,20 @@
       "saving": "Saving…",
       "saved": "✓ Saved"
     },
-    "about_text": "An open-source web interface for AI coding assistants.<br />Built with React + TypeScript + Python."
+    "about_text": "An open-source web interface for AI coding assistants.<br />Built with React + TypeScript + Python.",
+    "providers": {
+      "hint": "Configure API keys for AI providers. Keys are stored in ~/.hermes/.env. Providers with keys set in config.yaml are shown as read-only.",
+      "no_key": "No key",
+      "enter_key": "Enter API key…",
+      "save_key": "Save key",
+      "clear_key": "Clear key",
+      "show_key": "Show key",
+      "hide_key": "Hide key",
+      "saved": "Key saved",
+      "cleared": "Key removed",
+      "oauth_hint": "Uses OAuth — configure via CLI: hermes model",
+      "not_configurable_hint": "Key managed in config.yaml"
+    }
   },
   "workspace": {
     "title": "Workspace",

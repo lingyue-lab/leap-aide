@@ -122,6 +122,13 @@ export const sessionService = {
       body: JSON.stringify({ session_id: sessionId }),
     });
   },
+
+  updateModel: async (sessionId: string, model: string) => {
+    return api<{ session: import('@/types').Session }>('/api/session/update', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: sessionId, model }),
+    });
+  },
 };
 
 // Workspace API 服务
@@ -213,6 +220,27 @@ export const configFileService = {
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || 'Save failed');
+  },
+};
+
+// Providers API 服务
+export const providersService = {
+  getProviders: async (): Promise<{ providers: import('@/types').Provider[]; active_provider: string | null }> => {
+    return api('/api/providers');
+  },
+
+  setKey: async (provider: string, apiKey: string): Promise<{ ok: boolean; error?: string }> => {
+    return api('/api/providers', {
+      method: 'POST',
+      body: JSON.stringify({ provider, api_key: apiKey }),
+    });
+  },
+
+  deleteKey: async (provider: string): Promise<{ ok: boolean; error?: string }> => {
+    return api('/api/providers/delete', {
+      method: 'POST',
+      body: JSON.stringify({ provider }),
+    });
   },
 };
 

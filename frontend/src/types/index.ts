@@ -181,6 +181,17 @@ export interface Model {
   label: string;
 }
 
+export interface Provider {
+  id: string;
+  display_name: string;
+  has_key: boolean;
+  configurable: boolean;
+  is_oauth: boolean;
+  key_source: 'env_file' | 'env_var' | 'config_yaml' | 'oauth' | 'none';
+  auth_error?: string | null;
+  models: Array<{ id: string; label: string }>;
+}
+
 export interface UsageInfo {
   input_tokens?: number;
   output_tokens?: number;

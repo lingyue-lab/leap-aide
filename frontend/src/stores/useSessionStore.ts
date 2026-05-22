@@ -24,6 +24,8 @@ interface SessionState {
   assignWorkspace: (id: string, workspace: string) => Promise<void>;
   /** Update the skill binding list for a session */
   updateSessionSkills: (id: string, skills: string[] | null) => Promise<void>;
+  /** Update the model for a specific session */
+  updateSessionModel: (id: string, model: string) => Promise<void>;
 }
 
 export const useSessionStore = create<SessionState>((set) => ({
@@ -233,6 +235,25 @@ export const useSessionStore = create<SessionState>((set) => ({
       currentSession:
         state.currentSession?.session_id === id
           ? { ...state.currentSession, skills }
+          : state.currentSession,
+    }));
+  },
+
+  updateSessionModel: async (id, model) => {
+    const response = await fetch('/api/session/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: id, model }),
+      credentials: 'include',
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error((data as { error?: string }).error || 'Failed to update session model');
+    }
+    set((state) => ({
+      currentSession:
+        state.currentSession?.session_id === id
+          ? { ...state.currentSession, model }
           : state.currentSession,
     }));
   },

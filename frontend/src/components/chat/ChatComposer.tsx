@@ -2,6 +2,9 @@ import React, { useRef, useCallback, useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useChatStore } from '@/stores/useChatStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
+import { useSessionStore } from '@/stores/useSessionStore';
+import { modelsService } from '@/services/api';
+import type { ModelGroup } from '@/types';
 
 interface ChatComposerProps {
   onSend: (text: string, attachments?: string[]) => void;
@@ -14,15 +17,63 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
   const { t } = useTranslation('chat');
   const { pendingFiles } = useChatStore();
   const { settings } = useSettingsStore();
+  const { currentSession, updateSessionModel } = useSessionStore();
   
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const modelChipRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
   const [input, setInput] = useState('');
   const [isDragOver, setIsDragOver] = useState(false);
-  
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [modelGroups, setModelGroups] = useState<ModelGroup[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+
   const sendByCtrlEnter = settings?.send_key === 'ctrl+enter';
   const hasInput = input.trim().length > 0 || pendingFiles.length > 0;
   const canSend = hasInput && !busy;
+
+  // Resolve displayed model: session model → settings default → 'Model'
+  const sessionModel = currentSession?.model ?? '';
+  const effectiveModel = sessionModel || settings?.model || '';
+  const displayModel = effectiveModel
+    ? effectiveModel.split('/').pop() ?? effectiveModel
+    : 'Model';
+
+  // Load models when picker opens
+  useEffect(() => {
+    if (!modelPickerOpen) return;
+    setModelsLoading(true);
+    modelsService.getModels()
+      .then((resp) => setModelGroups(resp.groups ?? []))
+      .catch(() => setModelGroups([]))
+      .finally(() => setModelsLoading(false));
+  }, [modelPickerOpen]);
+
+  // Close popover on outside click
+  useEffect(() => {
+    if (!modelPickerOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        popoverRef.current && !popoverRef.current.contains(e.target as Node) &&
+        modelChipRef.current && !modelChipRef.current.contains(e.target as Node)
+      ) {
+        setModelPickerOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [modelPickerOpen]);
+
+  const handleModelSelect = useCallback(async (modelId: string) => {
+    setModelPickerOpen(false);
+    if (!currentSession?.session_id) return;
+    try {
+      await updateSessionModel(currentSession.session_id, modelId);
+    } catch {
+      // silently ignore
+    }
+  }, [currentSession, updateSessionModel]);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -117,6 +168,85 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
     >
+      {/* Model picker popover — at composer-wrap level to avoid any overflow clipping */}
+      {modelPickerOpen && (
+        <div
+          ref={popoverRef}
+          style={{
+            position: 'absolute',
+            bottom: 'calc(100% - 12px)',
+            left: 48,
+            minWidth: 260,
+            maxWidth: 320,
+            maxHeight: 320,
+            overflowY: 'auto',
+            background: 'var(--surface)',
+            border: '1px solid var(--border2)',
+            borderRadius: 10,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
+            zIndex: 200,
+            padding: '6px 0',
+          }}
+        >
+          {modelsLoading ? (
+            <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--muted)' }}>
+              Loading…
+            </div>
+          ) : modelGroups.length === 0 ? (
+            <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--muted)' }}>
+              No models available
+            </div>
+          ) : (
+            modelGroups.map((group) => (
+              <div key={group.provider}>
+                <div style={{
+                  padding: '4px 12px 2px',
+                  fontSize: 10,
+                  fontWeight: 600,
+                  letterSpacing: '0.06em',
+                  textTransform: 'uppercase',
+                  color: 'var(--muted)',
+                }}>
+                  {group.provider}
+                </div>
+                {group.models.map((m) => {
+                  const isActive = effectiveModel === m.id;
+                  return (
+                    <button
+                      key={m.id}
+                      onClick={() => handleModelSelect(m.id)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        width: '100%',
+                        padding: '7px 14px',
+                        background: isActive ? 'color-mix(in srgb, var(--blue) 15%, transparent)' : 'transparent',
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: 12,
+                        color: isActive ? 'var(--blue)' : 'var(--text)',
+                        textAlign: 'left',
+                      }}
+                    >
+                      {isActive && (
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ flexShrink: 0 }}>
+                          <path d="M2 6L5 9L10 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      )}
+                      {!isActive && <span style={{ width: 12, flexShrink: 0 }} />}
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {m.label}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
       <div className="composer-box">
         {/* Drop hint - only visible when dragging */}
         {isDragOver && (
@@ -181,8 +311,19 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
             
             <div className="composer-divider" />
             
-            {/* Model chip placeholder */}
-            <div className="chip model">{settings?.model?.split('/').pop() || 'Model'}</div>
+            {/* Model chip */}
+            <button
+              ref={modelChipRef}
+              className="chip model"
+              onClick={() => setModelPickerOpen((v) => !v)}
+              title="Switch model"
+              style={{ cursor: 'pointer' }}
+            >
+              {displayModel}
+              <svg width="8" height="5" viewBox="0 0 8 5" fill="none" style={{ marginLeft: 4, opacity: 0.6 }}>
+                <path d="M1 4L4 1L7 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </button>
           </div>
           
           <div className="composer-right">

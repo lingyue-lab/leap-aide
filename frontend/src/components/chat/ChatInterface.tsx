@@ -63,6 +63,9 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
         busy: bgState.busy,
         activeStreamId: bgState.streaming ? bgState.streamId : null,
       });
+      // Still load session metadata (model, workspace, etc.) in background so
+      // currentSession reflects the correct session even on fast-path switches.
+      loadSession(sessionId);
       return;
     }
 
@@ -70,6 +73,8 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
     //    we visited before).
     const cached = useChatStore.getState().restoreFromCache(sessionId);
     if (cached) {
+      // Still load session metadata in background so currentSession is up to date.
+      loadSession(sessionId);
       return;
     }
 

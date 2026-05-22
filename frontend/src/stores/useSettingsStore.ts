@@ -40,6 +40,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const response = await fetch('/api/settings', { credentials: 'include' });
       if (!response.ok) throw new Error('Failed to load settings');
       const settings = await response.json();
+      // Backend returns 'default_model'; map it to the frontend 'model' key.
+      if (settings.default_model && !settings.model) {
+        settings.model = settings.default_model;
+      }
       const merged = { ...defaultSettings, ...settings };
       set({ settings: merged, loading: false });
 

@@ -60,14 +60,16 @@
     "groups": {
       "appearance": "外观",
       "appearance_desc": "主题、语言、布局",
-      "model": "模型与输入",
-      "model_desc": "默认模型、发送键、机器人名称",
+      "model": "输入",
+      "model_desc": "发送键、机器人名称",
       "notifications": "通知",
       "notifications_desc": "声音、提醒、显示选项",
       "about": "关于",
       "about_desc": "版本、更新、信息",
       "config": "配置文件",
-      "config_desc": "直接编辑 config.yaml"
+      "config_desc": "直接编辑 config.yaml",
+      "providers": "Providers",
+      "providers_desc": "AI 提供商 API Key 管理"
     },
     "fields": {
       "theme": "主题",
@@ -121,7 +123,20 @@
       "saving": "保存中…",
       "saved": "✓ 已保存"
     },
-    "about_text": "一个开源的 AI 编程助手 Web 界面。<br />使用 React + TypeScript + Python 构建。"
+    "about_text": "一个开源的 AI 编程助手 Web 界面。<br />使用 React + TypeScript + Python 构建。",
+    "providers": {
+      "hint": "为 AI 提供商配置 API Key。Key 存储在 ~/.hermes/.env。在 config.yaml 中配置的 Key 显示为只读。",
+      "no_key": "未配置",
+      "enter_key": "输入 API Key…",
+      "save_key": "保存 Key",
+      "clear_key": "清除 Key",
+      "show_key": "显示 Key",
+      "hide_key": "隐藏 Key",
+      "saved": "Key 已保存",
+      "cleared": "Key 已清除",
+      "oauth_hint": "使用 OAuth — 请通过 CLI 配置：hermes model",
+      "not_configurable_hint": "Key 在 config.yaml 中管理"
+    }
   },
   "workspace": {
     "title": "工作区",

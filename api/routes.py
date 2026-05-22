@@ -307,6 +307,13 @@ def _resolve_compatible_session_model(model_id: str | None) -> tuple[str, bool]:
 
         if _model_matches_active_provider_family(bare_model, active_provider):
             return bare_model, True
+        # If the @provider hint is not a known/normalized provider name it is
+        # likely a user-configured custom gateway (e.g. @kat_v1_anthropic_gateway:…).
+        # Preserve the original model ID so the displayed value matches the
+        # persisted session data.  If the provider is genuinely stale the error
+        # will surface at inference time.
+        if not provider_normalized:
+            return model, False
         if default_model:
             return default_model, True
         return model, False
