@@ -716,6 +716,16 @@ def handle_get(handler, parsed) -> bool:
     if parsed.path == "/api/models":
         return j(handler, get_available_models())
 
+    # ── Config file raw YAML (GET) ──
+    if parsed.path == "/api/config/raw":
+        from api.config import _get_config_path
+        config_path = _get_config_path()
+        try:
+            raw_yaml = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+        except Exception as exc:
+            return j(handler, {"error": str(exc)}, status=500)
+        return t(handler, raw_yaml, content_type="text/plain; charset=utf-8")
+
     if parsed.path == "/api/models/live":
         return _handle_live_models(handler, parsed)
 
@@ -1261,6 +1271,27 @@ def handle_post(handler, parsed) -> bool:
         return _handle_skill_import(handler)
 
     body = read_body(handler)
+
+    # ── Config file raw YAML (POST) ──
+    if parsed.path == "/api/config/raw":
+        from api.config import _get_config_path, reload_config, invalidate_models_cache
+        yaml_text = body.get("content", "")
+        try:
+            import yaml as _yaml
+            _yaml.safe_load(yaml_text)  # validation only — raises on bad YAML
+        except Exception as exc:
+            return j(handler, {"ok": False, "error": f"Invalid YAML: {exc}"}, status=400)
+        config_path = _get_config_path()
+        try:
+            config_path.write_text(yaml_text, encoding="utf-8")
+        except Exception as exc:
+            return j(handler, {"ok": False, "error": str(exc)}, status=500)
+        try:
+            reload_config()
+            invalidate_models_cache()
+        except Exception:
+            pass
+        return j(handler, {"ok": True})
 
     if parsed.path == "/api/session/new":
         try:

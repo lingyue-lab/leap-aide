@@ -65,7 +65,9 @@
       "notifications": "通知",
       "notifications_desc": "声音、提醒、显示选项",
       "about": "关于",
-      "about_desc": "版本、更新、信息"
+      "about_desc": "版本、更新、信息",
+      "config": "配置文件",
+      "config_desc": "直接编辑 config.yaml"
     },
     "fields": {
       "theme": "主题",

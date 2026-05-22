@@ -65,7 +65,9 @@
       "notifications": "Notifications",
       "notifications_desc": "Sound, alerts, display options",
       "about": "About",
-      "about_desc": "Version, updates, info"
+      "about_desc": "Version, updates, info",
+      "config": "Config File",
+      "config_desc": "Edit config.yaml directly"
     },
     "fields": {
       "theme": "Theme",

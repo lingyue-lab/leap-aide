@@ -1,8 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+// @ts-ignore – @monaco-editor/react is installed on the server; run npm install
+import Editor from '@monaco-editor/react';
 import { useSettingsTabStore } from '@/stores/useSettingsTabStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 import { useTheme } from '@/contexts/ThemeContext';
+import { configFileService } from '@/services/api';
 import type { Settings, Theme, SendKey, FontSize } from '@/types';
 
 // ─── Reusable field components ────────────────────────────────────────────────
@@ -227,6 +230,81 @@ function NotificationsGroup({ form, set }: GroupProps) {
   );
 }
 
+// ─── Monaco theme map ─────────────────────────────────────────────────────────
+const MONACO_THEME: Record<string, string> = {
+  dark:      'vs-dark',
+  light:     'light',
+  system:    'vs-dark',
+  slate:     'vs-dark',
+  solarized: 'vs-dark',
+  monokai:   'vs-dark',
+  nord:      'vs-dark',
+  oled:      'vs-dark',
+};
+
+interface ConfigGroupProps {
+  editing: boolean;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  editorRef: React.MutableRefObject<any>;
+  onContentLoaded: (raw: string) => void;
+  onLoadError: (msg: string) => void;
+}
+
+function ConfigGroup({ editing, editorRef, onContentLoaded, onLoadError }: ConfigGroupProps) {
+  const { t } = useTranslation();
+  const { settings } = useSettingsStore();
+  const currentTheme = (settings as (Settings & { theme?: string }) | null)?.theme ?? 'dark';
+  const monacoTheme = MONACO_THEME[currentTheme] ?? 'vs-dark';
+
+  const [content, setContent] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    configFileService.getRaw()
+      .then((raw) => { setContent(raw); onContentLoaded(raw); })
+      .catch((e) => onLoadError((e as Error).message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 200, color: 'var(--muted)', fontSize: 13 }}>
+        {t('common.loading')}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {/* Monaco Editor */}
+      <div style={{ flex: 1, border: '1px solid var(--border2)', borderRadius: '8px 8px 0 0', overflow: 'hidden', minHeight: 0 }}>
+        <Editor
+          height="100%"
+          language="yaml"
+          theme={monacoTheme}
+          value={content}
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          onMount={(editor: any) => { editorRef.current = editor; }}
+          options={{
+            minimap: { enabled: false },
+            fontSize: 13,
+            lineNumbers: 'on',
+            scrollBeyondLastLine: false,
+            wordWrap: 'on',
+            tabSize: 2,
+            automaticLayout: true,
+            readOnly: !editing,
+          }}
+        />
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--muted)', lineHeight: 1.5, padding: '6px 0 10px', flexShrink: 0 }}>
+        {t('settings.config_file_hint', 'Editing ~/.hermes/config.yaml for the active profile. Changes take effect immediately after saving.')}
+      </div>
+    </div>
+  );
+}
+
 function AboutGroup() {
   const { t } = useTranslation();
   const { settings } = useSettingsStore();
@@ -263,6 +341,15 @@ export default function SettingsDetail() {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // ── Config group state (lifted from ConfigGroup) ──────────────────────────
+  const [configEditing, setConfigEditing]   = useState(false);
+  const [configSaving, setConfigSaving]     = useState(false);
+  const [configSaved, setConfigSaved]       = useState(false);
+  const [configError, setConfigError]       = useState<string | null>(null);
+  const [configSource, setConfigSource]     = useState(''); // last-saved server content
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const configEditorRef = useRef<any>(null);
+
   useEffect(() => {
     if (!settings) loadSettings();
   }, []);
@@ -275,6 +362,9 @@ export default function SettingsDetail() {
   useEffect(() => {
     setSaved(false);
     setError(null);
+    setConfigEditing(false);
+    setConfigError(null);
+    setConfigSaved(false);
   }, [selectedGroup]);
 
   const setField = <K extends keyof Settings>(key: K, value: Settings[K]) => {
@@ -295,7 +385,37 @@ export default function SettingsDetail() {
     }
   };
 
+  const handleConfigEdit = () => {
+    setConfigEditing(true);
+    setConfigError(null);
+    setConfigSaved(false);
+  };
+
+  const handleConfigCancel = () => {
+    configEditorRef.current?.setValue(configSource);
+    setConfigEditing(false);
+    setConfigError(null);
+  };
+
+  const handleConfigSave = async () => {
+    const val = configEditorRef.current ? configEditorRef.current.getValue() : configSource;
+    setConfigSaving(true);
+    setConfigError(null);
+    try {
+      await configFileService.saveRaw(val);
+      setConfigSource(val);
+      setConfigSaved(true);
+      setConfigEditing(false);
+      setTimeout(() => setConfigSaved(false), 2500);
+    } catch (e) {
+      setConfigError((e as Error).message);
+    } finally {
+      setConfigSaving(false);
+    }
+  };
+
   const isAbout = selectedGroup === 'about';
+  const isConfig = selectedGroup === 'config';
 
   return (
     <div className="settings-detail">
@@ -305,7 +425,9 @@ export default function SettingsDetail() {
           <div className="topbar-title">{t(`settings.groups.${selectedGroup}`)}</div>
           <div className="topbar-meta">{t('settings.preferences')}</div>
         </div>
-        {!isAbout && (
+
+        {/* Normal settings Save button */}
+        {!isAbout && !isConfig && (
           <div style={{ flexShrink: 0 }}>
             {error && (
               <span style={{ fontSize: 12, color: '#f87171', marginRight: 12 }}>{error}</span>
@@ -317,7 +439,7 @@ export default function SettingsDetail() {
               style={{
                 padding: '6px 16px',
                 fontSize: 13,
-                background: saved ? 'rgba(34, 197, 94, 0.8)' : undefined,
+                background: saved ? 'color-mix(in srgb, var(--blue) 30%, var(--surface))' : undefined,
                 transition: 'background 0.2s',
                 opacity: saving ? 0.7 : 1,
               }}
@@ -326,17 +448,68 @@ export default function SettingsDetail() {
             </button>
           </div>
         )}
+
+        {/* Config File Edit / Cancel / Save buttons */}
+        {isConfig && (
+          <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+            {configError && (
+              <span style={{ fontSize: 12, color: '#f87171' }}>{configError}</span>
+            )}
+            {configSaved && !configEditing && (
+              <span style={{ fontSize: 12, color: 'var(--blue)' }}>{t('settings.actions.saved')}</span>
+            )}
+            {!configEditing ? (
+              <button
+                onClick={handleConfigEdit}
+                className="cron-btn"
+                style={{ padding: '6px 16px', fontSize: 13 }}
+              >
+                {t('common.edit')}
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={handleConfigCancel}
+                  disabled={configSaving}
+                  className="cron-btn"
+                  style={{ padding: '6px 14px', fontSize: 13, opacity: configSaving ? 0.6 : 1 }}
+                >
+                  {t('common.cancel')}
+                </button>
+                <button
+                  onClick={handleConfigSave}
+                  disabled={configSaving}
+                  className="cron-btn run"
+                  style={{ padding: '6px 16px', fontSize: 13, transition: 'background 0.2s', opacity: configSaving ? 0.7 : 1 }}
+                >
+                  {configSaving ? t('settings.actions.saving') : t('settings.actions.save')}
+                </button>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Content */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '8px 24px 24px' }}>
-        <div style={{ maxWidth: 560, margin: '0 auto' }}>
-          {selectedGroup === 'appearance' && <AppearanceGroup form={form} set={setField} />}
-          {selectedGroup === 'model' && <ModelGroup form={form} set={setField} />}
-          {selectedGroup === 'notifications' && <NotificationsGroup form={form} set={setField} />}
-          {selectedGroup === 'about' && <AboutGroup />}
+      {isConfig ? (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '8px 16px 0' }}>
+          <ConfigGroup
+            editing={configEditing}
+            editorRef={configEditorRef}
+            onContentLoaded={(raw) => setConfigSource(raw)}
+            onLoadError={(msg) => setConfigError(msg)}
+          />
         </div>
-      </div>
+      ) : (
+        <div style={{ flex: 1, overflowY: 'auto', padding: '8px 24px 24px' }}>
+          <div style={{ maxWidth: 560, margin: '0 auto' }}>
+            {selectedGroup === 'appearance' && <AppearanceGroup form={form} set={setField} />}
+            {selectedGroup === 'model' && <ModelGroup form={form} set={setField} />}
+            {selectedGroup === 'notifications' && <NotificationsGroup form={form} set={setField} />}
+            {selectedGroup === 'about' && <AboutGroup />}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

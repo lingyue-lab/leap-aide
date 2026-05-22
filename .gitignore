@@ -23,6 +23,8 @@ AGENTS.md
 .windsurfrules
 .aider*
 copilot-instructions.md
+.codeflicker/
+git_commit_head.txt
 
 # Generated screenshots and transient artifacts
 screenshot-*.png

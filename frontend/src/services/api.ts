@@ -197,6 +197,25 @@ export const modelsService = {
   },
 };
 
+// Config file API 服务
+export const configFileService = {
+  getRaw: async (): Promise<string> => {
+    const res = await fetch('/api/config/raw', { credentials: 'include' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.text();
+  },
+  saveRaw: async (content: string): Promise<void> => {
+    const res = await fetch('/api/config/raw', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Save failed');
+  },
+};
+
 // Approval API 服务
 export const approvalService = {
   getPending: async (sessionId: string) => {
