@@ -1386,6 +1386,24 @@
     border-left: 2px solid rgba(232, 160, 48, 0.4);
   }
 
+  /* Unread message badge — red pill shown after a background session completes */
+  .session-unread-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 8px;
+    background: #e5363b;
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    flex-shrink: 0;
+    letter-spacing: 0.3px;
+  }
+
   .session-pin-indicator {
     display: inline-flex;
     align-items: center;
@@ -1546,6 +1564,117 @@
   .ws-opt-icon {
     flex-shrink: 0;
     opacity: 0.75;
+  }
+
+  .ws-opt-icon--spin {
+    animation: ws-icon-spin 0.8s linear infinite;
+    opacity: 0.6;
+  }
+
+  @keyframes ws-icon-spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+
+  /* Clear History modal */
+  .clear-history-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+  }
+
+  .clear-history-modal {
+    background: var(--sidebar-bg, #1e1e2e);
+    border: 1px solid var(--border-color, rgba(255,255,255,0.1));
+    border-radius: 8px;
+    padding: 20px 24px;
+    min-width: 320px;
+    max-width: 420px;
+    width: 90%;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  }
+
+  .clear-history-modal__title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary, #e0e0e0);
+  }
+
+  .clear-history-modal__desc {
+    font-size: 13px;
+    color: var(--text-secondary, #9a9ab0);
+    line-height: 1.5;
+  }
+
+  .clear-history-modal__field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .clear-history-modal__label {
+    font-size: 12px;
+    color: var(--text-secondary, #9a9ab0);
+  }
+
+  .clear-history-modal__input {
+    background: var(--input-bg, rgba(255,255,255,0.06));
+    border: 1px solid var(--border-color, rgba(255,255,255,0.15));
+    border-radius: 5px;
+    color: var(--text-primary, #e0e0e0);
+    font-size: 14px;
+    padding: 7px 10px;
+    outline: none;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .clear-history-modal__input:focus {
+    border-color: var(--accent, #6c8ebf);
+  }
+
+  .clear-history-modal__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .clear-history-modal__btn {
+    padding: 6px 16px;
+    border-radius: 5px;
+    font-size: 13px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: opacity 0.15s;
+  }
+
+  .clear-history-modal__btn--cancel {
+    background: transparent;
+    border-color: var(--border-color, rgba(255,255,255,0.15));
+    color: var(--text-secondary, #9a9ab0);
+  }
+
+  .clear-history-modal__btn--cancel:hover {
+    opacity: 0.8;
+    background: var(--hover-bg);
+  }
+
+  .clear-history-modal__btn--confirm {
+    background: #e05c5c;
+    color: #fff;
+    border-color: transparent;
+  }
+
+  .clear-history-modal__btn--confirm:hover {
+    opacity: 0.85;
   }
 
   .ws-opt-name {
@@ -1770,6 +1899,49 @@
     margin-bottom: 0;
   }
 
+  /* Inline reasoning block - inside msg-body, no separator */
+  .reasoning-inline {
+    margin-bottom: 10px;
+  }
+
+  .reasoning-header-inline {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    cursor: pointer;
+    font-size: 13px;
+    color: rgba(201, 168, 76, 0.85);
+    width: 100%;
+    border-radius: 6px;
+    background: rgba(201, 168, 76, 0.06);
+    border: 1px solid rgba(201, 168, 76, 0.12);
+    transition: background 0.15s, border-color 0.15s;
+    box-sizing: border-box;
+  }
+
+  .reasoning-header-inline:hover {
+    background: rgba(201, 168, 76, 0.1);
+    border-color: rgba(201, 168, 76, 0.2);
+  }
+
+  .reasoning-header-inline svg {
+    flex-shrink: 0;
+    opacity: 0.7;
+  }
+
+  .reasoning-header-inline span {
+    color: rgba(201, 168, 76, 0.85);
+    font-weight: 500;
+  }
+
+  .reasoning-header-inline .reasoning-toggle {
+    font-size: 10px;
+    color: var(--muted);
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+
   /* Light theme reasoning overrides — VSCode Light Modern */
   :root[data-theme="light"] .msg-role.reasoning {
     color: #895503;
@@ -1794,6 +1966,21 @@
   :root[data-theme="light"] .reasoning-block {
     border-color: rgba(137, 85, 3, 0.15);
     background: rgba(137, 85, 3, 0.04);
+  }
+
+  :root[data-theme="light"] .reasoning-header-inline {
+    color: rgba(137, 85, 3, 0.85);
+    background: rgba(137, 85, 3, 0.06);
+    border-color: rgba(137, 85, 3, 0.12);
+  }
+
+  :root[data-theme="light"] .reasoning-header-inline:hover {
+    background: rgba(137, 85, 3, 0.1);
+    border-color: rgba(137, 85, 3, 0.2);
+  }
+
+  :root[data-theme="light"] .reasoning-header-inline span {
+    color: rgba(137, 85, 3, 0.85);
   }
 
   /* Context compaction reference card */

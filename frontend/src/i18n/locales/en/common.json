@@ -9,6 +9,7 @@
     "save": "Save",
     "saving": "Saving...",
     "cancel": "Cancel",
+    "confirm": "Confirm",
     "delete": "Delete",
     "edit": "Edit",
     "create": "Create",
@@ -52,7 +53,16 @@
     "unpin": "Unpin",
     "assign_workspace": "Assign Workspace",
     "workspace_assigned": "Workspace assigned",
-    "no_workspace": "No Workspace"
+    "no_workspace": "No Workspace",
+    "compress_history": "Compress History",
+    "compressing": "Compressing...",
+    "compress_confirm": "Compress this session's history? Older messages will be summarized by AI to reduce context size. This cannot be undone.",
+    "clear_history": "Clear History",
+    "clearing": "Clearing...",
+    "clear_confirm": "Clear all messages in this session? This cannot be undone.",
+    "clear_keep_desc": "How many recent messages do you want to keep? Enter 0 to delete all.",
+    "clear_keep_label": "Messages to keep (0 = delete all)",
+    "clear_streaming_warn": "Cannot clear history while the session is streaming. Please wait for the response to finish."
   },
   "settings": {
     "preferences": "Settings & Preferences",
@@ -69,7 +79,9 @@
       "config": "Config File",
       "config_desc": "Edit config.yaml directly",
       "providers": "Providers",
-      "providers_desc": "API keys for AI providers"
+      "providers_desc": "API keys for AI providers",
+      "history": "History",
+      "history_desc": "Context compression, auto-cleanup"
     },
     "fields": {
       "theme": "Theme",
@@ -97,7 +109,9 @@
       "version": "Version",
       "check_updates": "Check for updates",
       "check_updates_hint": "Automatically check for new versions",
-      "managed_via_settings": "Managed via settings"
+      "managed_via_settings": "Managed via settings",
+      "auto_compress_threshold": "Auto-compress threshold",
+      "auto_compress_threshold_hint": "Automatically compress session history when message count exceeds this limit. Uses AI to summarize older exchanges, freeing up context window space."
     },
     "themes": {
       "dark": "Dark (VSCode Dark Modern)",

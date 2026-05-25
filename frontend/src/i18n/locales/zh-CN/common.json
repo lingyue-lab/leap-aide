@@ -9,6 +9,7 @@
     "save": "保存",
     "saving": "保存中...",
     "cancel": "取消",
+    "confirm": "确认",
     "delete": "删除",
     "edit": "编辑",
     "create": "创建",
@@ -52,7 +53,16 @@
     "unpin": "取消固定",
     "assign_workspace": "分配工作区",
     "workspace_assigned": "工作区已分配",
-    "no_workspace": "未分配工作区"
+    "no_workspace": "未分配工作区",
+    "compress_history": "压缩历史记录",
+    "compressing": "压缩中...",
+    "compress_confirm": "压缩此会话的历史记录？较旧的消息将由 AI 进行摘要，以减少上下文占用。此操作不可撤销。",
+    "clear_history": "清空历史记录",
+    "clearing": "清空中...",
+    "clear_confirm": "清空此会话的所有消息？此操作不可撤销。",
+    "clear_keep_desc": "需要保留最近多少条消息？填 0 表示全部删除。",
+    "clear_keep_label": "保留条数（0 = 全部删除）",
+    "clear_streaming_warn": "会话正在对话中，无法清空历史记录。请等待回复完成后再操作。"
   },
   "settings": {
     "preferences": "设置与偏好",
@@ -69,7 +79,9 @@
       "config": "配置文件",
       "config_desc": "直接编辑 config.yaml",
       "providers": "Providers",
-      "providers_desc": "AI 提供商 API Key 管理"
+      "providers_desc": "AI 提供商 API Key 管理",
+      "history": "历史",
+      "history_desc": "上下文压缩、自动清理"
     },
     "fields": {
       "theme": "主题",
@@ -97,7 +109,9 @@
       "version": "版本",
       "check_updates": "检查更新",
       "check_updates_hint": "自动检查新版本",
-      "managed_via_settings": "通过设置管理"
+      "managed_via_settings": "通过设置管理",
+      "auto_compress_threshold": "自动压缩阈値",
+      "auto_compress_threshold_hint": "当会话消息数超过此限制时自动压缩历史记录，使用 AI 对较旧的对话进行摘要，释放上下文窗口空间。"
     },
     "themes": {
       "dark": "深色 (VSCode Dark Modern)",

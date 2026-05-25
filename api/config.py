@@ -1971,6 +1971,7 @@ _SETTINGS_DEFAULTS = {
     "auto_title_refresh_every": "0",  # adaptive title refresh: 0=off, 5/10/20=every N exchanges
     "busy_input_mode": "queue",  # behavior when sending while agent is running: queue | interrupt | steer
     "font_size": "medium",  # UI font size / zoom level: small | medium | large
+    "auto_compress_threshold": "0",  # 0=disabled; compress session history when message count >= N (100/200/500)
     "password_hash": None,  # PBKDF2-HMAC-SHA256 hash; None = auth disabled
 }
 _SETTINGS_LEGACY_DROP_KEYS = {"assistant_language", "bubble_layout", "default_model"}
@@ -2074,6 +2075,7 @@ _SETTINGS_ENUM_VALUES = {
     "auto_title_refresh_every": {"0", "5", "10", "20"},
     "busy_input_mode": {"queue", "interrupt", "steer"},
     "font_size": {"small", "medium", "large"},
+    "auto_compress_threshold": {"0", "100", "200", "500"},
 }
 _SETTINGS_BOOL_KEYS = {
     "onboarding_completed",

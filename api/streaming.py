@@ -914,7 +914,33 @@ def _sanitize_messages_for_api(messages):
         sanitized = {k: v for k, v in msg.items() if k in _API_SAFE_MSG_KEYS}
         if sanitized.get('role'):
             clean.append(sanitized)
-    return clean
+
+    # Merge consecutive user messages — strictly-conformant providers (Anthropic, etc.)
+    # require strict role alternation (user/assistant/user/...).  A dangling user message
+    # at the end of a session (e.g. from a crashed agent turn) followed by a new user
+    # message would produce two adjacent user roles and trigger a 400 Bad Request.
+    # We merge them by concatenating their content rather than dropping either message.
+    # Note: merging only affects the copy sent to the LLM API; the original messages in
+    # the session JSON are not modified, so the UI continues to display them separately.
+    merged: list = []
+    for msg in clean:
+        if merged and merged[-1]['role'] == 'user' and msg['role'] == 'user':
+            prev = merged[-1]
+            prev_c = prev['content']
+            cur_c = msg['content']
+            # Normalise both sides to list-of-blocks for uniform handling.
+            if isinstance(prev_c, str):
+                prev_c = [{'type': 'text', 'text': prev_c}]
+            if isinstance(cur_c, str):
+                cur_c = [{'type': 'text', 'text': cur_c}]
+            if not isinstance(prev_c, list):
+                prev_c = [{'type': 'text', 'text': str(prev_c)}]
+            if not isinstance(cur_c, list):
+                cur_c = [{'type': 'text', 'text': str(cur_c)}]
+            prev['content'] = prev_c + cur_c
+        else:
+            merged.append(msg)
+    return merged
 
 
 def _api_safe_message_positions(messages):
@@ -1815,6 +1841,17 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 task_id=session_id,
                 persist_user_message=msg_text,
             )
+            # ── Diagnostic: always print run_conversation result summary ──
+            _diag_msgs = result.get('messages') or [] if isinstance(result, dict) else []
+            _diag_roles = [m.get('role') for m in _diag_msgs if isinstance(m, dict)]
+            print(
+                f'[webui] run_conversation done session={session_id}'
+                f' | result_type={type(result).__name__}'
+                f' | result_error={result.get("error") if isinstance(result, dict) else "N/A"!r}'
+                f' | msg_roles={_diag_roles}'
+                f' | agent._last_error={getattr(agent, "_last_error", "ATTR_MISSING")!r}',
+                flush=True,
+            )
             # ── Ephemeral mode (/btw): deliver answer, skip persistence, cleanup ──
             if ephemeral:
                 _answer = ''
@@ -1866,14 +1903,56 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 # an empty final_response without raising — the stream would end with
                 # a done event containing zero assistant messages, leaving the user with
                 # no feedback. Emit an apperror so the client shows an inline error.
+                #
+                # IMPORTANT: check only messages AFTER the last user message in the
+                # result, not the entire history. The history already contains assistant
+                # messages from previous turns; we need to know if the CURRENT turn
+                # produced a new assistant reply.
+                _result_messages = result.get('messages') or []
+                # Find the index of the last user message in the result
+                _last_user_idx = -1
+                for _idx, _m in enumerate(_result_messages):
+                    if isinstance(_m, dict) and _m.get('role') == 'user':
+                        _last_user_idx = _idx
+                # Check if there's any non-empty assistant message after the last user message
                 _assistant_added = any(
                     m.get('role') == 'assistant' and str(m.get('content') or '').strip()
-                    for m in (result.get('messages') or [])
+                    for m in _result_messages[_last_user_idx + 1:]
+                ) if _last_user_idx >= 0 else any(
+                    m.get('role') == 'assistant' and str(m.get('content') or '').strip()
+                    for m in _result_messages
                 )
                 # _token_sent tracks whether on_token() was called (any streamed text)
                 if not _assistant_added and not _token_sent:
-                    _last_err = getattr(agent, '_last_error', None) or result.get('error') or ''
-                    _err_str = str(_last_err) if _last_err else ''
+                    # Extract error from multiple possible locations in the result dict.
+                    # hermes-agent stores errors in 'error', 'failed', or 'final_response'.
+                    _result_error = ''
+                    if isinstance(result, dict):
+                        _result_error = (
+                            str(result.get('error') or '')
+                            or str(result.get('final_response') or '')
+                            or str(result.get('failed') or '')
+                        )
+                    _last_err = getattr(agent, '_last_error', None) or _result_error or ''
+                    _err_str = str(_last_err) if _last_err else _result_error
+                    # For exceptions with no message (e.g. bare AssertionError), include
+                    # the exception type and traceback snippet so users see something useful.
+                    if _last_err and not _err_str:
+                        _err_str = type(_last_err).__name__
+                    # Always print diagnostic info — even when _last_err is None,
+                    # the result dict may contain useful context.
+                    import traceback as _tb_mod
+                    _tb_info = ''.join(_tb_mod.format_exception(type(_last_err), _last_err, _last_err.__traceback__)) if isinstance(_last_err, Exception) else ''
+                    print(
+                        f'[webui] silent agent failure for session {session_id}'
+                        f' | type={type(_last_err).__name__ if _last_err else "None"!r}'
+                        f' | err={str(_last_err)!r}'
+                        f' | result_keys={list(result.keys()) if isinstance(result, dict) else type(result).__name__}'
+                        f' | result_error={result.get("error") if isinstance(result, dict) else ""!r}'
+                        f' | messages_count={len(result.get("messages") or []) if isinstance(result, dict) else 0}'
+                        + (('\n' + _tb_info) if _tb_info else ''),
+                        flush=True,
+                    )
                     _err_lower = _err_str.lower()
                     _is_quota = (
                         'insufficient credit' in _err_lower
@@ -1893,6 +1972,14 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                             or 'invalid_api_key' in _err_lower
                         )
                     )
+                    _is_timeout = (
+                        not _is_quota and not _is_auth and (
+                            'timed out' in _err_lower
+                            or 'timeout' in _err_lower
+                            or 'api request returned none' in _err_lower
+                            or 'returned none after all retries' in _err_lower
+                        )
+                    )
                     if _is_quota:
                         _err_label = 'Out of credits'
                         _err_type = 'quota_exhausted'
@@ -1904,6 +1991,14 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                             'The selected model may not be supported by your configured provider or '
                             'your API key is invalid. Run `hermes model` in your terminal to '
                             'update credentials, then restart the WebUI.'
+                        )
+                    elif _is_timeout:
+                        _err_label = 'Request timed out'
+                        _err_type = 'timeout'
+                        _err_hint = (
+                            'The API request timed out after all retries. '
+                            'This may be a temporary network issue or the model endpoint is overloaded. '
+                            'Please try again in a moment.'
                         )
                     else:
                         _err_label = 'No response received'
@@ -2141,8 +2236,21 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 else: os.environ['HERMES_HOME'] = old_hermes_home
 
     except Exception as e:
-        print('[webui] stream error:\n' + traceback.format_exc(), flush=True)
+        _tb_str = traceback.format_exc()
+        print(
+            f'[webui] stream error for session {session_id}'
+            f' | type={type(e).__name__!r} | msg={str(e)!r}\n'
+            + _tb_str,
+            flush=True,
+        )
         err_str = str(e)
+        # For exceptions with no message (e.g. bare AssertionError), fall back to
+        # the last line of the traceback which usually contains the most useful info.
+        if not err_str:
+            _tb_lines = [l.strip() for l in _tb_str.splitlines() if l.strip()]
+            # Use "ExceptionType (at file:line)" format so users see something actionable
+            _loc = _tb_lines[-2] if len(_tb_lines) >= 2 else ''
+            err_str = f'{type(e).__name__}: (no message){(" — " + _loc) if _loc else ""}'
         # Sanitize HTML from provider error responses — some providers return
         # full HTML pages (e.g. nginx "404 page not found") instead of JSON errors.
         # Strip HTML tags to avoid rendering raw markup in the chat message.

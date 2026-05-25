@@ -208,7 +208,16 @@ function NotificationsGroup({ form, set }: GroupProps) {
         <Toggle checked={form.sound_enabled ?? true} onChange={(v) => set('sound_enabled', v)} />
       </FieldRow>
       <FieldRow label={t('settings.fields.desktop_notifications')} hint={t('settings.fields.desktop_notifications_hint')}>
-        <Toggle checked={form.notifications_enabled ?? false} onChange={(v) => set('notifications_enabled', v)} />
+        <Toggle
+          checked={form.notifications_enabled ?? false}
+          onChange={async (v) => {
+            if (v && typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
+              const permission = await Notification.requestPermission();
+              if (permission !== 'granted') return; // user denied — don't save the toggle
+            }
+            set('notifications_enabled', v);
+          }}
+        />
       </FieldRow>
       <FieldRow label={t('settings.fields.show_token_usage')} hint={t('settings.fields.show_token_usage_hint')}>
         <Toggle checked={form.show_token_usage ?? true} onChange={(v) => set('show_token_usage', v)} />
@@ -218,6 +227,32 @@ function NotificationsGroup({ form, set }: GroupProps) {
       </FieldRow>
       <FieldRow label={t('settings.fields.sync_insights')} hint={t('settings.fields.sync_insights_hint')}>
         <Toggle checked={form.sync_insights ?? false} onChange={(v) => set('sync_insights', v)} />
+      </FieldRow>
+    </>
+  );
+}
+
+// ─── History Group ────────────────────────────────────────────────────────────
+
+function HistoryGroup({ form, set }: GroupProps) {
+  const { t } = useTranslation();
+  const THRESHOLDS = [
+    { value: '0',   label: t('common:disabled', 'Disabled') },
+    { value: '100', label: '100 messages' },
+    { value: '200', label: '200 messages' },
+    { value: '500', label: '500 messages' },
+  ];
+  return (
+    <>
+      <FieldRow
+        label={t('settings.fields.auto_compress_threshold')}
+        hint={t('settings.fields.auto_compress_threshold_hint')}
+      >
+        <SelectField
+          value={String(form.auto_compress_threshold ?? '0')}
+          onChange={(v) => set('auto_compress_threshold', v)}
+          options={THRESHOLDS}
+        />
       </FieldRow>
     </>
   );
@@ -740,6 +775,7 @@ export default function SettingsDetail() {
             {selectedGroup === 'appearance' && <AppearanceGroup form={form} set={setField} />}
             {selectedGroup === 'model' && <ModelGroup form={form} set={setField} />}
             {selectedGroup === 'notifications' && <NotificationsGroup form={form} set={setField} />}
+            {selectedGroup === 'history' && <HistoryGroup form={form} set={setField} />}
             {selectedGroup === 'about' && <AboutGroup />}
             {selectedGroup === 'providers' && <ProvidersGroup />}
           </div>

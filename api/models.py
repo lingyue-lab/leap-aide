@@ -318,6 +318,7 @@ class Session:
                  compression_anchor_visible_idx=None,
                  compression_anchor_message_key=None,
                  skills=None,
+                 last_seen_msg_count=None,
                  **kwargs):
         self.session_id = session_id or uuid.uuid4().hex[:12]
         self.title = title
@@ -342,6 +343,7 @@ class Session:
         self.pending_started_at = pending_started_at
         self.compression_anchor_visible_idx = compression_anchor_visible_idx
         self.compression_anchor_message_key = compression_anchor_message_key
+        self.last_seen_msg_count = last_seen_msg_count  # None = never explicitly seen
         self._metadata_message_count = None
 
     @property
@@ -361,6 +363,7 @@ class Session:
             'personality', 'active_stream_id', 'skills',
             'pending_user_message', 'pending_attachments', 'pending_started_at',
             'compression_anchor_visible_idx', 'compression_anchor_message_key',
+            'last_seen_msg_count',
         ]
         meta = {k: getattr(self, k, None) for k in METADATA_FIELDS}
         meta['messages'] = self.messages
@@ -429,16 +432,23 @@ class Session:
 
     def compact(self, include_runtime=False, active_stream_ids=None) -> dict:
         active_stream_ids = active_stream_ids if active_stream_ids is not None else set()
+        # Clamp last_seen_msg_count: it should never exceed message_count.
+        # When last_seen > message_count, it means history was cleared or
+        # compressed. Clamp to message_count (= "seen all current messages").
+        # The actual data-level fix happens in _fix_stale_last_seen_msg_count()
+        # called when loading a session for viewing.
+        _msg_count = (
+            self._metadata_message_count
+            if self._metadata_message_count is not None
+            else len(self.messages)
+        )
+        _clamped_last_seen = min(self.last_seen_msg_count or 0, _msg_count)
         return {
             'session_id': self.session_id,
             'title': self.title,
             'workspace': self.workspace,
             'model': self.model,
-            'message_count': (
-                self._metadata_message_count
-                if self._metadata_message_count is not None
-                else len(self.messages)
-            ),
+            'message_count': _msg_count,
             'created_at': self.created_at,
             'updated_at': self.updated_at,
             'last_message_at': _last_message_timestamp(self.messages) or self.updated_at,
@@ -451,6 +461,7 @@ class Session:
             'estimated_cost': self.estimated_cost,
             'personality': self.personality,
             'skills': self.skills,
+            'last_seen_msg_count': _clamped_last_seen,
             'compression_anchor_visible_idx': self.compression_anchor_visible_idx,
             'compression_anchor_message_key': self.compression_anchor_message_key,
             'active_stream_id': self.active_stream_id,
@@ -485,6 +496,35 @@ def get_session(sid, metadata_only=False):
                 SESSIONS.popitem(last=False)  # evict least recently used
         return s
     raise KeyError(sid)
+
+
+def _fix_stale_last_seen_msg_count(s):
+    """Detect and fix sessions where last_seen_msg_count > message_count.
+
+    This condition occurs when history was cleared (or compressed) but
+    last_seen_msg_count was not reset — a bug in earlier clear-history code.
+    When detected, clamp last_seen_msg_count to message_count (= "seen all
+    current messages") and persist the fix to disk.
+    """
+    actual_msg_count = len(s.messages)
+    last_seen = s.last_seen_msg_count or 0
+    if last_seen > actual_msg_count:
+        logger.info(
+            "[fix-stale-last_seen] session=%s title='%s' "
+            "last_seen_msg_count=%d > actual_message_count=%d — "
+            "clamping to %d (history was cleared)",
+            s.session_id, s.title, last_seen, actual_msg_count,
+            actual_msg_count,
+        )
+        s.last_seen_msg_count = actual_msg_count
+        try:
+            s.save(touch_updated_at=False)
+        except Exception:
+            logger.debug(
+                "Failed to persist stale last_seen fix for session %s",
+                s.session_id,
+            )
+
 
 def new_session(workspace=None, model=None, profile=None):
     """Create a new in-memory session.
@@ -577,9 +617,14 @@ def all_sessions():
             # No grace window: a 0-message Untitled session is never shown in the list
             # regardless of age. This means page refreshes and accidental New Conversation
             # clicks never leave orphan entries in the sidebar.
+            # Exception: sessions that have had prior activity (input_tokens > 0 or
+            # updated_at > created_at) are NOT hidden — they may have been cleared
+            # intentionally and should remain visible in the sidebar.
             result = [s for s in result if not (
                 s.get('title', 'Untitled') == 'Untitled'
                 and s.get('message_count', 0) == 0
+                and (s.get('input_tokens') or 0) == 0
+                and abs((s.get('updated_at') or 0) - (s.get('created_at') or 0)) < 5
             )]
             result = [s for s in result if not _hide_from_default_sidebar(s)]
             # Backfill: sessions created before Sprint 22 have no profile tag.
@@ -605,9 +650,12 @@ def all_sessions():
     # Hide empty Untitled sessions from the UI entirely — kept consistent with the
     # index-path filter above. No grace window: a 0-message Untitled session is
     # never shown regardless of age (#1171).
+    # Exception: sessions that have had prior activity are NOT hidden.
     result = [s.compact(include_runtime=True, active_stream_ids=active_stream_ids) for s in out if not (
         s.title == 'Untitled'
         and len(s.messages) == 0
+        and (s.input_tokens or 0) == 0
+        and abs((s.updated_at or 0) - (s.created_at or 0)) < 5
     )]
     result = [s for s in result if not _hide_from_default_sidebar(s)]
     for s in result:

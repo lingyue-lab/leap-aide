@@ -129,6 +129,36 @@ export const sessionService = {
       body: JSON.stringify({ session_id: sessionId, model }),
     });
   },
+
+  markSessionSeen: async (sessionId: string, msgCount: number) => {
+    return api<{ ok: boolean }>('/api/session/seen', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: sessionId, msg_count: msgCount }),
+    });
+  },
+
+  compressSession: async (sessionId: string, focusTopic?: string) => {
+    return api<{ ok: boolean; session: import('@/types').Session; summary?: object }>(
+      '/api/session/compress',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          session_id: sessionId,
+          ...(focusTopic ? { focus_topic: focusTopic } : {}),
+        }),
+      }
+    );
+  },
+
+  clearHistory: async (sessionId: string, keepLast = 0) => {
+    return api<{ ok: boolean; session_id: string; kept: number }>(
+      '/api/session/clear',
+      {
+        method: 'POST',
+        body: JSON.stringify({ session_id: sessionId, keep_last: keepLast }),
+      }
+    );
+  },
 };
 
 // Workspace API 服务

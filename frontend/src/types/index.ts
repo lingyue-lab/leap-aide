@@ -17,6 +17,8 @@ export interface Session {
   output_tokens?: number;
   estimated_cost?: number | null;
   skills?: string[] | null;
+  message_count?: number;
+  last_seen_msg_count?: number | null;
 }
 
 export interface SessionListItem {
@@ -27,6 +29,8 @@ export interface SessionListItem {
   pinned?: boolean;
   workspace?: string;
   skills?: string[] | null;
+  message_count?: number;
+  last_seen_msg_count?: number | null;
 }
 
 // types/message.ts - 消息相关类型定义
@@ -118,6 +122,7 @@ export interface Settings {
   sync_insights: boolean;
   check_updates: boolean;
   bot_name: string;
+  auto_compress_threshold?: string;
 }
 
 // types/approval.ts - 审批相关类型定义

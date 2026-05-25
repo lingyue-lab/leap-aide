@@ -8,6 +8,7 @@ interface MessageRowProps {
   toolCalls?: ToolCall[];
   isStreaming?: boolean;
   onFileOpen?: (path: string) => void;
+  thinkingText?: string;
 }
 
 // Tool icon mapping
@@ -215,7 +216,33 @@ export const ReasoningMessageRow = memo(function ReasoningMessageRow({ thinkingT
   );
 });
 
-// Extract reasoning/thinking text from a message
+// Inline reasoning block - rendered within a MessageRow's msg-body, collapsed by default
+// No separate msg-row or separator; reasoning is part of the same message.
+export const ReasoningBlock = memo(function ReasoningBlock({ thinkingText }: { thinkingText: string }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="reasoning-inline">
+      <div className="reasoning-header-inline" onClick={() => setExpanded(!expanded)}>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z" />
+          <path d="M10 21h4" />
+          <path d="M9 17h6" />
+        </svg>
+        <span>Reasoning</span>
+        <span className="reasoning-toggle">{expanded ? '▼' : '▶'}</span>
+      </div>
+      {expanded && (
+        <div className="msg-reasoning-body">
+          {thinkingText.split('<|reasoning_sep|>').map((block, idx) => (
+            <div key={idx} className="reasoning-block">
+              <div dangerouslySetInnerHTML={{ __html: renderMarkdown(block.trim()) }} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+});
 export function extractThinkingText(message: Message): string {
   let thinkingText = '';
   let content: string | ContentBlock[] = message.content || '';
@@ -410,7 +437,7 @@ function fallbackCopy(text: string) {
   document.body.removeChild(ta);
 }
 
-function MessageRowComponent({ message, messages = [], toolCalls = [], isStreaming }: MessageRowProps) {
+function MessageRowComponent({ message, messages = [], toolCalls = [], isStreaming, thinkingText }: MessageRowProps) {
   const roleClass = message.role === 'user' 
     ? 'msg-role user' 
     : message.role === 'tool'
@@ -434,7 +461,7 @@ function MessageRowComponent({ message, messages = [], toolCalls = [], isStreami
     return map;
   }, [toolCalls]);
 
-  // Extract stripped content (thinking/reasoning is rendered as separate ReasoningMessageRow)
+  // Extract stripped content (thinking/reasoning is rendered inline via ReasoningBlock)
   const { strippedContent } = useMemo(() => {
     let thinkingText = '';
     // Sprint 15: Handle null content
@@ -648,6 +675,9 @@ function MessageRowComponent({ message, messages = [], toolCalls = [], isStreami
       </div>
       
       <div className="msg-body" ref={msgBodyRef}>
+        {thinkingText && (
+          <ReasoningBlock thinkingText={thinkingText} />
+        )}
         {content}
         
         {message.attachments && message.attachments.length > 0 && (

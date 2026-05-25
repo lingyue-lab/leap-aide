@@ -20,6 +20,8 @@ interface SessionState {
   updateCurrentSession: (session: Partial<Session>) => void;
   /** Update only the title in the sidebar session list (for live title push from StreamManager) */
   updateSessionListTitle: (sessionId: string, title: string) => void;
+  /** Update last_seen_msg_count in the sidebar session list (optimistic update after markSeen) */
+  updateSessionLastSeen: (sessionId: string, count: number) => void;
   /** Assign (or switch) the workspace path for a session */
   assignWorkspace: (id: string, workspace: string) => Promise<void>;
   /** Update the skill binding list for a session */
@@ -90,11 +92,14 @@ export const useSessionStore = create<SessionState>((set) => ({
       });
       if (!response.ok) throw new Error('Failed to load session');
       const { session } = await response.json();
-      set({
+      // Only update currentSessionId if it still matches what we loaded.
+      // This prevents a race where the user switched away while the request
+      // was in-flight, and the late response would snap back to the old session.
+      set((state) => ({
         currentSession: session,
-        currentSessionId: id,
+        currentSessionId: state.currentSessionId === id ? id : state.currentSessionId,
         loading: false,
-      });
+      }));
     } catch (err) {
       set({ error: (err as Error).message, loading: false });
     }
@@ -191,6 +196,14 @@ export const useSessionStore = create<SessionState>((set) => ({
     set((state) => ({
       sessions: state.sessions.map((s) =>
         s.session_id === sessionId ? { ...s, title } : s
+      ),
+    }));
+  },
+
+  updateSessionLastSeen: (sessionId: string, count: number) => {
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.session_id === sessionId ? { ...s, last_seen_msg_count: count } : s
       ),
     }));
   },

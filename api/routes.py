@@ -801,6 +801,11 @@ def handle_get(handler, parsed) -> bool:
             _t1 = _time.monotonic()
             s = get_session(sid, metadata_only=(not load_messages))
             _t2 = _time.monotonic()
+            # When viewing session history, detect and fix stale last_seen_msg_count
+            # (left over from a clear-history operation that didn't reset it).
+            if load_messages:
+                from api.models import _fix_stale_last_seen_msg_count
+                _fix_stale_last_seen_msg_count(s)
             effective_model = (
                 _resolve_effective_session_model_for_display(s)
                 if resolve_model
@@ -1463,6 +1468,20 @@ def handle_post(handler, parsed) -> bool:
             s.save()
         return j(handler, {"session": s.compact() | {"messages": s.messages}})
 
+    if parsed.path == "/api/session/seen":
+        try:
+            require(body, "session_id", "msg_count")
+        except ValueError as e:
+            return bad(handler, str(e))
+        try:
+            s = get_session(body["session_id"])
+        except KeyError:
+            return bad(handler, "Session not found", 404)
+        with _get_session_agent_lock(body["session_id"]):
+            s.last_seen_msg_count = int(body["msg_count"])
+            s.save(touch_updated_at=False)
+        return j(handler, {"ok": True})
+
     if parsed.path == "/api/session/delete":
         sid = body.get("session_id", "")
         if not sid:
@@ -1501,25 +1520,6 @@ def handle_post(handler, parsed) -> bool:
             logger.debug("Failed to delete CLI session %s", sid)
         return j(handler, {"ok": True})
 
-    if parsed.path == "/api/session/clear":
-        try:
-            require(body, "session_id")
-        except ValueError as e:
-            return bad(handler, str(e))
-        try:
-            s = get_session(body["session_id"])
-        except KeyError:
-            return bad(handler, "Session not found", 404)
-        with _get_session_agent_lock(body["session_id"]):
-            s.messages = []
-            s.tool_calls = []
-            s.title = "Untitled"
-            s.save()
-            # Evict cached agent — cleared session is a fresh conversation
-            from api.config import _evict_session_agent
-            _evict_session_agent(body["session_id"])
-        return j(handler, {"ok": True, "session": s.compact()})
-
     if parsed.path == "/api/session/truncate":
         try:
             require(body, "session_id")
@@ -1541,6 +1541,48 @@ def handle_post(handler, parsed) -> bool:
 
     if parsed.path == "/api/session/compress":
         return _handle_session_compress(handler, body)
+
+    if parsed.path == "/api/session/clear":
+        sid = body.get("session_id", "")
+        if not sid:
+            return bad(handler, "session_id is required")
+        s = get_session(sid)
+        if s is None:
+            return bad(handler, "Session not found", 404)
+        # keep_last: number of most-recent messages to retain (default 0 = delete all)
+        keep_last = int(body.get("keep_last", 0) or 0)
+        lock = _get_session_agent_lock(sid)
+        with lock:
+            if keep_last > 0:
+                s.messages = s.messages[-keep_last:]
+            else:
+                s.messages = []
+            s.tool_calls = []
+            # Do NOT reset input_tokens/output_tokens — they serve as a signal that this
+            # session once had real activity, used by the sidebar filter to avoid hiding
+            # cleared sessions that have title="Untitled" and 0 messages.
+            # Reset last_seen_msg_count to match the new message count so the unread
+            # badge (+N) computes correctly. Without this, a session that had 351
+            # messages (last_seen=351) then gets cleared to 0 would compute
+            # unread = max(0, new_count - 351) = 0 even when new messages arrive.
+            s.last_seen_msg_count = len(s.messages)
+            s.pending_user_message = None
+            s.pending_attachments = []
+            s.active_stream_id = None
+            s.pending_started_at = None
+            try:
+                s.save()
+            except Exception:
+                logger.debug("Failed to save session after clear: %s", sid)
+        # Evict cached agent so next turn starts fresh
+        from api.config import _evict_session_agent
+        _evict_session_agent(sid)
+        # Invalidate session index cache
+        try:
+            SESSION_INDEX_FILE.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return j(handler, {"ok": True, "session_id": sid, "kept": len(s.messages)})
 
     if parsed.path == "/api/session/retry":
         try:
@@ -3124,6 +3166,26 @@ def _handle_chat_start(handler, body):
             )
         # Stale stream id from a previous run; clear and continue.
         s.active_stream_id = None
+    # Auto-compress: if the session history is very long and the user has
+    # configured an auto_compress_threshold, run a synchronous compression
+    # pass before starting the new stream.  We do this inline (blocking the
+    # /api/chat/start request) rather than in a background thread so the
+    # agent always receives a fresh, compressed history.  Failure is silently
+    # swallowed — compression is best-effort and must never block the chat.
+    try:
+        threshold_str = str(load_settings().get("auto_compress_threshold", "0")).strip()
+        threshold = int(threshold_str) if threshold_str.isdigit() else 0
+        if threshold > 0 and len(s.messages) >= threshold and not getattr(s, "active_stream_id", None):
+            logger.info(
+                "Auto-compressing session %s (%d messages >= threshold %d)",
+                s.session_id, len(s.messages), threshold,
+            )
+            _auto_compress_session(s)
+            # Re-read session so the agent thread picks up the compressed messages.
+            s = get_session(s.session_id)
+    except Exception as _auto_compress_err:
+        logger.debug("Auto-compress skipped for session %s: %s", s.session_id, _auto_compress_err)
+
     stream_id = uuid.uuid4().hex
     with _get_session_agent_lock(s.session_id):
         s.workspace = workspace
@@ -3687,6 +3749,50 @@ def _handle_clarify_respond(handler, body):
         return bad(handler, "response is required")
     resolve_clarify(sid, response, resolve_all=False)
     return j(handler, {"ok": True, "response": response})
+
+
+def _auto_compress_session(s) -> None:
+    """Internal (no HTTP handler) session compressor for auto-compress on chat start.
+
+    Runs the same compression logic as _handle_session_compress but returns nothing
+    (raises on failure so the caller can swallow the error gracefully).
+    """
+    from api.streaming import _sanitize_messages_for_api
+    import api.config as _cfg
+    import hermes_cli.runtime_provider as _runtime_provider
+    import run_agent as _run_agent
+
+    messages = _sanitize_messages_for_api(s.messages)
+    if len(messages) < 4:
+        return  # nothing to compress
+
+    resolved_model, resolved_provider, resolved_base_url = _cfg.resolve_model_provider(s.model)
+    _rt = _runtime_provider.resolve_runtime_provider(requested=resolved_provider)
+    resolved_api_key = _rt.get("api_key")
+    if not resolved_api_key:
+        raise RuntimeError("No API key configured for compression")
+
+    agent = _run_agent.AIAgent(
+        model=resolved_model,
+        provider=resolved_provider,
+        base_url=resolved_base_url,
+        api_key=resolved_api_key,
+        platform="webui",
+        quiet_mode=True,
+        enabled_toolsets=_resolve_cli_toolsets(),
+        session_id=s.session_id,
+    )
+    approx_tokens = _estimate_messages_tokens_rough(messages)
+    compressed = agent.context_compressor.compress(messages, current_tokens=approx_tokens)
+
+    with _cfg._get_session_agent_lock(s.session_id):
+        # Abort if history changed concurrently (shouldn't happen during chat start
+        # since there's no active stream, but be safe).
+        if _sanitize_messages_for_api(s.messages) != messages:
+            raise RuntimeError("Session modified concurrently; skipping auto-compress")
+        s.messages = compressed
+        s.tool_calls = []
+        s.save()
 
 
 def _handle_session_compress(handler, body):

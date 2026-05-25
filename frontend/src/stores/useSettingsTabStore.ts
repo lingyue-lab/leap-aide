@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type SettingsGroup = 'appearance' | 'model' | 'notifications' | 'about' | 'config' | 'providers';
+export type SettingsGroup = 'appearance' | 'model' | 'notifications' | 'history' | 'about' | 'config' | 'providers';
 
 interface SettingsTabState {
   settingsTabActive: boolean;

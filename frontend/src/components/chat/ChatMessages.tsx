@@ -1,6 +1,6 @@
 import React, { forwardRef, useEffect, useRef, useMemo } from 'react';
 import type { Message, ToolCall } from '@/types';
-import MessageRow, { ReasoningMessageRow, extractThinkingText, isContextCompactionMessage, ContextCompactionMessageRow } from './MessageRow';
+import MessageRow, { extractThinkingText, isContextCompactionMessage, ContextCompactionMessageRow } from './MessageRow';
 import { useChatStore } from '@/stores/useChatStore';
 
 interface ChatMessagesProps {
@@ -174,24 +174,9 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
                     }
                   }
                   
-                  // Render reasoning row if applicable
+                  // Render reasoning row if applicable — pass thinkingText to MessageRow
+                  // so reasoning is displayed inline within the same message (no separate separator)
                   const thinkingText = extractThinkingText(message);
-                  if (thinkingText) {
-                    result.push(
-                      <div key={`reasoning-sep-${i}`} className="msg-row hermes-separator reasoning-separator">
-                        <div className="msg-role assistant">
-                          <div className="role-icon assistant">H</div>
-                          <span>Hermes</span>
-                        </div>
-                      </div>
-                    );
-                    result.push(
-                      <ReasoningMessageRow
-                        key={`reasoning-${i}`}
-                        thinkingText={thinkingText}
-                      />
-                    );
-                  }
 
                   // Render assistant message
                   result.push(
@@ -202,6 +187,7 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
                       toolCalls={toolCalls}
                       isStreaming={streaming && i === sortedMessages.length - 1}
                       onFileOpen={onFileOpen}
+                      thinkingText={thinkingText}
                     />
                   );
                   
