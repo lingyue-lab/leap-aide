@@ -123,6 +123,8 @@ export interface Settings {
   check_updates: boolean;
   bot_name: string;
   auto_compress_threshold?: string;
+  last_seen_cron_ts?: number;  // DEPRECATED — replaced by last_seen_cron_ts_map
+  last_seen_cron_ts_map?: Record<string, number>;  // per-job {job_id: epoch_seconds}
 }
 
 // types/approval.ts - 审批相关类型定义
@@ -248,6 +250,14 @@ export interface CronCreateRequest {
   prompt: string;
   deliver: 'local' | 'discord' | 'telegram';
   skills?: string[];
+}
+
+export interface CronCompletion {
+  job_id: string;
+  name: string;
+  status: string;
+  completed_at: number;
+  has_new?: boolean;
 }
 
 // types/skill.ts - 技能相关类型定义

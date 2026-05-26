@@ -1677,6 +1677,9 @@ def handle_post(handler, parsed) -> bool:
     if parsed.path == "/api/crons/resume":
         return _handle_cron_resume(handler, body)
 
+    if parsed.path == "/api/crons/seen":
+        return _handle_cron_seen(handler, body)
+
     # ── File ops (POST) ──
     if parsed.path == "/api/workspace/file":
         return _handle_workspace_file_write(handler, body)
@@ -2907,11 +2910,19 @@ def _handle_cron_output(handler, parsed):
 
 
 def _handle_cron_recent(handler, parsed):
-    """Return cron jobs that have completed since a given timestamp."""
+    """Return cron jobs that have completed since each job's per-job
+    ``last_seen_cron_ts_map`` timestamp.  Each completion includes a
+    ``has_new`` flag indicating it is newer than that specific job's
+    last-seen timestamp."""
     import datetime
 
     qs = parse_qs(parsed.query)
-    since = float(qs.get("since", ["0"])[0])
+    # Global since param is still supported for backward compat, but
+    # per-job timestamps from settings take precedence.
+    global_since = float(qs.get("since", ["0"])[0])
+    settings = load_settings()
+    ts_map = settings.get("last_seen_cron_ts_map", {})
+
     try:
         from cron.jobs import list_jobs
 
@@ -2930,16 +2941,19 @@ def _handle_cron_recent(handler, parsed):
                     continue
             else:
                 ts = float(last_run)
-            if ts > since:
+            # Use per-job last_seen if available, else fall back to global since
+            job_since = ts_map.get(job.get("id", ""), global_since)
+            if ts > job_since:
                 completions.append(
                     {
                         "job_id": job.get("id", ""),
                         "name": job.get("name", "Unknown"),
                         "status": job.get("last_status", "unknown"),
                         "completed_at": ts,
+                        "has_new": True,
                     }
                 )
-        return j(handler, {"completions": completions, "since": since})
+        return j(handler, {"completions": completions, "since": global_since})
     except ImportError:
         return j(handler, {"completions": [], "since": since})
 
@@ -3435,6 +3449,31 @@ def _handle_cron_resume(handler, body):
     if result:
         return j(handler, {"ok": True, "job": result})
     return bad(handler, "Job not found", 404)
+
+
+def _handle_cron_seen(handler, body):
+    """Mark a specific cron job (or all jobs) as seen by the user.
+    Accepts an optional ``job_id`` — when provided, only that job's
+    ``last_seen_cron_ts_map`` entry is updated; when omitted, all known
+    jobs are stamped, which is useful when the user first opens the
+    Tasks tab."""
+    job_id = body.get("job_id", "")
+    settings = load_settings()
+    now = time.time()
+    ts_map = settings.setdefault("last_seen_cron_ts_map", {})
+    if job_id:
+        ts_map[job_id] = now
+    else:
+        # Stamp all known jobs — user opened the Tasks tab
+        try:
+            from cron.jobs import list_jobs
+            for job in list_jobs(include_disabled=True):
+                ts_map[job.get("id", "")] = now
+        except Exception:
+            # If list_jobs fails, just save what we have
+            pass
+    save_settings(settings)
+    return j(handler, {"ok": True, "last_seen_cron_ts_map": ts_map})
 
 
 def _handle_file_delete(handler, body):

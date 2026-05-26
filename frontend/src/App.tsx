@@ -7,12 +7,16 @@ import { useSessionStore } from './stores/useSessionStore';
 import { useSettingsStore } from './stores/useSettingsStore';
 import { useTheme } from './contexts/ThemeContext';
 import { ProtectedRoute } from './contexts/AuthContext';
+import { useCronNotify } from './hooks/useCronNotify';
+import { useStreamNotify } from './hooks/useStreamNotify';
 
 function App() {
   const { i18n } = useTranslation();
   const { currentSessionId } = useSessionStore();
   const { settings, loadSettings } = useSettingsStore();
   const { setTheme } = useTheme();
+  useCronNotify();
+  useStreamNotify();
 
   // Load settings on mount
   React.useEffect(() => {

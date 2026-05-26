@@ -1756,6 +1756,18 @@
     border-radius: 0 2px 2px 0;
   }
 
+  /* Unread dot on nav tabs (e.g. Chat / Tasks has new activity) */
+  .nav-tab-dot {
+    position: absolute;
+    top: 6px;
+    right: 4px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #e5363b;
+    z-index: 2;
+  }
+
   /* Panel view */
   .panel-view {
     display: none;

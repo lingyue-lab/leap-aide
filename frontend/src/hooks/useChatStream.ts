@@ -2,47 +2,8 @@ import { useCallback, useEffect, startTransition } from 'react';
 import { chatService } from '@/services/api';
 import { useChatStore } from '@/stores/useChatStore';
 import { useSessionStore } from '@/stores/useSessionStore';
-import { useSettingsStore } from '@/stores/useSettingsStore';
 import * as StreamManager from '@/stores/streamManager';
 import type { SessionStreamState } from '@/stores/streamManager';
-
-// ── Notification sound (Web Audio API — no external file needed) ──────────────
-let _audioCtx: AudioContext | null = null;
-
-function _playNotificationBeep() {
-  try {
-    if (!_audioCtx) {
-      _audioCtx = new AudioContext();
-    }
-    const ctx = _audioCtx;
-    const now = ctx.currentTime;
-
-    // Two-tone beep: pleasant "ding-ding" notification sound
-    const osc1 = ctx.createOscillator();
-    const osc2 = ctx.createOscillator();
-    const gain = ctx.createGain();
-
-    osc1.type = 'sine';
-    osc1.frequency.setValueAtTime(880, now); // A5 note
-    osc2.type = 'sine';
-    osc2.frequency.setValueAtTime(1100, now + 0.15); // higher second tone
-
-    gain.gain.setValueAtTime(0.3, now);
-    gain.gain.setValueAtTime(0.3, now + 0.15);
-    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.35);
-
-    osc1.connect(gain);
-    osc2.connect(gain);
-    gain.connect(ctx.destination);
-
-    osc1.start(now);
-    osc1.stop(now + 0.15);
-    osc2.start(now + 0.15);
-    osc2.stop(now + 0.35);
-  } catch (e) {
-    // Web Audio not available or context blocked — silently ignore
-  }
-}
 
 /**
  * useChatStream
@@ -125,61 +86,13 @@ export function useChatStream() {
     };
     window.addEventListener('bg-stream-title', onTitle);
 
-    // When any background stream finishes, play sound / send OS notification
-    // and refresh the sessions list so message_count is up to date, which
-    // enables the unread badge (+N) on non-active sessions.
-    const onDone = (e: Event) => {
-      const { sessionId } = (e as CustomEvent).detail;
-      const settings = useSettingsStore.getState().settings;
-
-      const currentId = useSessionStore.getState().currentSessionId;
-
-      // ① Sound effect — controlled by settings.sound_enabled
-      if (settings?.sound_enabled !== false) {
-        _playNotificationBeep();
-      }
-
-      // ② OS desktop notification — controlled by settings.notifications_enabled
-      if (settings?.notifications_enabled) {
-        if (Notification.permission === 'granted') {
-          const session = useSessionStore.getState().sessions.find(
-            (s) => s.session_id === sessionId
-          );
-          const sessionTitle = session?.title ?? 'Session';
-          new Notification('Hermes — Task Complete', {
-            body: sessionTitle,
-            // tag deduplicates: same session completing multiple times replaces previous notification
-            tag: `hermes-session-${sessionId}`,
-          });
-        }
-      }
-
-      // ③ Refresh sessions list so message_count is updated.
-      // This is what drives the unread badge (+N) on non-active sessions:
-      // unreadCount = session.message_count - session.last_seen_msg_count
-      // Without this refresh, message_count stays at the value from the last
-      // full list load and the badge never appears.
-      if (currentId !== sessionId) {
-        // Background session completed — refresh sidebar list for badge
-        useSessionStore.getState().loadSessions().catch(() => {/* ignore */});
-      }
-
-      // Clean up the stream state after a short delay (keep for a bit so UI
-      // can show the final state before clearing)
-      setTimeout(() => {
-        // Only clear if no new stream started for this session
-        const s = StreamManager.getSessionStreamState(sessionId);
-        if (s && !s.streaming) {
-          StreamManager.clearSessionStream(sessionId);
-        }
-      }, 5000);
-    };
-    window.addEventListener('bg-stream-done', onDone);
+    // NOTE: bg-stream-done listener is now in useStreamNotify (registered at
+    // App level) so it persists across tab switches. We only keep the title
+    // listener here because it needs the updateCurrentSession callback.
 
     return () => {
       unsubscribe();
       window.removeEventListener('bg-stream-title', onTitle);
-      window.removeEventListener('bg-stream-done', onDone);
     };
   }, [updateSessionCache, updateCurrentSession, loadSession]);
 

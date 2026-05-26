@@ -14,6 +14,7 @@ export default function TasksPanel() {
   const selectJob = useCronStore((s) => s.selectJob);
   const setStoreJobs = useCronStore((s) => s.setJobs);
   const setShowNewJobForm = useCronStore((s) => s.setShowNewJobForm);
+  const unreadJobIds = useCronStore((s) => s.unreadJobIds);
 
   useEffect(() => {
     loadJobs();
@@ -90,6 +91,9 @@ export default function TasksPanel() {
                   <span className="cron-name text-sm font-medium truncate">
                     {job.name || job.prompt.slice(0, 30) + '...'}
                   </span>
+                  {unreadJobIds.has(job.id) && selectedJob?.id !== job.id && (
+                    <span className="inline-flex rounded-full h-2 w-2 bg-[#e5363b] flex-shrink-0" />
+                  )}
                   {!job.enabled && (
                     <span className="text-xs text-[var(--muted)] flex-shrink-0">(paused)</span>
                   )}

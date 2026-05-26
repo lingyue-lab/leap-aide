@@ -367,6 +367,20 @@ export const cronService = {
       body: JSON.stringify({ id: jobId }),
     });
   },
+
+  recent: async (since: number) => {
+    return api<{ completions: import('@/types').CronCompletion[]; since: number }>(
+      `/api/crons/recent?since=${since}`
+    );
+  },
+
+  seen: async (jobId?: string) => {
+    const body = jobId ? { job_id: jobId } : {};
+    return api<{ ok: boolean; last_seen_cron_ts_map: Record<string, number> }>('/api/crons/seen', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
 };
 
 // Skills API 服务

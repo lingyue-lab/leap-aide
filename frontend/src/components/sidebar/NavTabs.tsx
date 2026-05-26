@@ -7,6 +7,8 @@ import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 import { useTerminalStore } from '@/stores/useTerminalStore';
 import { useVncStore } from '@/stores/useVncStore';
 import { useSettingsTabStore } from '@/stores/useSettingsTabStore';
+import { useSessionStore } from '@/stores/useSessionStore';
+import { sessionService } from '@/services/api';
 import type { NavPanel } from '@/types';
 
 interface NavTabsProps {
@@ -27,11 +29,17 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
   const setSkillsTabActive = useSkillStore((s) => s.setSkillsTabActive);
   const cancelEditing = useSkillStore((s) => s.cancelEditing);
   const setTasksTabActive = useCronStore((s) => s.setTasksTabActive);
+  const hasCronUnread = useCronStore((s) => s.unreadCronCount > 0);
   const setMemoryTabActive = useMemoryStore((s) => s.setMemoryTabActive);
   const setWorkspacesTabActive = useWorkspaceStore((s) => s.setWorkspacesTabActive);
   const setTerminalTabActive = useTerminalStore((s) => s.setTerminalTabActive);
   const setVncTabActive = useVncStore((s) => s.setVncTabActive);
   const setSettingsTabActive = useSettingsTabStore((s) => s.setSettingsTabActive);
+
+  // Derive whether any session has unread messages (for chat tab badge)
+  const hasSessionUnread = useSessionStore((s) =>
+    s.sessions.some((ses) => (ses.message_count ?? 0) > (ses.last_seen_msg_count ?? 0))
+  );
 
   const tabs: TabConfig[] = [
     {
@@ -146,6 +154,23 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
       setSettingsTabActive(true);
     } else if (panel === 'chat') {
       clearSelection();
+      // Mark the current session as seen if it has unread messages
+      // (normally handled by SessionItem.handleClick, but when switching
+      // back to chat tab the session is already selected — no click needed)
+      const currentSessionId = useSessionStore.getState().currentSessionId;
+      if (currentSessionId) {
+        const currentSession = useSessionStore.getState().sessions.find(
+          (s) => s.session_id === currentSessionId
+        );
+        if (currentSession) {
+          const mc = currentSession.message_count ?? 0;
+          const lsc = currentSession.last_seen_msg_count ?? 0;
+          if (mc > lsc) {
+            useSessionStore.getState().updateSessionLastSeen(currentSessionId, mc);
+            sessionService.markSessionSeen(currentSessionId, mc).catch(() => {/* ignore */});
+          }
+        }
+      }
     }
   };
 
@@ -164,6 +189,12 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
             aria-label={t(tab.titleKey)}
           >
             {tab.icon}
+            {tab.panel === 'chat' && hasSessionUnread && activePanel !== 'chat' && (
+              <span className="nav-tab-dot" />
+            )}
+            {tab.panel === 'tasks' && hasCronUnread && activePanel !== 'tasks' && (
+              <span className="nav-tab-dot" />
+            )}
           </button>
         ))}
       </div>
