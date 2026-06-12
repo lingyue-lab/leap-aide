@@ -13,6 +13,7 @@
 # ci       - CI configuration files and scripts
 # chore    - Other changes not modifying src or test files
 # revert   - Revert a previous commit
+# specify  - Specify related change, only incude add/delete/modifed files in .specify directory.
 #
 # ============================================
 # Subject (required):
