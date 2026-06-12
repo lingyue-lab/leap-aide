@@ -2955,7 +2955,7 @@ def _handle_cron_recent(handler, parsed):
                 )
         return j(handler, {"completions": completions, "since": global_since})
     except ImportError:
-        return j(handler, {"completions": [], "since": since})
+        return j(handler, {"completions": [], "since": global_since})
 
 
 def _handle_memory_read(handler):

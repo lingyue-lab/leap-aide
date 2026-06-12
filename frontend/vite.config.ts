@@ -42,7 +42,7 @@ export default defineConfig({
   },
   server: {
     host: '0.0.0.0',
-    port: 3000,
+    port: 8788,
     // Enable HTTPS for Vite dev server so noVNC 1.x (which requires a secure
     // context) works in dev mode.  Set HERMES_WEBUI_TLS_CERT / TLS_KEY env vars
     // to the same self-signed cert used by the Python backend.
@@ -56,7 +56,7 @@ export default defineConfig({
     })(),
     proxy: {
       '/api': {
-        target: 'https://localhost:8888',
+        target: 'https://localhost:8787',
         changeOrigin: true,
         ws: true,
         secure: false,   // allow self-signed cert on backend
@@ -79,7 +79,7 @@ export default defineConfig({
           });
         },
         headers: {
-          'X-Forwarded-Host': 'localhost:8888',
+          'X-Forwarded-Host': 'localhost:8787',
         }
       }
     }

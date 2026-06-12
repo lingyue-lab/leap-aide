@@ -1,0 +1,76 @@
+# <type>[optional scope]: <subject>
+#
+# ============================================
+# Types:
+# feat     - New feature
+# fix      - Bug fix
+# docs     - Documentation only
+# style    - Code style (formatting, semicolons, etc)
+# refactor - Code change that neither fixes bug nor adds feature
+# perf     - Performance improvement
+# test     - Adding or correcting tests
+# build    - Build system or external dependencies
+# ci       - CI configuration files and scripts
+# chore    - Other changes not modifying src or test files
+# revert   - Revert a previous commit
+#
+# ============================================
+# Subject (required):
+# - Imperative mood, no period at the end
+# - First letter lowercase, under 72 chars
+#
+# ============================================
+# Body (REQUIRED - cannot be omitted):
+# Must include:
+# 1. WHY this change is needed
+# 2. HOW the problem is solved (key changes)
+# 3. WHAT impact or side effects
+#
+# Format:
+# - Blank line between subject and body
+# - Wrap at 72 characters per line
+#
+# ============================================
+# Footer (optional):
+# Closes #123
+# BREAKING CHANGE: description
+# Co-Authored-By: Name <email@example.com>
+#
+# Note: Co-Authored-By is used when multiple people contribute
+# to the same commit. Add one line per co-author.
+#
+# ============================================
+# Examples:
+#
+# feat(auth): add password reset functionality
+#
+# Currently users cannot reset their password when they forget it,
+# leading to account lockouts and increased support tickets.
+#
+# Implement a complete password reset flow:
+# - Add forgot password endpoint that sends reset link via email
+# - Create password reset form with token validation
+# - Add email notification service with rate limiting
+#
+# Closes #234
+# Co-Authored-By: Jane Doe <jane@example.com>
+#
+# fix(api): reduce login timeout for poor network conditions
+#
+# Users report frequent timeout errors on mobile networks.
+# Investigation shows 5s timeout is too aggressive for 3G/4G.
+#
+# Increase timeout from 5s to 30s and add exponential backoff
+# retry logic (max 3 attempts). Add timeout metrics for monitoring.
+#
+# Closes #456
+# Co-Authored-By: John Smith <john@example.com>
+# Co-Authored-By: Alice Wu <alice@example.com>
+#
+# perf(db): optimize order query with composite index
+#
+# Order list takes over 3 seconds when data exceeds 100k rows.
+# Analysis shows existing index does not cover query pattern.
+#
+# Add composite index on (user_id, status, create_time).
+# Query time reduces from 3.2s to 120ms on 100k rows.
