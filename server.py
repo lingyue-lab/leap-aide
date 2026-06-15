@@ -53,11 +53,11 @@ class Handler(BaseHTTPRequestHandler):
     def log_request(self, code: str='-', size: str='-') -> None:
         """Structured JSON logs for each request."""
         import json as _json
-        duration_ms = round((time.time() - getattr(self, '_req_t0', time.time())) * 1000, 1)
+        duration_ms = round((time.time() - vars(self).get('_req_t0', time.time())) * 1000, 1)
         record = _json.dumps({
             'ts': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-            'method': self.command or '-',
-            'path': self.path or '-',
+            'method': vars(self).get('command', '-') or '-',
+            'path': vars(self).get('path', '-') or '-',
             'status': int(code) if str(code).isdigit() else code,
             'ms': duration_ms,
         })

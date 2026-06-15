@@ -215,7 +215,7 @@ def check_auth(handler, parsed) -> bool:
     if not is_auth_enabled():
         return True
     # Public paths don't require auth
-    if parsed.path in PUBLIC_PATHS or parsed.path.startswith('/static/'):
+    if parsed.path in PUBLIC_PATHS or parsed.path.startswith('/static/') or parsed.path.startswith('/assets/'):
         return True
     # Check session cookie
     cookie_val = parse_cookie(handler)

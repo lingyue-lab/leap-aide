@@ -765,6 +765,9 @@ def handle_get(handler, parsed) -> bool:
     if parsed.path.startswith("/static/"):
         return _serve_static(handler, parsed)
 
+    if parsed.path.startswith("/assets/"):
+        return _serve_assets(handler, parsed)
+
     if parsed.path == "/api/session":
         import time as _time
         _t0 = _time.monotonic()
@@ -2182,6 +2185,38 @@ def _serve_static(handler, parsed):
     handler.send_header("Content-Type", ct_header)
     handler.send_header("Cache-Control", "no-store")
     raw = static_file.read_bytes()
+    handler.send_header("Content-Length", str(len(raw)))
+    handler.end_headers()
+    handler.wfile.write(raw)
+    return True
+
+
+def _serve_assets(handler, parsed):
+    """Serve Vite-built frontend assets from static/assets/ directory.
+
+    The Vite build outputs index.html with /assets/... references, but the
+    Python server's static handler only serves under the /static/ prefix.
+    This function maps /assets/* → static/assets/* so the built frontend
+    works correctly when served by the Python server directly.
+    """
+    static_root = (Path(__file__).parent.parent / "static").resolve()
+    # Strip the leading '/assets/' prefix, then prepend 'assets/' so the
+    # resolved path is static/assets/<rest> rather than static/<rest>.
+    rel = "assets/" + parsed.path[len("/assets/") :]
+    asset_file = (static_root / rel).resolve()
+    try:
+        asset_file.relative_to(static_root)
+    except ValueError:
+        return j(handler, {"error": "not found"}, status=404)
+    if not asset_file.exists() or not asset_file.is_file():
+        return j(handler, {"error": "not found"}, status=404)
+    ext = asset_file.suffix.lower()
+    ct = _STATIC_MIME.get(ext.lstrip("."), "text/plain")
+    ct_header = f"{ct}; charset=utf-8" if ct in _TEXT_MIME_TYPES else ct
+    handler.send_response(200)
+    handler.send_header("Content-Type", ct_header)
+    handler.send_header("Cache-Control", "no-store")
+    raw = asset_file.read_bytes()
     handler.send_header("Content-Length", str(len(raw)))
     handler.end_headers()
     handler.wfile.write(raw)
