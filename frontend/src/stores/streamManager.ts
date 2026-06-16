@@ -358,6 +358,11 @@ function _attachEventListeners(es: EventSource, sessionId: string, streamId: str
     window.dispatchEvent(new CustomEvent('clarify-required', { detail: data }));
   });
 
+  es.addEventListener('mode_changed', (e: MessageEvent) => {
+    const data = JSON.parse(e.data);
+    window.dispatchEvent(new CustomEvent('mode-changed', { detail: data }));
+  });
+
   es.addEventListener('warning', (e: MessageEvent) => {
     const data = JSON.parse(e.data);
     window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: data.message, duration: 4000 } }));

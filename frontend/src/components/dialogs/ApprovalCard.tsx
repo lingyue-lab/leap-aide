@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useChatStore } from '@/stores/useChatStore';
+import { useModeStore } from '@/stores/useModeStore';
+import { useApprovalStore } from '@/stores/useApprovalStore';
 import { approvalService } from '@/services/api';
 import type { ApprovalRequest } from '@/types';
 
@@ -13,6 +15,16 @@ export default function ApprovalCard() {
 
   useEffect(() => {
     const handleApproval = (e: CustomEvent) => {
+      const currentMode = useModeStore.getState().currentMode;
+      // YOLO mode: auto-approve without showing the card
+      if (currentMode === 'yolo') {
+        const detail = e.detail as ApprovalRequest;
+        const sid = detail._session_id || '';
+        if (sid) {
+          approvalService.respond(sid, 'session', detail.approval_id).catch(() => {});
+        }
+        return;
+      }
       setApproval(e.detail);
       setVisible(true);
     };
@@ -30,12 +42,20 @@ export default function ApprovalCard() {
     }
   }, [activeStreamId, busy]);
 
-  const handleRespond = async (choice: 'once' | 'session' | 'always' | 'deny') => {
+  const handleRespond = async (choice: 'once' | 'session' | 'deny') => {
     if (!approval) return;
     
     setLoading(choice);
     try {
       await approvalService.respond(approval._session_id || '', choice, approval.approval_id);
+      // Update approval store — only session-scoped approvals are tracked;
+      // "once" is intentionally excluded (one-time, not persisted).
+      if (choice === 'session') {
+        const patterns = approval.pattern_keys || (approval.pattern_key ? [approval.pattern_key] : []);
+        if (patterns.length > 0) {
+          useApprovalStore.getState().addApproved(patterns);
+        }
+      }
       setVisible(false);
       setApproval(null);
     } catch (err) {
@@ -81,13 +101,6 @@ export default function ApprovalCard() {
             disabled={loading !== null}
           >
             {t('approval.session')}
-          </button>
-          <button
-            className="approval-btn always"
-            onClick={() => handleRespond('always')}
-            disabled={loading !== null}
-          >
-            {t('approval.always')}
           </button>
           <button
             className="approval-btn deny"

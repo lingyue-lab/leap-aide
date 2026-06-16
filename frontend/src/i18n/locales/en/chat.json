@@ -34,5 +34,12 @@
   "messages": {
     "copy": "Copy",
     "copied": "Copied!"
+  },
+  "mode": {
+    "label": "Approval Mode",
+    "manual": "Manual",
+    "smart": "Smart",
+    "yolo": "YOLO",
+    "smart_unsupported": "Smart mode requires a newer agent version"
   }
 }

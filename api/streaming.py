@@ -1191,6 +1191,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
     old_cwd = None
     old_exec_ask = None
     old_session_key = None
+    old_gateway_session = None
     old_hermes_home = None
 
     # ── MCP Server Discovery (lazy import, idempotent) ──
@@ -1282,10 +1283,12 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             old_cwd = os.environ.get('TERMINAL_CWD')
             old_exec_ask = os.environ.get('HERMES_EXEC_ASK')
             old_session_key = os.environ.get('HERMES_SESSION_KEY')
+            old_gateway_session = os.environ.get('HERMES_GATEWAY_SESSION')
             old_hermes_home = os.environ.get('HERMES_HOME')
             os.environ['TERMINAL_CWD'] = str(s.workspace)
             os.environ['HERMES_EXEC_ASK'] = '1'
             os.environ['HERMES_SESSION_KEY'] = session_id
+            os.environ['HERMES_GATEWAY_SESSION'] = '1'
             if _profile_home:
                 os.environ['HERMES_HOME'] = _profile_home
         # Lock released — agent runs without holding it
@@ -2232,6 +2235,8 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 else: os.environ['HERMES_EXEC_ASK'] = old_exec_ask
                 if old_session_key is None: os.environ.pop('HERMES_SESSION_KEY', None)
                 else: os.environ['HERMES_SESSION_KEY'] = old_session_key
+                if old_gateway_session is None: os.environ.pop('HERMES_GATEWAY_SESSION', None)
+                else: os.environ['HERMES_GATEWAY_SESSION'] = old_gateway_session
                 if old_hermes_home is None: os.environ.pop('HERMES_HOME', None)
                 else: os.environ['HERMES_HOME'] = old_hermes_home
 

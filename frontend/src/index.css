@@ -1302,6 +1302,262 @@
     background: rgba(124, 185, 255, 0.1);
   }
 
+  /* Mode selector — drop-up chip + menu */
+  .mode-selector {
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  .mode-selector-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 3px 10px;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 500;
+    border: 1px solid var(--border2);
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color 0.15s, background 0.15s, color 0.15s;
+  }
+
+  .mode-selector-btn:hover {
+    border-color: var(--border);
+    color: var(--text);
+  }
+
+  .mode-selector-btn .mode-label {
+    max-width: 70px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Manual: neutral */
+  .mode-selector-btn.manual {
+    color: var(--muted);
+    border-color: var(--border2);
+  }
+
+  /* Smart: accent */
+  .mode-selector-btn.smart {
+    color: var(--blue);
+    border-color: rgba(124, 185, 255, 0.35);
+    background: rgba(124, 185, 255, 0.08);
+  }
+
+  /* YOLO: warning/amber */
+  .mode-selector-btn.yolo {
+    color: var(--gold, #f0a040);
+    border-color: rgba(240, 160, 64, 0.45);
+    background: rgba(240, 160, 64, 0.12);
+    box-shadow: 0 0 8px rgba(240, 160, 64, 0.15);
+  }
+
+  /* Drop-up menu */
+  .mode-menu {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    right: 0;
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    overflow: hidden;
+    z-index: 50;
+    min-width: 150px;
+    backdrop-filter: blur(12px);
+  }
+
+  .mode-menu-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 10px 16px;
+    font-size: 13px;
+    color: var(--text);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: background 0.12s;
+    text-align: left;
+    gap: 8px;
+  }
+
+  .mode-menu-item:hover {
+    background: var(--hover-bg);
+  }
+
+  .mode-menu-item.active {
+    color: var(--blue);
+    font-weight: 600;
+  }
+
+  .mode-menu-item.disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /* Approval indicator — chip in composer footer */
+  .approval-indicator {
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  .approval-indicator-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border2);
+    color: var(--muted);
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+
+  .approval-indicator-chip:hover {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+
+  .approval-indicator-chip.has-approvals {
+    background: rgba(251, 191, 36, 0.12);
+    border-color: rgba(251, 191, 36, 0.3);
+    color: #fbbf24;
+  }
+
+  .approval-indicator-chip.has-approvals:hover {
+    background: rgba(251, 191, 36, 0.2);
+    border-color: rgba(251, 191, 36, 0.5);
+  }
+
+  .approval-indicator-count {
+    font-variant-numeric: tabular-nums;
+    min-width: 14px;
+    text-align: center;
+  }
+
+  /* Approval popover — drop-up menu matching .mode-menu */
+  .approval-popover {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    right: 0;
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    overflow: hidden;
+    z-index: 50;
+    min-width: 240px;
+    max-width: 340px;
+    backdrop-filter: blur(12px);
+    padding: 6px 0;
+  }
+
+  .approval-popover-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .approval-popover-header-permanent {
+    color: var(--muted);
+  }
+
+  .approval-popover-badge {
+    background: rgba(251, 191, 36, 0.15);
+    color: var(--amber, #fbbf24);
+    font-size: 10px;
+    font-weight: 600;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 5px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .approval-popover-empty {
+    padding: 8px 14px 10px;
+    font-size: 12px;
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  .approval-popover-list {
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  .approval-popover-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 14px;
+    font-size: 12px;
+    color: var(--text);
+    transition: background 0.1s;
+  }
+
+  .approval-popover-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .approval-popover-item-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .approval-popover-item-permanent .approval-popover-item-text {
+    color: var(--muted);
+  }
+
+  .approval-popover-divider {
+    height: 1px;
+    background: var(--border2);
+    margin: 4px 8px;
+  }
+
+  .approval-revoke-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: color 0.15s, background 0.15s;
+  }
+
+  .approval-revoke-btn:hover {
+    color: #e05c5c;
+    background: rgba(224, 92, 92, 0.12);
+  }
+
   /* Toast */
   .toast {
     position: fixed;

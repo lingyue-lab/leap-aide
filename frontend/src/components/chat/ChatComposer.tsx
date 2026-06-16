@@ -4,6 +4,9 @@ import { useChatStore } from '@/stores/useChatStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { modelsService } from '@/services/api';
+import ModeSelector from '@/components/common/ModeSelector';
+import ApprovalIndicator from '@/components/common/ApprovalIndicator';
+import { useModeShortcut } from '@/hooks/useModeShortcut';
 import type { ModelGroup } from '@/types';
 
 interface ChatComposerProps {
@@ -18,7 +21,8 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
   const { pendingFiles } = useChatStore();
   const { settings } = useSettingsStore();
   const { currentSession, updateSessionModel } = useSessionStore();
-  
+  useModeShortcut();
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const modelChipRef = useRef<HTMLButtonElement>(null);
@@ -325,7 +329,13 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
               </svg>
             </button>
           </div>
-          
+
+          {/* Mode selector — between model chip and send button */}
+          <ModeSelector sessionId={currentSession?.session_id ?? null} />
+
+          {/* Session approval indicator — shows approved patterns count + revoke popover */}
+          <ApprovalIndicator />
+
           <div className="composer-right">
             {busy && streaming && (
               <button

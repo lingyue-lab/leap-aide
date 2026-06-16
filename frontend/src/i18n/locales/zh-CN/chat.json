@@ -34,5 +34,12 @@
   "messages": {
     "copy": "复制",
     "copied": "已复制！"
+  },
+  "mode": {
+    "label": "审批模式",
+    "manual": "手动确认",
+    "smart": "智能评估",
+    "yolo": "全部放行",
+    "smart_unsupported": "智能模式需要更新版本的 Agent"
   }
 }

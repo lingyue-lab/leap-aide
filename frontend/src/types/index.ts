@@ -125,6 +125,7 @@ export interface Settings {
   auto_compress_threshold?: string;
   last_seen_cron_ts?: number;  // DEPRECATED — replaced by last_seen_cron_ts_map
   last_seen_cron_ts_map?: Record<string, number>;  // per-job {job_id: epoch_seconds}
+  default_mode?: 'manual' | 'smart' | 'yolo';
 }
 
 // types/approval.ts - 审批相关类型定义
@@ -142,6 +143,16 @@ export interface ApprovalResponse {
   session_id: string;
   choice: 'once' | 'session' | 'always' | 'deny';
   approval_id?: string | null;
+}
+
+export interface SessionApprovedResponse {
+  session_approved: string[];
+  permanent_approved: string[];
+}
+
+export interface RevokeRequest {
+  session_id: string;
+  pattern_key: string;
 }
 
 // types/clarify.ts - 澄清问题相关类型定义

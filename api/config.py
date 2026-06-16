@@ -1894,6 +1894,7 @@ STREAMS: dict = {}
 STREAMS_LOCK = threading.Lock()
 CANCEL_FLAGS: dict = {}
 AGENT_INSTANCES: dict = {}  # stream_id -> AIAgent instance for interrupt propagation
+SESSION_STREAMS: dict = {}  # session_id -> set[stream_id] for mode_changed broadcast
 STREAM_PARTIAL_TEXT: dict = {}  # stream_id -> partial assistant text accumulated during streaming
 SERVER_START_TIME = time.time()
 
@@ -1978,6 +1979,7 @@ _SETTINGS_DEFAULTS = {
     "auto_compress_threshold": "0",  # 0=disabled; compress session history when message count >= N (100/200/500)
     "last_seen_cron_ts_map": {},  # per-job {job_id: epoch_seconds} — drives +N unread badge
     "password_hash": None,  # PBKDF2-HMAC-SHA256 hash; None = auth disabled
+    "default_mode": "manual",  # approval mode for new sessions: manual | smart | yolo
 }
 _SETTINGS_LEGACY_DROP_KEYS = {"assistant_language", "bubble_layout", "default_model"}
 _SETTINGS_THEME_VALUES = {"light", "dark", "system"}
@@ -2081,6 +2083,7 @@ _SETTINGS_ENUM_VALUES = {
     "busy_input_mode": {"queue", "interrupt", "steer"},
     "font_size": {"small", "medium", "large"},
     "auto_compress_threshold": {"0", "100", "200", "500"},
+    "default_mode": {"manual", "smart", "yolo"},
 }
 _SETTINGS_BOOL_KEYS = {
     "onboarding_completed",

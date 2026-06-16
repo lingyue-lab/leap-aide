@@ -2,7 +2,9 @@ import { useRef, useCallback, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { useChatStore } from '@/stores/useChatStore';
 import { useSessionStore } from '@/stores/useSessionStore';
+import { useModeStore } from '@/stores/useModeStore';
 import { useChatStream } from '@/hooks/useChatStream';
+import { useModeSync } from '@/hooks/useModeSync';
 import * as StreamManager from '@/stores/streamManager';
 import { chatService } from '@/services/api';
 import ChatMessages from './ChatMessages';
@@ -24,6 +26,7 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
   const { currentSession, loadSession } = useSessionStore();
   const { messages, busy, activeStreamId, setMessages, setToolCalls } = useChatStore();
   const { startStream, cancelStream, streaming } = useChatStream();
+  useModeSync(sessionId ?? null);
 
   // ── Session switch logic ────────────────────────────────────────────────────
   useEffect(() => {
@@ -125,6 +128,12 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
       // ──────────────────────────────────────────────────────────────────────
     });
   }, [sessionId, loadSession, setMessages, setToolCalls]);
+
+  // ── Mode loading ────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!sessionId) return;
+    useModeStore.getState().loadMode(sessionId);
+  }, [sessionId]);
 
   // ── Auto-scroll ─────────────────────────────────────────────────────────────
   const scrollToBottom = useCallback(() => {

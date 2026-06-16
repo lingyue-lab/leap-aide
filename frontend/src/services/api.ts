@@ -292,6 +292,22 @@ export const approvalService = {
       }),
     });
   },
+
+  getSessionApproved: async (sessionId: string) => {
+    return api<import('@/types').SessionApprovedResponse>(
+      `/api/approval/session-approved?session_id=${encodeURIComponent(sessionId)}`
+    );
+  },
+
+  revoke: async (sessionId: string, patternKey: string) => {
+    return api<{ ok: boolean; revoked: string }>('/api/approval/revoke', {
+      method: 'POST',
+      body: JSON.stringify({
+        session_id: sessionId,
+        pattern_key: patternKey,
+      }),
+    });
+  },
 };
 
 // Clarify API 服务

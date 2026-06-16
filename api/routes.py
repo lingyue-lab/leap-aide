@@ -444,6 +444,9 @@ try:
         enable_session_yolo,
         disable_session_yolo,
         is_session_yolo_enabled,
+        get_session_approved,
+        revoke_session_approval,
+        restore_session_approvals,
     )
 except ImportError:
     _submit_pending_raw = lambda *a, **k: None
@@ -455,9 +458,27 @@ except ImportError:
     enable_session_yolo = lambda *a, **k: None
     disable_session_yolo = lambda *a, **k: None
     is_session_yolo_enabled = lambda *a, **k: False
+    get_session_approved = lambda *a, **k: set()
+    revoke_session_approval = lambda *a, **k: False
+    restore_session_approvals = lambda *a, **k: None
     _pending = {}
     _lock = threading.Lock()
     _permanent_approved = set()
+
+
+def _is_smart_supported() -> bool:
+    """Detect whether the agent kernel supports smart approval mode.
+
+    Probes ``tools.approval`` for a ``supports_smart_mode`` marker or
+    ``evaluate_risk`` function.  Returns False when the agent does not
+    provide the capability, so the frontend can show smart as available
+    but downgrade to manual at runtime if the agent isn't ready.
+    """
+    try:
+        from tools.approval import evaluate_risk
+        return True
+    except ImportError:
+        return False
 
 
 def submit_pending(session_key: str, approval: dict) -> None:
@@ -911,6 +932,19 @@ def handle_get(handler, parsed) -> bool:
         except KeyError:
             return bad(handler, "Session not found", 404)
 
+    if parsed.path == "/api/session/mode":
+        sid = parse_qs(parsed.query).get("session_id", [""])[0]
+        if not sid:
+            return bad(handler, "Missing session_id")
+        try:
+            s = get_session(sid, metadata_only=True)
+            return j(handler, {
+                "mode": getattr(s, 'mode', 'manual'),
+                "smart_supported": _is_smart_supported(),
+            })
+        except KeyError:
+            return bad(handler, "Session not found", 404)
+
     if parsed.path == "/api/session/yolo":
         sid = parse_qs(parsed.query).get("session_id", [""])[0]
         if not sid:
@@ -1110,6 +1144,9 @@ def handle_get(handler, parsed) -> bool:
         if handler.client_address[0] != "127.0.0.1":
             return j(handler, {"error": "not found"}, status=404)
         return _handle_approval_inject(handler, parsed)
+
+    if parsed.path == "/api/approval/session-approved":
+        return _handle_approval_session_list(handler, parsed)
 
     if parsed.path == "/api/clarify/pending":
         return _handle_clarify_pending(handler, parsed)
@@ -1615,13 +1652,51 @@ def handle_post(handler, parsed) -> bool:
         except ValueError as e:
             return j(handler, {"error": str(e)})
 
-    # ── YOLO mode toggle (POST) ──
-    # Session-scoped only — stored in-memory on the server side.
-    # Important lifecycle notes:
-    #   • Page reload: state PERSISTS (frontend re-fetches via GET endpoint)
-    #   • Cross-tab: state is SHARED (same server-side flag per session)
-    #   • Server restart: state is LOST (in-memory only)
-    #   • Cross-session: isolated (each session has its own flag)
+    # ── Unified mode toggle (POST) ──
+    # Stores mode on the Session object (persisted to JSON), replacing the
+    # legacy in-memory YOLO toggle.  Valid modes: manual, smart, yolo.
+    if parsed.path == "/api/session/mode":
+        try:
+            require(body, "session_id", "mode")
+        except ValueError as e:
+            return bad(handler, str(e))
+        sid = body["session_id"]
+        mode = body["mode"]
+        if mode not in ("manual", "smart", "yolo"):
+            return bad(handler, "Invalid mode: must be manual, smart, or yolo")
+        try:
+            s = get_session(sid)
+            s.mode = mode
+            s.save()
+            # If switching to yolo, resolve pending approvals
+            if mode == "yolo":
+                enable_session_yolo(sid)
+                try:
+                    from tools.approval import _pending as _p, _lock as _l
+                    with _l:
+                        _p.pop(sid, None)
+                except Exception:
+                    pass
+                resolve_gateway_approval(sid, "once", resolve_all=True)
+            else:
+                disable_session_yolo(sid)
+            result = {"ok": True, "mode": mode, "smart_supported": _is_smart_supported()}
+            # Broadcast mode_changed to all active SSE streams so frontend
+            # tabs can sync mode state in real time.  Each stream's
+            # EventSource listener filters by session_id.
+            mode_event = json.dumps({"mode": mode, "session_id": sid}, ensure_ascii=False)
+            with STREAMS_LOCK:
+                for stream_id, q in list(STREAMS.items()):
+                    try:
+                        q.put(("mode_changed", mode_event))
+                    except Exception:
+                        pass
+            return j(handler, result)
+        except KeyError:
+            return bad(handler, "Session not found", 404)
+
+    # ── YOLO mode toggle (POST, backward-compat) ──
+    # Delegates to the unified mode store so both APIs stay in sync.
     # Fixes #467
     if parsed.path == "/api/session/yolo":
         try:
@@ -1632,8 +1707,12 @@ def handle_post(handler, parsed) -> bool:
         enabled = bool(body.get("enabled", True))
         if enabled:
             enable_session_yolo(sid)
-            # Also resolve any pending approvals for this session so the
-            # agent doesn't stay stuck waiting on an already-dismissed card.
+            try:
+                s = get_session(sid)
+                s.mode = "yolo"
+                s.save()
+            except Exception:
+                pass
             try:
                 from tools.approval import _pending as _p, _lock as _l
                 with _l:
@@ -1643,6 +1722,12 @@ def handle_post(handler, parsed) -> bool:
             resolve_gateway_approval(sid, "once", resolve_all=True)
         else:
             disable_session_yolo(sid)
+            try:
+                s = get_session(sid)
+                s.mode = "manual"
+                s.save()
+            except Exception:
+                pass
         return j(handler, {"ok": True, "yolo_enabled": enabled})
 
     if parsed.path == "/api/btw":
@@ -1722,6 +1807,9 @@ def handle_post(handler, parsed) -> bool:
     # ── Approval (POST) ──
     if parsed.path == "/api/approval/respond":
         return _handle_approval_respond(handler, body)
+
+    if parsed.path == "/api/approval/revoke":
+        return _handle_approval_revoke(handler, body)
 
     # ── Clarify (POST) ──
     if parsed.path == "/api/clarify/respond":
@@ -3794,7 +3882,7 @@ def _handle_approval_respond(handler, body):
 
     if pending:
         keys = pending.get("pattern_keys") or [pending.get("pattern_key", "")]
-        if choice in ("once", "session"):
+        if choice == "session":
             for k in keys:
                 approve_session(sid, k)
         elif choice == "always":
@@ -3802,11 +3890,74 @@ def _handle_approval_respond(handler, body):
                 approve_session(sid, k)
                 approve_permanent(k)
             save_permanent_allowlist(_permanent_approved)
+        elif choice == "once":
+            logger.info(
+                "approval once: session=%s keys=%s command=%s",
+                sid, keys, pending.get("command", "")[:120]
+            )
     # Unblock the agent thread waiting in the gateway approval queue.
     # This is the primary signal when streaming is active — the agent
     # thread is parked in entry.event.wait() and needs to be woken up.
+    # The gateway thread will call approve_session() with the correct
+    # keys after being unblocked.
     resolve_gateway_approval(sid, choice, resolve_all=False)
+    # Persist session-approved patterns to the session JSON so they survive
+    # restarts.  Must run AFTER resolve_gateway_approval() so the gateway
+    # thread has a chance to call approve_session() before we read the set.
+    # A tiny yield ensures the gateway thread gets the GIL.
+    # Note: "once" is intentionally excluded — it's a one-time approval,
+    # not persisted to session state.
+    if choice in ("session", "always"):
+        try:
+            import time as _time
+            _time.sleep(0.02)  # yield to gateway thread
+            s = get_session(sid)
+            approved = list(get_session_approved(sid))
+            if approved:
+                s.session_approved = approved
+                s.save(touch_updated_at=False)
+        except (KeyError, Exception):
+            pass
     return j(handler, {"ok": True, "choice": choice})
+
+
+def _handle_approval_session_list(handler, parsed):
+    """GET /api/approval/session-approved — list approved patterns for a session."""
+    sid = parse_qs(parsed.query).get("session_id", [""])[0]
+    if not sid:
+        return bad(handler, "session_id is required")
+    # Touch the session to trigger restore_session_approvals() from the
+    # persisted session_approved field (needed after server restart).
+    try:
+        get_session(sid)
+    except KeyError:
+        pass
+    session_patterns = list(get_session_approved(sid))
+    permanent_patterns = list(_permanent_approved)
+    return j(handler, {
+        "session_approved": session_patterns,
+        "permanent_approved": permanent_patterns,
+    })
+
+
+def _handle_approval_revoke(handler, body):
+    """POST /api/approval/revoke — revoke a session-scoped approval."""
+    sid = body.get("session_id", "")
+    if not sid:
+        return bad(handler, "session_id is required")
+    pattern_key = body.get("pattern_key", "")
+    if not pattern_key:
+        return bad(handler, "pattern_key is required")
+    removed = revoke_session_approval(sid, pattern_key)
+    if removed:
+        # Persist the updated list to the session JSON
+        try:
+            s = get_session(sid)
+            s.session_approved = list(get_session_approved(sid))
+            s.save(touch_updated_at=False)
+        except (KeyError, Exception):
+            pass
+    return j(handler, {"ok": removed, "revoked": pattern_key})
 
 
 def _handle_clarify_respond(handler, body):

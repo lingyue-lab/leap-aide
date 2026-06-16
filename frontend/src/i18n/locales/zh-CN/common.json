@@ -92,6 +92,8 @@
       "font_size_hint": "调整文字和图标尺寸，适配不同屏幕分辨率",
       "default_model": "默认模型",
       "default_model_hint": "新对话使用的模型",
+      "default_mode": "默认审批模式",
+      "default_mode_hint": "新会话的审批模式（手动确认/智能评估/全部放行）",
       "send_key": "发送消息快捷键",
       "send_key_hint": "提交消息的按键组合",
       "bot_name": "机器人名称",

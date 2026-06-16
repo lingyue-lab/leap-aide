@@ -319,6 +319,7 @@ class Session:
                  compression_anchor_message_key=None,
                  skills=None,
                  last_seen_msg_count=None,
+                 mode: str='manual',
                  **kwargs):
         self.session_id = session_id or uuid.uuid4().hex[:12]
         self.title = title
@@ -344,7 +345,21 @@ class Session:
         self.compression_anchor_visible_idx = compression_anchor_visible_idx
         self.compression_anchor_message_key = compression_anchor_message_key
         self.last_seen_msg_count = last_seen_msg_count  # None = never explicitly seen
+        self._mode = mode if mode in ('manual', 'smart', 'yolo') else 'manual'
         self._metadata_message_count = None
+        # Store any extra fields (e.g. session_approved, llm_title_generated) so
+        # they survive a round-trip through save() → JSON → load().
+        self.__dict__.update(kwargs)
+
+    @property
+    def mode(self) -> str:
+        return getattr(self, '_mode', 'manual')
+
+    @mode.setter
+    def mode(self, value: str):
+        if value not in ('manual', 'smart', 'yolo'):
+            raise ValueError(f"Invalid mode: {value}")
+        self._mode = value
 
     @property
     def path(self):
@@ -363,7 +378,7 @@ class Session:
             'personality', 'active_stream_id', 'skills',
             'pending_user_message', 'pending_attachments', 'pending_started_at',
             'compression_anchor_visible_idx', 'compression_anchor_message_key',
-            'last_seen_msg_count',
+            'last_seen_msg_count', 'mode', 'session_approved',
         ]
         meta = {k: getattr(self, k, None) for k in METADATA_FIELDS}
         meta['messages'] = self.messages
@@ -464,6 +479,7 @@ class Session:
             'last_seen_msg_count': _clamped_last_seen,
             'compression_anchor_visible_idx': self.compression_anchor_visible_idx,
             'compression_anchor_message_key': self.compression_anchor_message_key,
+            'mode': getattr(self, 'mode', 'manual'),
             'active_stream_id': self.active_stream_id,
             'is_streaming': _is_streaming_session(
                 self.active_stream_id, active_stream_ids
@@ -489,6 +505,15 @@ def get_session(sid, metadata_only=False):
     else:
         s = Session.load(sid)
     if s:
+        # Restore persisted session approvals into the in-memory approval set
+        # so they survive server restarts.
+        _saved = getattr(s, 'session_approved', None)
+        if _saved and isinstance(_saved, list) and len(_saved) > 0:
+            try:
+                from tools.approval import restore_session_approvals
+                restore_session_approvals(sid, _saved)
+            except ImportError:
+                pass
         with LOCK:
             SESSIONS[sid] = s
             SESSIONS.move_to_end(sid)
@@ -557,10 +582,17 @@ def new_session(workspace=None, model=None, profile=None):
         except ImportError:
             profile = None
     effective_model = model or get_effective_default_model()
+    # Inherit default_mode from global settings for new sessions
+    try:
+        from api.config import load_settings
+        default_mode = load_settings().get("default_mode", "manual")
+    except Exception:
+        default_mode = "manual"
     s = Session(
         workspace=workspace or get_last_workspace(),
         model=effective_model,
         profile=profile,
+        mode=default_mode,
     )
     with LOCK:
         SESSIONS[s.session_id] = s

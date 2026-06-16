@@ -168,6 +168,17 @@ function AppearanceGroup({ form, set }: GroupProps) {
           options={FONT_SIZES}
         />
       </FieldRow>
+      <FieldRow label={t('settings.fields.default_mode')} hint={t('settings.fields.default_mode_hint')}>
+        <SelectField
+          value={form.default_mode ?? 'manual'}
+          onChange={(v) => set('default_mode', v as 'manual' | 'smart' | 'yolo')}
+          options={[
+            { value: 'manual', label: t('mode.manual', { ns: 'chat' }) },
+            { value: 'smart', label: t('mode.smart', { ns: 'chat' }) },
+            { value: 'yolo', label: t('mode.yolo', { ns: 'chat' }) },
+          ]}
+        />
+      </FieldRow>
     </>
   );
 }

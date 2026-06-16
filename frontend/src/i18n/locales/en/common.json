@@ -92,6 +92,8 @@
       "font_size_hint": "Adjust text and icon size for different screen resolutions",
       "default_model": "Default Model",
       "default_model_hint": "Model used for new conversations",
+      "default_mode": "Default Approval Mode",
+      "default_mode_hint": "Approval mode for new sessions (manual/smart/yolo)",
       "send_key": "Send Message Key",
       "send_key_hint": "Key combination to submit a message",
       "bot_name": "Bot Name",
