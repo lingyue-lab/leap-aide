@@ -329,6 +329,24 @@ export const clarifyService = {
   },
 };
 
+// Personality API 服务
+export const personalityService = {
+  getAll: async () => {
+    const result = await api<{ personalities: import('@/types').Personality[] }>('/api/personalities');
+    return result.personalities;
+  },
+
+  set: async (sessionId: string, name: string) => {
+    return api<{ ok: boolean; personality: string | null; prompt: string }>('/api/personality/set', {
+      method: 'POST',
+      body: JSON.stringify({
+        session_id: sessionId,
+        name,
+      }),
+    });
+  },
+};
+
 // Cron/Tasks API 服务
 export const cronService = {
   list: async () => {

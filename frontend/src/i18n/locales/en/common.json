@@ -54,6 +54,8 @@
     "assign_workspace": "Assign Workspace",
     "workspace_assigned": "Workspace assigned",
     "no_workspace": "No Workspace",
+    "personality": "Personality",
+    "no_personality": "None",
     "compress_history": "Compress History",
     "compressing": "Compressing...",
     "compress_confirm": "Compress this session's history? Older messages will be summarized by AI to reduce context size. This cannot be undone.",

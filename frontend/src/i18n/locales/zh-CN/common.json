@@ -54,6 +54,8 @@
     "assign_workspace": "分配工作区",
     "workspace_assigned": "工作区已分配",
     "no_workspace": "未分配工作区",
+    "personality": "人格",
+    "no_personality": "无",
     "compress_history": "压缩历史记录",
     "compressing": "压缩中...",
     "compress_confirm": "压缩此会话的历史记录？较旧的消息将由 AI 进行摘要，以减少上下文占用。此操作不可撤销。",

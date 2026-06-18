@@ -1812,6 +1812,8 @@
     background: var(--hover-bg);
     border-radius: 0 0 6px 6px;
     padding-bottom: 2px;
+    max-height: 240px;
+    overflow-y: auto;
   }
 
   .session-workspace-empty {

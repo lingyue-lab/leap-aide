@@ -1177,6 +1177,33 @@ def _build_session_skills_block(skill_names: list) -> str:
     return '  session-skills:\n' + '\n'.join(lines)
 
 
+def _resolve_personality_prompt(config_dict, personality_name):
+    """Resolve a personality prompt from config.
+
+    Args:
+        config_dict: The full hermes config dict (as returned by get_config()).
+        personality_name: Name of the personality to resolve, or None.
+
+    Returns:
+        The resolved prompt string, or None if not found / not configured.
+    """
+    if not personality_name:
+        return None
+    agent_cfg = config_dict.get('agent', {}) if isinstance(config_dict, dict) else {}
+    personalities = agent_cfg.get('personalities', {})
+    if not isinstance(personalities, dict) or personality_name not in personalities:
+        return None
+    pval = personalities[personality_name]
+    if isinstance(pval, dict):
+        parts = [pval.get('system_prompt', '') or pval.get('prompt', '')]
+        if pval.get('tone'):
+            parts.append('Tone: ' + pval['tone'])
+        if pval.get('style'):
+            parts.append('Style: ' + pval['style'])
+        return '\n'.join(p for p in parts if p) or None
+    return str(pval)
+
+
 def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, attachments=None, *, ephemeral=False):
     """Run agent in background thread, writing SSE events to STREAMS[stream_id].
 
@@ -1725,25 +1752,20 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             )
             # Resolve personality prompt from config.yaml agent.personalities
             # (matches hermes-agent CLI behavior — passes via ephemeral_system_prompt)
-            _personality_prompt = None
             _pname = getattr(s, 'personality', None)
-            if _pname:
-                _agent_cfg = _cfg.get('agent', {})
-                _personalities = _agent_cfg.get('personalities', {})
-                if isinstance(_personalities, dict) and _pname in _personalities:
-                    _pval = _personalities[_pname]
-                    if isinstance(_pval, dict):
-                        _parts = [_pval.get('system_prompt', '') or _pval.get('prompt', '')]
-                        if _pval.get('tone'):
-                            _parts.append(f'Tone: {_pval["tone"]}')
-                        if _pval.get('style'):
-                            _parts.append(f'Style: {_pval["style"]}')
-                        _personality_prompt = '\n'.join(p for p in _parts if p)
-                    else:
-                        _personality_prompt = str(_pval)
-            # Pass personality via ephemeral_system_prompt (agent's own mechanism)
+            _personality_prompt = _resolve_personality_prompt(_cfg, _pname)
+            agent.ephemeral_system_prompt = _personality_prompt
             if _personality_prompt:
-                agent.ephemeral_system_prompt = _personality_prompt
+                print(
+                    f'[webui] session={session_id} personality={_pname} '
+                    f'ephemeral_system_prompt={_personality_prompt!r}',
+                    flush=True,
+                )
+            else:
+                print(
+                    f'[webui] session={session_id} personality=None (default)',
+                    flush=True,
+                )
 
             # ── Per-session skill binding: replace <available_skills> block ──
             # When a session has a skills list configured (not None), replace the
@@ -1836,6 +1858,22 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 name=f"ckpt-{session_id[:8]}",
             )
             _ckpt_thread.start()
+
+            # ── Log full system prompt sent to model ──
+            _cached_sp = getattr(agent, '_cached_system_prompt', None) or ''
+            _ephemeral_sp = getattr(agent, 'ephemeral_system_prompt', None) or ''
+            _full_sp = (_cached_sp + '\n\n' + _ephemeral_sp).strip() if _ephemeral_sp else _cached_sp
+            print(
+                f'[webui] session={session_id} '
+                f'cached_len={len(_cached_sp)} ephemeral_len={len(_ephemeral_sp)} '
+                f'full_system_prompt_len={len(_full_sp)}',
+                flush=True,
+            )
+            print(
+                f'[webui] session={session_id} '
+                f'=== FULL SYSTEM PROMPT ===\n{_full_sp}\n=== END ===',
+                flush=True,
+            )
 
             result = agent.run_conversation(
                 user_message=workspace_ctx + msg_text,

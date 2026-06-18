@@ -1488,17 +1488,8 @@ def handle_post(handler, parsed) -> bool:
                 return bad(
                     handler, f'Personality "{name}" not found in config.yaml', 404
                 )
-            value = raw_personalities[name]
-            # Resolve prompt using the same logic as hermes-agent cli.py
-            if isinstance(value, dict):
-                parts = [value.get("system_prompt", "") or value.get("prompt", "")]
-                if value.get("tone"):
-                    parts.append(f"Tone: {value['tone']}")
-                if value.get("style"):
-                    parts.append(f"Style: {value['style']}")
-                prompt = "\n".join(p for p in parts if p)
-            else:
-                prompt = str(value)
+            from api.streaming import _resolve_personality_prompt
+            prompt = _resolve_personality_prompt(_cfg2, name) or ""
         with _get_session_agent_lock(sid):
             s.personality = name if name else None
             s.save()

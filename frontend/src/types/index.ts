@@ -1,5 +1,10 @@
 // types/session.ts - 会话相关类型定义
 
+export interface Personality {
+  name: string;
+  description: string;
+}
+
 export interface Session {
   session_id: string;
   title: string;
@@ -17,6 +22,7 @@ export interface Session {
   output_tokens?: number;
   estimated_cost?: number | null;
   skills?: string[] | null;
+  personality?: string | null;
   message_count?: number;
   last_seen_msg_count?: number | null;
   // Compression lineage (v1 — WebUI-native sessions only)
@@ -42,6 +48,7 @@ export interface SessionListItem {
   pinned?: boolean;
   workspace?: string;
   skills?: string[] | null;
+  personality?: string | null;
   message_count?: number;
   last_seen_msg_count?: number | null;
   // Compression chain metadata (v1 — WebUI-native sessions only)
