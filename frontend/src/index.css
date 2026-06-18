@@ -1164,6 +1164,38 @@
     background: rgba(124, 185, 255, 0.05);
   }
 
+  /* Compression overlay — grays out the entire input area */
+  .composer-wrap.compressing .composer-box {
+    opacity: 0.55;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  .composer-compress-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.15);
+    border-radius: inherit;
+    pointer-events: all;
+  }
+
+  .composer-compress-overlay-text {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    background: var(--surface);
+    padding: 8px 16px;
+    border-radius: 8px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
+  }
+
   .drop-hint {
     position: absolute;
     inset: 0;
@@ -4180,6 +4212,285 @@
   opacity: 1;
 }
 
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Compression Card (US1)
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.compression-card {
+  border: 1px solid var(--border2);
+  border-radius: 10px;
+  margin: 6px 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--surface);
+  font-size: 12px;
+  transition: border-color 0.2s ease;
+}
+
+.compression-card-auto {
+  border-left: 3px solid #eab308;  /* yellow accent for auto */
+}
+
+.compression-card-manual {
+  border-left: 3px solid #6366f1;  /* indigo accent for manual */
+}
+
+.compression-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.compression-card-header:hover {
+  background: var(--hover);
+}
+
+.compression-card-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.compression-card-label {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.compression-card-stats {
+  color: var(--muted);
+  font-size: 11px;
+  flex: 1;
+}
+
+.compression-card-time {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.compression-card-caret {
+  color: var(--muted);
+  font-size: 12px;
+  width: 14px;
+  text-align: center;
+}
+
+.compression-card-body {
+  padding: 0 12px 8px;
+  border-top: 1px solid var(--border1);
+  padding-top: 8px;
+}
+
+.compression-card-summary {
+  color: var(--text);
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.compression-card-details {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.compression-card-arrow {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+.compression-card-summary {
+  color: var(--muted);
+  cursor: pointer;
+  padding: 6px 12px 8px;
+  font-size: 11px;
+  border-top: 1px solid var(--border1);
+}
+
+.compression-card-summary:hover {
+  color: var(--text);
+}
+
+.compression-card-summary-text {
+  font-style: italic;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Context Usage Indicator — Circular Ring (US3)
+   Positioned left of the send button in ChatComposer
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.context-usage-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-right: 6px;
+  position: relative;
+}
+
+.context-usage-ring {
+  display: block;
+}
+
+.context-usage-ring-bg {
+  color: var(--muted);
+  opacity: 0.2;
+}
+
+.context-usage-ring-fg {
+  transition: stroke-dashoffset 0.5s ease, stroke 0.5s ease;
+}
+
+.context-usage-ring-text {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  fill: var(--text);
+  font-size: 9px;
+}
+
+/* Tooltip popover for context usage indicator */
+.context-usage-tooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  min-width: 200px;
+  max-width: 280px;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+  padding: 8px 12px;
+  z-index: 300;
+  pointer-events: none;
+  animation: context-tooltip-fadein 0.12s ease;
+}
+
+@keyframes context-tooltip-fadein {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.context-usage-tooltip-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.context-usage-tooltip-label {
+  color: var(--muted);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.context-usage-tooltip-value {
+  font-weight: 500;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Separator between detail lines and footer instruction */
+.context-usage-tooltip-separator {
+  height: 1px;
+  margin: 8px 0;
+  background: var(--border2);
+  opacity: 0.6;
+}
+
+/* Footer instruction text */
+.context-usage-tooltip-footer {
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--muted);
+  text-align: center;
+  opacity: 0.85;
+}
+
+/* Clickable ring visual cue */
+.context-usage-clickable {
+  cursor: pointer;
+}
+.context-usage-clickable:hover .context-usage-ring-fg {
+  filter: brightness(1.15);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Archived (compaction) session children in sidebar
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.session-archived-section {
+  margin-left: 8px;
+  border-left: 1px solid var(--border2);
+}
+
+.session-archived-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.session-archived-toggle:hover {
+  color: var(--text);
+}
+
+.session-archived-caret {
+  display: inline-block;
+  width: 12px;
+  font-size: 10px;
+  transition: transform 0.15s ease;
+}
+
+.session-archived-caret.expanded {
+  transform: rotate(90deg);
+}
+
+.session-archived-count {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.session-archived-children {
+  padding: 0;
+}
+
+.session-item-archived {
+  padding-left: 24px;
+  font-size: 12px;
+  opacity: 0.85;
+  cursor: pointer;
+  border-radius: 0;
+}
+
+.session-item-archived:hover {
+  opacity: 1;
+  background: var(--hover);
+}
+
+.session-item-archived .session-title {
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.session-archived-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+}
 
 /* ─────────────────────────────────────────────────────────────────────────────
    Font Size Scaling

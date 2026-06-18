@@ -797,6 +797,21 @@ def handle_get(handler, parsed) -> bool:
         sid = query.get("session_id", [""])[0]
         if not sid:
             return j(handler, {"error": "session_id is required"}, status=400)
+        # Handle archived (read-only compaction) session IDs: "parent_id/compaction_N"
+        if '/' in sid and '_archived' not in sid:
+            _parts = sid.split('/', 1)
+            _parent_id, _child_stem = _parts[0], _parts[1]
+            _archive_path = SESSION_DIR / f'{_parent_id}_archived' / f'{_child_stem}.json'
+            if _archive_path.exists():
+                try:
+                    _raw = json.loads(_archive_path.read_text(encoding='utf-8'))
+                    _raw['session_id'] = sid
+                    _raw['_readonly'] = True
+                    _raw['_parent_session_id'] = _parent_id
+                    return j(handler, {'ok': True, 'session': _raw})
+                except Exception:
+                    return j(handler, {"error": "Failed to load archived session"}, status=500)
+            return j(handler, {"error": "Archived session not found"}, status=404)
         # ?messages=0 skips the message payload for fast session switching.
         # The frontend uses this when switching conversations in the sidebar
         # (only needs metadata). The full message array is loaded lazily
@@ -1927,6 +1942,31 @@ def handle_post(handler, parsed) -> bool:
 
         saved = save_settings(body)
         saved.pop("password_hash", None)  # never expose hash to client
+
+        # When auto_compress_token_threshold changes, sync to agent config.yaml
+        # so path-3 (in-agent) compression picks up the new threshold on the
+        # next agent construction.
+        _token_thresh = body.get("auto_compress_token_threshold")
+        if _token_thresh is not None:
+            try:
+                from hermes_cli.config import load_config as _load_cfg, save_config as _save_cfg
+
+                _thresh_val = float(_token_thresh)
+                _cfg = _load_cfg()
+                _comp = _cfg.setdefault("compression", {})
+                if _thresh_val <= 0:
+                    _comp["enabled"] = False
+                else:
+                    # WebUI handles token-threshold compression itself after each
+                    # turn (see streaming.py done processing).  Disabling the
+                    # agent's built-in compression keeps the session_id stable,
+                    # avoids session-id rotation, and archives pre-compression
+                    # state to {sid}_archived/ — consistent with path 1 behaviour.
+                    _comp["enabled"] = False
+                    _comp["threshold"] = _thresh_val
+                _save_cfg(_cfg)
+            except Exception:
+                logger.debug("Failed to sync compression settings to config.yaml", exc_info=True)
 
         auth_enabled_after = is_auth_enabled()
         auth_just_enabled = bool(
@@ -3313,10 +3353,6 @@ def _handle_chat_start(handler, body):
         threshold_str = str(load_settings().get("auto_compress_threshold", "0")).strip()
         threshold = int(threshold_str) if threshold_str.isdigit() else 0
         if threshold > 0 and len(s.messages) >= threshold and not getattr(s, "active_stream_id", None):
-            logger.info(
-                "Auto-compressing session %s (%d messages >= threshold %d)",
-                s.session_id, len(s.messages), threshold,
-            )
             _auto_compress_session(s)
             # Re-read session so the agent thread picks up the compressed messages.
             s = get_session(s.session_id)
@@ -3976,6 +4012,100 @@ def _handle_clarify_respond(handler, body):
     return j(handler, {"ok": True, "response": response})
 
 
+def _fallback_estimate_messages_tokens_rough(msgs):
+    """Fallback heuristic token estimate when runtime metadata helpers are absent."""
+    total = 0
+    for m in msgs or []:
+        if not isinstance(m, dict):
+            continue
+        content = m.get("content", "")
+        if isinstance(content, list):
+            content_text = "\n".join(
+                str(p.get("text") or p.get("content") or "")
+                for p in content
+                if isinstance(p, dict)
+            )
+        else:
+            content_text = str(content or "")
+        total += len(content_text.split())
+    return max(1, total)
+
+
+def _estimate_messages_tokens_rough(msgs):
+    """Estimate token count for a list of messages.
+
+    Uses the agent's token estimator when available, falling back to a
+    word-count heuristic.
+    """
+    try:
+        from agent.model_metadata import estimate_messages_tokens_rough as _agent_est
+        return _agent_est(msgs)
+    except Exception:
+        return _fallback_estimate_messages_tokens_rough(msgs)
+
+
+def _archive_session_before_compress(s):
+    """Save a read-only snapshot of the current session before compression.
+
+    Saved to ``{SESSION_DIR}/{session_id}_archived/compaction_{N}.json``
+    with ``_readonly: true`` and ``_parent_session_id`` metadata.
+
+    After saving, prunes the oldest snapshots if the count exceeds
+    ``max_compaction_snapshots`` (configured in settings).
+
+    Returns the archive path on success or None (never blocks compression).
+    """
+    try:
+        src = SESSION_DIR / f'{s.session_id}.json'
+        if not src.exists():
+            return None
+        import json as _json
+        archive_dir = SESSION_DIR / f'{s.session_id}_archived'
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        # Count existing archived snapshots
+        existing = sorted(
+            int(p.stem.split('_')[1])
+            for p in archive_dir.glob('compaction_*.json')
+            if p.stem.startswith('compaction_') and p.stem.split('_')[1].isdigit()
+        )
+        next_n = existing[-1] + 1 if existing else 1
+        archived_id = f'compaction_{next_n}'
+        data = _json.loads(src.read_text(encoding='utf-8'))
+        data['session_id'] = archived_id
+        data['_parent_session_id'] = s.session_id
+        data['_readonly'] = True
+        data['_compaction_n'] = next_n
+        # Keep the original title for display
+        dst = archive_dir / f'{archived_id}.json'
+        dst.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+
+        # Prune oldest snapshots if count exceeds max_compaction_snapshots
+        try:
+            from api.config import load_settings
+            max_str = str(load_settings().get("max_compaction_snapshots", "5")).strip()
+            max_snap = int(max_str) if max_str.isdigit() else 5
+        except Exception:
+            max_snap = 5
+        all_snapshots = sorted(
+            archive_dir.glob('compaction_*.json'),
+            key=lambda p: int(p.stem.split('_')[1]) if p.stem.startswith('compaction_') and p.stem.split('_')[1].isdigit() else 9999,
+        )
+        while len(all_snapshots) > max_snap:
+            oldest = all_snapshots.pop(0)
+            try:
+                oldest.unlink()
+            except OSError:
+                pass
+
+        return str(dst)
+    except Exception:
+        logger.debug("Failed to archive session %s before compression", s.session_id, exc_info=True)
+        return None
+
+
+# _discover_archived_sessions moved to api/models.py to avoid circular import
+
+
 def _auto_compress_session(s) -> None:
     """Internal (no HTTP handler) session compressor for auto-compress on chat start.
 
@@ -4015,8 +4145,10 @@ def _auto_compress_session(s) -> None:
         # since there's no active stream, but be safe).
         if _sanitize_messages_for_api(s.messages) != messages:
             raise RuntimeError("Session modified concurrently; skipping auto-compress")
+        _archive_session_before_compress(s)
         s.messages = compressed
         s.tool_calls = []
+        s.last_compression_time = time.time()
         s.save()
 
 
@@ -4120,29 +4252,6 @@ def _handle_session_compress(handler, body):
         if len(messages) < 4:
             return bad(handler, "Not enough conversation to compress (need at least 4 messages).")
 
-        def _fallback_estimate_messages_tokens_rough(msgs):
-            """Fallback heuristic token estimate when runtime metadata helpers are absent.
-
-            Uses whitespace token-like word counting only. This intentionally
-            over/under-estimates BPE token counts (roughly around x3/x4 scale),
-            and is only for resilient fallback behavior.
-            """
-            total = 0
-            for m in msgs or []:
-                if not isinstance(m, dict):
-                    continue
-                content = m.get("content", "")
-                if isinstance(content, list):
-                    content_text = "\n".join(
-                        str(p.get("text") or p.get("content") or "")
-                        for p in content
-                        if isinstance(p, dict)
-                    )
-                else:
-                    content_text = str(content or "")
-                total += len(content_text.split())
-            return max(1, total)
-
         def _fallback_summarize_manual_compression(original_messages, compressed_messages, before_tokens, after_tokens, focus_topic=None):
             """Lightweight fallback summary to keep /session/compress usable in tests/runtime."""
             after_tokens = after_tokens if after_tokens is not None else _fallback_estimate_messages_tokens_rough(compressed_messages)
@@ -4159,14 +4268,6 @@ def _handle_session_compress(handler, body):
                 + "Compression completed."
             )
             return summary
-
-        def _estimate_messages_tokens_rough(msgs):
-            try:
-                from agent.model_metadata import estimate_messages_tokens_rough
-
-                return estimate_messages_tokens_rough(msgs)
-            except Exception:
-                return _fallback_estimate_messages_tokens_rough(msgs)
 
         def _summarize_manual_compression(
             original_messages,
@@ -4252,8 +4353,10 @@ def _handle_session_compress(handler, body):
             if _sanitize_messages_for_api(s.messages) != original_messages:
                 return bad(handler, "Session was modified during compression; please retry.", 409)
 
+            _archive_session_before_compress(s)
             s.messages = compressed
             s.tool_calls = []
+            s.last_compression_time = time.time()
             s.active_stream_id = None
             s.pending_user_message = None
             s.pending_attachments = []
@@ -4262,6 +4365,16 @@ def _handle_session_compress(handler, body):
             s.compression_anchor_visible_idx = max(0, len(visible_after) - 1) if visible_after else None
             s.compression_anchor_message_key = _anchor_message_key(visible_after[-1]) if visible_after else None
             s.save()
+
+        # Track compression lineage
+        _prev_count = getattr(s, 'compression_segment_count', 0) or 0
+        s.compression_segment_count = _prev_count + 1
+        s.parent_session_id = sid
+        # Root/tip lineage: first compression sets root = original session;
+        # subsequent compressions inherit the existing root.
+        if not getattr(s, 'lineage_root_id', None):
+            s.lineage_root_id = sid
+        s.lineage_tip_id = sid
 
         session_payload = redact_session_data(
             s.compact() | {
@@ -4282,6 +4395,13 @@ def _handle_session_compress(handler, body):
                 "session": session_payload,
                 "summary": summary,
                 "focus_topic": focus_topic,
+                "stats": {
+                    "saved_messages": len(original_messages) - len(compressed),
+                    "approx_tokens_before": approx_tokens,
+                    "approx_tokens_after": new_tokens,
+                    "messages_before": len(original_messages),
+                    "messages_after": len(compressed),
+                },
             },
         )
     except Exception as e:

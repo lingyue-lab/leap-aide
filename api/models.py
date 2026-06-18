@@ -320,6 +320,14 @@ class Session:
                  skills=None,
                  last_seen_msg_count=None,
                  mode: str='manual',
+                 parent_session_id: str=None,
+                 compression_segment_count: int=0,
+                 context_length: int=0,
+                 last_prompt_tokens: int=0,
+                 threshold_tokens: int=0,
+                 last_compression_time: float=0,
+                 lineage_root_id: str=None,
+                 lineage_tip_id: str=None,
                  **kwargs):
         self.session_id = session_id or uuid.uuid4().hex[:12]
         self.title = title
@@ -347,6 +355,15 @@ class Session:
         self.last_seen_msg_count = last_seen_msg_count  # None = never explicitly seen
         self._mode = mode if mode in ('manual', 'smart', 'yolo') else 'manual'
         self._metadata_message_count = None
+        # Compression lineage (v1 — WebUI-native sessions only)
+        self.parent_session_id = parent_session_id
+        self.compression_segment_count = compression_segment_count or 0
+        self.context_length = context_length or 0
+        self.last_prompt_tokens = last_prompt_tokens or 0
+        self.threshold_tokens = threshold_tokens or 0
+        self.last_compression_time = last_compression_time or 0
+        self.lineage_root_id = lineage_root_id
+        self.lineage_tip_id = lineage_tip_id
         # Store any extra fields (e.g. session_approved, llm_title_generated) so
         # they survive a round-trip through save() → JSON → load().
         self.__dict__.update(kwargs)
@@ -379,6 +396,10 @@ class Session:
             'pending_user_message', 'pending_attachments', 'pending_started_at',
             'compression_anchor_visible_idx', 'compression_anchor_message_key',
             'last_seen_msg_count', 'mode', 'session_approved',
+            'parent_session_id', 'compression_segment_count',
+            'context_length', 'last_prompt_tokens', 'threshold_tokens',
+            'last_compression_time',
+            'lineage_root_id', 'lineage_tip_id',
         ]
         meta = {k: getattr(self, k, None) for k in METADATA_FIELDS}
         meta['messages'] = self.messages
@@ -480,6 +501,14 @@ class Session:
             'compression_anchor_visible_idx': self.compression_anchor_visible_idx,
             'compression_anchor_message_key': self.compression_anchor_message_key,
             'mode': getattr(self, 'mode', 'manual'),
+            '_parent_session_id': getattr(self, 'parent_session_id', None),
+            '_compression_segment_count': getattr(self, 'compression_segment_count', 0) or 0,
+            '_lineage_root_id': getattr(self, 'lineage_root_id', None),
+            '_lineage_tip_id': getattr(self, 'lineage_tip_id', None),
+            'context_length': getattr(self, 'context_length', 0) or 0,
+            'last_prompt_tokens': getattr(self, 'last_prompt_tokens', 0) or 0,
+            'threshold_tokens': getattr(self, 'threshold_tokens', 0) or 0,
+            'last_compression_time': getattr(self, 'last_compression_time', 0) or 0,
             'active_stream_id': self.active_stream_id,
             'is_streaming': _is_streaming_session(
                 self.active_stream_id, active_stream_ids
@@ -608,6 +637,31 @@ def _hide_from_default_sidebar(session: dict) -> bool:
     return source == 'cron' or sid.startswith('cron_')
 
 
+def _append_archived_sessions(result):
+    """Append archived (read-only compaction snapshots) from *archived/ subdirectories."""
+    try:
+        for archive_dir in sorted(SESSION_DIR.glob('*_archived')):
+            parent_id = archive_dir.name[:-len('_archived')]
+            for p in sorted(archive_dir.glob('compaction_*.json')):
+                try:
+                    data = json.loads(p.read_text(encoding='utf-8'))
+                    result.append({
+                        'session_id': f'{parent_id}/{p.stem}',
+                        'title': data.get('title', ''),
+                        'message_count': len(data.get('messages', [])),
+                        'created_at': data.get('created_at', 0),
+                        'updated_at': data.get('updated_at', 0),
+                        '_parent_session_id': parent_id,
+                        '_readonly': True,
+                        '_compaction_n': data.get('_compaction_n', 0),
+                    })
+                except Exception:
+                    logger.debug("Failed to read archived session %s", p)
+    except Exception:
+        pass
+    return result
+
+
 def all_sessions():
     active_stream_ids = _active_stream_ids()
     # Phase C: try index first for O(1) read; fall back to full scan
@@ -660,10 +714,10 @@ def all_sessions():
             )]
             result = [s for s in result if not _hide_from_default_sidebar(s)]
             # Backfill: sessions created before Sprint 22 have no profile tag.
-            # Attribute them to 'default' so the client profile filter works correctly.
             for s in result:
                 if not s.get('profile'):
                     s['profile'] = 'default'
+            result = _append_archived_sessions(result)
             return result
         except Exception:
             logger.debug("Failed to load session index, falling back to full scan")
@@ -693,6 +747,7 @@ def all_sessions():
     for s in result:
         if not s.get('profile'):
             s['profile'] = 'default'
+    result = _append_archived_sessions(result)
     return result
 
 

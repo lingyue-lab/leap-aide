@@ -53,6 +53,19 @@ PROJECTS_FILE = STATE_DIR / "projects.json"
 logger = logging.getLogger(__name__)
 
 
+# ── Compression constants ────────────────────────────────────────────────────
+# Minimum messages required before manual compression is allowed
+MIN_MESSAGES_FOR_COMPRESSION = 4
+
+# Rough token estimation ratio (characters ÷ N ≈ tokens)
+TOKEN_ESTIMATION_CHARS_PER_TOKEN = 4
+
+# Context usage colour thresholds (frontend-driven; mirrored here for reference)
+# Green: < 60%, Yellow: 60%-85%, Red: > 85%
+COMPRESSION_COLOR_THRESHOLD_WARN = 0.60   # 60% — bar turns yellow
+COMPRESSION_COLOR_THRESHOLD_DANGER = 0.85  # 85% — bar turns red
+
+
 # ── Hermes agent directory discovery ─────────────────────────────────────────
 def _discover_agent_dir() -> Path:
     """
@@ -1976,7 +1989,9 @@ _SETTINGS_DEFAULTS = {
     "auto_title_refresh_every": "0",  # adaptive title refresh: 0=off, 5/10/20=every N exchanges
     "busy_input_mode": "queue",  # behavior when sending while agent is running: queue | interrupt | steer
     "font_size": "medium",  # UI font size / zoom level: small | medium | large
-    "auto_compress_threshold": "0",  # 0=disabled; compress session history when message count >= N (100/200/500)
+    "auto_compress_threshold": "0",  # Path 1 — auto-compress by message count (0=off, 100/200/500)
+    "auto_compress_token_threshold": "0",  # Path 3 — auto-compress by token % of context (0=off, 0.50/0.60/0.70/0.85)
+    "max_compaction_snapshots": "5",  # max archived compaction snapshots to retain per session
     "last_seen_cron_ts_map": {},  # per-job {job_id: epoch_seconds} — drives +N unread badge
     "password_hash": None,  # PBKDF2-HMAC-SHA256 hash; None = auth disabled
     "default_mode": "manual",  # approval mode for new sessions: manual | smart | yolo
@@ -2083,6 +2098,8 @@ _SETTINGS_ENUM_VALUES = {
     "busy_input_mode": {"queue", "interrupt", "steer"},
     "font_size": {"small", "medium", "large"},
     "auto_compress_threshold": {"0", "100", "200", "500"},
+    "auto_compress_token_threshold": {"0", "0.05", "0.50", "0.60", "0.70", "0.85"},
+    "max_compaction_snapshots": {"3", "5", "10", "20"},
     "default_mode": {"manual", "smart", "yolo"},
 }
 _SETTINGS_BOOL_KEYS = {

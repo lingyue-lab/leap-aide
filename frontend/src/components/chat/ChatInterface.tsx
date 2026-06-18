@@ -92,6 +92,19 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
         setToolCalls(session.tool_calls);
       }
 
+      // Restore context usage from persisted compressor data so the
+      // ContextUsageIndicator shows meaningful values after page refresh.
+      if (session?.context_length || session?.last_prompt_tokens) {
+        useChatStore.getState().setLastUsage({
+          context_length: session.context_length || 0,
+          last_prompt_tokens: session.last_prompt_tokens || 0,
+          threshold_tokens: session.threshold_tokens || 0,
+          input_tokens: session.input_tokens,
+          output_tokens: session.output_tokens,
+          estimated_cost: session.estimated_cost,
+        });
+      }
+
       // ── Reconnect streaming after page refresh ─────────────────────────────
       // After a full page reload the in-memory StreamManager is empty, but the
       // backend may still have an active stream for this session.  Detect it via
@@ -172,12 +185,14 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
         streaming={streaming}
       />
       
-      <ChatComposer
-        onSend={handleSend}
-        onCancel={handleCancel}
-        busy={busy}
-        streaming={streaming}
-      />
+      {!currentSession?._readonly && (
+        <ChatComposer
+          onSend={handleSend}
+          onCancel={handleCancel}
+          busy={busy}
+          streaming={streaming}
+        />
+      )}
       
       <ApprovalCard />
       <ClarifyCard />

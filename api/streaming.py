@@ -2085,8 +2085,24 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         _compressed = True
                 # Notify the frontend that compression happened
                 if _compressed:
+                    # Calculate message counts before/after compression
+                    _msg_before = len(_previous_messages)
+                    _msg_after = len(s.messages)
+                    # Rough token estimation (chars / 4 heuristic)
+                    _approx_tokens_before = sum(
+                        len(str(m.get('content', ''))) for m in _previous_messages
+                        if isinstance(m, dict)
+                    ) // 4
+                    _approx_tokens_after = sum(
+                        len(str(m.get('content', ''))) for m in s.messages
+                        if isinstance(m, dict)
+                    ) // 4
+                    s.last_compression_time = time.time()
                     put('compressed', {
                         'message': 'Context auto-compressed to continue the conversation',
+                        'saved_messages': max(0, _msg_before - _msg_after),
+                        'approx_tokens_before': _approx_tokens_before,
+                        'approx_tokens_after': _approx_tokens_after,
                     })
 
                 # Stamp 'timestamp' on any new messages that don't have one yet.
@@ -2118,6 +2134,13 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 s.output_tokens = (s.output_tokens or 0) + output_tokens
                 if estimated_cost:
                     s.estimated_cost = (s.estimated_cost or 0) + estimated_cost
+                # Persist context-window data from the compressor so the
+                # frontend ContextUsageIndicator can restore after page refresh.
+                _cc = getattr(agent, 'context_compressor', None)
+                if _cc:
+                    s.context_length = getattr(_cc, 'context_length', 0) or 0
+                    s.last_prompt_tokens = getattr(_cc, 'last_prompt_tokens', 0) or 0
+                    s.threshold_tokens = getattr(_cc, 'threshold_tokens', 0) or 0
                 # Persist tool-call summaries even when the final message history only
                 # kept bare tool rows and omitted explicit assistant tool_call IDs.
                 tool_calls = _extract_tool_calls_from_messages(
@@ -2150,6 +2173,78 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         if isinstance(_rm, dict) and _rm.get('role') == 'assistant':
                             _rm['reasoning'] = _reasoning_text
                             break
+                # ── WebUI-side token-threshold auto-compress (path 3) ──
+                # The agent's built-in compression is disabled when
+                # auto_compress_token_threshold > 0 (see settings sync in
+                # routes.py).  WebUI checks last_prompt_tokens / context_length
+                # after each turn and compresses when the ratio exceeds the
+                # configured threshold.  This keeps the session_id stable and
+                # archives pre-compression state to {sid}_archived/ — consistent
+                # with path 1 (message-count auto-compress) behaviour.
+                from api.config import load_settings as _load_settings_ctx
+                _settings = _load_settings_ctx()
+                _token_thresh_str = str(_settings.get('auto_compress_token_threshold', '0') or '0').strip()
+                try:
+                    _token_thresh_pct = float(_token_thresh_str)
+                except (ValueError, TypeError):
+                    _token_thresh_pct = 0.0
+                if _token_thresh_pct > 0:
+                    _cc2 = getattr(agent, 'context_compressor', None)
+                    if _cc2:
+                        _ctx_len = getattr(_cc2, 'context_length', 0) or 0
+                        _last_prompt = getattr(_cc2, 'last_prompt_tokens', 0) or 0
+                        _threshold_tokens = int(_ctx_len * _token_thresh_pct)
+                        if _ctx_len > 0 and _last_prompt >= _threshold_tokens > 0:
+                            _pre_messages = _sanitize_messages_for_api(s.messages)
+                            if len(_pre_messages) >= 4:
+                                logger.debug(
+                                    '[webui] token-threshold compress triggered session=%s '
+                                    'prompt_tokens=%d context_length=%d threshold=%.0f%%',
+                                    session_id, _last_prompt, _ctx_len, _token_thresh_pct * 100,
+                                )
+                                try:
+                                    _compressed = _cc2.compress(
+                                        _pre_messages, current_tokens=_last_prompt,
+                                    )
+                                except Exception as _cerr:
+                                    logger.debug(
+                                        'Token-threshold compress failed for '
+                                        'session %s: %s', session_id, _cerr,
+                                    )
+                                    _compressed = None
+                                if _compressed and len(_compressed) < len(_pre_messages):
+                                    try:
+                                        from api.routes import _archive_session_before_compress
+                                        _archive_session_before_compress(s)
+                                    except Exception:
+                                        logger.debug(
+                                            'Archive before token-threshold '
+                                            'compress failed for session %s',
+                                            session_id, exc_info=True,
+                                        )
+                                    _msg_before = len(_pre_messages)
+                                    _msg_after = len(_compressed)
+                                    _approx_tokens_after = sum(
+                                        len(str(m.get('content', '')))
+                                        for m in _compressed
+                                        if isinstance(m, dict)
+                                    ) // 4
+                                    s.messages = _compressed
+                                    s.tool_calls = []
+                                    s.last_compression_time = time.time()
+                                    tool_calls = []  # also update local for done event
+                                    put('compressed', {
+                                        'message': 'Context auto-compressed to continue the conversation',
+                                        'saved_messages': max(0, _msg_before - _msg_after),
+                                        'approx_tokens_before': _last_prompt,
+                                        'approx_tokens_after': _approx_tokens_after,
+                                    })
+                                    logger.debug(
+                                        '[webui] token-threshold compress done session=%s '
+                                        'messages %d→%d tokens_approx %d→%d',
+                                        session_id, _msg_before, _msg_after,
+                                        _last_prompt, _approx_tokens_after,
+                                    )
                 s.save()
             # Sync to state.db for /insights (opt-in setting)
             try:

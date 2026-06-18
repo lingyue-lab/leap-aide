@@ -19,6 +19,19 @@ export interface Session {
   skills?: string[] | null;
   message_count?: number;
   last_seen_msg_count?: number | null;
+  // Compression lineage (v1 — WebUI-native sessions only)
+  _parent_session_id?: string | null;
+  _compression_segment_count?: number;
+  _lineage_root_id?: string | null;
+  _lineage_tip_id?: string | null;
+  compression_anchor_visible_idx?: number | null;
+  compression_anchor_message_key?: string | null;
+  _readonly?: boolean;
+  // Persistent compressor data — restores ContextUsageIndicator after page refresh
+  context_length?: number;
+  last_prompt_tokens?: number;
+  threshold_tokens?: number;
+  last_compression_time?: number;  // epoch seconds — set by backend on compression
 }
 
 export interface SessionListItem {
@@ -31,6 +44,13 @@ export interface SessionListItem {
   skills?: string[] | null;
   message_count?: number;
   last_seen_msg_count?: number | null;
+  // Compression chain metadata (v1 — WebUI-native sessions only)
+  _compression_segment_count?: number;
+  _lineage_root_id?: string | null;
+  _lineage_tip_id?: string | null;
+  _parent_session_id?: string | null;
+  _readonly?: boolean;
+  _compaction_n?: number;
 }
 
 // types/message.ts - 消息相关类型定义
@@ -46,6 +66,7 @@ export interface Message {
   tool_call_id?: string;
   tool_name?: string;
   tool_calls?: ToolCallMessage[];
+  _compression?: CompressionRecord;  // Attached by streamManager on 'compressed' SSE event
 }
 
 export interface ToolCallMessage {
@@ -122,7 +143,9 @@ export interface Settings {
   sync_insights: boolean;
   check_updates: boolean;
   bot_name: string;
-  auto_compress_threshold?: string;
+  auto_compress_threshold?: string;       // Path 1 — auto-compress by message count
+  auto_compress_token_threshold?: string;  // Path 3 — auto-compress by token % of context
+  max_compaction_snapshots?: string;       // max archived compaction snapshots to retain
   last_seen_cron_ts?: number;  // DEPRECATED — replaced by last_seen_cron_ts_map
   last_seen_cron_ts_map?: Record<string, number>;  // per-job {job_id: epoch_seconds}
   default_mode?: 'manual' | 'smart' | 'yolo';
@@ -217,6 +240,31 @@ export interface UsageInfo {
   context_length?: number;
   last_prompt_tokens?: number;
   threshold_tokens?: number;
+}
+
+// ============================================================
+// Compression-related types
+// ============================================================
+
+/** Represents a single compression event in a chat session. */
+export interface CompressionRecord {
+  compression_time: number;
+  messages_before: number;
+  messages_after: number;
+  approx_tokens_before: number;
+  approx_tokens_after: number;
+  summary_text?: string | null;
+  trigger: 'auto' | 'manual';
+}
+
+/** Represents one segment in a compression chain (for sidebar display). */
+export interface CompressionChainSegment {
+  session_id: string;
+  title: string;
+  message_count: number;
+  created_at: number;
+  is_active: boolean;
+  parent_session_id?: string | null;
 }
 
 // types/nav.ts - 导航相关类型定义

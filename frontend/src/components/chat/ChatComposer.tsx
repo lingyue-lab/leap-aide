@@ -1,4 +1,4 @@
-import React, { useRef, useCallback, useState, useEffect } from 'react';
+import React, { useRef, useCallback, useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useChatStore } from '@/stores/useChatStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
@@ -6,6 +6,7 @@ import { useSessionStore } from '@/stores/useSessionStore';
 import { modelsService } from '@/services/api';
 import ModeSelector from '@/components/common/ModeSelector';
 import ApprovalIndicator from '@/components/common/ApprovalIndicator';
+import ContextUsageIndicator from '@/components/chat/ContextUsageIndicator';
 import { useModeShortcut } from '@/hooks/useModeShortcut';
 import type { ModelGroup } from '@/types';
 
@@ -18,7 +19,7 @@ interface ChatComposerProps {
 
 export default function ChatComposer({ onSend, onCancel, busy, streaming }: ChatComposerProps) {
   const { t } = useTranslation('chat');
-  const { pendingFiles } = useChatStore();
+  const { messages, pendingFiles, lastUsage } = useChatStore();
   const { settings } = useSettingsStore();
   const { currentSession, updateSessionModel } = useSessionStore();
   useModeShortcut();
@@ -32,10 +33,29 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [modelGroups, setModelGroups] = useState<ModelGroup[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
+  const [compressing, setCompressing] = useState(false);
+
+  const handleCompressingChange = useCallback((v: boolean) => {
+    setCompressing(v);
+  }, []);
 
   const sendByCtrlEnter = settings?.send_key === 'ctrl+enter';
   const hasInput = input.trim().length > 0 || pendingFiles.length > 0;
-  const canSend = hasInput && !busy;
+  const canSend = hasInput && !busy && !compressing;
+
+  // Derive last compression time: prefer persisted session field (survives page
+  // refresh), fall back to scanning live messages' _compression metadata (SSE).
+  const lastCompressionTime = useMemo(() => {
+    const fromSession = currentSession?.last_compression_time;
+    if (fromSession && fromSession > 0) return fromSession;
+    let latest = 0;
+    for (const msg of messages) {
+      if (msg._compression && msg._compression.compression_time > latest) {
+        latest = msg._compression.compression_time;
+      }
+    }
+    return latest > 0 ? latest : null;
+  }, [currentSession?.last_compression_time, messages]);
 
   // Resolve displayed model: session model → settings default → 'Model'
   const sessionModel = currentSession?.model ?? '';
@@ -166,8 +186,8 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
   }, []);
 
   return (
-    <div 
-      className={`composer-wrap ${isDragOver ? 'drag-over' : ''}`}
+    <div
+      className={`composer-wrap ${isDragOver ? 'drag-over' : ''}${compressing ? ' compressing' : ''}`}
       onDrop={handleDrop}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -252,6 +272,18 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
       )}
 
       <div className="composer-box">
+        {/* Compression overlay — blocks interaction and shows status */}
+        {compressing && (
+          <div className="composer-compress-overlay">
+            <span className="composer-compress-overlay-text">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: 'spin 1s linear infinite' }}>
+                <circle cx="12" cy="12" r="10" strokeOpacity="0.25" />
+                <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" />
+              </svg>
+              {t('sessions.compressing', { ns: 'common' })}
+            </span>
+          </div>
+        )}
         {/* Drop hint - only visible when dragging */}
         {isDragOver && (
           <div className="drop-hint">
@@ -296,9 +328,9 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          disabled={busy && !streaming}
+          disabled={compressing || (busy && !streaming)}
         />
-        
+
         {/* Footer */}
         <div className="composer-footer">
           <div className="composer-left">
@@ -306,7 +338,7 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
               className="icon-btn"
               onClick={handleAttachClick}
               title={t('composer.attach')}
-              disabled={busy && !streaming}
+              disabled={compressing || (busy && !streaming)}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
@@ -321,7 +353,8 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
               className="chip model"
               onClick={() => setModelPickerOpen((v) => !v)}
               title="Switch model"
-              style={{ cursor: 'pointer' }}
+              disabled={compressing}
+              style={{ cursor: compressing ? 'not-allowed' : 'pointer' }}
             >
               {displayModel}
               <svg width="8" height="5" viewBox="0 0 8 5" fill="none" style={{ marginLeft: 4, opacity: 0.6 }}>
@@ -337,6 +370,7 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
           <ApprovalIndicator />
 
           <div className="composer-right">
+            <ContextUsageIndicator usage={lastUsage} session={currentSession} lastCompressionTime={lastCompressionTime} streaming={streaming} onCompressingChange={handleCompressingChange} />
             {busy && streaming && (
               <button
                 className="cancel-btn"
@@ -349,7 +383,7 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
                 </svg>
               </button>
             )}
-            
+
             <button
               className="send-btn"
               onClick={handleSubmit}

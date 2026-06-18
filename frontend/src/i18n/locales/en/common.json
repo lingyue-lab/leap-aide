@@ -113,7 +113,13 @@
       "check_updates_hint": "Automatically check for new versions",
       "managed_via_settings": "Managed via settings",
       "auto_compress_threshold": "Auto-compress threshold",
-      "auto_compress_threshold_hint": "Automatically compress session history when message count exceeds this limit. Uses AI to summarize older exchanges, freeing up context window space."
+      "auto_compress_threshold_hint": "Automatically compress session history when message count exceeds this limit. Uses AI to summarize older exchanges, freeing up context window space.",
+      "auto_compress_msg_threshold": "Auto-compress (message count)",
+      "auto_compress_msg_threshold_hint": "Path 1 — Trigger compression when the session reaches this many messages. Compresses in-place in the same session.",
+      "auto_compress_token_threshold": "Auto-compress (token threshold)",
+      "auto_compress_token_threshold_hint": "Trigger compression when prompt tokens reach this percentage of the model's context window. Like the message-count path, compresses in-place in the same session.",
+      "max_compaction_snapshots": "Max compaction snapshots",
+      "max_compaction_snapshots_hint": "Maximum number of read-only archived snapshots to keep per session. Older snapshots beyond this limit are automatically deleted."
     },
     "themes": {
       "dark": "Dark (VSCode Dark Modern)",
@@ -210,6 +216,18 @@
     "placeholder": "Enter task description...",
     "show_panel": "Show todos panel",
     "hide_panel": "Hide todos panel"
+  },
+  "context_usage": {
+    "context": "Context",
+    "prompt_tokens": "Prompt tokens",
+    "auto_compress_at": "Auto-compress at",
+    "last_compression": "Last compression",
+    "total_input_tokens": "Total input tokens",
+    "total_output_tokens": "Total output tokens",
+    "messages": "Messages",
+    "click_to_compress": "Click to compress immediately",
+    "click_disabled_streaming": "Click to compress — unavailable while streaming",
+    "compressing": "Compressing…"
   },
   "chat": {
     "input_placeholder": "Type a message...",

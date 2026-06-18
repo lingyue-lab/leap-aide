@@ -113,7 +113,13 @@
       "check_updates_hint": "自动检查新版本",
       "managed_via_settings": "通过设置管理",
       "auto_compress_threshold": "自动压缩阈値",
-      "auto_compress_threshold_hint": "当会话消息数超过此限制时自动压缩历史记录，使用 AI 对较旧的对话进行摘要，释放上下文窗口空间。"
+      "auto_compress_threshold_hint": "当会话消息数超过此限制时自动压缩历史记录，使用 AI 对较旧的对话进行摘要，释放上下文窗口空间。",
+      "auto_compress_msg_threshold": "自动压缩（消息数量）",
+      "auto_compress_msg_threshold_hint": "路径 1 — 会话消息数达到该值时触发压缩，原地替换同一 session 中的消息。",
+      "auto_compress_token_threshold": "自动压缩（Token 阈值）",
+      "auto_compress_token_threshold_hint": "提示词 token 数达到模型上下文窗口的该百分比时触发压缩。与消息数量路径一样，在同一个 session 内原地压缩。",
+      "max_compaction_snapshots": "压缩快照保留上限",
+      "max_compaction_snapshots_hint": "每个会话最多保留的只读归档快照数量，超出上限时自动删除最旧的快照。"
     },
     "themes": {
       "dark": "深色 (VSCode Dark Modern)",
@@ -210,6 +216,18 @@
     "placeholder": "输入任务描述...",
     "show_panel": "显示待办面板",
     "hide_panel": "隐藏待办面板"
+  },
+  "context_usage": {
+    "context": "上下文",
+    "prompt_tokens": "提示词 Token",
+    "auto_compress_at": "自动压缩阈值",
+    "last_compression": "上次压缩时间",
+    "total_input_tokens": "总输入 Token",
+    "total_output_tokens": "总输出 Token",
+    "messages": "消息数",
+    "click_to_compress": "点击立即触发压缩",
+    "click_disabled_streaming": "点击触发压缩 — 对话进行中不可用",
+    "compressing": "压缩中…"
   },
   "chat": {
     "input_placeholder": "输入消息...",

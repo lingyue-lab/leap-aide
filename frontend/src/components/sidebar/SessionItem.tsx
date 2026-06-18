@@ -13,11 +13,12 @@ interface SessionItemProps {
   session: SessionListItem;
   isActive: boolean;
   onClick: () => void;
+  archivedChildren?: SessionListItem[];
 }
 
-export default function SessionItem({ session, isActive, onClick }: SessionItemProps) {
+export default function SessionItem({ session, isActive, onClick, archivedChildren }: SessionItemProps) {
   const { t, i18n } = useTranslation('common');
-  const { renameSession, deleteSession, pinSession, assignWorkspace, updateSessionLastSeen, loadSession } = useSessionStore();
+  const { renameSession, deleteSession, pinSession, assignWorkspace, updateSessionLastSeen, loadSession, selectSession, currentSessionId } = useSessionStore();
   const { workspaces } = useWorkspaceStore();
 
   // Unread count: how many messages were added since the user last viewed this session
@@ -26,6 +27,7 @@ export default function SessionItem({ session, isActive, onClick }: SessionItemP
   const unreadCount = Math.max(0, sessionMsgCount - lastSeenMsgCount);
 
   const [isEditing, setIsEditing] = useState(false);
+  const [archivedExpanded, setArchivedExpanded] = useState(false);
   const [editTitle, setEditTitle] = useState(session.title);
   const [menuOpen, setMenuOpen] = useState(false);
   const [showWorkspaceMenu, setShowWorkspaceMenu] = useState(false);
@@ -409,6 +411,47 @@ export default function SessionItem({ session, isActive, onClick }: SessionItemP
           </div>
         )}
       </div>
+
+      {/* Archived (compaction) child sessions — collapsible, read-only */}
+      {archivedChildren && archivedChildren.length > 0 && (
+        <div className="session-archived-section">
+          <div
+            className="session-archived-toggle"
+            onClick={(e) => {
+              e.stopPropagation();
+              setArchivedExpanded(!archivedExpanded);
+            }}
+          >
+            <span className={`session-archived-caret ${archivedExpanded ? 'expanded' : ''}`}>▸</span>
+            <span className="session-archived-count">
+              {archivedChildren.length} snapshot{archivedChildren.length > 1 ? 's' : ''}
+            </span>
+          </div>
+          {archivedExpanded && (
+            <div className="session-archived-children">
+              {[...archivedChildren]
+                .sort((a, b) => (b._compaction_n || 0) - (a._compaction_n || 0))
+                .map((child) => (
+                  <div
+                    key={child.session_id}
+                    className={`session-item session-item-archived ${currentSessionId === child.session_id ? 'active' : ''}`}
+                    onClick={(e) => { e.stopPropagation(); selectSession(child.session_id); }}
+                    data-session-id={child.session_id}
+                  >
+                    <div className="session-text">
+                      <div className="session-title-row">
+                        <span className="session-archived-icon">📜</span>
+                        <span className="session-title">
+                          #{child._compaction_n} · {child.message_count ?? 0} msgs
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Clear History Modal */}
       {showClearModal && (

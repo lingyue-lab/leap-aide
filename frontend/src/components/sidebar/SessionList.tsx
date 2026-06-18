@@ -41,14 +41,29 @@ export default function SessionList() {
     };
   }, [workspaces, t]);
 
-  // Group sessions by workspace; pinned sessions stay at the top within their workspace group
+  // Separate archived (read-only compaction snapshots) from active sessions
+  const { topLevelSessions, archivedMap } = useMemo(() => {
+    const archivedMap = new Map<string, typeof sessions>();
+    const topLevel = filteredSessions.filter((s) => {
+      if (s._readonly && s._parent_session_id) {
+        const children = archivedMap.get(s._parent_session_id) || [];
+        children.push(s);
+        archivedMap.set(s._parent_session_id, children);
+        return false;
+      }
+      return true;
+    });
+    return { topLevelSessions: topLevel, archivedMap };
+  }, [filteredSessions]);
+
+  // Group sessions by workspace; pinned sessions stay at the top within their workspace group.
   const groupedSessions = useMemo(() => {
     const groups: { label: string; sessions: typeof sessions; key: string }[] = [];
 
     // Map from workspace path (or '__none__') → session list (all sessions, including pinned)
     const wsMap = new Map<string, typeof sessions>();
 
-    filteredSessions.forEach((s) => {
+    topLevelSessions.forEach((s) => {
       const key = s.workspace || '__none__';
       if (!wsMap.has(key)) wsMap.set(key, []);
       wsMap.get(key)!.push(s);
@@ -75,7 +90,7 @@ export default function SessionList() {
     });
 
     return groups;
-  }, [filteredSessions, wsLabel, t]);
+  }, [topLevelSessions, wsLabel, t]);
 
   // Initialize collapse state once groups are known:
   // first group expanded, all others collapsed
@@ -168,13 +183,14 @@ export default function SessionList() {
                   session={session}
                   isActive={currentSessionId === session.session_id}
                   onClick={() => selectSession(session.session_id)}
+                  archivedChildren={archivedMap.get(session.session_id)}
                 />
               ))}
             </div>
           );
         })}
         
-        {filteredSessions.length === 0 && (
+        {topLevelSessions.length === 0 && archivedMap.size === 0 && (
           <div className="text-center text-[var(--muted)] text-sm py-4">
             {searchQuery ? t('sessions.no_results') : t('sessions.empty')}
           </div>

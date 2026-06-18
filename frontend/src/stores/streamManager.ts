@@ -261,6 +261,16 @@ function _attachEventListeners(es: EventSource, sessionId: string, streamId: str
       role: 'assistant',
       content: `*[${data.message || 'Context compressed'}]*`,
       _ts: Date.now() / 1000,
+      // Attach structured compression metadata for CompressionCard rendering
+      _compression: data.saved_messages != null ? {
+        compression_time: Date.now() / 1000,
+        messages_before: (data.saved_messages || 0) + (s.messages.length || 0),
+        messages_after: s.messages.length || 0,
+        approx_tokens_before: data.approx_tokens_before || 0,
+        approx_tokens_after: data.approx_tokens_after || 0,
+        summary_text: null,
+        trigger: 'auto' as const,
+      } : undefined,
     };
     _sessionStates.set(sessionId, { ...s, messages: [...s.messages, msg] });
     _notifyImmediate(sessionId);

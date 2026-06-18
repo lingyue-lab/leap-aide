@@ -247,22 +247,55 @@ function NotificationsGroup({ form, set }: GroupProps) {
 
 function HistoryGroup({ form, set }: GroupProps) {
   const { t } = useTranslation();
-  const THRESHOLDS = [
+  const MSG_THRESHOLDS = [
     { value: '0',   label: t('common:disabled', 'Disabled') },
     { value: '100', label: '100 messages' },
     { value: '200', label: '200 messages' },
     { value: '500', label: '500 messages' },
   ];
+  const TOKEN_THRESHOLDS = [
+    { value: '0',    label: t('common:disabled', 'Disabled') },
+    { value: '0.05', label: '5% of context' },
+    { value: '0.50', label: '50% of context' },
+    { value: '0.60', label: '60% of context' },
+    { value: '0.70', label: '70% of context' },
+    { value: '0.85', label: '85% of context' },
+  ];
   return (
     <>
       <FieldRow
-        label={t('settings.fields.auto_compress_threshold')}
-        hint={t('settings.fields.auto_compress_threshold_hint')}
+        label={t('settings.fields.auto_compress_msg_threshold')}
+        hint={t('settings.fields.auto_compress_msg_threshold_hint')}
       >
         <SelectField
           value={String(form.auto_compress_threshold ?? '0')}
           onChange={(v) => set('auto_compress_threshold', v)}
-          options={THRESHOLDS}
+          options={MSG_THRESHOLDS}
+        />
+      </FieldRow>
+      <FieldRow
+        label={t('settings.fields.auto_compress_token_threshold')}
+        hint={t('settings.fields.auto_compress_token_threshold_hint')}
+      >
+        <SelectField
+          value={String(form.auto_compress_token_threshold ?? '0')}
+          onChange={(v) => set('auto_compress_token_threshold', v)}
+          options={TOKEN_THRESHOLDS}
+        />
+      </FieldRow>
+      <FieldRow
+        label={t('settings.fields.max_compaction_snapshots')}
+        hint={t('settings.fields.max_compaction_snapshots_hint')}
+      >
+        <SelectField
+          value={String(form.max_compaction_snapshots ?? '5')}
+          onChange={(v) => set('max_compaction_snapshots', v)}
+          options={[
+            { value: '3',  label: '3 snapshots' },
+            { value: '5',  label: '5 snapshots' },
+            { value: '10', label: '10 snapshots' },
+            { value: '20', label: '20 snapshots' },
+          ]}
         />
       </FieldRow>
     </>
