@@ -1617,14 +1617,16 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             import inspect as _inspect
             _agent_params = set(_inspect.signature(_AIAgent.__init__).parameters)
 
-            # CLI-parity reasoning effort: read agent.reasoning_effort from the
-            # active profile's config.yaml (the same key the CLI writes via
-            # `/reasoning <level>`) and hand the parsed dict to AIAgent.  When
-            # the key is absent or invalid, pass None → agent uses its default.
+            # Per-session reasoning effort: read from session first (new behaviour),
+            # fall back to global config.yaml for backward compatibility.
+            # When both are absent, pass None → agent uses its default.
             try:
                 from api.config import parse_reasoning_effort as _parse_reff
-                _effort_cfg = _cfg.cfg.get('agent', {}) if isinstance(_cfg.cfg, dict) else {}
-                _effort_raw = _effort_cfg.get('reasoning_effort') if isinstance(_effort_cfg, dict) else None
+                _effort_raw = getattr(s, 'reasoning_effort', None)
+                if _effort_raw is None:
+                    # Fall back to global config.yaml (CLI-parity / old sessions)
+                    _effort_cfg = _cfg.cfg.get('agent', {}) if isinstance(_cfg.cfg, dict) else {}
+                    _effort_raw = _effort_cfg.get('reasoning_effort') if isinstance(_effort_cfg, dict) else None
                 _reasoning_config = _parse_reff(_effort_raw)
             except Exception:
                 _reasoning_config = None
@@ -1688,6 +1690,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                     resolved_provider or '',
                     sorted(_toolsets) if _toolsets else [],
                     sorted(getattr(s, 'skills', None) or []),
+                    _reasoning_config,
                 ], sort_keys=True)
                 _agent_sig = _hashlib.sha256(_sig_blob.encode()).hexdigest()[:16]
 
@@ -1707,6 +1710,9 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         agent.reasoning_callback = _agent_kwargs.get('reasoning_callback')
                     if hasattr(agent, 'clarify_callback'):
                         agent.clarify_callback = _agent_kwargs.get('clarify_callback')
+                    # Refresh reasoning_config — may have changed per-session between turns
+                    if hasattr(agent, 'reasoning_config') and 'reasoning_config' in _agent_kwargs:
+                        agent.reasoning_config = _agent_kwargs['reasoning_config']
                     if _session_db is not None:
                         agent._session_db = _session_db
                     if hasattr(agent, '_api_call_count'):

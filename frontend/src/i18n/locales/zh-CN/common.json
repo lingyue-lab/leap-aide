@@ -100,6 +100,8 @@
       "send_key_hint": "提交消息的按键组合",
       "bot_name": "机器人名称",
       "bot_name_hint": "助手显示的名称",
+      "default_reasoning_effort": "默认推理力度",
+      "default_reasoning_effort_hint": "设置新会话的全局默认推理力度（config.yaml）",
       "sound_effects": "音效",
       "sound_effects_hint": "收到消息时播放声音",
       "desktop_notifications": "桌面通知",

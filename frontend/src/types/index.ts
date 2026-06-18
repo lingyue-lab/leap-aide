@@ -10,6 +10,7 @@ export interface Session {
   title: string;
   workspace?: string;
   model?: string;
+  reasoning_effort?: string | null;  // 'minimal'|'low'|'medium'|'high'|'xhigh'|'none'|null
   messages: Message[];
   created_at: number;
   updated_at?: number;
@@ -227,6 +228,7 @@ export interface ModelGroup {
 export interface Model {
   id: string;
   label: string;
+  supportsExtendedThinking?: boolean;
 }
 
 export interface Provider {

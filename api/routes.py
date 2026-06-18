@@ -1511,6 +1511,15 @@ def handle_post(handler, parsed) -> bool:
         with _get_session_agent_lock(body["session_id"]):
             s.workspace = new_ws
             s.model = body.get("model", s.model)
+            # Per-session reasoning effort (None = use global default)
+            if "reasoning_effort" in body:
+                raw = str(body["reasoning_effort"] or "").strip().lower()
+                if raw == "" or raw == "none":
+                    s.reasoning_effort = raw if raw == "none" else None
+                elif raw not in ("minimal", "low", "medium", "high", "xhigh"):
+                    return bad(handler, f"Invalid reasoning_effort: {body['reasoning_effort']}")
+                else:
+                    s.reasoning_effort = raw
             s.save()
         return j(handler, {"session": s.compact() | {"messages": s.messages}})
 

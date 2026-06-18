@@ -1334,6 +1334,20 @@
     background: rgba(124, 185, 255, 0.1);
   }
 
+  /* Reasoning effort chip — teal/green tint to differentiate from model chip */
+  .chip.reasoning {
+    color: var(--green, #4ade80);
+    border-color: rgba(74, 222, 128, 0.35);
+    background: rgba(74, 222, 128, 0.1);
+  }
+
+  .chip.reasoning.inactive {
+    color: var(--muted);
+    border-color: var(--border2);
+    background: rgba(255, 255, 255, 0.03);
+    opacity: 0.5;
+  }
+
   /* Mode selector — drop-up chip + menu */
   .mode-selector {
     position: relative;

@@ -41,5 +41,16 @@
     "smart": "Smart",
     "yolo": "YOLO",
     "smart_unsupported": "Smart mode requires a newer agent version"
+  },
+  "reasoning": {
+    "label": "Reasoning Effort",
+    "default": "Default",
+    "none": "None",
+    "minimal": "Minimal",
+    "low": "Low",
+    "medium": "Medium",
+    "high": "High",
+    "xhigh": "XHigh",
+    "unsupported": "This model does not support extended thinking"
   }
 }

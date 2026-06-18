@@ -1250,6 +1250,39 @@ def _get_label_for_model(model_id: str, existing_groups: list) -> str:
     )
 
 
+def _model_supports_extended_thinking(model_id: str, provider: str = "") -> bool:
+    """Return whether a model is known to support extended thinking / configurable reasoning effort.
+
+    This is a best-effort heuristic.  Models not recognised here default to False
+    (chip disabled) — the agent will silently ignore the setting regardless.
+    """
+    mid = (model_id or "").lower()
+    pid = (provider or "").lower()
+    # Anthropic: Opus & Sonnet support extended thinking; Haiku does not
+    if "claude" in mid or "anthropic" in pid:
+        if "haiku" in mid:
+            return False
+        if "opus" in mid or "sonnet" in mid:
+            return True
+    # DeepSeek R1 (reasoning model) and V4 family
+    if "deepseek" in pid or "deepseek" in mid:
+        if "r1" in mid or "reasoner" in mid or "v4" in mid:
+            return True
+    # Gemini 2.5+ thinking models
+    if "gemini" in mid and ("2.5" in mid or "3." in mid or "3-" in mid):
+        return True
+    # xAI Grok
+    if "grok" in mid:
+        return True
+    # Qwen3 family
+    if "qwen3" in mid:
+        return True
+    # OpenAI GPT-5.x (reasoning capable)
+    if ("gpt-5" in mid or "gpt-5." in mid) and "openai" in pid:
+        return True
+    return False
+
+
 def get_available_models() -> dict:
     """
     Return available models grouped by provider.
@@ -1756,6 +1789,15 @@ def get_available_models() -> dict:
                             "provider_id": active_provider or "default",
                             "models": [{"id": default_model, "label": label}],
                         }
+                    )
+
+        # Enrich all models with supports_extended_thinking flag for UI chip state
+        for g in groups:
+            provider_id = g.get("provider_id", "")
+            for m in g.get("models", []):
+                if "supports_extended_thinking" not in m:
+                    m["supports_extended_thinking"] = _model_supports_extended_thinking(
+                        m.get("id", ""), provider_id
                     )
 
         return {

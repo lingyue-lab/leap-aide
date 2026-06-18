@@ -320,6 +320,7 @@ class Session:
                  skills=None,
                  last_seen_msg_count=None,
                  mode: str='manual',
+                 reasoning_effort: str=None,
                  parent_session_id: str=None,
                  compression_segment_count: int=0,
                  context_length: int=0,
@@ -354,6 +355,7 @@ class Session:
         self.compression_anchor_message_key = compression_anchor_message_key
         self.last_seen_msg_count = last_seen_msg_count  # None = never explicitly seen
         self._mode = mode if mode in ('manual', 'smart', 'yolo') else 'manual'
+        self.reasoning_effort = reasoning_effort  # None = use global config.yaml default
         self._metadata_message_count = None
         # Compression lineage (v1 — WebUI-native sessions only)
         self.parent_session_id = parent_session_id
@@ -392,7 +394,7 @@ class Session:
             'session_id', 'title', 'workspace', 'model', 'created_at', 'updated_at',
             'pinned', 'archived', 'project_id', 'profile',
             'input_tokens', 'output_tokens', 'estimated_cost',
-            'personality', 'active_stream_id', 'skills',
+            'personality', 'reasoning_effort', 'active_stream_id', 'skills',
             'pending_user_message', 'pending_attachments', 'pending_started_at',
             'compression_anchor_visible_idx', 'compression_anchor_message_key',
             'last_seen_msg_count', 'mode', 'session_approved',
@@ -496,6 +498,7 @@ class Session:
             'output_tokens': self.output_tokens,
             'estimated_cost': self.estimated_cost,
             'personality': self.personality,
+            'reasoning_effort': getattr(self, 'reasoning_effort', None),
             'skills': self.skills,
             'last_seen_msg_count': _clamped_last_seen,
             'compression_anchor_visible_idx': self.compression_anchor_visible_idx,
@@ -617,11 +620,20 @@ def new_session(workspace=None, model=None, profile=None):
         default_mode = load_settings().get("default_mode", "manual")
     except Exception:
         default_mode = "manual"
+    # Inherit reasoning_effort from global config.yaml for new sessions
+    try:
+        from api.config import _load_yaml_config_file, _get_config_path
+        _config_data = _load_yaml_config_file(_get_config_path())
+        _agent_cfg = _config_data.get("agent") if isinstance(_config_data, dict) else {}
+        _effort_default = _agent_cfg.get("reasoning_effort") if isinstance(_agent_cfg, dict) else None
+    except Exception:
+        _effort_default = None
     s = Session(
         workspace=workspace or get_last_workspace(),
         model=effective_model,
         profile=profile,
         mode=default_mode,
+        reasoning_effort=_effort_default,
     )
     with LOCK:
         SESSIONS[s.session_id] = s

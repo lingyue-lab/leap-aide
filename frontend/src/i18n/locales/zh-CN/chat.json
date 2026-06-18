@@ -41,5 +41,16 @@
     "smart": "智能评估",
     "yolo": "全部放行",
     "smart_unsupported": "智能模式需要更新版本的 Agent"
+  },
+  "reasoning": {
+    "label": "推理力度",
+    "default": "默认",
+    "none": "无",
+    "minimal": "极简",
+    "low": "低",
+    "medium": "中",
+    "high": "高",
+    "xhigh": "极高",
+    "unsupported": "此模型不支持扩展思考"
   }
 }

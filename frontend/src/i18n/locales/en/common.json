@@ -100,6 +100,8 @@
       "send_key_hint": "Key combination to submit a message",
       "bot_name": "Bot Name",
       "bot_name_hint": "Display name shown for the assistant",
+      "default_reasoning_effort": "Default Reasoning Effort",
+      "default_reasoning_effort_hint": "Set the global default reasoning effort for new sessions (config.yaml)",
       "sound_effects": "Sound effects",
       "sound_effects_hint": "Play sounds on message receive",
       "desktop_notifications": "Desktop notifications",

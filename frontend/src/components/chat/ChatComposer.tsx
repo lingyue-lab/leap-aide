@@ -21,7 +21,7 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
   const { t } = useTranslation('chat');
   const { messages, pendingFiles, lastUsage } = useChatStore();
   const { settings } = useSettingsStore();
-  const { currentSession, updateSessionModel } = useSessionStore();
+  const { currentSession, updateSessionModel, updateSessionReasoningEffort } = useSessionStore();
   useModeShortcut();
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -34,6 +34,56 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
   const [modelGroups, setModelGroups] = useState<ModelGroup[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [compressing, setCompressing] = useState(false);
+
+  // Reasoning effort chip state
+  const reasoningChipRef = useRef<HTMLButtonElement>(null);
+  const reasoningPopoverRef = useRef<HTMLDivElement>(null);
+  const [reasoningPickerOpen, setReasoningPickerOpen] = useState(false);
+
+  const REASONING_EFFORT_LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
+
+  // Resolve current reasoning effort: session value → 'default'
+  const effectiveReasoningEffort = currentSession?.reasoning_effort ?? null;
+  const displayReasoningEffort = effectiveReasoningEffort || 'default';
+
+  // Determine if current model supports extended thinking
+  const currentModelSupportsThinking = useMemo(() => {
+    const sessionModelId = currentSession?.model ?? '';
+    if (!sessionModelId || modelGroups.length === 0) return true; // default: enabled until models load
+    for (const g of modelGroups) {
+      for (const m of g.models) {
+        if (m.id === sessionModelId) {
+          return m.supportsExtendedThinking !== false;
+        }
+      }
+    }
+    return true; // unknown model: fail open
+  }, [currentSession?.model, modelGroups]);
+
+  // Close reasoning popover on outside click
+  useEffect(() => {
+    if (!reasoningPickerOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        reasoningPopoverRef.current && !reasoningPopoverRef.current.contains(e.target as Node) &&
+        reasoningChipRef.current && !reasoningChipRef.current.contains(e.target as Node)
+      ) {
+        setReasoningPickerOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [reasoningPickerOpen]);
+
+  const handleReasoningSelect = useCallback(async (effort: string | null) => {
+    setReasoningPickerOpen(false);
+    if (!currentSession?.session_id) return;
+    try {
+      await updateSessionReasoningEffort(currentSession.session_id, effort);
+    } catch {
+      // silently ignore
+    }
+  }, [currentSession, updateSessionReasoningEffort]);
 
   const handleCompressingChange = useCallback((v: boolean) => {
     setCompressing(v);
@@ -271,6 +321,99 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
         </div>
       )}
 
+      {/* Reasoning effort popover */}
+      {reasoningPickerOpen && (
+        <div
+          ref={reasoningPopoverRef}
+          style={{
+            position: 'absolute',
+            bottom: 'calc(100% - 12px)',
+            left: 200,
+            minWidth: 160,
+            maxWidth: 200,
+            maxHeight: 300,
+            overflowY: 'auto',
+            background: 'var(--surface)',
+            border: '1px solid var(--border2)',
+            borderRadius: 10,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
+            zIndex: 200,
+            padding: 0,
+          }}
+        >
+          {/* Popover header */}
+          <div style={{
+            padding: '8px 14px 6px',
+            fontSize: 10,
+            fontWeight: 600,
+            letterSpacing: '0.06em',
+            textTransform: 'uppercase',
+            color: 'var(--muted)',
+            borderBottom: '1px solid var(--border2)',
+          }}>
+            {t('reasoning.label')}
+          </div>
+          <div style={{ padding: '6px 0' }}>
+          {/* Default option — uses global config.yaml fallback */}
+          <button
+            onClick={() => handleReasoningSelect(null)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              width: '100%',
+              padding: '7px 14px',
+              background: displayReasoningEffort === 'default' ? 'color-mix(in srgb, var(--blue) 15%, transparent)' : 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              fontSize: 12,
+              color: displayReasoningEffort === 'default' ? 'var(--blue)' : 'var(--text)',
+              textAlign: 'left',
+            }}
+          >
+            {displayReasoningEffort === 'default' && (
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ flexShrink: 0 }}>
+                <path d="M2 6L5 9L10 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            )}
+            {displayReasoningEffort !== 'default' && <span style={{ width: 12, flexShrink: 0 }} />}
+            <span>{t('reasoning.default')}</span>
+          </button>
+
+          {REASONING_EFFORT_LEVELS.map((level) => {
+            const isActive = effectiveReasoningEffort === level;
+            return (
+              <button
+                key={level}
+                onClick={() => handleReasoningSelect(level)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  width: '100%',
+                  padding: '7px 14px',
+                  background: isActive ? 'color-mix(in srgb, var(--blue) 15%, transparent)' : 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  color: isActive ? 'var(--blue)' : 'var(--text)',
+                  textAlign: 'left',
+                }}
+              >
+                {isActive && (
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ flexShrink: 0 }}>
+                    <path d="M2 6L5 9L10 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                )}
+                {!isActive && <span style={{ width: 12, flexShrink: 0 }} />}
+                <span>{t(`reasoning.${level}`)}</span>
+              </button>
+            );
+          })}
+          </div>
+        </div>
+      )}
+
       <div className="composer-box">
         {/* Compression overlay — blocks interaction and shows status */}
         {compressing && (
@@ -357,6 +500,26 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
               style={{ cursor: compressing ? 'not-allowed' : 'pointer' }}
             >
               {displayModel}
+              <svg width="8" height="5" viewBox="0 0 8 5" fill="none" style={{ marginLeft: 4, opacity: 0.6 }}>
+                <path d="M1 4L4 1L7 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </button>
+
+            {/* Reasoning effort chip — after model chip */}
+            <div className="composer-divider" />
+            <button
+              ref={reasoningChipRef}
+              className={`chip reasoning ${!currentModelSupportsThinking ? 'inactive' : ''}`}
+              onClick={() => currentModelSupportsThinking && setReasoningPickerOpen((v) => !v)}
+              title={
+                !currentModelSupportsThinking
+                  ? t('reasoning.unsupported')
+                  : `${t('reasoning.label')}: ${t(`reasoning.${displayReasoningEffort}`)}`
+              }
+              disabled={compressing || !currentModelSupportsThinking}
+              style={{ cursor: compressing || !currentModelSupportsThinking ? 'not-allowed' : 'pointer' }}
+            >
+              {t(`reasoning.${displayReasoningEffort}`)}
               <svg width="8" height="5" viewBox="0 0 8 5" fill="none" style={{ marginLeft: 4, opacity: 0.6 }}>
                 <path d="M1 4L4 1L7 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>

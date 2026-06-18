@@ -123,10 +123,10 @@ export const sessionService = {
     });
   },
 
-  updateModel: async (sessionId: string, model: string) => {
+  updateModel: async (sessionId: string, model: string, reasoningEffort?: string | null) => {
     return api<{ session: import('@/types').Session }>('/api/session/update', {
       method: 'POST',
-      body: JSON.stringify({ session_id: sessionId, model }),
+      body: JSON.stringify({ session_id: sessionId, model, reasoning_effort: reasoningEffort }),
     });
   },
 

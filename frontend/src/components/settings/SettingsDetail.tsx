@@ -191,6 +191,44 @@ function ModelGroup({ form, set }: GroupProps) {
     { value: 'ctrl+enter', label: t('settings.send_keys.ctrl_enter') },
   ];
 
+  // Global default reasoning effort (from config.yaml, not WebUI settings)
+  const [globalEffort, setGlobalEffort] = useState<string>('');
+
+  useEffect(() => {
+    fetch('/api/reasoning', { credentials: 'include' })
+      .then((r) => r.json())
+      .then((d) => setGlobalEffort(d.reasoning_effort || ''))
+      .catch(() => {});
+  }, []);
+
+  const handleGlobalEffortChange = async (value: string) => {
+    setGlobalEffort(value);
+    try {
+      await fetch('/api/reasoning', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ effort: value || 'none' }),
+        credentials: 'include',
+      });
+    } catch {
+      // revert on failure
+      fetch('/api/reasoning', { credentials: 'include' })
+        .then((r) => r.json())
+        .then((d) => setGlobalEffort(d.reasoning_effort || ''))
+        .catch(() => {});
+    }
+  };
+
+  const EFFORT_OPTIONS: { value: string; label: string }[] = [
+    { value: '', label: t('chat:reasoning.default') },
+    { value: 'none', label: t('chat:reasoning.none') },
+    { value: 'minimal', label: t('chat:reasoning.minimal') },
+    { value: 'low', label: t('chat:reasoning.low') },
+    { value: 'medium', label: t('chat:reasoning.medium') },
+    { value: 'high', label: t('chat:reasoning.high') },
+    { value: 'xhigh', label: t('chat:reasoning.xhigh') },
+  ];
+
   return (
     <>
       <FieldRow label={t('settings.fields.send_key')} hint={t('settings.fields.send_key_hint')}>
@@ -205,6 +243,13 @@ function ModelGroup({ form, set }: GroupProps) {
           value={form.bot_name ?? ''}
           onChange={(v) => set('bot_name', v)}
           placeholder="Hermes"
+        />
+      </FieldRow>
+      <FieldRow label={t('settings.fields.default_reasoning_effort')} hint={t('settings.fields.default_reasoning_effort_hint')}>
+        <SelectField
+          value={globalEffort}
+          onChange={handleGlobalEffortChange}
+          options={EFFORT_OPTIONS}
         />
       </FieldRow>
     </>
