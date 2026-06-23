@@ -1959,6 +1959,14 @@ SERVER_START_TIME = time.time()
 SESSION_AGENT_CACHE: dict = {}   # session_id -> (AIAgent, config_sig)
 SESSION_AGENT_CACHE_LOCK = threading.Lock()
 
+# Per-session FIFO message queue for busy-input-mode="queue".
+# Queue entries are dicts with keys: message, model, workspace, attachments.
+# Messages are dequeued when the current stream ends (success/error/cancel).
+# LOST ON RESTART by design — no persistence needed.
+SESSION_MESSAGE_QUEUE: dict[str, list] = {}  # session_id -> [{payload}, ...]
+SESSION_MESSAGE_QUEUE_LOCK = threading.Lock()
+_MAX_QUEUE_LENGTH = 20
+
 
 def _evict_session_agent(session_id: str) -> None:
     """Remove a cached agent for a session (on delete, clear, or model switch)."""
@@ -2029,7 +2037,8 @@ _SETTINGS_DEFAULTS = {
     "show_thinking": True,  # show/hide thinking/reasoning blocks in chat view
     "sidebar_density": "compact",  # compact | detailed
     "auto_title_refresh_every": "0",  # adaptive title refresh: 0=off, 5/10/20=every N exchanges
-    "busy_input_mode": "queue",  # behavior when sending while agent is running: queue | interrupt | steer
+    "busy_input_mode": "interrupt",  # behavior when sending while agent is running: interrupt | queue | steer
+    "session_poll_interval_sec": "10",  # frontend session polling interval in seconds, 0=disabled
     "font_size": "medium",  # UI font size / zoom level: small | medium | large
     "auto_compress_threshold": "0",  # Path 1 — auto-compress by message count (0=off, 100/200/500)
     "auto_compress_token_threshold": "0",  # Path 3 — auto-compress by token % of context (0=off, 0.50/0.60/0.70/0.85)

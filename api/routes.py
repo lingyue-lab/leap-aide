@@ -1133,6 +1133,9 @@ def handle_get(handler, parsed) -> bool:
         cancelled = cancel_stream(stream_id)
         return j(handler, {"ok": True, "cancelled": cancelled, "stream_id": stream_id})
 
+    if parsed.path == "/api/chat/queue":
+        return _handle_queue(handler, parsed)
+
     if parsed.path == "/api/chat/stream":
         return _handle_sse_stream(handler, parsed)
 
@@ -3306,6 +3309,123 @@ def _handle_background(handler, body):
     return j(handler, {"task_id": task_id, "stream_id": stream_id, "session_id": bg.session_id})
 
 
+def _handle_queue(handler, parsed):
+    """Handle GET/DELETE for session message queue.
+
+    GET  /api/chat/queue?session_id=...          — return queue status.
+    GET  /api/chat/queue?session_id=...&action=clear — clear the queue.
+    """
+    from api.config import SESSION_MESSAGE_QUEUE, SESSION_MESSAGE_QUEUE_LOCK
+    qs = parse_qs(parsed.query)
+    session_id = qs.get("session_id", [""])[0]
+    if not session_id:
+        return bad(handler, "session_id required")
+
+    if qs.get("action", [""])[0] == "clear":
+        with SESSION_MESSAGE_QUEUE_LOCK:
+            q = SESSION_MESSAGE_QUEUE.pop(session_id, None)
+        removed = len(q) if q else 0
+        return j(handler, {"ok": True, "removed": removed})
+
+    # Default: return queue status
+    with SESSION_MESSAGE_QUEUE_LOCK:
+        q = SESSION_MESSAGE_QUEUE.get(session_id)
+        items = []
+        if q:
+            for i, payload in enumerate(q):
+                items.append({
+                    "position": i + 1,
+                    "message": payload.get("message", ""),
+                    "attachments": payload.get("attachments", []),
+                })
+    return j(handler, {"queue_length": len(items), "items": items})
+
+
+def _resolve_busy_handling(s, mode, body):
+    """Resolve what to do when a session may already be busy.
+
+    Returns (result, stream_id_or_none) where result is one of:
+      - "proceed"     — no active stream, send normally
+      - "reject"      — active stream, reject (mode=reject)
+      - "interrupted" — cancelled, proceed to send
+      - "queued"      — message enqueued for later
+      - "steered"     — steer injected into running agent
+    """
+    current_stream_id = getattr(s, "active_stream_id", None)
+    if current_stream_id:
+        with STREAMS_LOCK:
+            current_active = current_stream_id in STREAMS
+        if not current_active:
+            # Stale stream id — clear and proceed
+            s.active_stream_id = None
+            return ("proceed", None)
+    else:
+        # No active stream
+        return ("proceed", None)
+
+    # ── Active stream exists ──
+    if mode == "reject":
+        return ("reject", current_stream_id)
+
+    if mode == "interrupt":
+        from api.streaming import cancel_stream
+        cancel_stream(current_stream_id)
+        return ("interrupted", None)
+
+    if mode == "queue":
+        from api.config import SESSION_MESSAGE_QUEUE, SESSION_MESSAGE_QUEUE_LOCK, _MAX_QUEUE_LENGTH
+        payload = {
+            "message": str(body.get("message", "")).strip(),
+            "model": body.get("model") or s.model,
+            "workspace": str(body.get("workspace") or s.workspace),
+            "attachments": [str(a) for a in (body.get("attachments") or [])][:20],
+        }
+        with SESSION_MESSAGE_QUEUE_LOCK:
+            q = SESSION_MESSAGE_QUEUE.get(s.session_id)
+            if q is None:
+                q = []
+                SESSION_MESSAGE_QUEUE[s.session_id] = q
+            if len(q) >= _MAX_QUEUE_LENGTH:
+                return ("reject", None)  # caller returns 429
+            q.append(payload)
+            queue_position = len(q)   # 1-based position
+            queue_length = len(q)
+        return ("queued", {"queue_position": queue_position, "queue_length": queue_length})
+
+    if mode == "steer":
+        steer_text = str(body.get("message", "")).strip()
+        if not steer_text:
+            return ("reject", None)  # caller returns 400
+        if len(steer_text) > 4000:
+            return ("reject", None)  # caller returns 400
+        from api.streaming import _try_steer
+        steer_result = _try_steer(s.session_id, steer_text)
+        if steer_result.get("accepted"):
+            return ("steered", steer_result.get("stream_id"))
+        # Steer failed — fall back to queue
+        s._last_steer_fallback = steer_result.get("fallback", "unknown")
+        from api.config import SESSION_MESSAGE_QUEUE, SESSION_MESSAGE_QUEUE_LOCK, _MAX_QUEUE_LENGTH
+        payload = {
+            "message": str(body.get("message", "")).strip(),
+            "model": body.get("model") or s.model,
+            "workspace": str(body.get("workspace") or s.workspace),
+            "attachments": [str(a) for a in (body.get("attachments") or [])][:20],
+        }
+        with SESSION_MESSAGE_QUEUE_LOCK:
+            q = SESSION_MESSAGE_QUEUE.get(s.session_id)
+            if q is None:
+                q = []
+                SESSION_MESSAGE_QUEUE[s.session_id] = q
+            if len(q) >= _MAX_QUEUE_LENGTH:
+                return ("reject", None)
+            q.append(payload)
+            queue_position = len(q)
+            queue_length = len(q)
+        return ("queued", {"queue_position": queue_position, "queue_length": queue_length})
+
+    return ("proceed", None)  # fallback
+
+
 def _handle_chat_start(handler, body):
     try:
         require(body, "session_id")
@@ -3325,24 +3445,43 @@ def _handle_chat_start(handler, body):
         return bad(handler, str(e))
     requested_model = body.get("model") or s.model
     model, normalized_model = _resolve_compatible_session_model(requested_model)
-    # Prevent duplicate runs in the same session while a stream is still active.
-    # This commonly happens after page refresh/reconnect races and can produce
-    # duplicated clarify cards for what appears to be a single user request.
-    current_stream_id = getattr(s, "active_stream_id", None)
-    if current_stream_id:
-        with STREAMS_LOCK:
-            current_active = current_stream_id in STREAMS
-        if current_active:
+
+    # ── Busy input mode ──
+    _valid_modes = frozenset({"interrupt", "queue", "steer", "reject"})
+    mode = str(body.get("mode") or "").strip()
+    if not mode:
+        mode = str(load_settings().get("busy_input_mode", "interrupt")).strip()
+    if mode not in _valid_modes:
+        return bad(handler, f"invalid mode: {mode}. Must be one of: {', '.join(sorted(_valid_modes))}")
+    result, result_stream_id = _resolve_busy_handling(s, mode, body)
+    if result == "reject":
+        if result_stream_id:
             return j(
                 handler,
-                {
-                    "error": "session already has an active stream",
-                    "active_stream_id": current_stream_id,
-                },
+                {"error": "session already has an active stream", "active_stream_id": result_stream_id},
                 status=409,
             )
-        # Stale stream id from a previous run; clear and continue.
-        s.active_stream_id = None
+        # steer validation errors (empty text, >4000 chars) or queue overflow
+        return bad(handler, "message invalid or queue full", status=400)
+    if result == "queued":
+        resp = {"queued": True, "session_id": s.session_id}
+        if isinstance(result_stream_id, dict):
+            resp.update(result_stream_id)
+        # If steer fell back to queue, tell the frontend why
+        _steer_fb = getattr(s, "_last_steer_fallback", None)
+        if _steer_fb:
+            resp["steer_fallback"] = _steer_fb
+            s._last_steer_fallback = None
+        return j(handler, resp)
+    if result == "steered":
+        resp = {"steered": True, "stream_id": result_stream_id, "session_id": s.session_id}
+        _steer_fb = getattr(s, "_last_steer_fallback", None)
+        if _steer_fb:
+            resp["steer_fallback"] = _steer_fb
+            s._last_steer_fallback = None
+        return j(handler, resp)
+    # "proceed" or "interrupted": continue to create stream normally
+    # The current_stream_id / stale handling is now inside _resolve_busy_handling
     # Auto-compress: if the session history is very long and the user has
     # configured an auto_compress_threshold, run a synchronous compression
     # pass before starting the new stream.  We do this inline (blocking the
@@ -3483,6 +3622,14 @@ def _handle_chat_sync(handler, body):
             _previous_messages,
             result.get("messages") or s.messages,
         )
+        # Stamp timestamps on any new messages that don't have one yet
+        # (same logic as the streaming endpoint). The sync endpoint is
+        # called by CLI scripts (e.g. cmd_util.sh --sync) and must keep
+        # timestamps consistent so the frontend displays messages correctly.
+        _prev_msg_ids = {id(m) for m in _previous_messages}
+        for _m in s.messages:
+            if id(_m) not in _prev_msg_ids and isinstance(_m, dict) and not _m.get('timestamp') and not _m.get('_ts'):
+                _m['timestamp'] = int(time.time())
         # Only auto-generate title when still default; preserves user renames
         if s.title == "Untitled":
             s.title = title_from(s.messages, s.title)

@@ -27,6 +27,8 @@ const defaultSettings: Settings = {
   sync_insights: false,
   check_updates: true,
   bot_name: 'Hermes',
+  busy_input_mode: 'interrupt',
+  session_poll_interval_sec: '10',
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({

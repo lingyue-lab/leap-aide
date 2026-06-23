@@ -238,6 +238,24 @@ function ModelGroup({ form, set }: GroupProps) {
           options={SEND_KEYS}
         />
       </FieldRow>
+      <FieldRow label={t('settings.fields.busy_input_mode')} hint={t('settings.fields.busy_input_mode_hint')}>
+        <SelectField
+          value={form.busy_input_mode ?? 'interrupt'}
+          onChange={(v) => set('busy_input_mode', v as 'interrupt' | 'queue' | 'steer')}
+          options={[
+            { value: 'interrupt', label: t('settings.busy_input_modes.interrupt') },
+            { value: 'queue', label: t('settings.busy_input_modes.queue') },
+            { value: 'steer', label: t('settings.busy_input_modes.steer') },
+          ]}
+        />
+      </FieldRow>
+      <FieldRow label={t('settings.fields.session_poll_interval')} hint={t('settings.fields.session_poll_interval_hint')}>
+        <TextInput
+          value={form.session_poll_interval_sec ?? '10'}
+          onChange={(v) => set('session_poll_interval_sec', v)}
+          placeholder="10"
+        />
+      </FieldRow>
       <FieldRow label={t('settings.fields.bot_name')} hint={t('settings.fields.bot_name_hint')}>
         <TextInput
           value={form.bot_name ?? ''}

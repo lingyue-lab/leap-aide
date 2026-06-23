@@ -5,10 +5,12 @@ import { useSessionStore } from '@/stores/useSessionStore';
 import { useModeStore } from '@/stores/useModeStore';
 import { useChatStream } from '@/hooks/useChatStream';
 import { useModeSync } from '@/hooks/useModeSync';
+import { useSessionPolling } from '@/hooks/useSessionPolling';
 import * as StreamManager from '@/stores/streamManager';
 import { chatService } from '@/services/api';
 import ChatMessages from './ChatMessages';
 import ChatComposer from './ChatComposer';
+import QueueStatusBar from './QueueStatusBar';
 import ApprovalCard from '@/components/dialogs/ApprovalCard';
 import ClarifyCard from '@/components/dialogs/ClarifyCard';
 import { useTranslation } from 'react-i18next';
@@ -27,6 +29,40 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
   const { messages, busy, activeStreamId, setMessages, setToolCalls } = useChatStore();
   const { startStream, cancelStream, streaming } = useChatStream();
   useModeSync(sessionId ?? null);
+  useSessionPolling(sessionId ?? null);
+
+  // ── Queue consistency cleanup ─────────────────────────────────────────────
+  // When the agent goes idle, check that queuedMessages is in sync with
+  // actual ghost messages.  Runs twice: once synchronously (handles most
+  // cases) and once deferred via setTimeout(0) to catch race conditions
+  // where a pending loadSession callback re-adds ghosts after the sync check.
+  const prevBusyRef = useRef(busy);
+  useEffect(() => {
+    const wasBusy = prevBusyRef.current;
+    prevBusyRef.current = busy;
+    // Only act on busy→idle transition
+    if (!wasBusy || busy) return;
+
+    const runCleanup = () => {
+      const state = useChatStore.getState();
+      const ghosts = state.messages.filter(m => m._queued);
+      if (state.queuedMessages.length !== ghosts.length) {
+        if (ghosts.length === 0) {
+          state.clearQueuedMessages();
+        } else {
+          state.setMessages(state.messages.filter(m => !m._queued));
+          state.clearQueuedMessages();
+        }
+      }
+    };
+
+    // Synchronous pass
+    runCleanup();
+
+    // Deferred pass — runs after all microtasks (loadSession callbacks) settle
+    const timer = setTimeout(() => runCleanup(), 0);
+    return () => clearTimeout(timer);
+  }, [busy]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Session switch logic ────────────────────────────────────────────────────
   useEffect(() => {
@@ -53,48 +89,15 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
       // tokens into the cache slot for prevId.
     }
 
-    // ── Switching TO sessionId ──────────────────────────────────────────────
-
-    // 1. Check if there is a live background stream for this session.
-    const bgState = StreamManager.getSessionStreamState(sessionId);
-    if (bgState) {
-      // Restore from the most up-to-date StreamManager state (not the older cache).
-      // Batch into single state update to avoid multiple re-renders
-      useChatStore.setState({
-        messages: bgState.messages,
-        toolCalls: bgState.toolCalls,
-        busy: bgState.busy,
-        activeStreamId: bgState.streaming ? bgState.streamId : null,
-      });
-      // Still load session metadata (model, workspace, etc.) in background so
-      // currentSession reflects the correct session even on fast-path switches.
-      loadSession(sessionId);
-      return;
-    }
-
-    // 2. Try restoring from the normal session cache (e.g., a non-streaming session
-    //    we visited before).
-    const cached = useChatStore.getState().restoreFromCache(sessionId);
-    if (cached) {
-      // Still load session metadata in background so currentSession is up to date.
-      loadSession(sessionId);
-      return;
-    }
-
-    // 3. No cache at all — load from backend.
-    useChatStore.getState().reset();
-    loadSession(sessionId).then(async () => {
+    // ── Helper: refresh session data from backend and reconnect to any active stream ──
+    const refreshFromBackend = async (sid: string) => {
       const session = useSessionStore.getState().currentSession;
-      if (session?.messages) {
-        setMessages(session.messages);
-      }
-      if (session?.tool_calls) {
-        setToolCalls(session.tool_calls);
-      }
+      if (!session) return;
+      if (session.messages) setMessages(session.messages);
+      if (session.tool_calls) setToolCalls(session.tool_calls);
 
-      // Restore context usage from persisted compressor data so the
-      // ContextUsageIndicator shows meaningful values after page refresh.
-      if (session?.context_length || session?.last_prompt_tokens) {
+      // Restore context usage from persisted compressor data.
+      if (session.context_length || session.last_prompt_tokens) {
         useChatStore.getState().setLastUsage({
           context_length: session.context_length || 0,
           last_prompt_tokens: session.last_prompt_tokens || 0,
@@ -105,41 +108,48 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
         });
       }
 
-      // ── Reconnect streaming after page refresh ─────────────────────────────
-      // After a full page reload the in-memory StreamManager is empty, but the
-      // backend may still have an active stream for this session.  Detect it via
-      // active_stream_id / pending_user_message returned by GET /api/session,
-      // verify the stream is still alive, and re-attach the SSE connection.
-      const activeStreamId = session?.active_stream_id;
-      const pendingMsg = session?.pending_user_message;
+      // If there's an active backend stream for this session (e.g. started by a
+      // CLI script), re-attach to it so the browser sees tokens in real time.
+      const activeStreamId = session.active_stream_id;
+      const pendingMsg = session.pending_user_message;
       if (activeStreamId && pendingMsg) {
         try {
           const status = await chatService.checkStreamStatus(activeStreamId);
           if (status.active) {
-            // Re-attach to the running stream.  Seed with already-persisted messages
-            // so the user sees the conversation history + the pending user turn.
-            StreamManager.reconnectStream(
-              sessionId,
-              activeStreamId,
-              pendingMsg,
-              session?.messages ?? []
-            );
-            // Sync busy / activeStreamId into ChatStore live state immediately
-            // so the Cancel button and streaming indicators appear right away.
-            useChatStore.setState({
-              busy: true,
-              activeStreamId,
-            });
+            StreamManager.reconnectStream(sid, activeStreamId, pendingMsg, session.messages ?? []);
+            useChatStore.setState({ busy: true, activeStreamId });
           }
-          // If !status.active: stream already finished — persisted messages are
-          // already loaded above, nothing else to do.
-        } catch {
-          // checkStreamStatus failed (network error, etc.) — silently ignore and
-          // show whatever messages we already loaded from the DB.
-        }
+        } catch { /* network error — ignore, already showing persisted messages */ }
       }
-      // ──────────────────────────────────────────────────────────────────────
-    });
+    };
+
+    // ── Switching TO sessionId ──────────────────────────────────────────────
+
+    // 1. Check if there is a live background stream for this session.
+    const bgState = StreamManager.getSessionStreamState(sessionId);
+    if (bgState) {
+      // Restore from the most up-to-date StreamManager state (not the older cache).
+      useChatStore.setState({
+        messages: bgState.messages,
+        toolCalls: bgState.toolCalls,
+        busy: bgState.busy,
+        activeStreamId: bgState.streaming ? bgState.streamId : null,
+      });
+      // Still load session metadata (model, workspace, etc.) in background.
+      loadSession(sessionId);
+      return;
+    }
+
+    // 2. Try restoring from cache for instant display, then refresh from backend.
+    const cached = useChatStore.getState().restoreFromCache(sessionId);
+    if (cached) {
+      loadSession(sessionId).then(() => refreshFromBackend(sessionId));
+      return;
+    }
+
+    // 3. No cache at all — clean load from backend.
+    useChatStore.getState().reset();
+    loadSession(sessionId).then(() => refreshFromBackend(sessionId));
   }, [sessionId, loadSession, setMessages, setToolCalls]);
 
   // ── Mode loading ────────────────────────────────────────────────────────────
@@ -160,10 +170,10 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
   }, [messages.length, scrollToBottom]);
 
   // ── Send / Cancel ────────────────────────────────────────────────────────────
-  const handleSend = useCallback(async (text: string) => {
+  const handleSend = useCallback(async (text: string, attachments?: string[], mode?: string) => {
     if (!sessionId || !text.trim()) return;
     const model = currentSession?.model || 'anthropic/claude-sonnet-4-5';
-    await startStream(sessionId, text, model, currentSession?.workspace);
+    await startStream(sessionId, text, model, currentSession?.workspace, attachments, mode);
     scrollToBottom();
   }, [sessionId, currentSession, startStream, scrollToBottom]);
 
@@ -184,14 +194,17 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
         messages={messages}
         streaming={streaming}
       />
-      
+
       {!currentSession?._readonly && (
-        <ChatComposer
-          onSend={handleSend}
-          onCancel={handleCancel}
-          busy={busy}
-          streaming={streaming}
-        />
+        <>
+          <QueueStatusBar sessionId={sessionId} />
+          <ChatComposer
+            onSend={handleSend}
+            onCancel={handleCancel}
+            busy={busy}
+            streaming={streaming}
+          />
+        </>
       )}
       
       <ApprovalCard />

@@ -98,6 +98,10 @@
       "default_mode_hint": "Approval mode for new sessions (manual/smart/yolo)",
       "send_key": "Send Message Key",
       "send_key_hint": "Key combination to submit a message",
+      "busy_input_mode": "Busy Input Mode",
+      "busy_input_mode_hint": "Controls what happens when you send a message while the agent is running",
+      "session_poll_interval": "Session Poll Interval",
+      "session_poll_interval_hint": "How often to check for externally added messages (seconds, 0=off)",
       "bot_name": "Bot Name",
       "bot_name_hint": "Display name shown for the assistant",
       "default_reasoning_effort": "Default Reasoning Effort",
@@ -138,6 +142,11 @@
     "send_keys": {
       "enter": "Enter",
       "ctrl_enter": "Ctrl + Enter"
+    },
+    "busy_input_modes": {
+      "interrupt": "Interrupt (stop current)",
+      "queue": "Queue (wait for turn)",
+      "steer": "Steer (add as guidance)"
     },
     "font_sizes": {
       "small": "Small",
@@ -240,6 +249,14 @@
     "regenerate": "Regenerate",
     "clear": "Clear",
     "new_chat": "New Chat",
-    "thinking": "Thinking..."
+    "thinking": "Thinking...",
+    "queued": "Queued",
+    "queue_position": "Queue position: #{{n}}",
+    "queue_waiting": "{{n}} message(s) waiting",
+    "queue_hint": "Agent is currently generating a reply...",
+    "queue_cancel_all": "Cancel all",
+    "queue_cancel_item": "Remove from queue",
+    "steered": "Steered (injected into current turn)",
+    "steered_fallback": "Queued (steer unavailable)"
   }
 }

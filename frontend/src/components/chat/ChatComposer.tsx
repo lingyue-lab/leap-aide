@@ -11,7 +11,7 @@ import { useModeShortcut } from '@/hooks/useModeShortcut';
 import type { ModelGroup } from '@/types';
 
 interface ChatComposerProps {
-  onSend: (text: string, attachments?: string[]) => void;
+  onSend: (text: string, attachments?: string[], mode?: string) => void;
   onCancel: () => void;
   busy?: boolean;
   streaming?: boolean;
@@ -91,7 +91,10 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
 
   const sendByCtrlEnter = settings?.send_key === 'ctrl+enter';
   const hasInput = input.trim().length > 0 || pendingFiles.length > 0;
-  const canSend = hasInput && !busy && !compressing;
+  const sendMode = busy ? (settings?.busy_input_mode ?? 'interrupt') : undefined;
+  // Allow sending while busy if mode is interrupt, queue, or steer
+  const busyAllowsSend = !!(busy && sendMode && (sendMode === 'interrupt' || sendMode === 'queue' || sendMode === 'steer'));
+  const canSend = hasInput && !compressing && (!busy || busyAllowsSend);
 
   // Derive last compression time: prefer persisted session field (survives page
   // refresh), fall back to scanning live messages' _compression metadata (SSE).
@@ -167,8 +170,9 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
       textareaRef.current.style.height = 'auto';
     }
     
-    onSend(text);
-  }, [canSend, input, pendingFiles, onSend]);
+    const mode = busy ? (settings?.busy_input_mode ?? 'interrupt') : undefined;
+    onSend(text, pendingFiles.length > 0 ? pendingFiles.map(f => f.name) : undefined, mode);
+  }, [canSend, input, pendingFiles, onSend, busy, settings?.busy_input_mode]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Check for IME composition

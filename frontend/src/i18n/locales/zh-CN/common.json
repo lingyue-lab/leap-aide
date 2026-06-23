@@ -98,6 +98,10 @@
       "default_mode_hint": "新会话的审批模式（手动确认/智能评估/全部放行）",
       "send_key": "发送消息快捷键",
       "send_key_hint": "提交消息的按键组合",
+      "busy_input_mode": "忙时输入模式",
+      "busy_input_mode_hint": "当 Agent 正在运行时发送消息的行为策略",
+      "session_poll_interval": "Session 轮询间隔",
+      "session_poll_interval_hint": "检测外部新增消息的频率（秒，0=关闭）",
       "bot_name": "机器人名称",
       "bot_name_hint": "助手显示的名称",
       "default_reasoning_effort": "默认推理力度",
@@ -138,6 +142,11 @@
     "send_keys": {
       "enter": "Enter",
       "ctrl_enter": "Ctrl + Enter"
+    },
+    "busy_input_modes": {
+      "interrupt": "打断（停止当前）",
+      "queue": "排队（等待轮次）",
+      "steer": "注入（作为指导）"
     },
     "font_sizes": {
       "small": "小",
@@ -240,6 +249,14 @@
     "regenerate": "重新生成",
     "clear": "清空",
     "new_chat": "新对话",
-    "thinking": "思考中..."
+    "thinking": "思考中...",
+    "queued": "排队中",
+    "queue_position": "队列位置: #{{n}}",
+    "queue_waiting": "{{n}} 条消息等待中",
+    "queue_hint": "当前正在生成回复...",
+    "queue_cancel_all": "取消全部",
+    "queue_cancel_item": "取消排队",
+    "steered": "Steered（已注入到当前对话）",
+    "steered_fallback": "排队中（注入失败）"
   }
 }

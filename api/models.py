@@ -403,6 +403,15 @@ class Session:
             'last_compression_time',
             'lineage_root_id', 'lineage_tip_id',
         ]
+        # Stamp timestamps on any messages that don't have one yet.
+        # The streaming code normally handles this, but messages added via other
+        # paths (e.g. direct session manipulation, CLI tools) may lack timestamps.
+        # Without a timestamp, the frontend sorts them to epoch 0 and they appear
+        # at the wrong position, making them effectively invisible to the user.
+        _now_ts = int(time.time())
+        for _m in self.messages:
+            if isinstance(_m, dict) and not _m.get('timestamp') and not _m.get('_ts'):
+                _m['timestamp'] = _now_ts
         meta = {k: getattr(self, k, None) for k in METADATA_FIELDS}
         meta['messages'] = self.messages
         meta['tool_calls'] = self.tool_calls

@@ -12,6 +12,7 @@ import threading
 import time
 import traceback
 import copy
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -22,7 +23,7 @@ from api.config import (
     LOCK, SESSIONS, SESSION_DIR,
     _get_session_agent_lock, _set_thread_env, _clear_thread_env,
     SESSION_AGENT_LOCKS, SESSION_AGENT_LOCKS_LOCK,
-    resolve_model_provider,
+    resolve_model_provider, ReplayableStream,
 )
 from api.helpers import redact_session_data
 from api.metering import meter
@@ -2379,6 +2380,9 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 if old_hermes_home is None: os.environ.pop('HERMES_HOME', None)
                 else: os.environ['HERMES_HOME'] = old_hermes_home
 
+        # Dequeue any queued message for this session (success path)
+        _dequeue_next(session_id)
+
     except Exception as e:
         _tb_str = traceback.format_exc()
         print(
@@ -2459,34 +2463,51 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             )
         else:
             _exc_label, _exc_type, _exc_hint = 'Error', 'error', ''
+        # Whether this thread still owns the session.  When cancel_stream() has
+        # already released the stream (interrupt mode, eager release), the
+        # session may be claimed by a new stream before this except block runs.
+        # We must not mutate session state or dequeue in that case — the active
+        # stream's own exit handler will handle cleanup and dequeue.
+        _owned = True
         if s is not None:
             if _checkpoint_stop is not None:
                 _checkpoint_stop.set()
             if _ckpt_thread is not None:
                 _ckpt_thread.join(timeout=15)
-            # Persist the error so it survives page reload.
-            # _error=True ensures _sanitize_messages_for_api excludes it from subsequent
-            # API calls so the LLM never sees its own error as prior context on the next turn.
             _lock_ctx = _agent_lock if _agent_lock is not None else contextlib.nullcontext()
             with _lock_ctx:
-                s.active_stream_id = None
-                s.pending_user_message = None
-                s.pending_attachments = []
-                s.pending_started_at = None
-                s.messages.append({
-                    'role': 'assistant',
-                    'content': f'**{_exc_label}:** {err_str}' + (f'\n\n*{_exc_hint}*' if _exc_hint else ''),
-                    'timestamp': int(time.time()),
-                    '_error': True,
-                })
-                try:
-                    s.save()
-                except Exception:
-                    pass
+                # Guard: only mutate session if we are still the active stream.
+                # After cancel_stream (interrupt mode), s.active_stream_id is
+                # either None or points to the new stream that replaced us.
+                if getattr(s, 'active_stream_id', None) != stream_id:
+                    _owned = False
+                if _owned:
+                    # Persist the error so it survives page reload.
+                    # _error=True ensures _sanitize_messages_for_api excludes it from subsequent
+                    # API calls so the LLM never sees its own error as prior context on the next turn.
+                    s.active_stream_id = None
+                    s.pending_user_message = None
+                    s.pending_attachments = []
+                    s.pending_started_at = None
+                    s.messages.append({
+                        'role': 'assistant',
+                        'content': f'**{_exc_label}:** {err_str}' + (f'\n\n*{_exc_hint}*' if _exc_hint else ''),
+                        'timestamp': int(time.time()),
+                        '_error': True,
+                    })
+                    try:
+                        s.save()
+                    except Exception:
+                        pass
         _apperror_payload: dict = {'message': err_str, 'type': _exc_type}
         if _exc_hint:
             _apperror_payload['hint'] = _exc_hint
         put('apperror', _apperror_payload)
+        # Check for queued messages before cleanup so the dequeued stream
+        # can register itself in STREAMS before the current stream is popped.
+        # Skip if we lost ownership — the active stream's exit handler will dequeue.
+        if _owned:
+            _dequeue_next(session_id)
     finally:
         # Stop periodic checkpoint thread if it was started (Issue #765)
         if _checkpoint_stop is not None:
@@ -2508,32 +2529,107 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
 # ============================================================
 
 
+def _dequeue_next(session_id: str) -> None:
+    """If the session has a queued message, dequeue and start a new agent thread.
+
+    Called from the streaming thread's finally block (success/error exit) and
+    from cancel_stream() (cancel exit).  The caller must NOT hold any lock that
+    _run_agent_streaming needs to acquire internally.
+    """
+    from api.config import SESSION_MESSAGE_QUEUE, SESSION_MESSAGE_QUEUE_LOCK
+
+    with SESSION_MESSAGE_QUEUE_LOCK:
+        q = SESSION_MESSAGE_QUEUE.get(session_id)
+        if not q:
+            return
+        payload = q.pop(0)
+        if not q:
+            del SESSION_MESSAGE_QUEUE[session_id]
+
+    # Spawn new agent thread outside the lock
+    stream_id = uuid.uuid4().hex
+    try:
+        s = get_session(session_id)
+    except KeyError:
+        return
+    # Guard: if the session already has an active stream (e.g. interrupt mode
+    # started a new stream before this dequeue fired), re-enqueue the message
+    # so the active stream's own exit handler picks it up when it finishes.
+    if getattr(s, 'active_stream_id', None):
+        with SESSION_MESSAGE_QUEUE_LOCK:
+            q = SESSION_MESSAGE_QUEUE.get(session_id)
+            if q is None:
+                q = []
+                SESSION_MESSAGE_QUEUE[session_id] = q
+            q.insert(0, payload)
+        return
+    with STREAMS_LOCK:
+        from api.config import STREAMS as _cfg_STREAMS
+        _q = ReplayableStream()
+        _cfg_STREAMS[stream_id] = _q
+    with _get_session_agent_lock(session_id):
+        s.active_stream_id = stream_id
+        s.pending_user_message = payload.get("message", "")
+        s.pending_attachments = payload.get("attachments", [])
+        s.pending_started_at = time.time()
+        s.save()
+    thr = threading.Thread(
+        target=_run_agent_streaming,
+        args=(
+            session_id,
+            payload.get("message", ""),
+            payload.get("model", s.model),
+            payload.get("workspace", s.workspace),
+            stream_id,
+            payload.get("attachments", []),
+        ),
+        daemon=True,
+    )
+    thr.start()
+
+
+def _try_steer(session_id: str, text: str) -> dict:
+    """Attempt to inject steer text into the running agent for a session.
+
+    Returns {"accepted": bool, "fallback": str|None, "stream_id": str|None}.
+    Does NOT format an HTTP response — caller handles that.
+    """
+    from api import config as _cfg
+
+    with _cfg.SESSION_AGENT_CACHE_LOCK:
+        cached = _cfg.SESSION_AGENT_CACHE.get(session_id)
+    if not cached:
+        return {"accepted": False, "fallback": "no_cached_agent", "stream_id": None}
+    agent = cached[0]
+    if not hasattr(agent, "steer"):
+        return {"accepted": False, "fallback": "agent_lacks_steer", "stream_id": None}
+
+    try:
+        s = get_session(session_id)
+    except KeyError:
+        return {"accepted": False, "fallback": "session_not_found", "stream_id": None}
+    active_stream_id = getattr(s, "active_stream_id", None) or None
+    if not active_stream_id:
+        return {"accepted": False, "fallback": "not_running", "stream_id": None}
+    with _cfg.STREAMS_LOCK:
+        stream_alive = active_stream_id in _cfg.STREAMS
+    if not stream_alive:
+        return {"accepted": False, "fallback": "stream_dead", "stream_id": None}
+
+    try:
+        accepted = bool(agent.steer(text))
+    except Exception:
+        return {"accepted": False, "fallback": "steer_error", "stream_id": active_stream_id}
+
+    return {"accepted": accepted, "fallback": None, "stream_id": active_stream_id}
+
+
 def _handle_chat_steer(handler, body: dict) -> bool:
     """Inject a /steer payload into the active agent for a session.
 
-    Mirrors the CLI's `/steer <text>` command (cli.py:6140-6155):
-      - Look up the cached AIAgent for the session (PR #1051's
-        SESSION_AGENT_CACHE).
-      - Verify a stream is currently active for this session.
-      - Call agent.steer(text) — thread-safe, stashes text in
-        _pending_steer for application at the next tool-result boundary.
-
-    The agent's loop calls _apply_pending_steer_to_tool_results() at the
-    end of every tool batch and appends the steer text to the last tool
-    result's content with a marker, so the model sees the steer as part
-    of the tool output on its next iteration. The user's stream is NOT
-    interrupted.
-
-    If no agent is cached, the agent is too old to support steer, or no
-    stream is active, return {"accepted": False, "fallback": "<reason>"}
-    so the frontend can fall back to interrupt or queue mode. The
-    fallback path is the existing behaviour from PR #1062.
-
-    Returns 200 with {"accepted": bool, "fallback": str|None,
-    "stream_id": str|None}.
+    Delegates to _try_steer() for the core logic, then formats an HTTP response.
     """
     from api.helpers import j, bad
-    from api import config as _cfg
 
     sid = str((body or {}).get("session_id", "") or "").strip()
     text = str((body or {}).get("text", "") or "").strip()
@@ -2542,46 +2638,8 @@ def _handle_chat_steer(handler, body: dict) -> bool:
     if not text:
         return bad(handler, "text required")
 
-    with _cfg.SESSION_AGENT_CACHE_LOCK:
-        cached = _cfg.SESSION_AGENT_CACHE.get(sid)
-    if not cached:
-        # No active agent for this session — caller falls back to interrupt
-        return j(handler, {"accepted": False, "fallback": "no_cached_agent",
-                           "stream_id": None})
-    agent = cached[0]
-    if not hasattr(agent, "steer"):
-        # Older hermes-agent that pre-dates the steer() method
-        return j(handler, {"accepted": False, "fallback": "agent_lacks_steer",
-                           "stream_id": None})
-
-    # Verify the agent is currently running. Use the session's
-    # active_stream_id rather than calling load_session_locked() which
-    # would block on the streaming thread's lock.
-    try:
-        s = get_session(sid)
-    except KeyError:
-        return j(handler, {"accepted": False, "fallback": "session_not_found",
-                           "stream_id": None})
-    active_stream_id = getattr(s, "active_stream_id", None) or None
-    if not active_stream_id:
-        return j(handler, {"accepted": False, "fallback": "not_running",
-                           "stream_id": None})
-    with _cfg.STREAMS_LOCK:
-        stream_alive = active_stream_id in _cfg.STREAMS
-    if not stream_alive:
-        # Active stream id is stale — stream has ended; caller falls back
-        return j(handler, {"accepted": False, "fallback": "stream_dead",
-                           "stream_id": None})
-
-    try:
-        accepted = bool(agent.steer(text))
-    except Exception as exc:
-        logger.debug("agent.steer() raised for session=%s: %s", sid, exc)
-        return j(handler, {"accepted": False, "fallback": "steer_error",
-                           "stream_id": active_stream_id})
-
-    return j(handler, {"accepted": accepted, "fallback": None,
-                       "stream_id": active_stream_id})
+    result = _try_steer(sid, text)
+    return j(handler, result)
 
 
 def cancel_stream(stream_id: str) -> bool:
@@ -2695,6 +2753,17 @@ def cancel_stream(stream_id: str) -> bool:
     # concurrent undo/retry calls.
     if _cancel_session_id:
         with _get_session_agent_lock(_cancel_session_id):
+            # Evict the cached agent so the next stream for this session
+            # (e.g. interrupt mode) creates a fresh instance.  Without this,
+            # the new stream reuses the same agent object while the old
+            # run_conversation() is still unwinding, producing silent failures
+            # ("No response received").
+            try:
+                from api.config import SESSION_AGENT_CACHE, SESSION_AGENT_CACHE_LOCK
+                with SESSION_AGENT_CACHE_LOCK:
+                    SESSION_AGENT_CACHE.pop(_cancel_session_id, None)
+            except Exception:
+                pass
             try:
                 _cs = get_session(_cancel_session_id)
                 _cs.active_stream_id = None
@@ -2745,4 +2814,6 @@ def cancel_stream(stream_id: str) -> bool:
             except Exception:
                 logger.debug("Failed to clear session state on cancel for %s", _cancel_session_id)
 
+    # After cancel, check for queued messages
+    _dequeue_next(_cancel_session_id)
     return True

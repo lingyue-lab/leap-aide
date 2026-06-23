@@ -75,6 +75,16 @@ export interface Message {
   tool_name?: string;
   tool_calls?: ToolCallMessage[];
   _compression?: CompressionRecord;  // Attached by streamManager on 'compressed' SSE event
+  _queued?: boolean;               // True when message is waiting in the busy-mode queue
+  _queue_position?: number;        // 1-based position in the queue
+  _steered?: boolean;              // True when message was injected via steer mode
+}
+
+/** Tracks a message waiting in the session's busy-mode queue. */
+export interface QueuedMessage {
+  position: number;      // 1-based position in queue
+  text: string;          // user message text
+  attachments?: string[];
 }
 
 export interface ToolCallMessage {
@@ -157,6 +167,8 @@ export interface Settings {
   last_seen_cron_ts?: number;  // DEPRECATED — replaced by last_seen_cron_ts_map
   last_seen_cron_ts_map?: Record<string, number>;  // per-job {job_id: epoch_seconds}
   default_mode?: 'manual' | 'smart' | 'yolo';
+  busy_input_mode?: 'interrupt' | 'queue' | 'steer' | 'reject';  // behavior when sending while agent is running
+  session_poll_interval_sec?: string;  // frontend session polling interval in seconds
 }
 
 // types/approval.ts - 审批相关类型定义

@@ -36,8 +36,8 @@ export async function api<T>(
 
 // Chat API 服务
 export const chatService = {
-  startChat: async (sessionId: string, message: string, model: string, workspace?: string, attachments?: string[]) => {
-    return api<{ stream_id: string }>('/api/chat/start', {
+  startChat: async (sessionId: string, message: string, model: string, workspace?: string, attachments?: string[], mode?: string) => {
+    return api<{ stream_id?: string; queued?: boolean; steered?: boolean; steer_fallback?: string; queue_position?: number; queue_length?: number }>('/api/chat/start', {
       method: 'POST',
       body: JSON.stringify({
         session_id: sessionId,
@@ -45,6 +45,7 @@ export const chatService = {
         model,
         workspace,
         attachments,
+        ...(mode ? { mode } : {}),
       }),
     });
   },
@@ -72,6 +73,10 @@ export const chatService = {
   cancelStream: async (streamId: string) => {
     // Use GET with query param (routes.py line 1048-1053)
     return api(`/api/chat/cancel?stream_id=${encodeURIComponent(streamId)}`);
+  },
+
+  clearQueue: async (sessionId: string) => {
+    return api(`/api/chat/queue?session_id=${encodeURIComponent(sessionId)}&action=clear`);
   },
 };
 

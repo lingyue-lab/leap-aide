@@ -497,6 +497,15 @@ export function stopBackgroundStream(sessionId: string): void {
     es.close();
     _eventSources.delete(s.streamId);
   }
+  // Cancel any pending throttled notification so stale tokens from
+  // this session are not pushed to useChatStore after the stream is
+  // stopped (critical for interrupt mode where a new stream starts
+  // immediately after stopping the old one).
+  const pending = _pendingNotifies.get(sessionId);
+  if (pending) {
+    clearTimeout(pending);
+    _pendingNotifies.delete(sessionId);
+  }
 }
 
 /** Remove all state for a session (call after done event is handled by UI) */

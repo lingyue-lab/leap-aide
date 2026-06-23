@@ -69,17 +69,12 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
       el.current.scrollTop = el.current.scrollHeight;
     }, [streaming, messages]);
 
-    // Sort messages by timestamp; when timestamps are equal, preserve original order.
-    const sortedMessages = React.useMemo(() => {
-      const indexed = messages.map((m, i) => ({ m, i }));
-      indexed.sort((a, b) => {
-        const tsA = a.m._ts ?? a.m.timestamp ?? 0;
-        const tsB = b.m._ts ?? b.m.timestamp ?? 0;
-        if (tsA !== tsB) return tsA - tsB;
-        return a.i - b.i;
-      });
-      return indexed.map(({ m }) => m);
-    }, [messages]);
+    // Messages are displayed in their original array order (the order they
+    // appear in the session JSON). The backend appends messages in
+    // chronological order, so no timestamp-based sorting is needed.
+    // Sorting by timestamp is brittle — messages without timestamps (e.g.
+    // added via CLI scripts) get pushed to epoch 0 and become invisible.
+    const sortedMessages = messages;
 
     // Helper: get local date string "M月D日" from a unix timestamp (seconds)
     const getLocalDateLabel = (ts: number): string => {
@@ -185,6 +180,7 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
                       message={message}
                       messages={sortedMessages}
                       toolCalls={toolCalls}
+                      streaming={streaming}
                       isStreaming={streaming && i === sortedMessages.length - 1}
                       onFileOpen={onFileOpen}
                       thinkingText={thinkingText}
@@ -216,6 +212,7 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
                           message={nextMsg}
                           messages={sortedMessages}
                           toolCalls={toolCalls}
+                      streaming={streaming}
                           isStreaming={false}
                           onFileOpen={onFileOpen}
                         />
@@ -242,6 +239,7 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
                       message={message}
                       messages={sortedMessages}
                       toolCalls={toolCalls}
+                      streaming={streaming}
                       isStreaming={false}
                       onFileOpen={onFileOpen}
                     />
@@ -255,6 +253,7 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
                       message={message}
                       messages={sortedMessages}
                       toolCalls={toolCalls}
+                      streaming={streaming}
                       isStreaming={false}
                       onFileOpen={onFileOpen}
                     />

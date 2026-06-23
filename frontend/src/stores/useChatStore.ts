@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Message, ToolCall, UsageInfo, ContentBlock } from '@/types';
+import type { Message, ToolCall, UsageInfo, ContentBlock, QueuedMessage } from '@/types';
 
 interface SessionCache {
   messages: Message[];
@@ -7,6 +7,7 @@ interface SessionCache {
   busy: boolean;
   activeStreamId: string | null;
   lastUsage: UsageInfo | null;
+  queuedMessages: QueuedMessage[];
 }
 
 interface ChatState {
@@ -17,11 +18,12 @@ interface ChatState {
   pendingFiles: File[];
   lastUsage: UsageInfo | null;
   abortController: AbortController | null;
+  queuedMessages: QueuedMessage[];
   // Per-session state cache to preserve data across session switches
   _sessionCache: Map<string, SessionCache>;
   // Current session ID tracked by chat store (to know which cache slot to use)
   _currentSessionId: string | null;
-  
+
   // Actions
   setMessages: (messages: Message[]) => void;
   addMessage: (message: Message) => void;
@@ -43,6 +45,12 @@ interface ChatState {
   setLastUsage: (usage: UsageInfo | null) => void;
   setAbortController: (controller: AbortController | null) => void;
   reset: () => void;
+  // Queue management
+  addQueuedMessage: (msg: QueuedMessage) => void;
+  removeQueuedMessage: (position: number) => void;
+  clearQueuedMessages: () => void;
+  /** Shift queue when front message is consumed by backend */
+  promoteQueuedMessages: () => void;
   // Session cache actions
   saveToCache: (sessionId: string) => void;
   restoreFromCache: (sessionId: string) => SessionCache | null;
@@ -63,6 +71,7 @@ export const useChatStore = create<ChatState>((set) => ({
   pendingFiles: [],
   lastUsage: null,
   abortController: null,
+  queuedMessages: [],
   _sessionCache: new Map<string, SessionCache>(),
   _currentSessionId: null,
 
@@ -233,6 +242,29 @@ export const useChatStore = create<ChatState>((set) => ({
 
   setAbortController: (controller) => set({ abortController: controller }),
 
+  // ── Queue management ─────────────────────────────────────────────────────────
+  addQueuedMessage: (msg) => set((state) => {
+    return { queuedMessages: [...state.queuedMessages, msg] };
+  }),
+
+  removeQueuedMessage: (position) => set((state) => {
+    return { queuedMessages: state.queuedMessages.filter((qm) => qm.position !== position) };
+  }),
+
+  clearQueuedMessages: () => {
+    set({ queuedMessages: [] });
+  },
+
+  promoteQueuedMessages: () => set((state) => {
+    if (state.queuedMessages.length === 0) return {};
+    // Remove the front message and shift remaining positions
+    const shifted = state.queuedMessages.slice(1).map((qm, i) => ({
+      ...qm,
+      position: i + 1,
+    }));
+    return { queuedMessages: shifted };
+  }),
+
   reset: () => set({
     messages: [],
     toolCalls: [],
@@ -241,6 +273,7 @@ export const useChatStore = create<ChatState>((set) => ({
     pendingFiles: [],
     lastUsage: null,
     abortController: null,
+    queuedMessages: [],
   }),
 
   // Save current chat state into per-session cache
@@ -251,6 +284,7 @@ export const useChatStore = create<ChatState>((set) => ({
       busy: state.busy,
       activeStreamId: state.activeStreamId,
       lastUsage: state.lastUsage,
+      queuedMessages: state.queuedMessages,
     };
     const newCache = new Map(state._sessionCache);
     newCache.set(sessionId, cache);
@@ -262,12 +296,23 @@ export const useChatStore = create<ChatState>((set) => ({
     const state = useChatStore.getState() as ChatState;
     const cache = state._sessionCache.get(sessionId) as SessionCache | undefined;
     if (cache) {
+      // Auto-clean stale queuedMessages when restoring from cache:
+      // if the cached queue is non-empty but there are no actual ghost
+      // messages, the queue is stale and should be cleared.
+      let queuedToRestore = cache.queuedMessages || [];
+      if (queuedToRestore.length > 0) {
+        const cachedGhosts = (cache.messages || []).filter(m => m._queued);
+        if (cachedGhosts.length === 0) {
+          queuedToRestore = [];
+        }
+      }
       set({
         messages: cache.messages,
         toolCalls: cache.toolCalls,
         busy: cache.busy,
         activeStreamId: cache.activeStreamId,
         lastUsage: cache.lastUsage,
+        queuedMessages: queuedToRestore,
         _currentSessionId: sessionId,
       });
       return cache;
@@ -293,6 +338,7 @@ export const useChatStore = create<ChatState>((set) => ({
       busy: existing?.busy ?? false,
       activeStreamId: existing?.activeStreamId ?? null,
       lastUsage: existing?.lastUsage ?? null,
+      queuedMessages: existing?.queuedMessages ?? [],
       ...patch,
     };
     const newCache = new Map(state._sessionCache);
@@ -300,8 +346,20 @@ export const useChatStore = create<ChatState>((set) => ({
     // If this session is currently displayed, also update live state
     if (state._currentSessionId === sessionId) {
       // Only include fields that actually changed to minimize React re-renders
+      // NOTE: queuedMessages is NOT synced here — it's managed exclusively
+      // through addQueuedMessage / removeQueuedMessage / clearQueuedMessages.
       const liveUpdate: Partial<ChatState> = { _sessionCache: newCache };
-      if (updated.messages !== state.messages) liveUpdate.messages = updated.messages;
+      if (updated.messages !== state.messages) {
+        // Preserve optimistically-added messages that StreamManager doesn't
+        // know about: queued ghosts (⏳) and steered messages (↪).
+        // Both are front-end-only markers and would be lost on sync.
+        const preservedMessages = state.messages.filter(m => m._queued || m._steered);
+        if (preservedMessages.length > 0) {
+          liveUpdate.messages = [...updated.messages, ...preservedMessages];
+        } else {
+          liveUpdate.messages = updated.messages;
+        }
+      }
       if (updated.toolCalls !== state.toolCalls) liveUpdate.toolCalls = updated.toolCalls;
       if (updated.busy !== state.busy) liveUpdate.busy = updated.busy;
       if (updated.activeStreamId !== state.activeStreamId) liveUpdate.activeStreamId = updated.activeStreamId;

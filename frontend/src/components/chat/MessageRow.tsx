@@ -7,6 +7,7 @@ interface MessageRowProps {
   messages?: Message[];
   toolCalls?: ToolCall[];
   isStreaming?: boolean;
+  streaming?: boolean;         // true while any stream is active (for transient indicators)
   onFileOpen?: (path: string) => void;
   thinkingText?: string;
 }
@@ -383,9 +384,12 @@ function ToolMessageRow({ message, messages, toolCallMap }: { message: Message; 
     }
   }
   
+  // Detect out-of-band user messages (steer) embedded in tool output
+  const hasOOB = typeof content === 'string' && content.includes('OUT-OF-BAND USER MESSAGE');
+
   return (
-    <div className={`msg-row tool-message`}>
-      <div 
+    <div className={`msg-row tool-message${hasOOB ? ' tool-message--steered' : ''}`}>
+      <div
         className="tool-message-header"
         onClick={() => setExpanded(!expanded)}
       >
@@ -393,6 +397,9 @@ function ToolMessageRow({ message, messages, toolCallMap }: { message: Message; 
           <div className="role-icon tool">{icon}</div>
           <span>{toolName}</span>
         </div>
+        {hasOOB && (
+          <span className="tool-steer-badge" title="This tool output contains a steered user message">↪ Steer</span>
+        )}
         <span className="tool-card-toggle">{expanded ? '▼' : '▶'}</span>
       </div>
       {expanded && (
@@ -437,7 +444,7 @@ function fallbackCopy(text: string) {
   document.body.removeChild(ta);
 }
 
-function MessageRowComponent({ message, messages = [], toolCalls = [], isStreaming, thinkingText }: MessageRowProps) {
+function MessageRowComponent({ message, messages = [], toolCalls = [], isStreaming, streaming, thinkingText }: MessageRowProps) {
   const roleClass = message.role === 'user' 
     ? 'msg-role user' 
     : message.role === 'tool'
@@ -662,9 +669,15 @@ function MessageRowComponent({ message, messages = [], toolCalls = [], isStreami
     return <ToolMessageRow message={message} messages={messages} toolCallMap={toolCallMap} />;
   }
 
+  const isQueued = !!(message._queued);
+  const isSteered = !!(message._steered);
+  const queuePos = message._queue_position;
+  // Steer→queue fallback: message has both flags
+  const isSteerFallback = isQueued && isSteered;
+
   return (
-    <div 
-      className={`msg-row${message.role === 'user' ? ' user-message' : ''}`}
+    <div
+      className={`msg-row${message.role === 'user' ? ' user-message' : ''}${isQueued ? ' msg-row--queued' : ''}`}
       data-raw-text={typeof message.content === 'string' ? message.content : ''}
     >
       <div className={roleClass}>
@@ -673,13 +686,32 @@ function MessageRowComponent({ message, messages = [], toolCalls = [], isStreami
         </div>
         <span>{roleText}</span>
       </div>
-      
+
       <div className="msg-body" ref={msgBodyRef}>
         {thinkingText && (
           <ReasoningBlock thinkingText={thinkingText} />
         )}
         {content}
-        
+
+        {isQueued && (
+          <div className="msg-queued-indicator">
+            <span className="msg-queued-icon">⏳</span>
+            <span className="msg-queued-text">
+              {isSteerFallback ? '排队中（注入失败）' : '排队中'}
+            </span>
+            {queuePos != null && (
+              <span className="msg-queued-position">#{queuePos}</span>
+            )}
+          </div>
+        )}
+
+        {isSteered && !isQueued && streaming && (
+          <div className="msg-steered-indicator">
+            <span className="msg-steered-icon">↪</span>
+            <span className="msg-steered-text">Steered（已注入到当前对话）</span>
+          </div>
+        )}
+
         {message.attachments && message.attachments.length > 0 && (
           <div className="msg-files">
             {message.attachments.map((file, idx) => (
