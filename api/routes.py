@@ -76,6 +76,8 @@ from api.config import (
     set_reasoning_display,
     set_reasoning_effort,
     ReplayableStream,
+    _set_thread_env,
+    _clear_thread_env,
 )
 from api.helpers import (
     require,
@@ -1319,6 +1321,19 @@ def handle_get(handler, parsed) -> bool:
             {"name": get_active_profile_name(), "path": str(get_active_hermes_home())},
         )
 
+    # ── Session Observer routes ──────────────────────────────────────────
+    import re as _re_obs
+    _obs_info = _re_obs.match(r'^/api/observer/([a-zA-Z0-9_-]+)/info$', parsed.path)
+    _obs_root = _re_obs.match(r'^/api/observer/([a-zA-Z0-9_-]+)$', parsed.path)
+
+    if _obs_info:
+        from api.observer import handle_observer_info
+        return handle_observer_info(handler, _obs_info.group(1))
+
+    if _obs_root:
+        from api.observer import handle_observer_page
+        return handle_observer_page(handler, _obs_root.group(1))
+
     return False  # 404
 
 
@@ -1546,6 +1561,14 @@ def handle_post(handler, parsed) -> bool:
             return bad(handler, "session_id is required")
         if not all(c in '0123456789abcdefghijklmnopqrstuvwxyz_' for c in sid):
             return bad(handler, "Invalid session_id", 400)
+        # Stop SessionDisplay if running
+        try:
+            from api.session_display import _DISPLAYS
+            existing = _DISPLAYS.get(sid)
+            if existing:
+                existing.stop(remove_json=True)
+        except Exception as e:
+            logger.debug("SessionDisplay cleanup on delete failed for %s: %s", sid, e)
         # Delete from WebUI session store
         with LOCK:
             SESSIONS.pop(sid, None)
@@ -2047,6 +2070,24 @@ def handle_post(handler, parsed) -> bool:
         with _get_session_agent_lock(body["session_id"]):
             s.pinned = bool(body.get("pinned", True))
             s.save()
+
+        # Pin → start SessionDisplay; Unpin → stop SessionDisplay
+        try:
+            from api.session_display import SessionDisplay, _DISPLAYS
+            existing = _DISPLAYS.get(body["session_id"])
+            if s.pinned:
+                if existing and existing.is_running():
+                    pass  # already running, nothing to do
+                else:
+                    sd = SessionDisplay(body["session_id"])
+                    sd.start()
+            else:
+                if existing:
+                    existing.stop(remove_json=True)
+        except Exception as e:
+            logger.warning("SessionDisplay pin hook failed for %s: %s",
+                           body["session_id"], e)
+
         return j(handler, {"ok": True, "session": s.compact()})
 
     # ── Session assign workspace (POST) ──
@@ -3537,6 +3578,14 @@ def _handle_chat_sync(handler, body):
         s.model = body.get("model") or s.model
     from api.streaming import _ENV_LOCK
 
+    # Register thread-local env overrides so subprocesses spawned by the agent
+    # inherit the correct session key / cwd (see _IsolatedPopen in api/config.py).
+    _set_thread_env(
+        TERMINAL_CWD=str(workspace),
+        HERMES_EXEC_ASK='1',
+        HERMES_SESSION_KEY=s.session_id,
+    )
+
     with _ENV_LOCK:
         old_cwd = os.environ.get("TERMINAL_CWD")
         os.environ["TERMINAL_CWD"] = str(workspace)
@@ -3617,6 +3666,7 @@ def _handle_chat_sync(handler, body):
                 os.environ.pop("HERMES_SESSION_KEY", None)
             else:
                 os.environ["HERMES_SESSION_KEY"] = old_session_key
+        _clear_thread_env()
     with _get_session_agent_lock(s.session_id):
         s.messages = _restore_reasoning_metadata(
             _previous_messages,

@@ -1471,6 +1471,30 @@
     opacity: 0.5;
   }
 
+  /* Observe (👁) button — matches chip style in topbar-chips */
+  .observe-btn {
+    color: var(--blue, #58a6ff);
+    border-color: rgba(88, 166, 255, 0.35);
+    background: rgba(88, 166, 255, 0.08);
+  }
+
+  .observe-btn:hover {
+    border-color: rgba(88, 166, 255, 0.6);
+    background: rgba(88, 166, 255, 0.15);
+    color: var(--blue, #79c0ff);
+  }
+
+  .observe-btn.disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
+  .observe-btn.disabled:hover {
+    border-color: rgba(88, 166, 255, 0.35);
+    background: rgba(88, 166, 255, 0.08);
+    color: var(--blue, #58a6ff);
+  }
+
   /* Mode selector — drop-up chip + menu */
   .mode-selector {
     position: relative;

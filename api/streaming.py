@@ -35,6 +35,13 @@ from api.metering import meter
 _ENV_LOCK = threading.Lock()
 _REASONING_SEP_MARK = "<|reasoning_sep|>"
 
+# Sentinel CDP URL written to os.environ when a SessionDisplay-managed Chrome
+# is available.  agent-browser-wrapper.sh detects this value and resolves the
+# real CDP URL from ~/.hermes/webui/sessions_display/<sid>.json.  Using a
+# constant sentinel makes the env-var immune to cross-session races: every
+# SessionDisplay session writes the same value, so overwriting is harmless.
+CDP_URL_SENTINEL = "http://127.0.0.1:19999"
+
 # Lazy import to avoid circular deps -- hermes-agent is on sys.path via api/config.py
 try:
     from run_agent import AIAgent
@@ -1178,6 +1185,15 @@ def _build_session_skills_block(skill_names: list) -> str:
     return '  session-skills:\n' + '\n'.join(lines)
 
 
+def _resolve_session_cdp_port(session_id: str) -> int | None:
+    """Return the CDP port for a session's SessionDisplay, or None if not running."""
+    from api.session_display import SessionDisplay
+    info = SessionDisplay.get_info(session_id)
+    if info:
+        return info.get("cdp_port")
+    return None
+
+
 def _resolve_personality_prompt(config_dict, personality_name):
     """Resolve a personality prompt from config.
 
@@ -1297,26 +1313,61 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
         except ImportError:
             _profile_home = os.environ.get('HERMES_HOME', '')
 
+        # Resolve CDP port early — needed for both TLS overrides and os.environ.
+        # _cdp_port being non-None means SessionDisplay manages a Chrome for this
+        # session and the agent should connect to it.
+        _cdp_port = _resolve_session_cdp_port(session_id)
+
         _set_thread_env(
             TERMINAL_CWD=str(s.workspace),
             HERMES_EXEC_ASK='1',
             HERMES_SESSION_KEY=session_id,
             HERMES_HOME=_profile_home,
+            HERMES_GATEWAY_SESSION='1',
+            BROWSER_CDP_URL=(CDP_URL_SENTINEL if _cdp_port else ''),
         )
-        # Still set process-level env as fallback for tools that bypass thread-local
-        # Acquire lock only for the env mutation, then release before the agent runs.
-        # The finally block re-acquires to restore — keeping critical sections short
-        # and preventing a deadlock where the restore would re-enter the same lock.
+        # ── os.environ mutation (under global lock) ──────────────────────
+        # _IsolatedPopen (activated by _set_thread_env above) protects
+        # subprocesses from cross-session env races via thread-local
+        # overrides.  We still write to os.environ for two reasons:
+        #   1. Python in-process consumers (browser_tool._get_cdp_override)
+        #      that read os.environ directly.
+        #   2. Subprocesses spawned by code that constructs an explicit
+        #      env=... dict from os.environ *before* calling Popen — those
+        #      snapshots happen after our writes, so the values must be
+        #      correct here.
         with _ENV_LOCK:
             old_cwd = os.environ.get('TERMINAL_CWD')
             old_exec_ask = os.environ.get('HERMES_EXEC_ASK')
             old_session_key = os.environ.get('HERMES_SESSION_KEY')
             old_gateway_session = os.environ.get('HERMES_GATEWAY_SESSION')
             old_hermes_home = os.environ.get('HERMES_HOME')
+            old_cdp_url = os.environ.get('BROWSER_CDP_URL')
+            old_http_proxy = os.environ.get('HTTP_PROXY')
+            old_https_proxy = os.environ.get('HTTPS_PROXY')
             os.environ['TERMINAL_CWD'] = str(s.workspace)
             os.environ['HERMES_EXEC_ASK'] = '1'
             os.environ['HERMES_SESSION_KEY'] = session_id
             os.environ['HERMES_GATEWAY_SESSION'] = '1'
+            # BROWSER_CDP_URL: use sentinel so agent-browser-wrapper.sh resolves
+            # the real port from sessions_display/<sid>.json.  If a global CDP
+            # URL is already set (e.g. via CLI /browser connect), keep it —
+            # the sentinel must not overwrite a real user-configured value.
+            # agent-browser's HTTP client ignores NO_PROXY and routes ALL
+            # connections through HTTP_PROXY, including 127.0.0.1 CDP. Clear
+            # proxy vars so agent-browser reaches CDP directly.
+            _existing_cdp = os.environ.get('BROWSER_CDP_URL', '').strip()
+            if _cdp_port:
+                if not _existing_cdp or _existing_cdp == CDP_URL_SENTINEL:
+                    os.environ['BROWSER_CDP_URL'] = CDP_URL_SENTINEL
+                    old_http_proxy = os.environ.pop('HTTP_PROXY', None)
+                    old_https_proxy = os.environ.pop('HTTPS_PROXY', None)
+                    os.environ.pop('http_proxy', None)
+                    os.environ.pop('https_proxy', None)
+                # else: global real CDP URL exists — keep it, don't overwrite
+            elif _existing_cdp == CDP_URL_SENTINEL:
+                # SessionDisplay gone but sentinel lingers from a prior run
+                del os.environ['BROWSER_CDP_URL']
             if _profile_home:
                 os.environ['HERMES_HOME'] = _profile_home
         # Lock released — agent runs without holding it
@@ -1509,6 +1560,12 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         'preview': preview,
                         'args': args_snap,
                     })
+                    # ── CLI tool visualization (non-blocking, try/except) ──
+                    try:
+                        from api.cli_viewer import on_tool_started
+                        on_tool_started(session_id, name, args if isinstance(args, dict) else {}, tid)
+                    except Exception:
+                        pass
                     # Fallback: poll for pending approval in case notify_cb wasn't
                     # registered (e.g. older approval module without gateway support).
                     try:
@@ -1556,6 +1613,15 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                     if _todos_for_event is not None:
                         _tool_complete_payload['todos'] = _todos_for_event
                     put('tool_complete', _tool_complete_payload)
+                    # ── CLI tool visualization (non-blocking, try/except) ──
+                    try:
+                        from api.cli_viewer import on_tool_completed
+                        on_tool_completed(
+                            session_id, name, tid_for_event, preview,
+                            cb_kwargs.get('duration'), bool(cb_kwargs.get('is_error', False)),
+                        )
+                    except Exception:
+                        pass
                     # Reset message_started so the next token creates a new message row
                     _message_started = False
                     return
@@ -2379,6 +2445,24 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 else: os.environ['HERMES_GATEWAY_SESSION'] = old_gateway_session
                 if old_hermes_home is None: os.environ.pop('HERMES_HOME', None)
                 else: os.environ['HERMES_HOME'] = old_hermes_home
+                try:
+                    if old_cdp_url is None:
+                        os.environ.pop('BROWSER_CDP_URL', None)
+                    else:
+                        os.environ['BROWSER_CDP_URL'] = old_cdp_url
+                    if old_http_proxy is not None:
+                        os.environ['HTTP_PROXY'] = old_http_proxy
+                    if old_https_proxy is not None:
+                        os.environ['HTTPS_PROXY'] = old_https_proxy
+                except NameError:
+                    pass
+
+        # Close any remaining xterm windows for this session
+        try:
+            from api.cli_viewer import cleanup_session_xterms
+            cleanup_session_xterms(session_id)
+        except Exception:
+            pass
 
         # Dequeue any queued message for this session (success path)
         _dequeue_next(session_id)

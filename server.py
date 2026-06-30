@@ -82,10 +82,14 @@ class Handler(BaseHTTPRequestHandler):
                 return j(self, {'error': 'websocket upgrade required'}, status=426)
 
             # ── WebSocket VNC proxy upgrade ────────────────────────────────────
-            if parsed.path == '/api/ws/vnc':
+            # Matches: /api/ws/vnc (default port) or /api/ws/vnc/<port>
+            import re as _re_vnc
+            _vnc_match = _re_vnc.match(r'^/api/ws/vnc(?:/(\d+))?$', parsed.path)
+            if _vnc_match:
                 if self.headers.get('Upgrade', '').lower() == 'websocket':
                     from api.vnc import handle_ws_vnc
-                    handle_ws_vnc(self)
+                    vnc_path_port = int(_vnc_match.group(1)) if _vnc_match.group(1) else None
+                    handle_ws_vnc(self, path_port=vnc_path_port)
                     return
                 return j(self, {'error': 'websocket upgrade required'}, status=426)
 
@@ -199,6 +203,14 @@ def main() -> None:
         print(f'  Remote access: ssh -N -L {PORT}:127.0.0.1:{PORT} <user>@<your-server>', flush=True)
     print(f'  Then open:     {scheme}://{HOST}:{PORT}', flush=True)
     print('', flush=True)
+
+    # Start SessionDisplay for all pinned sessions on server restart
+    try:
+        from api.session_display import ensure_pinned_displays
+        ensure_pinned_displays()
+    except Exception:
+        logger.debug("Failed to start pinned session displays", exc_info=True)
+
     try:
         httpd.serve_forever()
     finally:

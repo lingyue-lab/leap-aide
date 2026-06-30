@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import Layout from './components/layout/Layout';
 import ChatInterface from './components/chat/ChatInterface';
+import ObserverPage from './components/observer/ObserverPage';
 import { useSessionStore } from './stores/useSessionStore';
 import { useSettingsStore } from './stores/useSettingsStore';
 import { useTheme } from './contexts/ThemeContext';
@@ -52,6 +53,7 @@ function App() {
         <Routes>
           <Route path="/" element={<ChatInterface sessionId={currentSessionId} />} />
           <Route path="/session/:sessionId" element={<ChatInterface />} />
+          <Route path="/observer/:sessionId" element={<ObserverPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Layout>

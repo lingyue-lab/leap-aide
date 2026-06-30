@@ -30,6 +30,33 @@ import socket
 
 logger = logging.getLogger(__name__)
 
+# ── TCP keepalive ───────────────────────────────────────────────────────────────
+
+def _set_tcp_keepalive(sock: socket.socket, idle_sec: int = 60, interval_sec: int = 10, probes: int = 5) -> None:
+    """Enable TCP keepalive on a socket to prevent idle disconnection.
+
+    Without keepalive, proxies, NAT gateways, and Docker bridge networks
+    may silently drop idle connections after their conntrack timeout
+    (typically 300-1800s).  Keepalive probes at OS level keep the connection
+    alive regardless of application-layer data flow.
+
+    Defaults: first probe after 60s idle, every 10s thereafter, 5 failures
+    → connection declared dead after ~110s of unresponsiveness.
+    """
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        # Linux-specific tuning (gracefully skipped on other platforms)
+        if hasattr(socket, 'TCP_KEEPIDLE'):
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, idle_sec)
+        elif hasattr(socket, 'TCP_KEEPALIVE'):  # macOS
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPALIVE, idle_sec)
+        if hasattr(socket, 'TCP_KEEPINTVL'):
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, interval_sec)
+        if hasattr(socket, 'TCP_KEEPCNT'):
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, probes)
+    except OSError:
+        pass  # best-effort — some container environments restrict setsockopt
+
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 VNC_HOST: str = os.environ.get("HERMES_VNC_HOST", "127.0.0.1")
@@ -119,10 +146,15 @@ def _bridge_vnc(ws_sock: socket.socket, vnc_sock: socket.socket) -> None:
 
 # ── Public entry point (called from server.py) ────────────────────────────────
 
-def handle_ws_vnc(handler) -> None:
+def handle_ws_vnc(handler, path_port: int | None = None) -> None:
     """
-    Called from Handler.do_GET when path == '/api/ws/vnc' and the
+    Called from Handler.do_GET when path matches '/api/ws/vnc' and the
     request carries 'Upgrade: websocket'.
+
+    Port resolution priority:
+    1. path_port from URL path: /api/ws/vnc/<port>
+    2. ?port= query param: /api/ws/vnc?port=<port>
+    3. VNC_PORT env var (default 5901)
 
     1. Validates the WebSocket upgrade request.
     2. Connects to the local VNC server (TCP).
@@ -133,6 +165,28 @@ def handle_ws_vnc(handler) -> None:
     in its own thread, so blocking here does not prevent new connections
     from being served.
     """
+    from urllib.parse import parse_qs, urlparse
+
+    # Port resolution: path > query param > env default
+    if path_port is not None:
+        vnc_port = path_port
+    else:
+        # Parse per-session VNC port from query string: /api/ws/vnc?port=5900
+        parsed_url = urlparse(handler.path)
+        qs = parse_qs(parsed_url.query)
+        requested_port = qs.get("port", [None])[0]
+
+        if requested_port:
+            try:
+                vnc_port = int(requested_port)
+            except ValueError:
+                handler.send_response(400)
+                handler.send_header("Content-Type", "text/plain")
+                handler.end_headers()
+                handler.wfile.write(b"Invalid port parameter")
+                return
+        else:
+            vnc_port = VNC_PORT  # Fallback to env var (backward compatible)
     client_key = handler.headers.get("Sec-WebSocket-Key", "").strip()
     if not client_key:
         handler.send_response(400)
@@ -144,16 +198,18 @@ def handle_ws_vnc(handler) -> None:
     # ── Connect to VNC server before completing the WS handshake ─────────────
     # If VNC is unavailable, we return a proper HTTP error (not a garbled WS).
     try:
-        vnc_sock = socket.create_connection((VNC_HOST, VNC_PORT), timeout=5)
+        vnc_sock = socket.create_connection((VNC_HOST, vnc_port), timeout=5)
     except (ConnectionRefusedError, OSError) as exc:
-        logger.warning("VNC connect failed (%s:%s): %s", VNC_HOST, VNC_PORT, exc)
+        logger.warning("VNC connect failed (%s:%d): %s", VNC_HOST, vnc_port, exc)
         handler.send_response(503)
         handler.send_header("Content-Type", "text/plain")
         handler.end_headers()
         handler.wfile.write(
-            f"VNC server unavailable at {VNC_HOST}:{VNC_PORT}".encode()
+            f"VNC server unavailable at {VNC_HOST}:{vnc_port}".encode()
         )
         return
+
+    _set_tcp_keepalive(vnc_sock)
 
     # noVNC requires the server to advertise 'binary' sub-protocol.
     # Flush buffered output before taking over the raw socket.
@@ -163,6 +219,7 @@ def handle_ws_vnc(handler) -> None:
         pass
 
     raw_sock: socket.socket = handler.connection
+    _set_tcp_keepalive(raw_sock)
 
     # Complete WebSocket handshake (sends HTTP 101).
     try:
@@ -177,7 +234,7 @@ def handle_ws_vnc(handler) -> None:
     handler.close_connection = True
 
     logger.info(
-        "VNC WS session starting (proxy → %s:%s)", VNC_HOST, VNC_PORT
+        "VNC WS session starting (proxy → %s:%d)", VNC_HOST, vnc_port
     )
 
     try:

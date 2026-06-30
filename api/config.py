@@ -44,6 +44,7 @@ STATE_DIR = (
 )
 
 SESSION_DIR = STATE_DIR / "sessions"
+SESSIONS_DISPLAY_DIR = STATE_DIR / "sessions_display"
 WORKSPACES_FILE = STATE_DIR / "workspaces.json"
 SESSION_INDEX_FILE = SESSION_DIR / "_index.json"
 SETTINGS_FILE = STATE_DIR / "settings.json"
@@ -1975,10 +1976,48 @@ def _evict_session_agent(session_id: str) -> None:
 
 # ── Thread-local env context ─────────────────────────────────────────────────
 _thread_ctx = threading.local()
+_original_popen = None          # saved reference to real subprocess.Popen
+_popen_patched = False
+_popen_lock = threading.Lock()
 
 
 def _set_thread_env(**kwargs):
+    """Register thread-local env overrides and enable subprocess isolation.
+
+    On first call, replaces :class:`subprocess.Popen` with
+    :class:`_IsolatedPopen` so that every subprocess spawned by an agent
+    thread inherits the session-specific env vars registered here (e.g.
+    ``HERMES_SESSION_KEY``, ``BROWSER_CDP_URL``).  Threads that have not
+    called ``_set_thread_env`` are unaffected — their subprocesses behave
+    exactly as before.
+    """
+    global _popen_patched, _original_popen
+
     _thread_ctx.env = kwargs
+
+    with _popen_lock:
+        if not _popen_patched:
+            import subprocess as _sp
+
+            _original_popen = _sp.Popen
+
+            class _IsolatedPopen(_original_popen):  # type: ignore[valid-type]
+                """Popen that merges thread-local env overrides into the child env."""
+
+                def __init__(self, *args, **kwargs):
+                    overrides = getattr(_thread_ctx, 'env', None) or {}
+                    if overrides:
+                        env = kwargs.get('env', None)
+                        if env is None:
+                            env = dict(os.environ)
+                            env.update(overrides)
+                        else:
+                            env = {**env, **overrides}
+                        kwargs['env'] = env
+                    super().__init__(*args, **kwargs)
+
+            _sp.Popen = _IsolatedPopen
+            _popen_patched = True
 
 
 def _clear_thread_env():

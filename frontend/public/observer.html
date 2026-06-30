@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hermes Observer — __SESSION_ID__</title>
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+body{background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;overflow:hidden;height:100vh;width:100vw}
+#c{width:100vw;height:100vh;display:block}
+
+/* ── Overlay ───────────────────────────────────────────────── */
+#overlay{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:10;background:rgba(13,17,23,.92);transition:opacity .35s;backdrop-filter:blur(4px)}
+#overlay.hidden{opacity:0;pointer-events:none}
+#overlay-icon{font-size:48px;margin-bottom:12px;display:none}
+#overlay-icon.show{display:block}
+.spinner{width:40px;height:40px;border:3px solid #30363d;border-top-color:#58a6ff;border-radius:50%;animation:spin .8s linear infinite;margin-bottom:16px}
+@keyframes spin{to{transform:rotate(360deg)}}
+#status{font-size:15px;color:#c9d1d9;margin-bottom:8px;text-align:center;max-width:320px;line-height:1.4}
+#sub-status{font-size:12px;color:#8b949e;margin-bottom:16px;display:none}
+#sub-status.show{display:block}
+#retry{display:none;padding:10px 28px;background:#238636;color:#fff;border:1px solid #2ea043;border-radius:6px;cursor:pointer;font-size:14px;font-weight:500;transition:background .15s}
+#retry:hover{background:#2ea043}
+#retry.show{display:inline-block}
+</style>
+</head>
+<body>
+<div id="c"></div>
+<div id="overlay">
+  <div class="spinner" id="spin"></div>
+  <div id="overlay-icon">⚠</div>
+  <p id="status">Connecting...</p>
+  <p id="sub-status"></p>
+  <button id="retry" onclick="doConnect()">重新连接</button>
+</div>
+<script type="module">
+import RFB from '/static/novnc/core/rfb.js';
+
+const SID = "__SESSION_ID__";
+const VNC_PORT = __VNC_PORT__;
+const MAX_RECONNECT = 5;
+
+const container = document.getElementById('c');
+const overlay = document.getElementById('overlay');
+const statusEl = document.getElementById('status');
+const subStatusEl = document.getElementById('sub-status');
+const spinEl = document.getElementById('spin');
+const retryEl = document.getElementById('retry');
+const iconEl = document.getElementById('overlay-icon');
+
+let rfb = null;
+let reconnectAttempts = 0;
+let reconnectTimer = null;
+
+function setUI(state) {
+  // state: { icon?, status, sub?, spin?, retry? }
+  iconEl.textContent = state.icon || '';
+  iconEl.classList.toggle('show', !!state.icon);
+  statusEl.textContent = state.status || '';
+  spinEl.style.display = state.spin ? 'block' : 'none';
+  retryEl.classList.toggle('show', !!state.retry);
+  retryEl.textContent = state.retry || '重新连接';
+  subStatusEl.textContent = state.sub || '';
+  subStatusEl.classList.toggle('show', !!state.sub);
+  overlay.classList.toggle('hidden', !!state._hidden);
+}
+
+function getWsUrl() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  return `${proto}://${location.host}/api/ws/vnc/${VNC_PORT}`;
+}
+
+function doConnect() {
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  setUI({ status: '正在连接...', spin: true });
+  overlay.classList.remove('hidden');
+
+  try {
+    rfb = new RFB(container, getWsUrl());
+    rfb.scaleViewport = true;
+    rfb.resizeSession = false;
+
+    rfb.addEventListener('connect', () => {
+      reconnectAttempts = 0;
+      setUI({ _hidden: true });
+    });
+
+    rfb.addEventListener('disconnect', (ev) => {
+      const clean = ev.detail && ev.detail.clean;
+      if (clean) {
+        setUI({
+          icon: '⚠',
+          status: 'VNC 已断开',
+          sub: '会话已结束，请关闭此页面后重新打开观察窗口。',
+          retry: '重新连接',
+        });
+        return;
+      }
+      if (reconnectAttempts < MAX_RECONNECT) {
+        reconnectAttempts++;
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 16000);
+        setUI({
+          status: `VNC 连接断开，正在重连...`,
+          sub: `第 ${reconnectAttempts}/${MAX_RECONNECT} 次重试`,
+          spin: true,
+        });
+        reconnectTimer = setTimeout(doConnect, delay);
+      } else {
+        setUI({
+          icon: '⚠',
+          status: 'VNC 连接断开，自动重连失败',
+          sub: '请检查服务是否正常后点击按钮重新连接。',
+          retry: '重新连接',
+        });
+      }
+    });
+
+    rfb.addEventListener('securityfailure', (ev) => {
+      const reason = (ev.detail && ev.detail.reason) ? ev.detail.reason : '认证失败';
+      setUI({
+        icon: '⚠',
+        status: 'VNC 安全认证失败',
+        sub: reason,
+        retry: '重试',
+      });
+    });
+  } catch (e) {
+    setUI({
+      icon: '⚠',
+      status: '无法创建 VNC 连接',
+      sub: e.message || '',
+      retry: '重试',
+    });
+  }
+}
+
+doConnect();
+
+window.addEventListener('beforeunload', () => {
+  if (rfb) { try { rfb.disconnect(); } catch (_) {} }
+});
+</script>
+</body>
+</html>
