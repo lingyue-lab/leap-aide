@@ -24,6 +24,7 @@ export interface Session {
   estimated_cost?: number | null;
   skills?: string[] | null;
   personality?: string | null;
+  service_tier?: string | null;
   message_count?: number;
   last_seen_msg_count?: number | null;
   // Compression lineage (v1 — WebUI-native sessions only)
@@ -50,6 +51,8 @@ export interface SessionListItem {
   workspace?: string;
   skills?: string[] | null;
   personality?: string | null;
+  reasoning_effort?: string | null;
+  service_tier?: string | null;
   message_count?: number;
   last_seen_msg_count?: number | null;
   // Compression chain metadata (v1 — WebUI-native sessions only)
@@ -78,6 +81,7 @@ export interface Message {
   _queued?: boolean;               // True when message is waiting in the busy-mode queue
   _queue_position?: number;        // 1-based position in the queue
   _steered?: boolean;              // True when message was injected via steer mode
+  original_content?: string;        // User's original input when expanded via skill command (FR-008)
 }
 
 /** Tracks a message waiting in the session's busy-mode queue. */
@@ -359,6 +363,23 @@ export interface SkillFileNode {
   is_dir: boolean;
   size?: number;
   children?: SkillFileNode[];
+}
+
+export interface SlashCommand {
+  name: string;
+  slug?: string;
+  description: string;
+  category?: string;
+  type: 'builtin' | 'skill' | 'plugin';
+  args_hint?: string;
+  subcommands?: string[];
+  dir_name?: string;
+}
+
+export interface SlashCommandsResponse {
+  builtin: SlashCommand[];
+  skills: SlashCommand[];
+  plugins: SlashCommand[];
 }
 
 // types/memory.ts - 记忆相关类型定义

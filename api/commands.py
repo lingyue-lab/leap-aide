@@ -10,13 +10,14 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Commands that are gateway_only in the agent registry -- webui never
-# wants to expose them (sethome, restart, update etc.) even if a future
-# agent version drops the gateway_only flag. /commands is the agent's
-# own command-listing command; webui has its own /help that calls
-# cmdHelp() locally, so /commands would be redundant and confusing.
+# Commands that are gateway_only or cli_only in the agent registry --
+# webui never wants to expose them. Also excludes /commands (the agent's
+# own command-listing command; webui has its own /help).
 _NEVER_EXPOSE: frozenset[str] = frozenset({
-    'sethome', 'restart', 'update', 'commands',
+    'sethome', 'restart', 'update', 'commands', 'resume', 'sessions', 'stop', 'kanban',
+    'yolo',  # WebUI uses ModeSelector (manual/smart/yolo) instead
+    'voice',  # WebUI uses browser-native Web Speech API instead
+    'codex-runtime',  # requires local codex CLI binary, not available in browser
 })
 
 
@@ -40,6 +41,8 @@ def list_commands(_registry=None) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for cmd in _registry:
         if cmd.gateway_only:
+            continue
+        if cmd.cli_only:
             continue
         if cmd.name in _NEVER_EXPOSE:
             continue

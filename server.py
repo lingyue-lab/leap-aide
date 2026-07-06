@@ -209,11 +209,21 @@ def main() -> None:
         from api.session_display import ensure_pinned_displays
         ensure_pinned_displays()
     except Exception:
-        logger.debug("Failed to start pinned session displays", exc_info=True)
+        logger.warning("Failed to start pinned session displays", exc_info=True)
 
     try:
         httpd.serve_forever()
     finally:
+        # Stop all SessionDisplay processes so they don't leave stale X11 locks
+        try:
+            from api.session_display import _DISPLAYS
+            for sid, sd in list(_DISPLAYS.items()):
+                try:
+                    sd.stop(remove_json=False)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         # Stop the gateway watcher on shutdown
         try:
             from api.gateway_watcher import stop_watcher

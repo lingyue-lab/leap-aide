@@ -246,7 +246,12 @@ export const ReasoningBlock = memo(function ReasoningBlock({ thinkingText }: { t
 });
 export function extractThinkingText(message: Message): string {
   let thinkingText = '';
-  let content: string | ContentBlock[] = message.content || '';
+  // For user messages with a skill invocation, show the original input
+  // instead of the expanded skill content (FR-008).
+  let content: string | ContentBlock[] =
+    (message.role === 'user' && message.original_content)
+      ? message.original_content
+      : (message.content || '');
 
   // 1. Extract thinking/reasoning blocks from structured content (Claude extended thinking, o3)
   if (Array.isArray(content)) {
@@ -472,7 +477,7 @@ function MessageRowComponent({ message, messages = [], toolCalls = [], isStreami
   const { strippedContent } = useMemo(() => {
     let thinkingText = '';
     // Sprint 15: Handle null content
-    let content: string | ContentBlock[] = message.content || '';
+    let content: string | ContentBlock[] = (message.original_content as string) || message.content || '';
 
     // 1. Extract thinking/reasoning blocks from structured content (Claude extended thinking, o3)
     if (Array.isArray(content)) {

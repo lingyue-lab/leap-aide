@@ -408,6 +408,11 @@ from api.models import (
     get_cli_sessions,
     get_cli_session_messages,
 )
+
+
+def _sessions_file():
+    """Return the Path to the sessions index file."""
+    return SESSION_INDEX_FILE
 from api.workspace import (
     load_workspaces,
     save_workspaces,
@@ -985,6 +990,30 @@ def handle_get(handler, parsed) -> bool:
         from api.background import get_results
         return j(handler, {"results": get_results(sid)})
 
+    if parsed.path == "/api/goal/status":
+        sid = parse_qs(parsed.query).get("session_id", [""])[0]
+        if not sid:
+            return bad(handler, "Missing session_id")
+        try:
+            from hermes_cli.goals import GoalManager
+            mgr = GoalManager(sid)
+            st = mgr.state
+            if st is None or st.status in ("cleared", "done"):
+                return j(handler, {"goal": None})
+            return j(handler, {
+                "goal": st.goal,
+                "status": st.status,
+                "turns_used": st.turns_used,
+                "max_turns": st.max_turns,
+                "subgoals": len(st.subgoals) if st.subgoals else 0,
+                "subgoal_texts": list(st.subgoals) if st.subgoals else [],
+                "last_verdict": st.last_verdict,
+                "paused_reason": st.paused_reason,
+            })
+        except Exception as e:
+            logger.debug("Goal status check failed: %s", e)
+            return j(handler, {"goal": None})
+
     if parsed.path == "/api/sessions":
         webui_sessions = all_sessions()
         settings = load_settings()
@@ -1088,6 +1117,10 @@ def handle_get(handler, parsed) -> bool:
     if parsed.path == "/api/commands":
         from api.commands import list_commands
         return j(handler, {"commands": list_commands()})
+
+    if parsed.path == "/api/slash-commands":
+        from api.slash_commands import get_unified_commands
+        return j(handler, get_unified_commands())
 
     if parsed.path == "/api/updates/check":
         settings = load_settings()
@@ -3273,27 +3306,22 @@ def _handle_btw(handler, body):
     return j(handler, {"stream_id": stream_id, "session_id": ephemeral.session_id, "parent_session_id": body["session_id"]})
 
 
-def _handle_background(handler, body):
-    """POST /api/background — run prompt in parallel background agent.
+def _start_background_task(parent_session, prompt, keep_session=True):
+    """Create and start a background agent session.
 
-    Creates a hidden session, starts streaming in a daemon thread.
-    Frontend polls /api/background/status for completed results.
+    If *keep_session* is True (WebUI), the session file persists on disk so
+    it appears in the sidebar.  If False, it is deleted after completion
+    (existing direct-API behaviour).
     """
-    try:
-        require(body, "session_id")
-        require(body, "prompt")
-    except ValueError as e:
-        return bad(handler, str(e))
-    try:
-        s = get_session(body["session_id"])
-    except KeyError:
-        return bad(handler, "Session not found", 404)
-    prompt = str(body["prompt"]).strip()
-    if not prompt:
-        return bad(handler, "prompt is required")
     from api.models import new_session as _new_session
-    bg = _new_session(workspace=s.workspace, model=s.model, profile=getattr(s, 'profile', None))
+
+    bg = _new_session(
+        workspace=parent_session.workspace,
+        model=parent_session.model,
+        profile=getattr(parent_session, 'profile', None),
+    )
     bg.title = f"bg: {prompt[:60]}"
+    bg.pending_user_message = prompt
     bg.save()
     stream_id = uuid.uuid4().hex
     bg.active_stream_id = stream_id
@@ -3302,19 +3330,17 @@ def _handle_background(handler, body):
     with STREAMS_LOCK:
         STREAMS[stream_id] = q
     task_id = uuid.uuid4().hex[:8]
-    from api.background import track_background, complete_background
-    parent_sid = body["session_id"]
+    parent_sid = parent_session.session_id
     bg_sid = bg.session_id
+    from api.background import track_background, complete_background
     track_background(parent_sid, bg_sid, stream_id, task_id, prompt)
 
     def _run_bg_and_notify():
-        """Run the background agent, then mark the tracked task `done` with the
-        last assistant reply so `/api/background/status` can surface it.  Without
-        this, `complete_background()` is never called and the result is lost —
-        `get_results()` would see a forever-`running` task and return nothing.
-        """
+        """Run the background agent, then mark the tracked task ``done`` with the
+        last assistant reply so ``/api/background/status`` can surface it."""
         try:
-            _run_agent_streaming(bg_sid, prompt, s.model, s.workspace, stream_id, None)
+            _run_agent_streaming(bg_sid, prompt, parent_session.model,
+                                parent_session.workspace, stream_id, None)
             # Reload the bg session from disk and extract the final assistant reply.
             try:
                 from api.models import Session as _Session
@@ -3332,13 +3358,11 @@ def _handle_background(handler, body):
                 complete_background(parent_sid, task_id, _answer or "(no answer produced)")
             except Exception:
                 complete_background(parent_sid, task_id, "(background task failed)")
-            # Best-effort cleanup of the hidden bg session file so it doesn't
-            # clutter the sidebar or SESSION_DIR. The index is pruned on the
-            # next rebuild via _index_entry_exists().
-            try:
-                (SESSION_DIR / f"{bg_sid}.json").unlink(missing_ok=True)
-            except Exception:
-                pass
+            if not keep_session:
+                try:
+                    (SESSION_DIR / f"{bg_sid}.json").unlink(missing_ok=True)
+                except Exception:
+                    pass
         except Exception:
             try:
                 complete_background(parent_sid, task_id, "(background task failed)")
@@ -3347,7 +3371,37 @@ def _handle_background(handler, body):
 
     thr = threading.Thread(target=_run_bg_and_notify, daemon=True)
     thr.start()
-    return j(handler, {"task_id": task_id, "stream_id": stream_id, "session_id": bg.session_id})
+    return {
+        "task_id": task_id,
+        "stream_id": stream_id,
+        "session_id": bg_sid,
+        "title": bg.title,
+        "created_at": getattr(bg, "created_at", None) or time.time(),
+        "workspace": bg.workspace,
+    }
+
+
+def _handle_background(handler, body):
+    """POST /api/background — run prompt in parallel background agent.
+
+    Creates a hidden session, starts streaming in a daemon thread.
+    Frontend polls /api/background/status for completed results.
+    The session file is deleted after completion (keep_session=False).
+    """
+    try:
+        require(body, "session_id")
+        require(body, "prompt")
+    except ValueError as e:
+        return bad(handler, str(e))
+    try:
+        s = get_session(body["session_id"])
+    except KeyError:
+        return bad(handler, "Session not found", 404)
+    prompt = str(body["prompt"]).strip()
+    if not prompt:
+        return bad(handler, "prompt is required")
+    result = _start_background_task(s, prompt, keep_session=False)
+    return j(handler, result)
 
 
 def _handle_queue(handler, parsed):
@@ -3479,6 +3533,38 @@ def _handle_chat_start(handler, body):
     msg = str(body.get("message", "")).strip()
     if not msg:
         return bad(handler, "message is required")
+
+    # ── Slash-command dispatch ──
+    _dispatch_result = None
+    _original_msg = msg
+    if msg.startswith("/"):
+        try:
+            from api.slash_commands import dispatch_command as _dispatch
+            _dispatch_result = _dispatch(msg, s)
+        except Exception as _dc_err:
+            logger.debug("dispatch_command failed: %s", _dc_err, exc_info=True)
+
+    _forced_mode = None
+
+    if _dispatch_result is not None:
+        if _dispatch_result.get("type") == "force_mode":
+            _forced_mode = _dispatch_result["mode"]
+            msg = _dispatch_result["prompt"]
+            s._pending_original_message = _original_msg
+            # Fall through — mode will be overridden before busy check below
+        elif _dispatch_result.get("type") == "direct":
+            _resp = _dispatch_result["response"]
+            return j(handler, {
+                "direct": True,
+                "content": _resp.get("content", ""),
+                "session_id": s.session_id,
+                "session_update": _resp.get("session_update", {}),
+            })
+        elif _dispatch_result.get("type") == "agent":
+            msg = _dispatch_result["transformed_msg"]
+            s._pending_original_message = _original_msg
+            # Fall through to normal streaming flow with transformed msg
+
     attachments = [str(a) for a in (body.get("attachments") or [])][:20]
     try:
         workspace = str(resolve_trusted_workspace(body.get("workspace") or s.workspace))
@@ -3492,6 +3578,12 @@ def _handle_chat_start(handler, body):
     mode = str(body.get("mode") or "").strip()
     if not mode:
         mode = str(load_settings().get("busy_input_mode", "interrupt")).strip()
+    # Slash-command /queue or /steer overrides the global mode for this message.
+    # Also update the body so _resolve_busy_handling uses the cleaned prompt
+    # (without the /queue or /steer prefix).
+    if _forced_mode:
+        mode = _forced_mode
+        body["message"] = msg
     if mode not in _valid_modes:
         return bad(handler, f"invalid mode: {mode}. Must be one of: {', '.join(sorted(_valid_modes))}")
     result, result_stream_id = _resolve_busy_handling(s, mode, body)

@@ -1218,15 +1218,22 @@
     display: flex;
     align-items: center;
     gap: 6px;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
   }
 
   .queue-status-icon {
     font-size: 13px;
+    flex-shrink: 0;
   }
 
   .queue-status-text {
     font-weight: 600;
     color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .queue-status-divider {
@@ -3048,6 +3055,91 @@
   }
 }
 
+/* Background task notification card */
+.bg-task-card {
+  display: none;
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 560px;
+  width: min(560px, calc(100vw - 480px));
+  z-index: 100;
+}
+.bg-task-card.visible {
+  display: block;
+}
+.bg-task-inner {
+  background: var(--surface);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border2);
+  border-radius: 14px;
+  padding: 16px 18px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+}
+.bg-task-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.bg-task-close {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+}
+.bg-task-close:hover {
+  color: var(--text);
+  background: rgba(255,255,255,0.08);
+}
+.bg-task-desc {
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.5;
+  margin-bottom: 10px;
+  opacity: 0.85;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.bg-task-desc a {
+  color: var(--blue);
+  text-decoration: underline;
+  word-break: break-all;
+}
+
+.bg-task-desc a:hover {
+  opacity: 0.8;
+}
+.bg-task-btns {
+  display: flex;
+  gap: 8px;
+}
+.bg-task-btn {
+  padding: 5px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.bg-task-btn:hover:not(:disabled) {
+  background: var(--hover-bg);
+  border-color: var(--muted);
+}
+
 /* ── KaTeX Math Rendering ── */
 .katex-block {
   display: block;
@@ -3345,6 +3437,16 @@
 .icon-btn:hover {
   color: var(--text);
   background: rgba(255, 255, 255, 0.05);
+}
+
+.icon-btn.voice-active {
+  color: var(--red);
+  animation: pulse-glow 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 
 /* Small button */

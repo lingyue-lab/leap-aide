@@ -3,12 +3,15 @@ import { useTranslation } from 'react-i18next';
 import { useChatStore } from '@/stores/useChatStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 import { useSessionStore } from '@/stores/useSessionStore';
-import { modelsService } from '@/services/api';
+import { modelsService, personalityService } from '@/services/api';
 import ModeSelector from '@/components/common/ModeSelector';
 import ApprovalIndicator from '@/components/common/ApprovalIndicator';
 import ContextUsageIndicator from '@/components/chat/ContextUsageIndicator';
 import { useModeShortcut } from '@/hooks/useModeShortcut';
-import type { ModelGroup } from '@/types';
+import { useSlashCommands } from '@/hooks/useSlashCommands';
+import SlashCommandDropdown from '@/components/chat/SlashCommandDropdown';
+import type { SlashCommandItem } from '@/components/chat/SlashCommandDropdown';
+import type { ModelGroup, Personality } from '@/types';
 
 interface ChatComposerProps {
   onSend: (text: string, attachments?: string[], mode?: string) => void;
@@ -21,7 +24,7 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
   const { t } = useTranslation('chat');
   const { messages, pendingFiles, lastUsage } = useChatStore();
   const { settings } = useSettingsStore();
-  const { currentSession, updateSessionModel, updateSessionReasoningEffort } = useSessionStore();
+  const { currentSession, updateSessionModel, updateSessionReasoningEffort, updateSessionPersonality } = useSessionStore();
   useModeShortcut();
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -35,6 +38,30 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
   const [modelsLoading, setModelsLoading] = useState(false);
   const [compressing, setCompressing] = useState(false);
 
+  // Eagerly load model list for /model arg completion
+  useEffect(() => {
+    modelsService.getModels()
+      .then((resp) => setModelGroups(resp.groups ?? []))
+      .catch(() => {});
+  }, []);
+
+  // Extract flat model ID list for slash-command dynamic arg completion
+  const modelIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const g of modelGroups) {
+      for (const m of g.models) {
+        ids.push(m.id);
+      }
+    }
+    return ids;
+  }, [modelGroups]);
+
+  // Slash command autocomplete state
+  const [slashOpen, setSlashOpen] = useState(false);
+  const [slashFilter, setSlashFilter] = useState('');
+  const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
+  const [cursorPos, setCursorPos] = useState(0);
+
   // Reasoning effort chip state
   const reasoningChipRef = useRef<HTMLButtonElement>(null);
   const reasoningPopoverRef = useRef<HTMLDivElement>(null);
@@ -42,9 +69,136 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
 
   const REASONING_EFFORT_LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 
-  // Resolve current reasoning effort: session value → 'default'
-  const effectiveReasoningEffort = currentSession?.reasoning_effort ?? null;
-  const displayReasoningEffort = effectiveReasoningEffort || 'default';
+  // Global reasoning config fallback (fetched on mount)
+  const [globalReasoningEffort, setGlobalReasoningEffort] = useState<string>('medium');
+
+  useEffect(() => {
+    fetch('/api/reasoning', { credentials: 'include' })
+      .then(r => r.json().catch(() => ({})))
+      .then((d: any) => {
+        if (d?.reasoning_effort) setGlobalReasoningEffort(d.reasoning_effort);
+        if (typeof d?.show_reasoning === 'boolean') {
+          useChatStore.getState().setShowReasoning(d.show_reasoning);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Resolve current reasoning effort: session override → global config → 'medium'
+  const effectiveReasoningEffort: string =
+    currentSession?.reasoning_effort || globalReasoningEffort || 'medium';
+
+  // Personality chip state
+  const personalityChipRef = useRef<HTMLButtonElement>(null);
+  const personalityPopoverRef = useRef<HTMLDivElement>(null);
+  const [personalityPickerOpen, setPersonalityPickerOpen] = useState(false);
+  const [personalities, setPersonalities] = useState<Personality[]>([]);
+
+  const effectivePersonality = currentSession?.personality || null;
+
+  // Fetch available personalities on mount
+  useEffect(() => {
+    personalityService.getAll()
+      .then(setPersonalities)
+      .catch(() => {});
+  }, []);
+
+  // Close personality popover on outside click
+  useEffect(() => {
+    if (!personalityPickerOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        personalityPopoverRef.current && !personalityPopoverRef.current.contains(e.target as Node) &&
+        personalityChipRef.current && !personalityChipRef.current.contains(e.target as Node)
+      ) {
+        setPersonalityPickerOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [personalityPickerOpen]);
+
+  const handlePersonalitySelect = useCallback(async (name: string | null) => {
+    setPersonalityPickerOpen(false);
+    if (!currentSession?.session_id) return;
+    try {
+      await updateSessionPersonality(currentSession.session_id, name ?? '');
+    } catch {
+      // silently ignore
+    }
+  }, [currentSession, updateSessionPersonality]);
+
+  // Voice input state — Web Speech API
+  const { i18n } = useTranslation();
+  const [voiceSupported, setVoiceSupported] = useState(false);
+  const [voiceListening, setVoiceListening] = useState(false);
+  const recognitionRef = useRef<any>(null);
+
+  useEffect(() => {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    setVoiceSupported(!!SR);
+  }, []);
+
+  const handleVoiceToggle = useCallback(() => {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) return;
+
+    if (voiceListening && recognitionRef.current) {
+      recognitionRef.current.stop();
+      return;
+    }
+
+    const recognition = new SR();
+    // Use browser/system locale for speech recognition, not UI language.
+    // navigator.language reflects the OS language which maps to the user's
+    // spoken language. Fall back to i18n language, then en-US.
+    const speechLang = (navigator.language || i18n.language || 'en-US').toLowerCase();
+    recognition.lang = speechLang.startsWith('zh') ? 'zh-CN'
+      : speechLang.startsWith('ja') ? 'ja-JP'
+      : speechLang.startsWith('ko') ? 'ko-KR'
+      : 'en-US';
+    recognition.interimResults = false;
+    recognition.continuous = false;
+
+    recognition.onresult = (event: any) => {
+      const transcript: string = event.results[0][0].transcript;
+      const textarea = textareaRef.current;
+      if (textarea) {
+        const pos = textarea.selectionStart ?? textarea.value.length;
+        const before = textarea.value.slice(0, pos);
+        const after = textarea.value.slice(pos);
+        const newValue = before + transcript + ' ' + after;
+        setInput(newValue);
+        const newPos = pos + transcript.length + 1;
+        setTimeout(() => {
+          textarea.setSelectionRange(newPos, newPos);
+          textarea.focus();
+        }, 0);
+      }
+      setVoiceListening(false);
+    };
+
+    recognition.onerror = () => setVoiceListening(false);
+    recognition.onend = () => setVoiceListening(false);
+
+    recognitionRef.current = recognition;
+    recognition.start();
+    setVoiceListening(true);
+  }, [voiceListening, i18n.language]);
+
+  // Slash command autocomplete — dynamic args including personality names
+  const personalityNames = useMemo(() => ['none', ...personalities.map(p => p.name)], [personalities]);
+
+  const slashDynamicArgs = useMemo(() => ({
+    model: modelIds,
+    reasoning: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'show', 'hide', 'default'],
+    personality: personalityNames,
+  }), [modelIds, personalityNames]);
+
+  const { matchCommands, flattenMatching } = useSlashCommands(slashDynamicArgs);
+
+  const matchingGroups = useMemo(() => matchCommands(slashFilter), [matchCommands, slashFilter]);
+  const flatCommandCount = useMemo(() => flattenMatching(matchingGroups).length, [matchingGroups, flattenMatching]);
 
   // Determine if current model supports extended thinking
   const currentModelSupportsThinking = useMemo(() => {
@@ -75,7 +229,7 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [reasoningPickerOpen]);
 
-  const handleReasoningSelect = useCallback(async (effort: string | null) => {
+  const handleReasoningSelect = useCallback(async (effort: string) => {
     setReasoningPickerOpen(false);
     if (!currentSession?.session_id) return;
     try {
@@ -177,10 +331,79 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Check for IME composition
     if (e.nativeEvent.isComposing) return;
-    
+
+    // ── Slash command dropdown keyboard handling ──
+    if (slashOpen) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSlashSelectedIndex((i) => Math.min(i + 1, flatCommandCount - 1));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSlashSelectedIndex((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        const flat = flattenMatching(matchingGroups);
+        if (flat.length > 0) {
+          const idx = Math.min(slashSelectedIndex, flat.length - 1);
+          const cmd = flat[idx];
+          const displayName = cmd.displayName || cmd.name;
+
+          const lastSlashPos = input.lastIndexOf('/');
+          const afterSlash = input.slice(lastSlashPos + 1);
+
+          // Enter when the user has already typed what completion would
+          // produce → close dropdown and submit as-is (don't overwrite).
+          // For example: /memory approve a1b2c3d4 should submit, not
+          // replace with just /memory.  But /model clau should still
+          // complete to /model claude-opus-4-8.
+          const completionTarget = displayName.split('|')[0].trim();
+          if (
+            e.key === 'Enter' &&
+            (afterSlash === completionTarget || afterSlash.startsWith(completionTarget + ' '))
+          ) {
+            setSlashOpen(false);
+            setSlashFilter('');
+            handleSubmit();
+            return;
+          }
+
+          // Replace /partial with /command-name
+          const beforeSlash = input.slice(0, input.lastIndexOf('/'));
+          const afterCursor = input.slice(cursorPos);
+          const newValue = beforeSlash + '/' + displayName + ' ' + afterCursor;
+          setInput(newValue);
+          setSlashOpen(false);
+          setSlashFilter('');
+          const newCursorPos = beforeSlash.length + displayName.length + 2; // +2 for / and space
+          setTimeout(() => {
+            textareaRef.current?.setSelectionRange(newCursorPos, newCursorPos);
+            textareaRef.current?.focus();
+          }, 0);
+        } else {
+          // No matching commands — close dropdown.
+          // On Enter, also submit the current input normally.
+          setSlashOpen(false);
+          setSlashFilter('');
+          if (e.key === 'Enter') {
+            handleSubmit();
+          }
+        }
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setSlashOpen(false);
+        return;
+      }
+    }
+
     const isEnter = e.key === 'Enter';
     const shouldSend = sendByCtrlEnter ? (isEnter && (e.ctrlKey || e.metaKey)) : (isEnter && !e.shiftKey);
-    
+
     if (shouldSend) {
       e.preventDefault();
       handleSubmit();
@@ -188,7 +411,7 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
       e.preventDefault();
       onCancel();
     }
-  }, [sendByCtrlEnter, handleSubmit, busy, onCancel]);
+  }, [sendByCtrlEnter, handleSubmit, busy, onCancel, slashOpen, input, cursorPos, matchingGroups, flatCommandCount, flattenMatching, slashSelectedIndex]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -295,7 +518,7 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
                       onClick={() => handleModelSelect(m.id)}
                       style={{
                         display: 'flex',
-                        alignItems: 'center',
+                        alignItems: 'flex-start',
                         gap: 8,
                         width: '100%',
                         padding: '7px 14px',
@@ -313,8 +536,32 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
                         </svg>
                       )}
                       {!isActive && <span style={{ width: 12, flexShrink: 0 }} />}
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {m.label}
+                      <span style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        overflow: 'hidden',
+                        minWidth: 0,
+                      }}>
+                        <span style={{
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          fontSize: 12,
+                          lineHeight: 1.4,
+                        }}>
+                          {m.label}
+                        </span>
+                        <span style={{
+                          fontSize: 10,
+                          color: 'var(--muted)',
+                          fontFamily: 'monospace',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          lineHeight: 1.3,
+                        }}>
+                          {m.id}
+                        </span>
                       </span>
                     </button>
                   );
@@ -358,32 +605,6 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
             {t('reasoning.label')}
           </div>
           <div style={{ padding: '6px 0' }}>
-          {/* Default option — uses global config.yaml fallback */}
-          <button
-            onClick={() => handleReasoningSelect(null)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              width: '100%',
-              padding: '7px 14px',
-              background: displayReasoningEffort === 'default' ? 'color-mix(in srgb, var(--blue) 15%, transparent)' : 'transparent',
-              border: 'none',
-              cursor: 'pointer',
-              fontSize: 12,
-              color: displayReasoningEffort === 'default' ? 'var(--blue)' : 'var(--text)',
-              textAlign: 'left',
-            }}
-          >
-            {displayReasoningEffort === 'default' && (
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ flexShrink: 0 }}>
-                <path d="M2 6L5 9L10 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
-            )}
-            {displayReasoningEffort !== 'default' && <span style={{ width: 12, flexShrink: 0 }} />}
-            <span>{t('reasoning.default')}</span>
-          </button>
-
           {REASONING_EFFORT_LEVELS.map((level) => {
             const isActive = effectiveReasoningEffort === level;
             return (
@@ -415,6 +636,134 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
             );
           })}
           </div>
+        </div>
+      )}
+
+      {/* Personality popover */}
+      {personalityPickerOpen && (
+        <div
+          ref={personalityPopoverRef}
+          style={{
+            position: 'absolute',
+            bottom: 'calc(100% - 12px)',
+            left: 280,
+            minWidth: 200,
+            maxWidth: 280,
+            maxHeight: 280,
+            overflowY: 'auto',
+            background: 'var(--surface)',
+            border: '1px solid var(--border2)',
+            borderRadius: 10,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
+            zIndex: 200,
+            padding: 0,
+          }}
+        >
+          <div style={{
+            padding: '8px 14px 6px',
+            fontSize: 10,
+            fontWeight: 600,
+            letterSpacing: '0.06em',
+            textTransform: 'uppercase',
+            color: 'var(--muted)',
+            borderBottom: '1px solid var(--border2)',
+          }}>
+            Personality
+          </div>
+          <div style={{ padding: '6px 0' }}>
+            {/* None option */}
+            <button
+              onClick={() => handlePersonalitySelect(null)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                width: '100%',
+                padding: '7px 14px',
+                background: !effectivePersonality ? 'color-mix(in srgb, var(--blue) 15%, transparent)' : 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                fontSize: 12,
+                color: !effectivePersonality ? 'var(--blue)' : 'var(--text)',
+                textAlign: 'left',
+              }}
+            >
+              {!effectivePersonality && (
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ flexShrink: 0 }}>
+                  <path d="M2 6L5 9L10 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              )}
+              {effectivePersonality && <span style={{ width: 12, flexShrink: 0 }} />}
+              <span>None</span>
+            </button>
+            {personalities.map((p) => {
+              const isActive = effectivePersonality === p.name;
+              return (
+                <button
+                  key={p.name}
+                  onClick={() => handlePersonalitySelect(p.name)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    width: '100%',
+                    padding: '7px 14px',
+                    background: isActive ? 'color-mix(in srgb, var(--blue) 15%, transparent)' : 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: 12,
+                    color: isActive ? 'var(--blue)' : 'var(--text)',
+                    textAlign: 'left',
+                  }}
+                >
+                  {isActive && (
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={{ flexShrink: 0 }}>
+                      <path d="M2 6L5 9L10 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  )}
+                  {!isActive && <span style={{ width: 12, flexShrink: 0 }} />}
+                  <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
+                    <span style={{ fontSize: 12, lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {p.name}
+                    </span>
+                    {p.description && (
+                      <span style={{ fontSize: 10, color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.3 }}>
+                        {p.description}
+                      </span>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Slash command autocomplete dropdown */}
+      {slashOpen && (
+        <div style={{ position: 'relative' }}>
+          <SlashCommandDropdown
+            groups={matchingGroups}
+            selectedIndex={slashSelectedIndex}
+            onSelect={(cmd: SlashCommandItem) => {
+              let displayName = cmd.displayName || cmd.name;
+              // If there are multiple args (pipe-separated), use only the first
+              const pipeIdx = displayName.indexOf('|');
+              if (pipeIdx > 0) displayName = displayName.slice(0, pipeIdx);
+              const beforeSlash = input.slice(0, input.lastIndexOf('/'));
+              const afterCursor = input.slice(cursorPos);
+              const newValue = beforeSlash + '/' + displayName + ' ' + afterCursor;
+              setInput(newValue);
+              setSlashOpen(false);
+              setSlashFilter('');
+              const newCursorPos = beforeSlash.length + displayName.length + 2;
+              setTimeout(() => {
+                textareaRef.current?.setSelectionRange(newCursorPos, newCursorPos);
+                textareaRef.current?.focus();
+              }, 0);
+            }}
+            onMouseEnterIndex={setSlashSelectedIndex}
+          />
         </div>
       )}
 
@@ -472,7 +821,41 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
           rows={1}
           placeholder={t('composer.placeholder')}
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => {
+            const value = e.target.value;
+            const pos = e.target.selectionStart ?? value.length;
+            setInput(value);
+            setCursorPos(pos);
+
+            // Detect slash at word boundary: start of input or preceded by whitespace
+            const beforeCursor = value.slice(0, pos);
+            const lastSlashIdx = (() => {
+              let idx = beforeCursor.lastIndexOf('/');
+              if (idx === -1) return -1;
+              if (idx === 0 || /\s/.test(beforeCursor[idx - 1])) return idx;
+              return -1;
+            })();
+
+            if (lastSlashIdx >= 0) {
+              const partial = beforeCursor.slice(lastSlashIdx + 1);
+              // Show dropdown for slash in command position;
+              // matchCommands handles both command-name and arg-level filtering.
+              // Only open if there are actual matches to avoid blocking
+              // normal typing after a completed /command.
+              const matched = matchCommands(partial);
+              if (matched.length > 0) {
+                setSlashOpen(true);
+                setSlashFilter(partial);
+                setSlashSelectedIndex(0);
+              } else {
+                setSlashOpen(false);
+                setSlashFilter('');
+              }
+            } else {
+              setSlashOpen(false);
+              setSlashFilter('');
+            }
+          }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           disabled={compressing || (busy && !streaming)}
@@ -481,6 +864,22 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
         {/* Footer */}
         <div className="composer-footer">
           <div className="composer-left">
+            {/* Voice input button — Web Speech API */}
+            {voiceSupported && (
+              <button
+                className={`icon-btn${voiceListening ? ' voice-active' : ''}`}
+                onClick={handleVoiceToggle}
+                title={voiceListening ? t('composer.voiceStop') : t('composer.voiceStart')}
+                disabled={compressing || (busy && !streaming)}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill={voiceListening ? 'var(--red)' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                  <line x1="12" y1="19" x2="12" y2="23"/>
+                  <line x1="8" y1="23" x2="16" y2="23"/>
+                </svg>
+              </button>
+            )}
             <button
               className="icon-btn"
               onClick={handleAttachClick}
@@ -518,12 +917,28 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
               title={
                 !currentModelSupportsThinking
                   ? t('reasoning.unsupported')
-                  : `${t('reasoning.label')}: ${t(`reasoning.${displayReasoningEffort}`)}`
+                  : `${t('reasoning.label')}: ${t(`reasoning.${effectiveReasoningEffort}`)}`
               }
               disabled={compressing || !currentModelSupportsThinking}
               style={{ cursor: compressing || !currentModelSupportsThinking ? 'not-allowed' : 'pointer' }}
             >
-              {t(`reasoning.${displayReasoningEffort}`)}
+              {t(`reasoning.${effectiveReasoningEffort}`)}
+              <svg width="8" height="5" viewBox="0 0 8 5" fill="none" style={{ marginLeft: 4, opacity: 0.6 }}>
+                <path d="M1 4L4 1L7 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </button>
+
+            {/* Personality chip — after reasoning effort chip */}
+            <div className="composer-divider" />
+            <button
+              ref={personalityChipRef}
+              className="chip personality"
+              onClick={() => setPersonalityPickerOpen((v) => !v)}
+              title={effectivePersonality ? `Personality: ${effectivePersonality}` : 'Personality (none)'}
+              disabled={compressing}
+              style={{ cursor: compressing ? 'not-allowed' : 'pointer' }}
+            >
+              {effectivePersonality || 'None'}
               <svg width="8" height="5" viewBox="0 0 8 5" fill="none" style={{ marginLeft: 4, opacity: 0.6 }}>
                 <path d="M1 4L4 1L7 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>

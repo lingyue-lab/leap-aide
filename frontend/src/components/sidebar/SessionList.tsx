@@ -19,6 +19,17 @@ export default function SessionList() {
     loadSessions();
   }, [loadSessions]);
 
+  // Auto-select first session on initial load (e.g. after page refresh or restart).
+  // Pinned sessions sort first, so they get priority.
+  const [autoSelectDone, setAutoSelectDone] = useState(false);
+  useEffect(() => {
+    if (autoSelectDone) return;
+    if (sessions.length > 0 && !currentSessionId) {
+      setAutoSelectDone(true);
+      selectSession(sessions[0].session_id);
+    }
+  }, [sessions, currentSessionId, autoSelectDone, selectSession]);
+
   // Filter sessions by search query
   const filteredSessions = useMemo(() => {
     const sessionList = sessions || [];

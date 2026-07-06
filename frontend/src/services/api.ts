@@ -36,8 +36,8 @@ export async function api<T>(
 
 // Chat API 服务
 export const chatService = {
-  startChat: async (sessionId: string, message: string, model: string, workspace?: string, attachments?: string[], mode?: string) => {
-    return api<{ stream_id?: string; queued?: boolean; steered?: boolean; steer_fallback?: string; queue_position?: number; queue_length?: number }>('/api/chat/start', {
+  startChat: async (sessionId: string, message: string, model: string, workspace?: string, attachments?: string[], mode?: string, signal?: AbortSignal) => {
+    return api<{ stream_id?: string; queued?: boolean; steered?: boolean; steer_fallback?: string; queue_position?: number; queue_length?: number; direct?: boolean; content?: string; session_update?: Record<string, unknown> }>('/api/chat/start', {
       method: 'POST',
       body: JSON.stringify({
         session_id: sessionId,
@@ -47,6 +47,7 @@ export const chatService = {
         attachments,
         ...(mode ? { mode } : {}),
       }),
+      ...(signal ? { signal } : {}),
     });
   },
 
@@ -77,6 +78,10 @@ export const chatService = {
 
   clearQueue: async (sessionId: string) => {
     return api(`/api/chat/queue?session_id=${encodeURIComponent(sessionId)}&action=clear`);
+  },
+
+  getGoalStatus: async (sessionId: string) => {
+    return api<{ goal: string | null; status?: string; turns_used?: number; max_turns?: number; subgoals?: number; subgoal_texts?: string[]; paused_reason?: string }>(`/api/goal/status?session_id=${encodeURIComponent(sessionId)}`);
   },
 };
 
@@ -493,6 +498,13 @@ export const skillsService = {
       throw { message: data.message || `HTTP ${response.status}`, status: response.status };
     }
     return data;
+  },
+};
+
+// Slash-command API 服务
+export const slashCommandsService = {
+  list: async () => {
+    return api<import('@/types').SlashCommandsResponse>('/api/slash-commands');
   },
 };
 

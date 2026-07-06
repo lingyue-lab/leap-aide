@@ -17,7 +17,9 @@
     "attach": "Attach files",
     "send": "Send message",
     "stop": "Stop generating",
-    "drop_files": "Drop files to attach"
+    "drop_files": "Drop files to attach",
+    "voiceStart": "Voice input",
+    "voiceStop": "Stop recording"
   },
   "approval": {
     "title": "Command Approval Required",

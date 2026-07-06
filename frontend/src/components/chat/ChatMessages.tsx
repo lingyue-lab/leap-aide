@@ -18,6 +18,7 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
     const innerRef = useRef<HTMLDivElement>(null);
     const scrollRef = ref || innerRef;
     const toolCalls = useChatStore(selectToolCalls);
+    const showReasoning = useChatStore((s) => s.showReasoning);
 
     // Auto-scroll logic
     const _scrollPinned = useRef(true);
@@ -171,7 +172,7 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
                   
                   // Render reasoning row if applicable — pass thinkingText to MessageRow
                   // so reasoning is displayed inline within the same message (no separate separator)
-                  const thinkingText = extractThinkingText(message);
+                  const thinkingText = showReasoning ? extractThinkingText(message) : undefined;
 
                   // Render assistant message
                   result.push(

@@ -2,6 +2,9 @@ import { useCallback, useEffect, startTransition } from 'react';
 import { chatService } from '@/services/api';
 import { useChatStore } from '@/stores/useChatStore';
 import { useSessionStore } from '@/stores/useSessionStore';
+import { showBackgroundTaskCard } from '@/components/dialogs/BackgroundTaskCard';
+import { showInfoCard, dismissInfoCard } from '@/components/dialogs/InfoCard';
+import { refreshGoalStatus } from '@/components/chat/GoalStatusBar';
 import * as StreamManager from '@/stores/streamManager';
 import type { SessionStreamState } from '@/stores/streamManager';
 import type { Message } from '@/types';
@@ -187,24 +190,170 @@ export function useChatStream() {
       StreamManager.stopBackgroundStream(sessionId);
     }
 
-    // Optimistically add the user message to the live display
-    store.addMessage({
-      role: 'user',
-      content: message,
-      attachments,
-      _ts: Date.now() / 1000,
-    });
+    // Optimistically add the user message to the live display.
+    // For slash commands, defer — the response determines whether the
+    // message should appear (card commands show no user message at all).
+    const isSlash = message.startsWith('/');
+    if (!isSlash) {
+      store.addMessage({
+        role: 'user',
+        content: message,
+        attachments,
+        _ts: Date.now() / 1000,
+      });
+    }
     store.setBusy(true);
+
+    // ── Slash commands: show loading card immediately, support cancel ──
+    let abortController: AbortController | undefined;
+    if (isSlash) {
+      abortController = new AbortController();
+      showInfoCard("Running command...", {
+        sticky: true,
+        loading: true,
+        onDismiss: () => abortController?.abort(),
+      });
+    }
 
     try {
       // Start the chat on the backend
       const result = await chatService.startChat(
-        sessionId, message, model, workspace, attachments, mode
+        sessionId, message, model, workspace, attachments, mode,
+        abortController?.signal,
       );
+
+      // Handle direct command response (slash commands like /help, /model, /clear)
+      if (result.direct) {
+        // ── Background task: show card notification instead of chat message ──
+        const update = result.session_update as Record<string, unknown> | undefined;
+        if (update?.background_session) {
+          store.setBusy(false);
+          const bg = update.background_session as {
+            session_id: string; title: string; created_at: number; workspace?: string;
+            stream_id: string; prompt: string;
+          };
+          // Show floating notification card
+          showBackgroundTaskCard(bg);
+          // Connect to the background session's SSE stream so the sidebar shows
+          // the streaming indicator and tokens accumulate for live viewing.
+          StreamManager.startBackgroundStream(
+            bg.session_id,
+            bg.stream_id,
+            { role: 'user' as const, content: bg.prompt, _ts: Date.now() / 1000 },
+            [],
+          );
+          // Optimistically prepend to sidebar session list
+          const sStore = useSessionStore.getState();
+          const entry = {
+            session_id: bg.session_id, title: bg.title,
+            created_at: bg.created_at, pinned: false, workspace: bg.workspace,
+          };
+          const current = sStore.sessions || [];
+          if (!current.some((s) => s.session_id === bg.session_id)) {
+            useSessionStore.setState({ sessions: [entry, ...current] });
+          }
+          sStore.loadSessions().catch(() => {});
+          return;
+        }
+
+        // ── Info-card commands: show card instead of chat message ──
+        if (update?._as_card) {
+          store.setBusy(false);
+          // Apply session updates before showing card (e.g. /model changes)
+          if (update.model) {
+            const { updateSessionModel: _usm } = useSessionStore.getState();
+            _usm(sessionId, update.model as string).catch(() => {});
+          }
+          if (update.title) {
+            const { updateCurrentSession, loadSessions: _ls2 } = useSessionStore.getState();
+            updateCurrentSession({ title: update.title as string });
+            _ls2().catch(() => {});
+          }
+          if (typeof update.show_reasoning === 'boolean') {
+            store.setShowReasoning(update.show_reasoning as boolean);
+          }
+          if ('reasoning_effort' in (update as Record<string, unknown>)) {
+            const { updateSessionReasoningEffort: _usre } = useSessionStore.getState();
+            _usre(sessionId, (update as Record<string, unknown>).reasoning_effort as string | null).catch(() => {});
+          }
+          if ('personality' in (update as Record<string, unknown>)) {
+            const { updateSessionPersonality: _usp } = useSessionStore.getState();
+            _usp(sessionId, (update as Record<string, unknown>).personality as string | null).catch(() => {});
+          }
+          if ('service_tier' in (update as Record<string, unknown>)) {
+            const { updateCurrentSession: _ucs } = useSessionStore.getState();
+            _ucs({ service_tier: (update as Record<string, unknown>).service_tier as string | null });
+          }
+          showInfoCard(result.content || '', { sticky: true });
+          refreshGoalStatus();
+          return;
+        }
+
+        // ── Normal direct commands: add message to chat history ──
+        if (isSlash) {
+          store.addMessage({
+            role: 'user',
+            content: message,
+            attachments,
+            _ts: Date.now() / 1000,
+          });
+        }
+        store.addMessage({
+          role: 'assistant',
+          content: result.content || '',
+          _ts: Date.now() / 1000,
+        });
+        store.setBusy(false);
+
+        // Apply session state updates from command
+        if (update) {
+          if (update.model) {
+            const { updateSessionModel } = useSessionStore.getState();
+            updateSessionModel(sessionId, update.model as string).catch(() => {});
+          }
+          if (update.title) {
+            const { updateCurrentSession, loadSessions } = useSessionStore.getState();
+            updateCurrentSession({ title: update.title as string });
+            loadSessions().catch(() => {});
+          }
+          if (update.cleared) {
+            // Reload session to get cleared messages
+            const { loadSession } = useSessionStore.getState();
+            loadSession(sessionId).catch(() => {});
+          }
+          if ('personality' in (update as Record<string, unknown>)) {
+            const { updateSessionPersonality: _usp } = useSessionStore.getState();
+            _usp(sessionId, (update as Record<string, unknown>).personality as string | null).catch(() => {});
+          }
+          if ('service_tier' in (update as Record<string, unknown>)) {
+            const { updateCurrentSession: _ucs } = useSessionStore.getState();
+            _ucs({ service_tier: (update as Record<string, unknown>).service_tier as string | null });
+          }
+          if (update.new_session_id) {
+            // Navigate to the new session
+            const newSid = update.new_session_id as string;
+            window.history.replaceState(null, '', `?session=${encodeURIComponent(newSid)}`);
+            const { loadSession, selectSession, loadSessions } = useSessionStore.getState();
+            selectSession(newSid);
+            loadSession(newSid).catch(() => {});
+            loadSessions().catch(() => {});
+          }
+        }
+        return;
+      }
 
       // Handle queued/steered responses (no stream_id)
       if (result.queued || result.steered) {
+        // Strip slash-command prefix so the message shows the actual prompt,
+        // not "/queue review the code". The backend already stores the clean
+        // prompt in the queue / steers it directly.
+        let cleanMsg = message;
+        if (cleanMsg.startsWith('/queue ')) cleanMsg = cleanMsg.slice(7);
+        else if (cleanMsg.startsWith('/steer ')) cleanMsg = cleanMsg.slice(7);
+        else if (cleanMsg.startsWith('/q ')) cleanMsg = cleanMsg.slice(3);
+
         if (result.queued) {
+
           // The optimistic user message may have been overwritten by
           // StreamManager token events during the await above. Use a
           // fresh state snapshot and re-add the ghost if necessary.
@@ -219,6 +368,7 @@ export function useChatStream() {
             const updatedMessages = [...freshMessages];
             updatedMessages[lastIdx] = {
               ...updatedMessages[lastIdx],
+              content: cleanMsg,
               _queued: true,
               _queue_position: result.queue_position,
               // Carry steer fallback reason so MessageRow can show it
@@ -226,10 +376,10 @@ export function useChatStream() {
             };
             useChatStore.setState({ messages: updatedMessages });
           } else {
-            // Optimistic message was lost — re-add as ghost
+            // Optimistic message was lost or never added (slash cmd) — re-add as ghost
             useChatStore.getState().addMessage({
               role: 'user',
-              content: message,
+              content: cleanMsg,
               attachments,
               _ts: Date.now() / 1000,
               _queued: true,
@@ -240,30 +390,58 @@ export function useChatStream() {
           // Track in queue state
           freshState.addQueuedMessage({
             position: result.queue_position ?? 0,
-            text: message,
+            text: cleanMsg,
             attachments,
           });
         }
 
         if (result.steered) {
           // Steer succeeded — message was injected into the running agent.
-          // Mark the optimistic message as steered so the UI can show a subtle
-          // indicator (different from queued ghost).
           const freshState = useChatStore.getState();
           const freshMessages = freshState.messages;
           const lastIdx = freshMessages.length - 1;
-          if (lastIdx >= 0 && freshMessages[lastIdx].role === 'user') {
+          const lastMsg = lastIdx >= 0 ? freshMessages[lastIdx] : null;
+          const ghostExists = lastMsg?.role === 'user' && lastMsg.content === message;
+
+          if (ghostExists) {
+            // Mark the existing optimistic message as steered
             const updatedMessages = [...freshMessages];
             updatedMessages[lastIdx] = {
               ...updatedMessages[lastIdx],
+              content: cleanMsg,
               _steered: true,
             };
             useChatStore.setState({ messages: updatedMessages });
+          } else if (isSlash) {
+            // No optimistic message — add ghost steered indicator
+            useChatStore.getState().addMessage({
+              role: 'user',
+              content: cleanMsg,
+              attachments,
+              _ts: Date.now() / 1000,
+              _steered: true,
+            });
           }
         }
 
         store.setBusy(false);
         return;
+      }
+
+      // For slash commands that reach the streaming path (skills, /retry,
+      // /undo), dismiss the loading card and add the user message now.
+      // Regular messages were already optimistically added above; the
+      // seed-message logic below will strip it and StreamManager prepends
+      // it cleanly.  The user message is shown in chat history with its
+      // original_content (the raw /command text) when available.
+      if (isSlash) {
+        dismissInfoCard();
+        store.addMessage({
+          role: 'user',
+          content: message,
+          attachments,
+          _ts: Date.now() / 1000,
+        });
       }
 
       const stream_id = result.stream_id!;
@@ -308,6 +486,11 @@ export function useChatStream() {
     } catch (err) {
       store.setBusy(false);
       store.setAbortController(null);
+      // AbortError from user dismissing the loading card — just dismiss silently
+      if ((err as Error).name === 'AbortError') {
+        showInfoCard("Command cancelled.", { sticky: false });
+        return;
+      }
       const errorMsg = (err as Error).message || 'Unknown error';
       store.addMessage({
         role: 'assistant',

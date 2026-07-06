@@ -2,12 +2,12 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { formatDistanceToNow } from 'date-fns';
 import { zhCN, enUS } from 'date-fns/locale';
-import type { SessionListItem, Personality } from '@/types';
+import type { SessionListItem } from '@/types';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 import { useChatStore } from '@/stores/useChatStore';
 import { isSessionStreaming, subscribe as subscribeStream } from '@/stores/streamManager';
-import { sessionService, personalityService } from '@/services/api';
+import { sessionService } from '@/services/api';
 
 interface SessionItemProps {
   session: SessionListItem;
@@ -18,7 +18,7 @@ interface SessionItemProps {
 
 export default function SessionItem({ session, isActive, onClick, archivedChildren }: SessionItemProps) {
   const { t, i18n } = useTranslation('common');
-  const { renameSession, deleteSession, pinSession, assignWorkspace, updateSessionLastSeen, updateSessionPersonality, loadSession, selectSession, currentSessionId } = useSessionStore();
+  const { renameSession, deleteSession, pinSession, assignWorkspace, updateSessionLastSeen, loadSession, selectSession, currentSessionId } = useSessionStore();
   const { workspaces } = useWorkspaceStore();
 
   // Unread count: how many messages were added since the user last viewed this session
@@ -31,8 +31,6 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
   const [editTitle, setEditTitle] = useState(session.title);
   const [menuOpen, setMenuOpen] = useState(false);
   const [showWorkspaceMenu, setShowWorkspaceMenu] = useState(false);
-  const [showPersonalityMenu, setShowPersonalityMenu] = useState(false);
-  const [personalities, setPersonalities] = useState<Personality[]>([]);
   const [compressing, setCompressing] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [showClearModal, setShowClearModal] = useState(false);
@@ -60,11 +58,6 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
   useEffect(() => {
     setEditTitle(session.title);
   }, [session.title]);
-
-  // Fetch available personalities on mount
-  useEffect(() => {
-    personalityService.getAll().then(setPersonalities).catch(() => {});
-  }, []);
 
   // Subscribe to StreamManager to reflect background streaming state
   useEffect(() => {
@@ -100,7 +93,6 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
       });
     }
     setShowWorkspaceMenu(false);
-    setShowPersonalityMenu(false);
     setMenuOpen(true);
   };
 
@@ -111,20 +103,6 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
 
   const handleAssignWorkspace = () => {
     setShowWorkspaceMenu((prev) => !prev);
-  };
-
-  const handlePersonalityMenu = () => {
-    setShowPersonalityMenu((prev) => !prev);
-  };
-
-  const handleSelectPersonality = async (name: string | null) => {
-    setMenuOpen(false);
-    setShowPersonalityMenu(false);
-    try {
-      await updateSessionPersonality(session.session_id, name);
-    } catch (err) {
-      console.error('Failed to set personality:', err);
-    }
   };
 
   const handleSelectWorkspace = async (workspacePath: string) => {
@@ -312,7 +290,7 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
               position: 'fixed',
               top: menuPosition.top,
               left: menuPosition.left,
-              minWidth: (showWorkspaceMenu || showPersonalityMenu) ? 220 : 140,
+              minWidth: showWorkspaceMenu ? 220 : 140,
             }}
           >
             <button className="session-action-opt" onClick={handleStartEdit}>
@@ -371,64 +349,6 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
                     </button>
                   ))
                 )}
-              </div>
-            )}
-            <button className="session-action-opt" onClick={handlePersonalityMenu}>
-              <span className="ws-opt-action">
-                <svg className="ws-opt-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="10"/>
-                  <path d="M12 6v6l4 2"/>
-                </svg>
-                <span className="ws-opt-name">{t('sessions.personality')}</span>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginLeft: 'auto', opacity: 0.5 }}>
-                  <polyline points={showPersonalityMenu ? '18 15 12 9 6 15' : '9 18 15 12 9 6'}/>
-                </svg>
-              </span>
-            </button>
-            {showPersonalityMenu && (
-              <div className="session-workspace-submenu">
-                <button
-                  className="session-action-opt"
-                  onClick={() => handleSelectPersonality(null)}
-                >
-                  <span className="ws-opt-action">
-                    <svg className="ws-opt-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <circle cx="12" cy="12" r="10"/>
-                      <line x1="15" y1="9" x2="9" y2="15"/>
-                      <line x1="9" y1="9" x2="15" y2="15"/>
-                    </svg>
-                    <span className="ws-opt-name ws-opt-name--ellipsis">
-                      {t('sessions.no_personality')}
-                    </span>
-                    {!session.personality && (
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ marginLeft: 'auto', flexShrink: 0, opacity: 0.6 }}>
-                        <polyline points="20 6 9 17 4 12"/>
-                      </svg>
-                    )}
-                  </span>
-                </button>
-                {personalities.map((p) => (
-                  <button
-                    key={p.name}
-                    className="session-action-opt"
-                    onClick={() => handleSelectPersonality(p.name)}
-                  >
-                    <span className="ws-opt-action">
-                      <svg className="ws-opt-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-                        <circle cx="12" cy="7" r="4"/>
-                      </svg>
-                      <span className="ws-opt-name ws-opt-name--ellipsis">
-                        {p.name}
-                      </span>
-                      {session.personality === p.name && (
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ marginLeft: 'auto', flexShrink: 0, opacity: 0.6 }}>
-                          <polyline points="20 6 9 17 4 12"/>
-                        </svg>
-                      )}
-                    </span>
-                  </button>
-                ))}
               </div>
             )}
             {(session.message_count ?? 0) > 50 && (

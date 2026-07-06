@@ -127,6 +127,25 @@ _LOCK = threading.RLock()
 _DISPLAYS: dict[str, "SessionDisplay"] = {}
 
 
+def _lock_owner_alive(lock_file: Path) -> bool:
+    """Check if the process that owns an X11 lock file is still running.
+
+    X11 lock files contain the PID of the X server process as a decimal
+    number on the first line.  Returns False if the file is unreadable,
+    malformed, or the PID no longer exists.
+    """
+    try:
+        content = lock_file.read_text().strip()
+        pid = int(content.split("\n")[0])
+    except (ValueError, OSError):
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
 def _find_free_display_and_ports() -> tuple[int, int, int]:
     """Find a free Xvfb display number, VNC port, and CDP port.
 
@@ -145,9 +164,19 @@ def _find_free_display_and_ports() -> tuple[int, int, int]:
         socket_dir = Path(f"/tmp/.X11-unix")
         socket_file = socket_dir / f"X{display}"
 
-        # Check Xvfb lock file
+        # Check Xvfb lock file — if the owning process is dead, clean up
         if lock_file.exists():
-            continue
+            if _lock_owner_alive(lock_file):
+                continue
+            # Stale lock from a dead process — remove it
+            try:
+                lock_file.unlink()
+            except OSError:
+                pass
+            try:
+                socket_file.unlink(missing_ok=True)
+            except OSError:
+                pass
 
         # Check X11 socket
         if socket_file.exists():

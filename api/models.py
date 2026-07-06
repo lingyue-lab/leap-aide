@@ -321,6 +321,7 @@ class Session:
                  last_seen_msg_count=None,
                  mode: str='manual',
                  reasoning_effort: str=None,
+                 service_tier: str=None,
                  parent_session_id: str=None,
                  compression_segment_count: int=0,
                  context_length: int=0,
@@ -356,6 +357,7 @@ class Session:
         self.last_seen_msg_count = last_seen_msg_count  # None = never explicitly seen
         self._mode = mode if mode in ('manual', 'smart', 'yolo') else 'manual'
         self.reasoning_effort = reasoning_effort  # None = use global config.yaml default
+        self.service_tier = service_tier  # None = normal, "priority" = fast mode enabled
         self._metadata_message_count = None
         # Compression lineage (v1 — WebUI-native sessions only)
         self.parent_session_id = parent_session_id
@@ -394,7 +396,7 @@ class Session:
             'session_id', 'title', 'workspace', 'model', 'created_at', 'updated_at',
             'pinned', 'archived', 'project_id', 'profile',
             'input_tokens', 'output_tokens', 'estimated_cost',
-            'personality', 'reasoning_effort', 'active_stream_id', 'skills',
+            'personality', 'reasoning_effort', 'service_tier', 'active_stream_id', 'skills',
             'pending_user_message', 'pending_attachments', 'pending_started_at',
             'compression_anchor_visible_idx', 'compression_anchor_message_key',
             'last_seen_msg_count', 'mode', 'session_approved',
@@ -508,6 +510,7 @@ class Session:
             'estimated_cost': self.estimated_cost,
             'personality': self.personality,
             'reasoning_effort': getattr(self, 'reasoning_effort', None),
+            'service_tier': getattr(self, 'service_tier', None),
             'skills': self.skills,
             'last_seen_msg_count': _clamped_last_seen,
             'compression_anchor_visible_idx': self.compression_anchor_visible_idx,

@@ -11,8 +11,11 @@ import { chatService } from '@/services/api';
 import ChatMessages from './ChatMessages';
 import ChatComposer from './ChatComposer';
 import QueueStatusBar from './QueueStatusBar';
+import GoalStatusBar from './GoalStatusBar';
 import ApprovalCard from '@/components/dialogs/ApprovalCard';
 import ClarifyCard from '@/components/dialogs/ClarifyCard';
+import BackgroundTaskCard from '@/components/dialogs/BackgroundTaskCard';
+import InfoCard from '@/components/dialogs/InfoCard';
 import { useTranslation } from 'react-i18next';
 
 interface ChatInterfaceProps {
@@ -129,11 +132,24 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
     const bgState = StreamManager.getSessionStreamState(sessionId);
     if (bgState) {
       // Restore from the most up-to-date StreamManager state (not the older cache).
+      // Merge ghost messages (queued/steered) from the cache so they survive
+      // session switches — StreamManager state lacks frontend-only markers.
+      let messages = bgState.messages;
+      let queuedMessages = undefined;
+      const cached = (useChatStore.getState() as any)._sessionCache?.get(sessionId);
+      if (cached) {
+        const cachedGhosts = (cached.messages || []).filter((m: any) => m._queued || m._steered);
+        if (cachedGhosts.length > 0) {
+          messages = [...messages, ...cachedGhosts];
+          queuedMessages = cached.queuedMessages;
+        }
+      }
       useChatStore.setState({
-        messages: bgState.messages,
+        messages,
         toolCalls: bgState.toolCalls,
         busy: bgState.busy,
         activeStreamId: bgState.streaming ? bgState.streamId : null,
+        ...(queuedMessages !== undefined ? { queuedMessages } : {}),
       });
       // Still load session metadata (model, workspace, etc.) in background.
       loadSession(sessionId);
@@ -198,6 +214,7 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
       {!currentSession?._readonly && (
         <>
           <QueueStatusBar sessionId={sessionId} />
+          <GoalStatusBar sessionId={sessionId} />
           <ChatComposer
             onSend={handleSend}
             onCancel={handleCancel}
@@ -209,6 +226,8 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
       
       <ApprovalCard />
       <ClarifyCard />
+      <BackgroundTaskCard />
+      <InfoCard />
     </div>
   );
 }

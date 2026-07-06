@@ -70,7 +70,7 @@ from api.workspace import set_last_workspace
 # Fields that are safe to send to LLM provider APIs.
 # Everything else (attachments, timestamp, _ts, etc.) is display-only
 # metadata added by the webui and must be stripped before the API call.
-_API_SAFE_MSG_KEYS = {'role', 'content', 'tool_calls', 'tool_call_id', 'name', 'refusal'}
+_API_SAFE_MSG_KEYS = {'role', 'content', 'tool_calls', 'tool_call_id', 'name', 'refusal', 'reasoning'}
 
 
 def _strip_thinking_markup(text: str) -> str:
@@ -979,6 +979,47 @@ def _api_safe_message_positions(messages):
     return out
 
 
+def _distribute_inline_reasoning(messages):
+    """Extract ``<think>…</think>`` blocks from each assistant message's
+    content and copy them into the message's ``reasoning`` field.
+
+    Models like DeepSeek, QwQ, and MiniMax embed chain-of-thought directly
+    in the response text.  This function pulls those blocks out into the
+    structured ``reasoning`` field so the frontend can render them as
+    collapsible reasoning cards on each individual message.
+
+    The ``content`` text is **not** modified — the ``<think>`` tags stay
+    in place so they continue to participate in API context for subsequent
+    turns.  The frontend already strips them at render time via
+    ``strippedContent`` / ``extractThinkingText``.
+
+    Already-populated ``reasoning`` fields (e.g. from the agent's native
+    ``reasoning_content`` delta path) are left untouched.
+    """
+    import re as _re
+    if not messages:
+        return
+    _THINK_RE = _re.compile(r'\s*<think>([\s\S]*?)</think>\s*', _re.IGNORECASE)
+    for _m in messages:
+        if not isinstance(_m, dict) or _m.get('role') != 'assistant':
+            continue
+        if _m.get('reasoning'):
+            # reasoning already set by another path (e.g. reasoning=high)
+            continue
+        _content = _m.get('content')
+        if not isinstance(_content, str) or not _content:
+            continue
+        _think_matches = list(_THINK_RE.finditer(_content))
+        if not _think_matches:
+            continue
+        _parts = [_match.group(1).strip() for _match in _think_matches]
+        _m['reasoning'] = '\n<|reasoning_sep|>\n'.join(
+            p for p in _parts if p
+        )
+        # Content is intentionally left intact — <think> tags remain so
+        # they participate in API context for subsequent turns.
+
+
 def _restore_reasoning_metadata(previous_messages, updated_messages):
     """Carry forward display-only metadata lost during API-safe history sanitization.
 
@@ -1021,6 +1062,9 @@ def _restore_reasoning_metadata(previous_messages, updated_messages):
                 cur_msg['timestamp'] = prev_msg['timestamp']
             elif prev_msg.get('_ts') and not cur_msg.get('_ts') and not cur_msg.get('timestamp'):
                 cur_msg['_ts'] = prev_msg['_ts']
+            # Preserve original_content across sanitization (goal/skill commands)
+            if prev_msg.get('original_content') and not cur_msg.get('original_content'):
+                cur_msg['original_content'] = prev_msg['original_content']
             safe_pos += 1
             continue
 
@@ -1498,6 +1542,12 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             def on_reasoning(text):
                 if text is None:
                     return
+                # reasoning=none: SDK final response omits reasoning_content,
+                # but DeepSeek still emits reasoning_content delta chunks that
+                # mirror the assistant text.  Suppress them so no spurious
+                # reasoning is pushed via SSE or persisted to the session.
+                if _reasoning_config and _reasoning_config.get("enabled") is False:
+                    return
                 _append_reasoning_text(text)
                 put('reasoning', {'text': str(text)})
                 # Track reasoning tokens in the meter so TPS reflects all AI output
@@ -1531,7 +1581,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 # The content of on_tool/on_token/on_reasoning maybe same.
                 if event_type in ('reasoning.available', '_thinking'):
                     reason_text = preview if event_type == 'reasoning.available' else name
-                    if reason_text:
+                    if reason_text and not (_reasoning_config and _reasoning_config.get("enabled") is False):
                         _append_reasoning_text(reason_text)
                         put('reasoning', {'text': str(reason_text)})
                         meter().record_reasoning(stream_id, len(_reasoning_text))
@@ -1698,6 +1748,19 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             except Exception:
                 _reasoning_config = None
 
+            # Per-session service tier (fast mode): read from session,
+            # resolve provider-appropriate request_overrides.
+            _service_tier = None
+            _request_overrides = None
+            try:
+                _service_tier = getattr(s, 'service_tier', None) or None
+                if _service_tier == "priority":
+                    from hermes_cli.models import resolve_fast_mode_overrides
+                    _request_overrides = resolve_fast_mode_overrides(resolved_model)
+            except Exception:
+                _service_tier = None
+                _request_overrides = None
+
             _agent_kwargs = dict(
                 model=resolved_model,
                 provider=resolved_provider,
@@ -1733,12 +1796,28 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 _agent_kwargs['acp_args'] = _rt.get('args')
             if 'credential_pool' in _agent_params:
                 _agent_kwargs['credential_pool'] = _rt.get('credential_pool')
+            if 'service_tier' in _agent_params and _service_tier:
+                _agent_kwargs['service_tier'] = _service_tier
+            if 'request_overrides' in _agent_params and _request_overrides:
+                _agent_kwargs['request_overrides'] = _request_overrides
             # Pin Honcho memory sessions to the stable WebUI session ID.
             # Without this, 'per-session' Honcho strategy creates a new Honcho
             # session on every streaming request because HonchoSessionManager is
             # re-instantiated fresh each turn (#855).
             if 'gateway_session_key' in _agent_params:
                 _agent_kwargs['gateway_session_key'] = session_id
+
+            # ── Filesystem checkpoint support ──
+            # Read checkpoints config from hermes config.yaml; defaults to disabled.
+            _cp_cfg = (_cfg or {}).get('checkpoints', {}) if isinstance(_cfg, dict) else {}
+            if 'checkpoints_enabled' in _agent_params:
+                _agent_kwargs['checkpoints_enabled'] = _cp_cfg.get('enabled', False)
+            if 'checkpoint_max_snapshots' in _agent_params:
+                _agent_kwargs['checkpoint_max_snapshots'] = int(_cp_cfg.get('max_snapshots', 20))
+            if 'checkpoint_max_total_size_mb' in _agent_params:
+                _agent_kwargs['checkpoint_max_total_size_mb'] = int(_cp_cfg.get('max_total_size_mb', 500))
+            if 'checkpoint_max_file_size_mb' in _agent_params:
+                _agent_kwargs['checkpoint_max_file_size_mb'] = int(_cp_cfg.get('max_file_size_mb', 10))
 
             # ── Agent cache: reuse across messages in the same session ──
             # Mirrors gateway _agent_cache.  Keeps _user_turn_count alive so
@@ -1758,6 +1837,8 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                     sorted(_toolsets) if _toolsets else [],
                     sorted(getattr(s, 'skills', None) or []),
                     _reasoning_config,
+                    _service_tier,
+                    _request_overrides,
                 ], sort_keys=True)
                 _agent_sig = _hashlib.sha256(_sig_blob.encode()).hexdigest()[:16]
 
@@ -1780,6 +1861,11 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                     # Refresh reasoning_config — may have changed per-session between turns
                     if hasattr(agent, 'reasoning_config') and 'reasoning_config' in _agent_kwargs:
                         agent.reasoning_config = _agent_kwargs['reasoning_config']
+                    # Refresh service_tier / request_overrides — may have changed via /fast
+                    if hasattr(agent, 'service_tier'):
+                        agent.service_tier = _service_tier
+                    if hasattr(agent, 'request_overrides'):
+                        agent.request_overrides = dict(_request_overrides or {})
                     if _session_db is not None:
                         agent._session_db = _session_db
                     if hasattr(agent, '_api_call_count'):
@@ -1955,6 +2041,14 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 task_id=session_id,
                 persist_user_message=msg_text,
             )
+            # ── Skill command: attach original_content to user message for clean display ──
+            _pending_original = getattr(s, '_pending_original_message', None)
+            if _pending_original:
+                s._pending_original_message = None
+                for _m in result.get('messages') or []:
+                    if isinstance(_m, dict) and _m.get('role') == 'user':
+                        _m['original_content'] = _pending_original
+                        break
             # ── Diagnostic: always print run_conversation result summary ──
             _diag_msgs = result.get('messages') or [] if isinstance(result, dict) else []
             _diag_roles = [m.get('role') for m in _diag_msgs if isinstance(m, dict)]
@@ -1992,9 +2086,19 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             if _ckpt_thread is not None:
                 _ckpt_thread.join(timeout=15)
             with _agent_lock:
+                # The agent returns per-message reasoning_content (API-native).
+                # Copy it to reasoning (WebUI display field) BEFORE
+                # _restore_reasoning_metadata — which sanitizes through
+                # _API_SAFE_MSG_KEYS and would drop reasoning_content otherwise.
+                _agent_msgs = result.get('messages') or s.messages
+                for _m in _agent_msgs:
+                    if isinstance(_m, dict) and _m.get('role') == 'assistant':
+                        _rc = _m.get('reasoning_content')
+                        if isinstance(_rc, str) and _rc.strip() and not _m.get('reasoning'):
+                            _m['reasoning'] = _rc.strip()
                 s.messages = _restore_reasoning_metadata(
                     _previous_messages,
-                    result.get('messages') or s.messages,
+                    _agent_msgs,
                 )
                 # Strip XML tool-call blocks from assistant message content.
                 # DeepSeek and some other providers emit <function_calls>...</function_calls>
@@ -2275,14 +2379,21 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                             if base_text[:60] in content or content[:60] in msg_text:
                                 m['attachments'] = attachments
                                 break
-                # Persist reasoning trace in the session so it survives reload.
-                # Must run BEFORE s.save() — otherwise the mutation lives only in
-                # memory until the next turn's save, and the last-turn thinking card
-                # is lost when the user reloads immediately after a response.
+                # Persist reasoning trace per-message so each assistant message
+                # carries only the thinking that led to it, not the whole turn.
+                # DeepSeek / QwQ / MiniMax embed thinking as <think> tags inside
+                # the content text; extract them and move them into the dedicated
+                # 'reasoning' field for structured display and persistence.
+                _distribute_inline_reasoning(s.messages)
+                # Fallback: any reasoning accumulated via on_reasoning callbacks
+                # that was NOT embedded as <think> tags (e.g. reasoning=high mode
+                # where delta.reasoning_content is already per-message) still ends
+                # up here, but only if not already distributed above.
                 if _reasoning_text and s.messages:
                     for _rm in reversed(s.messages):
                         if isinstance(_rm, dict) and _rm.get('role') == 'assistant':
-                            _rm['reasoning'] = _reasoning_text
+                            if not _rm.get('reasoning'):
+                                _rm['reasoning'] = _reasoning_text
                             break
                 # ── WebUI-side token-threshold auto-compress (path 3) ──
                 # The agent's built-in compression is disabled when
@@ -2341,6 +2452,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                                         if isinstance(m, dict)
                                     ) // 4
                                     s.messages = _compressed
+                                    _distribute_inline_reasoning(s.messages)
                                     s.tool_calls = []
                                     s.last_compression_time = time.time()
                                     tool_calls = []  # also update local for done event
@@ -2463,6 +2575,69 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             cleanup_session_xterms(session_id)
         except Exception:
             pass
+
+        # ── Goal continuation (post-turn) ──
+        # If a standing goal is active, evaluate the last assistant response
+        # and auto-continue if the goal is not yet achieved (CLI behaviour).
+        try:
+            from hermes_cli.goals import GoalManager
+            mgr = GoalManager(session_id)
+            if mgr.is_active():
+                last_response = ""
+                for m in reversed(s.messages or []):
+                    if isinstance(m, dict) and m.get("role") == "assistant":
+                        last_response = str(m.get("content", ""))
+                        break
+                if last_response:
+                    decision = mgr.evaluate_after_turn(last_response, user_initiated=False)
+                    # Merge any subgoals added by a concurrent /subgoal command.
+                    # evaluate_after_turn calls save_goal() which can overwrite
+                    # subgoals added mid-turn.  The handler tags s._pending_subgoals
+                    # so we can merge them back and re-save.
+                    _pending = getattr(s, '_pending_subgoals', None)
+                    if _pending is not None and mgr._state:
+                        if _pending != (mgr._state.subgoals or []):
+                            mgr._state.subgoals = list(_pending)
+                            from hermes_cli.goals import save_goal as _save_goal
+                            _save_goal(session_id, mgr._state)
+                    s._pending_subgoals = None
+                    # Re-check against SessionDB: the goal may have been
+                    # paused/cleared from another thread (e.g. /goal pause)
+                    # while this turn was running.  Only enqueue if the goal
+                    # is STILL active after reloading from disk.
+                    if decision.get("should_continue"):
+                        from hermes_cli.goals import load_goal as _reload_goal
+                        fresh = _reload_goal(session_id)
+                        if fresh is None or fresh.status != "active":
+                            logger.debug(
+                                "Goal continuation skipped for session %s: "
+                                "goal no longer active (status=%s)",
+                                session_id, fresh.status if fresh else None,
+                            )
+                        else:
+                            prompt = decision.get("continuation_prompt")
+                            if prompt:
+                                from api.config import SESSION_MESSAGE_QUEUE, SESSION_MESSAGE_QUEUE_LOCK, _MAX_QUEUE_LENGTH
+                                with SESSION_MESSAGE_QUEUE_LOCK:
+                                    q = SESSION_MESSAGE_QUEUE.get(session_id)
+                                    if q is None:
+                                        q = []
+                                        SESSION_MESSAGE_QUEUE[session_id] = q
+                                    if len(q) < _MAX_QUEUE_LENGTH:
+                                        # Preserve goal text as original_content so the
+                                        # continuation prompt isn't exposed in chat history.
+                                        _goal_text = (fresh.goal if fresh else None) or ""
+                                        q.append({
+                                            "message": prompt,
+                                            "model": s.model,
+                                            "workspace": s.workspace,
+                                            "attachments": [],
+                                            "original_content": _goal_text,
+                                        })
+                                logger.debug("Goal continuation enqueued for session %s (verdict=%s)",
+                                             session_id, decision.get("verdict"))
+        except Exception as e:
+            logger.debug("Goal continuation check failed for session %s: %s", session_id, e)
 
         # Dequeue any queued message for this session (success path)
         _dequeue_next(session_id)
@@ -2655,6 +2830,9 @@ def _dequeue_next(session_id: str) -> None:
         s.active_stream_id = stream_id
         s.pending_user_message = payload.get("message", "")
         s.pending_attachments = payload.get("attachments", [])
+        _oc = payload.get("original_content", "")
+        if _oc:
+            s._pending_original_message = _oc
         s.pending_started_at = time.time()
         s.save()
     thr = threading.Thread(
