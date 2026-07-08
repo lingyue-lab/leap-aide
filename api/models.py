@@ -672,9 +672,15 @@ def _append_archived_sessions(result):
                     result.append({
                         'session_id': f'{parent_id}/{p.stem}',
                         'title': data.get('title', ''),
+                        'workspace': data.get('workspace', ''),
+                        'model': data.get('model'),
                         'message_count': len(data.get('messages', [])),
                         'created_at': data.get('created_at', 0),
                         'updated_at': data.get('updated_at', 0),
+                        'archived': False,
+                        'pinned': False,
+                        'project_id': data.get('project_id'),
+                        'profile': data.get('profile'),
                         '_parent_session_id': parent_id,
                         '_readonly': True,
                         '_compaction_n': data.get('_compaction_n', 0),
@@ -832,6 +838,32 @@ def import_cli_session(
 
 # ── CLI session bridge ──────────────────────────────────────────────────────
 
+def _resolve_gateway_workspace() -> str:
+    """Resolve the actual working directory for gateway sessions (no cwd in state.db).
+
+    Priority: TERMINAL_CWD env var → config.yaml terminal.cwd → home directory.
+    This mirrors the gateway process's own cwd resolution in gateway/run.py.
+    """
+    import os as _os
+    # 1. TERMINAL_CWD environment variable (set by .env or the gateway config bridge)
+    _env_cwd = _os.environ.get('TERMINAL_CWD', '').strip()
+    if _env_cwd and _env_cwd not in {'.', 'auto', 'cwd'}:
+        return str(Path(_env_cwd).expanduser().resolve())
+    # 2. config.yaml terminal.cwd (canonical source for the gateway)
+    try:
+        from api.config import _load_yaml_config_file, _get_config_path
+        _cfg = _load_yaml_config_file(_get_config_path())
+        _terminal_cfg = _cfg.get('terminal', {})
+        if isinstance(_terminal_cfg, dict):
+            _cfg_cwd = str(_terminal_cfg.get('cwd', '')).strip()
+            if _cfg_cwd and _cfg_cwd not in {'.', 'auto', 'cwd'}:
+                return str(Path(_cfg_cwd).expanduser().resolve())
+    except Exception:
+        pass
+    # 3. Fall back to home directory
+    return str(Path.home())
+
+
 def get_cli_sessions() -> list:
     """Read CLI sessions from the agent's SQLite store and return them as
     dicts in a format the WebUI sidebar can render alongside local sessions.
@@ -877,7 +909,7 @@ def get_cli_sessions() -> list:
             profile = _cli_profile  # CLI DB has no profile column; use active profile
 
             _source = row['source'] or 'cli'
-            _title = row['title']
+            _title = row['title'] or row.get('first_user_message')
             if not _title and _source == 'cron' and sid.startswith('cron_'):
                 # Extract job_id from session ID (cron_{job_id}_{timestamp})
                 # and look up the human-friendly job name from jobs.json
@@ -895,11 +927,17 @@ def get_cli_sessions() -> list:
                                     break
                     except Exception:
                         pass  # degrade gracefully
+            _user_id = row.get('user_id') or os.environ.get('USER', 'default')
+            # Use cwd from state.db as workspace when available (CLI sessions have a real working directory).
+            # For sessions without cwd (gateway platforms), resolve the actual gateway working directory
+            # from TERMINAL_CWD env var → config.yaml terminal.cwd → home directory.
+            _cwd = row.get('cwd')
+            _workspace = str(Path(_cwd).expanduser().resolve()) if _cwd else _resolve_gateway_workspace()
             _display_title = _title or f'{_source.title()} Session'
             cli_sessions.append({
                 'session_id': sid,
                 'title': _display_title,
-                'workspace': str(get_last_workspace()),
+                'workspace': _workspace,
                 'model': row['model'] or None,
                 'message_count': row['message_count'] or row['actual_message_count'] or 0,
                 'created_at': row['started_at'],
@@ -910,6 +948,7 @@ def get_cli_sessions() -> list:
                 'profile': profile,
                 'source_tag': _source,
                 'is_cli_session': True,
+                'user_id': _user_id,
             })
     except Exception as _cli_err:
         # DB schema changed, locked, or corrupted -- log warning so admins can diagnose.
@@ -926,10 +965,10 @@ def get_cli_sessions() -> list:
 
 def get_cli_session_messages(sid) -> list:
     """Read messages for a single CLI session from the SQLite store.
-    Returns a list of {role, content, timestamp} dicts.
+    Returns a list of {role, content, timestamp, tool_call_id, tool_name, tool_calls} dicts.
     Returns empty list on any error.
     """
-    import os
+    import os, json as _json
     try:
         import sqlite3
     except ImportError:
@@ -949,18 +988,31 @@ def get_cli_session_messages(sid) -> list:
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
             cur.execute("""
-                SELECT role, content, timestamp
+                SELECT role, content, timestamp, tool_call_id, tool_name, tool_calls
                 FROM messages
-                WHERE session_id = ?
+                WHERE session_id = ? AND active = 1
                 ORDER BY timestamp ASC
             """, (sid,))
             msgs = []
             for row in cur.fetchall():
-                msgs.append({
+                # Skip internal metadata rows (session lifecycle markers)
+                if row['role'] in ('session_meta',):
+                    continue
+                msg = {
                     'role': row['role'],
                     'content': row['content'],
                     'timestamp': row['timestamp'],
-                })
+                }
+                if row['tool_call_id']:
+                    msg['tool_call_id'] = row['tool_call_id']
+                if row['tool_name']:
+                    msg['tool_name'] = row['tool_name']
+                if row['tool_calls']:
+                    try:
+                        msg['tool_calls'] = _json.loads(row['tool_calls'])
+                    except (_json.JSONDecodeError, TypeError):
+                        pass  # keep as-is if unparseable
+                msgs.append(msg)
     except Exception:
         return []
     return msgs

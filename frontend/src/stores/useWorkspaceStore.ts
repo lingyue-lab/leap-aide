@@ -203,8 +203,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         credentials: 'include',
       });
       if (!response.ok) throw new Error('Failed to add workspace');
-      const data = await response.json();
-      set({ workspaces: data.workspaces || [] });
+      // Reload full workspace list (includes readonly flags + derived workspaces)
+      await get().loadWorkspaces();
     } catch (err) {
       throw err;
     }
@@ -212,33 +212,32 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   removeWorkspace: async (path: string) => {
     try {
-      await fetch('/api/workspaces/remove', {
+      const response = await fetch('/api/workspaces/remove', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path }),
         credentials: 'include',
       });
-      const { workspaces, currentWorkspace } = get();
-      const newWorkspaces = workspaces.filter(w => w.path !== path);
-      set({ workspaces: newWorkspaces });
-      if (currentWorkspace === path) {
-        set({ currentWorkspace: null });
-      }
+      if (!response.ok) throw new Error('Failed to remove workspace');
+      await get().loadWorkspaces();
     } catch (err) {
       throw err;
     }
   },
 
   renameWorkspace: async (path: string, newName: string) => {
-    const response = await fetch('/api/workspaces/rename', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path, name: newName }),
-      credentials: 'include',
-    });
-    if (!response.ok) throw new Error('Failed to rename workspace');
-    const data = await response.json();
-    set({ workspaces: data.workspaces || [] });
+    try {
+      const response = await fetch('/api/workspaces/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path, name: newName }),
+        credentials: 'include',
+      });
+      if (!response.ok) throw new Error('Failed to rename workspace');
+      await get().loadWorkspaces();
+    } catch (err) {
+      throw err;
+    }
   },
 
   setWorkspacesTabActive: (active) => set({ workspacesTabActive: active }),

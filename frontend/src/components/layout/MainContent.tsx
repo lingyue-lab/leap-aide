@@ -147,10 +147,12 @@ function NonTerminalContent({
         </div>
 
         <div className="topbar-chips">
-          <SessionSkillsSelector
-            onClick={() => setSkillsPanelOpen(!skillsPanelOpen)}
-            isOpen={skillsPanelOpen}
-          />
+          {!currentSession?._readonly && (
+            <SessionSkillsSelector
+              onClick={() => setSkillsPanelOpen(!skillsPanelOpen)}
+              isOpen={skillsPanelOpen}
+            />
+          )}
           <button
             className={`chip workspace-toggle-btn ${todosPanelOpen ? 'active' : ''}`}
             onClick={() => setTodosPanelOpen(!todosPanelOpen)}
@@ -166,22 +168,24 @@ function NonTerminalContent({
             </svg>
             <span className="workspace-toggle-label">{t('todos.title')}</span>
           </button>
-          <button
-            className={`chip observe-btn${currentSession?.pinned ? '' : ' disabled'}`}
-            onClick={currentSession?.pinned ? async () => {
-              const sid = currentSession?.session_id;
-              if (!sid) return;
-              try { await observerService.getInfo(sid); } catch { /* ignore */ }
-              window.open('/api/observer/' + encodeURIComponent(sid), '_blank');
-            } : undefined}
-            title={currentSession?.pinned ? 'Observe session' : '请先 Pin 此会话以启用观察'}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-              <circle cx="12" cy="12" r="3" />
-            </svg>
-            <span>Observe</span>
-          </button>
+          {!currentSession?._readonly && (
+            <button
+              className={`chip observe-btn${currentSession?.pinned ? '' : ' disabled'}`}
+              onClick={currentSession?.pinned ? async () => {
+                const sid = currentSession?.session_id;
+                if (!sid) return;
+                try { await observerService.getInfo(sid); } catch { /* ignore */ }
+                window.open('/api/observer/' + encodeURIComponent(sid), '_blank');
+              } : undefined}
+              title={currentSession?.pinned ? 'Observe session' : '请先 Pin 此会话以启用观察'}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+              <span>Observe</span>
+            </button>
+          )}
         </div>
       </div>
 

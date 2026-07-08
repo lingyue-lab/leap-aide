@@ -39,6 +39,8 @@
     "empty": "暂无对话",
     "no_results": "无匹配对话",
     "pinned": "已固定",
+    "readonly_gateway": "只读 — 外部网关会话",
+    "readonly_snapshot": "只读 — 归档快照",
     "today": "今天",
     "yesterday": "昨天",
     "this_week": "本周",

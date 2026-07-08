@@ -424,6 +424,7 @@ from api.workspace import (
     safe_resolve_ws,
     resolve_trusted_workspace,
     validate_workspace_to_add,
+    profile_default_workspace,
     _is_blocked_system_path,
     _workspace_blocked_roots,
 )
@@ -938,6 +939,9 @@ def handle_get(handler, parsed) -> bool:
                     "project_id": None,
                     "profile": (cli_meta or {}).get("profile"),
                     "is_cli_session": True,
+                    "source_tag": (cli_meta or {}).get("source_tag"),
+                    "user_id": (cli_meta or {}).get("user_id"),
+                    "_readonly": True,
                     "messages": msgs,
                     "tool_calls": [],
                 }
@@ -1051,8 +1055,42 @@ def handle_get(handler, parsed) -> bool:
         return _handle_session_export(handler, parsed)
 
     if parsed.path == "/api/workspaces":
+        user_workspaces = load_workspaces()
+        user_paths = {w['path'] for w in user_workspaces}
+
+        # The default workspace (from config.yaml terminal.cwd) is readonly
+        try:
+            _default_ws = profile_default_workspace()
+        except Exception:
+            _default_ws = ''
+        for w in user_workspaces:
+            if w['path'] == _default_ws:
+                w['readonly'] = True
+
+        # Derive readonly workspaces from gateway/CLI sessions that have real cwd
+        derived: list[dict] = []
+        try:
+            for s in get_cli_sessions():
+                ws_path = s.get('workspace', '')
+                if not ws_path or ws_path in user_paths:
+                    continue
+                user_paths.add(ws_path)
+                # Use the last path segment as display name; fall back to full path
+                _p = Path(ws_path)
+                name = _p.name if _p.name else str(_p)
+                derived.append({
+                    'path': ws_path,
+                    'name': name,
+                    'readonly': True,
+                })
+        except Exception:
+            pass  # state.db unavailable — degrade gracefully
+
         return j(
-            handler, {"workspaces": load_workspaces(), "last": get_last_workspace()}
+            handler, {
+                "workspaces": user_workspaces + derived,
+                "last": get_last_workspace(),
+            }
         )
 
     if parsed.path == "/api/workspaces/suggest":
@@ -1489,12 +1527,6 @@ def handle_post(handler, parsed) -> bool:
         _routes.Session = _models.Session
         _routes.compact = _models.compact
         return j(handler, {"status": "ok", "reloaded": "api.models"})
-
-    if parsed.path == "/api/sessions/cleanup":
-        return _handle_sessions_cleanup(handler, body, zero_only=False)
-
-    if parsed.path == "/api/sessions/cleanup_zero_message":
-        return _handle_sessions_cleanup(handler, body, zero_only=True)
 
     if parsed.path == "/api/session/rename":
         try:
@@ -2348,6 +2380,10 @@ def handle_post(handler, parsed) -> bool:
         handler.wfile.write(json.dumps({"ok": True}).encode())
         return True
 
+    # ── Session cleanup (POST) ──
+    if parsed.path in ("/api/sessions/cleanup", "/api/sessions/gateway/cleanup"):
+        return _handle_session_cleanup(handler, body)
+
     return False  # 404
 
 # ── GET route helpers ─────────────────────────────────────────────────────────
@@ -2668,10 +2704,7 @@ def _handle_gateway_sse_stream(handler, parsed):
         payload, status = _gateway_sse_probe_payload(settings, watcher)
         return j(handler, payload, status=status)
 
-    # Check if the feature is enabled
-    if not settings.get('show_cli_sessions'):
-        return j(handler, {'error': 'agent sessions not enabled'}, status=404)
-
+    # SSE connection is always available — frontend toggle controls display
     # Same watcher_alive semantics as the probe path — centralised via
     # the helper so both branches stay in sync.
     _probe_body, _probe_status = _gateway_sse_probe_payload(settings, watcher)
@@ -3233,27 +3266,80 @@ def _handle_memory_read(handler):
 # ── POST route helpers ────────────────────────────────────────────────────────
 
 
-def _handle_sessions_cleanup(handler, body, zero_only=False):
-    cleaned = 0
-    for p in SESSION_DIR.glob("*.json"):
-        if p.name.startswith("_"):
-            continue
-        try:
-            s = Session.load(p.stem)
-            if zero_only:
-                should_delete = s and len(s.messages) == 0
-            else:
-                should_delete = s and s.title == "Untitled" and len(s.messages) == 0
-            if should_delete:
-                with LOCK:
-                    SESSIONS.pop(p.stem, None)
-                p.unlink(missing_ok=True)
-                cleaned += 1
-        except Exception:
-            logger.debug("Failed to clean up session file %s", p)
-    if SESSION_INDEX_FILE.exists():
-        SESSION_INDEX_FILE.unlink(missing_ok=True)
-    return j(handler, {"ok": True, "cleaned": cleaned})
+def _handle_session_cleanup(handler, body):
+    """POST /api/sessions/cleanup — delete ended sessions older than threshold.
+
+    Supports:
+    - source="webui": clean WebUI session JSON files from SESSION_DIR (skips pinned)
+    - source=<gateway>: clean gateway sessions from state.db by source tag
+    """
+    source = str(body.get("source", "")).strip()
+    if not source:
+        return bad(handler, "source is required", 400)
+
+    older_than_days = int(body.get("older_than_days", 30))
+    if older_than_days < 1:
+        return bad(handler, "older_than_days must be >= 1", 400)
+
+    cutoff = time.time() - (older_than_days * 86400)
+    deleted_count = 0
+
+    if source == "webui":
+        # ── WebUI sessions: iterate JSON files in SESSION_DIR ──
+        for p in SESSION_DIR.glob("*.json"):
+            if p.name.startswith("_"):
+                continue
+            try:
+                s = Session.load(p.stem)
+                if s is None:
+                    continue
+                # Skip pinned sessions — they are never cleaned
+                if s.pinned:
+                    continue
+                # Only delete if the session hasn't been updated in <older_than_days>
+                if s.updated_at < cutoff:
+                    with LOCK:
+                        SESSIONS.pop(p.stem, None)
+                    p.unlink(missing_ok=True)
+                    deleted_count += 1
+            except Exception:
+                logger.debug("Failed to clean up session file %s", p)
+        if SESSION_INDEX_FILE.exists():
+            SESSION_INDEX_FILE.unlink(missing_ok=True)
+        return j(handler, {"deleted_count": deleted_count, "source": source, "older_than_days": older_than_days})
+
+    # ── Gateway sessions: delete from state.db ──
+    import sqlite3
+    try:
+        from api.profiles import get_active_hermes_home
+        hermes_home = Path(get_active_hermes_home()).expanduser().resolve()
+    except Exception:
+        hermes_home = Path(os.environ.get('HERMES_HOME', str(HOME / '.hermes'))).expanduser().resolve()
+
+    db_path = hermes_home / 'state.db'
+    if not db_path.exists():
+        return j(handler, {"deleted_count": 0, "source": source, "older_than_days": older_than_days})
+
+    try:
+        with sqlite3.connect(str(db_path)) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT id FROM sessions WHERE source = ? AND ended_at IS NOT NULL AND ended_at < ?",
+                (source, cutoff),
+            )
+            to_delete = [row[0] for row in cur.fetchall()]
+            for sid in to_delete:
+                cur.execute("DELETE FROM messages WHERE session_id = ?", (sid,))
+            cur.execute(
+                "DELETE FROM sessions WHERE source = ? AND ended_at IS NOT NULL AND ended_at < ?",
+                (source, cutoff),
+            )
+            conn.commit()
+            deleted_count = len(to_delete)
+    except Exception as e:
+        return j(handler, {"error": _sanitize_error(e)}, status=500)
+
+    return j(handler, {"deleted_count": deleted_count, "source": source, "older_than_days": older_than_days})
 
 
 def _handle_btw(handler, body):
@@ -4016,6 +4102,24 @@ def _handle_file_rename(handler, body):
         return bad(handler, _sanitize_error(e))
 
 
+def _is_derived_readonly_workspace(ws_path: str) -> bool:
+    """Return True if the workspace path is readonly (default workspace or gateway/CLI derived)."""
+    # Default workspace from config.yaml is always readonly
+    try:
+        if ws_path == profile_default_workspace():
+            return True
+    except Exception:
+        pass
+    # Gateway/CLI derived workspaces are readonly
+    try:
+        for s in get_cli_sessions():
+            if s.get('workspace', '') == ws_path:
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def _handle_create_dir(handler, body):
     try:
         require(body, "session_id", "path")
@@ -4074,6 +4178,9 @@ def _handle_workspace_remove(handler, body):
     path_str = body.get("path", "").strip()
     if not path_str:
         return bad(handler, "path is required")
+    # Block removal of readonly (gateway/CLI derived) workspaces
+    if _is_derived_readonly_workspace(path_str):
+        return bad(handler, "Cannot remove a read-only workspace derived from gateway/CLI sessions", 403)
     wss = load_workspaces()
     wss = [w for w in wss if w["path"] != path_str]
     save_workspaces(wss)
@@ -4085,6 +4192,9 @@ def _handle_workspace_rename(handler, body):
     name = body.get("name", "").strip()
     if not path_str or not name:
         return bad(handler, "path and name are required")
+    # Block rename of readonly (gateway/CLI derived) workspaces
+    if _is_derived_readonly_workspace(path_str):
+        return bad(handler, "Cannot rename a read-only workspace derived from gateway/CLI sessions", 403)
     wss = load_workspaces()
     for w in wss:
         if w["path"] == path_str:

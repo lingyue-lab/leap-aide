@@ -48,8 +48,13 @@ def _get_state_db_path() -> Path:
 
 def _get_agent_sessions_from_db() -> list:
     """Read all non-webui sessions from state.db.
-    Returns list of session dicts, or empty list on any error.
+
+    Returns list of session dicts compatible with the frontend SSE handler,
+    including workspace, user_id, and source_tag for proper sidebar grouping.
+    Returns empty list on any error.
     """
+    import os as _os
+
     db_path = _get_state_db_path()
     if not db_path.exists():
         return []
@@ -57,14 +62,28 @@ def _get_agent_sessions_from_db() -> list:
     try:
         sessions = []
         for row in read_importable_agent_session_rows(db_path, limit=200, log=logger):
+            _source = row['source'] or 'cli'
+            _user_id = row.get('user_id') or _os.environ.get('USER', 'default')
+            # Use cwd from state.db as workspace when available (CLI sessions have a real working directory).
+            # For sessions without cwd (gateway platforms), resolve the actual gateway working directory.
+            _cwd = row.get('cwd')
+            if _cwd:
+                _workspace = str(Path(_cwd).expanduser().resolve())
+            else:
+                from api.models import _resolve_gateway_workspace
+                _workspace = _resolve_gateway_workspace()
             sessions.append({
                 'session_id': row['id'],
-                'title': row['title'] or 'Agent Session',
+                'title': row['title'] or row.get('first_user_message') or 'Agent Session',
+                'workspace': _workspace,
                 'model': row['model'] or None,
                 'message_count': row['message_count'] or row['actual_message_count'] or 0,
                 'created_at': row['started_at'],
                 'updated_at': row['last_activity'] or row['started_at'],
-                'source': row['source'] or 'cli',
+                'source': _source,
+                'source_tag': _source,
+                'user_id': _user_id,
+                'is_cli_session': True,
             })
         return sessions
     except Exception:

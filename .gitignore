@@ -30,6 +30,12 @@ git_commit_head.txt
 screenshot-*.png
 full-UI.png
 
+# Frontend build artifacts
+node_modules/
+frontend/dist/
+frontend/.tsbuildinfo
+*.log
+
 # Version file written by Docker/CI build — generated, never committed
 api/_version.py
 

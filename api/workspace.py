@@ -55,7 +55,7 @@ def _last_workspace_file() -> Path:
     return _profile_state_dir() / 'last_workspace.txt'
 
 
-def _profile_default_workspace() -> str:
+def profile_default_workspace() -> str:
     """Read the profile's default workspace from its config.yaml.
 
     Checks keys in priority order:
@@ -166,7 +166,7 @@ def load_workspaces() -> list:
                     )
                 except Exception:
                     logger.debug("Failed to persist cleaned workspace list")
-            return cleaned or [{'path': _profile_default_workspace(), 'name': 'Home'}]
+            return cleaned or [{'path': profile_default_workspace(), 'name': 'Home'}]
         except Exception:
             logger.debug("Failed to load workspaces from %s", ws_file)
     # No profile-local file yet.
@@ -182,7 +182,7 @@ def load_workspaces() -> list:
         if migrated:
             return migrated
     # Fresh start: single entry from the profile's configured workspace, labeled "Home"
-    return [{'path': _profile_default_workspace(), 'name': 'Home'}]
+    return [{'path': profile_default_workspace(), 'name': 'Home'}]
 
 
 def save_workspaces(workspaces: list) -> None:
@@ -208,7 +208,7 @@ def get_last_workspace() -> str:
                 return p
         except Exception:
             logger.debug("Failed to read global last workspace")
-    return _profile_default_workspace()
+    return profile_default_workspace()
 
 
 def set_last_workspace(path: str) -> None:

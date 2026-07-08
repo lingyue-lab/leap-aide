@@ -7,7 +7,8 @@ interface SessionState {
   currentSession: Session | null;
   loading: boolean;
   error: string | null;
-  
+  gatewayOnline: boolean;
+
   // Actions
   loadSessions: () => Promise<void>;
   createSession: (workspace?: string) => Promise<Session>;
@@ -32,6 +33,8 @@ interface SessionState {
   updateSessionReasoningEffort: (id: string, effort: string | null) => Promise<void>;
   /** Update the personality for a specific session */
   updateSessionPersonality: (id: string, personality: string | null) => Promise<void>;
+  /** Subscribe to Gateway SSE for real-time session list updates. Returns unsubscribe function. */
+  subscribeGatewaySSE: () => () => void;
 }
 
 export const useSessionStore = create<SessionState>((set) => ({
@@ -40,6 +43,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   currentSession: null,
   loading: false,
   error: null,
+  gatewayOnline: false,
 
   loadSessions: async () => {
     set({ loading: true, error: null });
@@ -314,5 +318,107 @@ export const useSessionStore = create<SessionState>((set) => ({
           ? { ...state.currentSession, personality }
           : state.currentSession,
     }));
+  },
+
+  subscribeGatewaySSE: () => {
+    let es: EventSource | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let stopped = false;
+    // Throttle auto-reload of read-only active sessions: min 5s between reloads
+    const _lastReloadTs: Record<string, number> = {};
+
+    const connect = () => {
+      if (stopped) return;
+
+      es = new EventSource('/api/sessions/gateway/stream', { withCredentials: true });
+
+      es.addEventListener('open', () => {
+        set({ gatewayOnline: true });
+      });
+
+      es.addEventListener('sessions_changed', (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          const gatewaySessions: SessionListItem[] = (data.sessions || []).map(
+            (s: Record<string, unknown>) => ({
+              session_id: s.session_id as string,
+              title: (s.title as string) || 'Gateway Session',
+              workspace: s.workspace as string | undefined,
+              model: s.model as string | undefined,
+              message_count: s.message_count as number | undefined,
+              created_at: s.created_at as number,
+              updated_at: s.updated_at as number | undefined,
+              pinned: false,
+              source_tag: (s.source_tag as string) || (s.source as string) || undefined,
+              is_cli_session: true,
+              user_id: s.user_id as string | undefined,
+            })
+          );
+
+          set((state) => {
+            // Preserve WebUI-native sessions (non-gateway), replace gateway sessions
+            const webuiSessions = state.sessions.filter((s) => !s.is_cli_session);
+            // Build merged session list from WebUI-native and gateway sessions
+            const merged: SessionListItem[] = [
+              ...webuiSessions,
+              ...gatewaySessions,
+            ];
+            // Sort by pinned first, then by updated_at desc
+            merged.sort((a, b) => {
+              if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+              return (b.updated_at || b.created_at) - (a.updated_at || a.created_at);
+            });
+            return { sessions: merged };
+          });
+
+          // Auto-reload read-only active session when message_count increases
+          const current = useSessionStore.getState().currentSession;
+          const currentId = useSessionStore.getState().currentSessionId;
+          if (current?._readonly && currentId) {
+            const oldCount = current.message_count ?? 0;
+            const gw = gatewaySessions.find((s) => s.session_id === currentId);
+            const newCount = gw?.message_count ?? 0;
+            if (newCount > oldCount) {
+              const lastTs = _lastReloadTs[currentId] || 0;
+              const now = Date.now();
+              if (now - lastTs >= 5000) {
+                _lastReloadTs[currentId] = now;
+                useSessionStore.getState().loadSession(currentId).catch(() => {
+                  /* ignore — session may have been cleaned up on the agent side */
+                });
+              }
+            }
+          }
+        } catch (err) {
+          console.error('[Gateway SSE] Failed to parse sessions_changed event:', err);
+        }
+      });
+
+      es.onerror = () => {
+        // EventSource auto-closes on error; schedule reconnect
+        set({ gatewayOnline: false });
+        if (es) {
+          es.close();
+          es = null;
+        }
+        if (!stopped) {
+          reconnectTimer = setTimeout(connect, 5000);
+        }
+      };
+    };
+
+    connect();
+
+    return () => {
+      stopped = true;
+      if (es) {
+        es.close();
+        es = null;
+      }
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    };
   },
 }));

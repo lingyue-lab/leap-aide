@@ -180,8 +180,14 @@ def read_importable_agent_session_rows(
                    {parent_expr},
                    {ended_expr},
                    {end_reason_expr},
+                   s.user_id,
+                   s.cwd,
                    COUNT(m.id) AS actual_message_count,
-                   MAX(m.timestamp) AS last_activity
+                   MAX(m.timestamp) AS last_activity,
+                   (SELECT substr(m2.content, 1, 100)
+                    FROM messages m2
+                    WHERE m2.session_id = s.id AND m2.role = 'user'
+                    ORDER BY m2.timestamp ASC LIMIT 1) AS first_user_message
             FROM sessions s
             LEFT JOIN messages m ON m.session_id = s.id
             WHERE {' AND '.join(where_clauses)}

@@ -1875,6 +1875,16 @@
     display: block;
   }
 
+  .session-readonly-marker {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    font-size: 0.7rem;
+    opacity: 0.55;
+    margin-right: 3px;
+    line-height: 1;
+  }
+
   .session-title {
     flex: 1;
     overflow: hidden;

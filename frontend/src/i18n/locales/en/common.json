@@ -39,6 +39,8 @@
     "empty": "No conversations yet",
     "no_results": "No matching conversations",
     "pinned": "Pinned",
+    "readonly_gateway": "Read-only — external gateway session",
+    "readonly_snapshot": "Read-only — archived snapshot",
     "today": "Today",
     "yesterday": "Yesterday",
     "this_week": "This week",

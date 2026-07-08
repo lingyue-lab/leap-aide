@@ -23,7 +23,7 @@ const defaultSettings: Settings = {
   sound_enabled: true,
   notifications_enabled: false,
   show_token_usage: true,
-  show_cli_sessions: false,
+  show_cli_sessions: true,
   sync_insights: false,
   check_updates: true,
   bot_name: 'Hermes',

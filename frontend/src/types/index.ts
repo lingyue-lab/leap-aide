@@ -55,6 +55,10 @@ export interface SessionListItem {
   service_tier?: string | null;
   message_count?: number;
   last_seen_msg_count?: number | null;
+  // Gateway session fields (non-WebUI sessions from agent state.db)
+  source_tag?: string;
+  is_cli_session?: boolean;
+  user_id?: string;
   // Compression chain metadata (v1 — WebUI-native sessions only)
   _compression_segment_count?: number;
   _lineage_root_id?: string | null;
@@ -138,6 +142,7 @@ export interface Workspace {
   name: string;
   path: string;
   display_name?: string;
+  readonly?: boolean;
 }
 
 export interface DirEntry {

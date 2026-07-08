@@ -48,6 +48,27 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
 
   const dateLocale = i18n.language === 'zh-CN' ? zhCN : enUS;
 
+  // Read-only marker for gateway/CLI sessions and compaction snapshots
+  const readOnlyMarker = (session.is_cli_session || session._readonly) ? (
+    <span className="session-readonly-marker" title={session.is_cli_session ? t('sessions.readonly_gateway') : t('sessions.readonly_snapshot')}>🔒</span>
+  ) : null;
+
+  // Platform icon mapping for gateway sessions
+  const platformIcon = (() => {
+    if (!session.is_cli_session) return null;
+    const tag = (session.source_tag || '').toLowerCase();
+    switch (tag) {
+      case 'weixin':
+        return <span className="gateway-icon weixin" title="WeChat">💬</span>;
+      case 'telegram':
+        return <span className="gateway-icon telegram" title="Telegram">✈</span>;
+      case 'cli':
+        return <span className="gateway-icon cli" title="CLI">▸</span>;
+      default:
+        return tag ? <span className="gateway-icon generic" title={session.source_tag}>{tag.charAt(0).toUpperCase()}</span> : null;
+    }
+  })();
+
   useEffect(() => {
     if (isEditing && inputRef.current) {
       inputRef.current.focus();
@@ -85,6 +106,7 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
+    if (session.is_cli_session) return;  // gateway sessions are read-only — no actions
     const rect = buttonRef.current?.getBoundingClientRect();
     if (rect) {
       setMenuPosition({
@@ -236,6 +258,8 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
                 </svg>
               </span>
             )}
+            {platformIcon}
+            {readOnlyMarker}
             {isEditing ? (
               <input
                 ref={inputRef}
@@ -264,23 +288,25 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
           <div className="session-meta">{relativeTime}</div>
         </div>
 
-        <div className="session-actions">
-          <button
-            ref={buttonRef}
-            className={`session-actions-trigger ${menuOpen ? 'active' : ''}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              handleContextMenu(e);
-            }}
-            aria-label={t('sessions.actions')}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="1" />
-              <circle cx="12" cy="5" r="1" />
-              <circle cx="12" cy="19" r="1" />
-            </svg>
-          </button>
-        </div>
+        {!session.is_cli_session && (
+          <div className="session-actions">
+            <button
+              ref={buttonRef}
+              className={`session-actions-trigger ${menuOpen ? 'active' : ''}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleContextMenu(e);
+              }}
+              aria-label={t('sessions.actions')}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="1" />
+                <circle cx="12" cy="5" r="1" />
+                <circle cx="12" cy="19" r="1" />
+              </svg>
+            </button>
+          </div>
+        )}
 
         {menuOpen && (
           <div
@@ -293,35 +319,41 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
               minWidth: showWorkspaceMenu ? 220 : 140,
             }}
           >
-            <button className="session-action-opt" onClick={handleStartEdit}>
-              <span className="ws-opt-action">
-                <svg className="ws-opt-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                </svg>
-                <span className="ws-opt-name">{t('sessions.rename')}</span>
-              </span>
-            </button>
-            <button className="session-action-opt" onClick={handlePin}>
-              <span className="ws-opt-action">
-                <svg className="ws-opt-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 17v-7m-4 4l4-4 4 4" />
-                </svg>
-                <span className="ws-opt-name">
-                  {session.pinned ? t('sessions.unpin') : t('sessions.pin')}
+            {!session.is_cli_session && (
+              <>
+                <button className="session-action-opt" onClick={handleStartEdit}>
+                  <span className="ws-opt-action">
+                    <svg className="ws-opt-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                    </svg>
+                    <span className="ws-opt-name">{t('sessions.rename')}</span>
+                  </span>
+                </button>
+                <button className="session-action-opt" onClick={handlePin}>
+                  <span className="ws-opt-action">
+                    <svg className="ws-opt-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 17v-7m-4 4l4-4 4 4" />
+                    </svg>
+                    <span className="ws-opt-name">
+                      {session.pinned ? t('sessions.unpin') : t('sessions.pin')}
+                    </span>
+                  </span>
+                </button>
+              </>
+            )}
+            {!session.is_cli_session && (
+              <button className="session-action-opt" onClick={handleAssignWorkspace}>
+                <span className="ws-opt-action">
+                  <svg className="ws-opt-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                  </svg>
+                  <span className="ws-opt-name">{t('sessions.assign_workspace')}</span>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginLeft: 'auto', opacity: 0.5 }}>
+                    <polyline points={showWorkspaceMenu ? '18 15 12 9 6 15' : '9 18 15 12 9 6'}/>
+                  </svg>
                 </span>
-              </span>
-            </button>
-            <button className="session-action-opt" onClick={handleAssignWorkspace}>
-              <span className="ws-opt-action">
-                <svg className="ws-opt-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                </svg>
-                <span className="ws-opt-name">{t('sessions.assign_workspace')}</span>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginLeft: 'auto', opacity: 0.5 }}>
-                  <polyline points={showWorkspaceMenu ? '18 15 12 9 6 15' : '9 18 15 12 9 6'}/>
-                </svg>
-              </span>
-            </button>
+              </button>
+            )}
             {showWorkspaceMenu && (
               <div className="session-workspace-submenu">
                 {workspaces.length === 0 ? (
@@ -351,7 +383,7 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
                 )}
               </div>
             )}
-            {(session.message_count ?? 0) > 50 && (
+            {!session.is_cli_session && (session.message_count ?? 0) > 50 && (
               <button
                 className="session-action-opt"
                 onClick={handleCompress}
@@ -374,7 +406,7 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
                 </span>
               </button>
             )}
-            {(session.message_count ?? 0) > 0 && (
+            {!session.is_cli_session && (session.message_count ?? 0) > 0 && (
               <button
                 className="session-action-opt"
                 onClick={handleClear}
@@ -400,14 +432,16 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
                 </span>
               </button>
             )}
-            <button className="session-action-opt danger" onClick={handleDelete}>
-              <span className="ws-opt-action">
-                <svg className="ws-opt-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                </svg>
-                <span className="ws-opt-name">{t('sessions.delete')}</span>
-              </span>
-            </button>
+            {!session.is_cli_session && (
+              <button className="session-action-opt danger" onClick={handleDelete}>
+                <span className="ws-opt-action">
+                  <svg className="ws-opt-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                  </svg>
+                  <span className="ws-opt-name">{t('sessions.delete')}</span>
+                </span>
+              </button>
+            )}
           </div>
         )}
       </div>

@@ -135,6 +135,8 @@ export default function WorkspacesPanel() {
             {t('workspaces.empty') || 'No workspaces added'}
           </div>
         )}
+
+        {/* User Workspaces */}
         {workspaces.map((workspace) => (
           <div
             key={workspace.path}
@@ -151,9 +153,13 @@ export default function WorkspacesPanel() {
           >
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-2 flex-1 min-w-0">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0">
-                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-                </svg>
+                {workspace.readonly ? (
+                  <span className="flex-shrink-0 text-xs opacity-50" title="Read-only workspace (derived from gateway/CLI sessions)">🔒</span>
+                ) : (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                  </svg>
+                )}
                 <div className="flex-1 min-w-0">
                   {renamingPath === workspace.path ? (
                     <div onClick={(e) => e.stopPropagation()}>
@@ -179,20 +185,22 @@ export default function WorkspacesPanel() {
                 </div>
               </div>
 
-              {/* Actions trigger */}
-              <div className="flex-shrink-0 ml-1">
-                <button
-                  className={`session-actions-trigger ${menuOpenPath === workspace.path ? 'active' : ''}`}
-                  onClick={(e) => handleMenuOpen(e, workspace)}
-                  aria-label="More actions"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="12" cy="12" r="1" />
-                    <circle cx="12" cy="5" r="1" />
-                    <circle cx="12" cy="19" r="1" />
-                  </svg>
-                </button>
-              </div>
+              {/* Actions trigger — hidden for readonly workspaces */}
+              {!workspace.readonly && (
+                <div className="flex-shrink-0 ml-1">
+                  <button
+                    className={`session-actions-trigger ${menuOpenPath === workspace.path ? 'active' : ''}`}
+                    onClick={(e) => handleMenuOpen(e, workspace)}
+                    aria-label="More actions"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="1" />
+                      <circle cx="12" cy="5" r="1" />
+                      <circle cx="12" cy="19" r="1" />
+                    </svg>
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         ))}

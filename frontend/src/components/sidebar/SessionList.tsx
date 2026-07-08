@@ -2,22 +2,38 @@ import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
+import { useSettingsStore } from '@/stores/useSettingsStore';
 import SessionItem from './SessionItem';
 
 export default function SessionList() {
   const { t } = useTranslation('common');
-  const { sessions, currentSessionId, currentSession, loadSessions, createSession, selectSession } = useSessionStore();
+  const { sessions, currentSessionId, currentSession, loadSessions, createSession, selectSession, gatewayOnline } = useSessionStore();
   const { workspaces } = useWorkspaceStore();
   const [searchQuery, setSearchQuery] = useState('');
   // Set of collapsed workspace keys; first group is expanded by default (not in set)
   const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(new Set());
   // Track whether we have initialized collapse state from the first render
   const [collapseInit, setCollapseInit] = useState(false);
+  // Cleanup modal state
+  const [showCleanupModal, setShowCleanupModal] = useState(false);
+  const [cleanupSource, setCleanupSource] = useState('');
+  const [cleanupDays, setCleanupDays] = useState(30);
+  const [cleanupPreview, setCleanupPreview] = useState<number | null>(null);
+  const [cleanupRunning, setCleanupRunning] = useState(false);
+
+  const showCliSessions = useSettingsStore((s) => s.settings?.show_cli_sessions ?? false);
 
   // Load sessions on mount
   useEffect(() => {
     loadSessions();
   }, [loadSessions]);
+
+  // Subscribe to Gateway SSE for real-time session updates
+  useEffect(() => {
+    if (!showCliSessions) return;
+    const unsubscribe = useSessionStore.getState().subscribeGatewaySSE();
+    return unsubscribe;
+  }, [showCliSessions]);
 
   // Auto-select first session on initial load (e.g. after page refresh or restart).
   // Pinned sessions sort first, so they get priority.
@@ -52,20 +68,26 @@ export default function SessionList() {
     };
   }, [workspaces, t]);
 
-  // Separate archived (read-only compaction snapshots) from active sessions
-  const { topLevelSessions, archivedMap } = useMemo(() => {
-    const archivedMap = new Map<string, typeof sessions>();
-    const topLevel = filteredSessions.filter((s) => {
+  // Build map of parent → archived children (read-only compaction snapshots)
+  const archivedMap = useMemo(() => {
+    const map = new Map<string, typeof sessions>();
+    filteredSessions.forEach((s) => {
       if (s._readonly && s._parent_session_id) {
-        const children = archivedMap.get(s._parent_session_id) || [];
+        const children = map.get(s._parent_session_id) || [];
         children.push(s);
-        archivedMap.set(s._parent_session_id, children);
-        return false;
+        map.set(s._parent_session_id, children);
       }
-      return true;
     });
-    return { topLevelSessions: topLevel, archivedMap };
+    return map;
   }, [filteredSessions]);
+
+
+
+  // All sessions (WebUI + gateway/CLI), excluding archived compaction snapshots
+  const allSessions = useMemo(
+    () => filteredSessions.filter((s) => !(s._readonly && s._parent_session_id)),
+    [filteredSessions]
+  );
 
   // Group sessions by workspace; pinned sessions stay at the top within their workspace group.
   const groupedSessions = useMemo(() => {
@@ -74,7 +96,7 @@ export default function SessionList() {
     // Map from workspace path (or '__none__') → session list (all sessions, including pinned)
     const wsMap = new Map<string, typeof sessions>();
 
-    topLevelSessions.forEach((s) => {
+    allSessions.forEach((s) => {
       const key = s.workspace || '__none__';
       if (!wsMap.has(key)) wsMap.set(key, []);
       wsMap.get(key)!.push(s);
@@ -101,13 +123,15 @@ export default function SessionList() {
     });
 
     return groups;
-  }, [topLevelSessions, wsLabel, t]);
+  }, [allSessions, wsLabel, t]);
 
   // Initialize collapse state once groups are known:
   // first group expanded, all others collapsed
   useEffect(() => {
     if (collapseInit || groupedSessions.length === 0) return;
-    setCollapsedKeys(new Set(groupedSessions.slice(1).map((g) => g.key)));
+    const allGroupKeys = groupedSessions.map((g) => g.key);
+    // First group expanded, all others collapsed
+    setCollapsedKeys(new Set(allGroupKeys.slice(1)));
     setCollapseInit(true);
   }, [groupedSessions, collapseInit]);
 
@@ -141,6 +165,43 @@ export default function SessionList() {
     setSearchQuery(e.target.value);
   };
 
+  const handleCleanupOpen = (sourceTag?: string) => {
+    setCleanupSource(sourceTag || '');
+    setCleanupDays(30);
+    setCleanupPreview(null);
+    setShowCleanupModal(true);
+  };
+
+  const handleCleanupClose = () => {
+    setShowCleanupModal(false);
+    setCleanupPreview(null);
+  };
+
+  const handleCleanupConfirm = async () => {
+    setCleanupRunning(true);
+    try {
+      const res = await fetch('/api/sessions/cleanup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: cleanupSource, older_than_days: cleanupDays }),
+        credentials: 'include',
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setCleanupPreview(data.deleted_count);
+        // Reload sessions after cleanup
+        await loadSessions();
+      } else {
+        alert(data.error || 'Cleanup failed');
+      }
+    } catch (err) {
+      alert(`Cleanup failed: ${(err as Error).message}`);
+    } finally {
+      setCleanupRunning(false);
+      setShowCleanupModal(false);
+    }
+  };
+
   return (
     <>
       <div className="sidebar-section">
@@ -164,49 +225,119 @@ export default function SessionList() {
       </div>
       
       <div className="session-list">
-        {groupedSessions.map((group) => {
-          const collapsed = collapsedKeys.has(group.key);
-          return (
-            <div key={group.key}>
-              <div
-                className={`session-ws-header${collapsed ? ' collapsed' : ''}`}
-                onClick={() => toggleGroup(group.key)}
-              >
-                <svg
-                  className="session-ws-caret"
-                  width="12"
-                  height="12"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
+        {groupedSessions.length > 0 && (
+          <div className="webui-sessions-section">
+            <div className="flex items-center justify-between px-2 py-1">
+              {showCliSessions && (
+                <button
+                  className="text-xs text-[var(--muted)] hover:text-[var(--accent)] transition-colors"
+                  onClick={() => handleCleanupOpen()}
+                  title="Clean up old gateway sessions"
                 >
-                  <polyline points="6 9 12 15 18 9" />
-                </svg>
-                <span className="session-ws-label">{group.label}</span>
-                <span className="session-ws-count">{group.sessions.length}</span>
-              </div>
-              {!collapsed && group.sessions.map((session) => (
-                <SessionItem
-                  key={session.session_id}
-                  session={session}
-                  isActive={currentSessionId === session.session_id}
-                  onClick={() => selectSession(session.session_id)}
-                  archivedChildren={archivedMap.get(session.session_id)}
-                />
-              ))}
+                  🧹 Clean
+                </button>
+              )}
+              {showCliSessions && !gatewayOnline && <span className="text-xs text-[var(--accent)]" title="Gateway offline">⚠</span>}
             </div>
-          );
-        })}
-        
-        {topLevelSessions.length === 0 && archivedMap.size === 0 && (
+            {groupedSessions.map((group) => {
+              const collapsed = collapsedKeys.has(group.key);
+              return (
+                <div key={group.key}>
+                  <div
+                    className={`session-ws-header${collapsed ? ' collapsed' : ''}`}
+                    onClick={() => toggleGroup(group.key)}
+                  >
+                    <svg
+                      className="session-ws-caret"
+                      width="12"
+                      height="12"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <polyline points="6 9 12 15 18 9" />
+                    </svg>
+                    <span className="session-ws-label">{group.label}</span>
+                    <span className="session-ws-count">{group.sessions.length}</span>
+                  </div>
+                  {!collapsed && group.sessions.map((session) => (
+                    <SessionItem
+                      key={session.session_id}
+                      session={session}
+                      isActive={currentSessionId === session.session_id}
+                      onClick={() => selectSession(session.session_id)}
+                      archivedChildren={archivedMap.get(session.session_id)}
+                    />
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {groupedSessions.length === 0 && archivedMap.size === 0 && (
           <div className="text-center text-[var(--muted)] text-sm py-4">
             {searchQuery ? t('sessions.no_results') : t('sessions.empty')}
           </div>
         )}
       </div>
+
+      {/* Cleanup Modal */}
+      {showCleanupModal && (
+        <div className="clear-history-overlay" onClick={handleCleanupClose}>
+          <div className="clear-history-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="clear-history-modal__title">Clean Up Sessions</div>
+            <div className="clear-history-modal__desc">
+              Delete ended sessions older than the selected period.
+              Pinned sessions are never deleted.
+            </div>
+            <div className="clear-history-modal__field">
+              <label className="clear-history-modal__label">Source</label>
+              <select
+                className="clear-history-modal__input"
+                value={cleanupSource}
+                onChange={(e) => setCleanupSource(e.target.value)}
+              >
+                <option value="">-- Select --</option>
+                <option value="webui">Web UI</option>
+                {(() => [...new Set(filteredSessions.filter(s => s.is_cli_session).map(s => s.source_tag).filter(Boolean) as string[])].sort())().map((tag) => (
+                  <option key={tag} value={tag}>{tag}</option>
+                ))}
+              </select>
+            </div>
+            <div className="clear-history-modal__field">
+              <label className="clear-history-modal__label">Older Than</label>
+              <select
+                className="clear-history-modal__input"
+                value={cleanupDays}
+                onChange={(e) => setCleanupDays(Number(e.target.value))}
+              >
+                <option value={7}>7 days</option>
+                <option value={30}>30 days</option>
+                <option value={90}>90 days</option>
+              </select>
+            </div>
+            {cleanupPreview !== null && (
+              <div className="text-sm text-green-500 mb-2">Deleted {cleanupPreview} session(s).</div>
+            )}
+            <div className="clear-history-modal__actions">
+              <button className="clear-history-modal__btn clear-history-modal__btn--cancel" onClick={handleCleanupClose}>
+                Cancel
+              </button>
+              <button
+                className="clear-history-modal__btn clear-history-modal__btn--confirm"
+                onClick={handleCleanupConfirm}
+                disabled={!cleanupSource || cleanupRunning}
+              >
+                {cleanupRunning ? 'Cleaning...' : 'Clean Up'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

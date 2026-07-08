@@ -2062,7 +2062,7 @@ _SETTINGS_DEFAULTS = {
     "onboarding_completed": False,
     "send_key": "enter",  # 'enter' or 'ctrl+enter'
     "show_token_usage": False,  # show input/output token badge below assistant messages
-    "show_cli_sessions": False,  # merge CLI sessions from state.db into the sidebar
+    "show_cli_sessions": True,  # merge CLI sessions from state.db into the sidebar
     "sync_to_insights": False,  # mirror WebUI token usage to state.db for /insights
     "check_for_updates": True,  # check if webui/agent repos are behind upstream
     "theme": "dark",  # light | dark | system
