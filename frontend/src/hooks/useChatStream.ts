@@ -40,6 +40,7 @@ export function useChatStream() {
             busy: state.busy,
             activeStreamId: state.streaming ? state.streamId : null,
             lastUsage: state.lastUsage ?? null,
+            phase: state.phase,
           });
 
           // ── Queue state consistency check ────────────────────────────────

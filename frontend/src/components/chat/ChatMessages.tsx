@@ -2,6 +2,8 @@ import React, { forwardRef, useEffect, useRef, useMemo } from 'react';
 import type { Message, ToolCall } from '@/types';
 import MessageRow, { extractThinkingText, isContextCompactionMessage, ContextCompactionMessageRow } from './MessageRow';
 import { useChatStore } from '@/stores/useChatStore';
+import ThinkingIndicator from './ThinkingIndicator';
+import ConversationMinimap from './ConversationMinimap';
 
 interface ChatMessagesProps {
   messages: Message[];
@@ -19,6 +21,7 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
     const scrollRef = ref || innerRef;
     const toolCalls = useChatStore(selectToolCalls);
     const showReasoning = useChatStore((s) => s.showReasoning);
+    const phase = useChatStore((s) => s.phase);
 
     // Auto-scroll logic
     const _scrollPinned = useRef(true);
@@ -176,16 +179,18 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
 
                   // Render assistant message
                   result.push(
-                    <MessageRow
-                      key={`msg-${i}`}
-                      message={message}
-                      messages={sortedMessages}
-                      toolCalls={toolCalls}
-                      streaming={streaming}
-                      isStreaming={streaming && i === sortedMessages.length - 1}
-                      onFileOpen={onFileOpen}
-                      thinkingText={thinkingText}
-                    />
+                    <div key={`msg-wrap-${i}`} data-msg-idx={i}>
+                      <MessageRow
+                        key={`msg-${i}`}
+                        message={message}
+                        messages={sortedMessages}
+                        toolCalls={toolCalls}
+                        streaming={streaming}
+                        isStreaming={streaming && i === sortedMessages.length - 1}
+                        onFileOpen={onFileOpen}
+                        thinkingText={thinkingText}
+                      />
+                    </div>
                   );
                   
                   // Collect following tool messages until next non-tool message
@@ -198,25 +203,18 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
                     const tcId = nextMsg.tool_call_id || '';
                     if (isStreamingAssistant || toolCallIds.has(tcId) || toolCallIds.size === 0) {
                       renderedIndices.add(j);
-                      // Sprint 15: Add Hermes separator before each tool message
                       result.push(
-                        <div key={`hermes-sep-${j}`} className="msg-row hermes-separator">
-                          <div className="msg-role assistant">
-                            <div className="role-icon assistant">H</div>
-                            <span>Hermes</span>
-                          </div>
+                        <div key={`msg-wrap-${j}`} data-msg-idx={j}>
+                          <MessageRow
+                            key={`msg-${j}`}
+                            message={nextMsg}
+                            messages={sortedMessages}
+                            toolCalls={toolCalls}
+                        streaming={streaming}
+                            isStreaming={false}
+                            onFileOpen={onFileOpen}
+                          />
                         </div>
-                      );
-                      result.push(
-                        <MessageRow
-                          key={`msg-${j}`}
-                          message={nextMsg}
-                          messages={sortedMessages}
-                          toolCalls={toolCalls}
-                      streaming={streaming}
-                          isStreaming={false}
-                          onFileOpen={onFileOpen}
-                        />
                       );
                     } else {
                       break;
@@ -225,39 +223,39 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
                 } else if (message.role === 'tool') {
                   // Orphaned tool message (without preceding assistant)
                   renderedIndices.add(i);
-                  // Add Hermes separator before orphaned tool message
                   result.push(
-                    <div key={`hermes-sep-orphan-${i}`} className="msg-row hermes-separator">
-                      <div className="msg-role assistant">
-                        <div className="role-icon assistant">H</div>
-                        <span>Hermes</span>
-                      </div>
+                    <div key={`msg-wrap-${i}`} data-msg-idx={i}>
+                      <MessageRow
+                        key={`msg-${i}`}
+                        message={message}
+                        messages={sortedMessages}
+                        toolCalls={toolCalls}
+                        streaming={streaming}
+                        isStreaming={false}
+                        onFileOpen={onFileOpen}
+                      />
                     </div>
-                  );
-                  result.push(
-                    <MessageRow
-                      key={`msg-${i}`}
-                      message={message}
-                      messages={sortedMessages}
-                      toolCalls={toolCalls}
-                      streaming={streaming}
-                      isStreaming={false}
-                      onFileOpen={onFileOpen}
-                    />
                   );
                 } else {
                   // Non-tool message (user)
                   renderedIndices.add(i);
+                  const isUser = message.role === 'user';
                   result.push(
-                    <MessageRow
-                      key={`msg-${i}`}
-                      message={message}
-                      messages={sortedMessages}
-                      toolCalls={toolCalls}
-                      streaming={streaming}
-                      isStreaming={false}
-                      onFileOpen={onFileOpen}
-                    />
+                    <div
+                      key={`msg-wrap-${i}`}
+                      data-msg-idx={i}
+                      {...(isUser ? { 'data-user-msg-idx': i } : {})}
+                    >
+                      <MessageRow
+                        key={`msg-${i}`}
+                        message={message}
+                        messages={sortedMessages}
+                        toolCalls={toolCalls}
+                        streaming={streaming}
+                        isStreaming={false}
+                        onFileOpen={onFileOpen}
+                      />
+                    </div>
                   );
                 }
               }
@@ -265,7 +263,18 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
               return result;
             }, [sortedMessages, streaming, toolCalls, onFileOpen])}
           </div>
+
+          {/* Phase indicator — shown after sending, before first assistant token, and between tool calls */}
+          {streaming && phase && (
+            <ThinkingIndicator phase={phase} />
+          )}
         </div>
+
+        {/* Conversation minimap — right-edge navigation rail */}
+        <ConversationMinimap
+          messages={sortedMessages}
+          containerRef={scrollRef as React.RefObject<HTMLDivElement>}
+        />
       </div>
     );
   }));

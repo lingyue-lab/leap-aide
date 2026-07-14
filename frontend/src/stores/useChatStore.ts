@@ -8,6 +8,7 @@ interface SessionCache {
   activeStreamId: string | null;
   lastUsage: UsageInfo | null;
   queuedMessages: QueuedMessage[];
+  phase: string | null;
 }
 
 interface ChatState {
@@ -19,6 +20,8 @@ interface ChatState {
   lastUsage: UsageInfo | null;
   abortController: AbortController | null;
   queuedMessages: QueuedMessage[];
+  /** Current generating phase: 'connecting' | 'initializing' | 'thinking' | null */
+  phase: string | null;
   // Global reasoning display toggle (from config.yaml display.show_reasoning)
   showReasoning: boolean;
   setShowReasoning: (v: boolean) => void;
@@ -75,6 +78,7 @@ export const useChatStore = create<ChatState>((set) => ({
   lastUsage: null,
   abortController: null,
   queuedMessages: [],
+  phase: null,
   showReasoning: true,  // default: show (matches CLI default)
   _sessionCache: new Map<string, SessionCache>(),
   _currentSessionId: null,
@@ -229,7 +233,7 @@ export const useChatStore = create<ChatState>((set) => ({
   })),
 
   setShowReasoning: (v) => set({ showReasoning: v }),
-  setBusy: (busy) => set({ busy }),
+  setBusy: (busy) => set({ busy, ...(busy ? { phase: 'connecting' as const } : { phase: null }) }),
 
   setActiveStreamId: (id) => set({ activeStreamId: id }),
 
@@ -279,6 +283,7 @@ export const useChatStore = create<ChatState>((set) => ({
     lastUsage: null,
     abortController: null,
     queuedMessages: [],
+    phase: null,
   }),
 
   // Save current chat state into per-session cache
@@ -290,6 +295,7 @@ export const useChatStore = create<ChatState>((set) => ({
       activeStreamId: state.activeStreamId,
       lastUsage: state.lastUsage,
       queuedMessages: state.queuedMessages,
+      phase: state.phase,
     };
     const newCache = new Map(state._sessionCache);
     newCache.set(sessionId, cache);
@@ -318,6 +324,7 @@ export const useChatStore = create<ChatState>((set) => ({
         activeStreamId: cache.activeStreamId,
         lastUsage: cache.lastUsage,
         queuedMessages: queuedToRestore,
+        phase: cache.phase ?? null,
         _currentSessionId: sessionId,
       });
       return cache;
@@ -344,6 +351,7 @@ export const useChatStore = create<ChatState>((set) => ({
       activeStreamId: existing?.activeStreamId ?? null,
       lastUsage: existing?.lastUsage ?? null,
       queuedMessages: existing?.queuedMessages ?? [],
+      phase: existing?.phase ?? null,
       ...patch,
     };
     const newCache = new Map(state._sessionCache);
@@ -369,6 +377,7 @@ export const useChatStore = create<ChatState>((set) => ({
       if (updated.busy !== state.busy) liveUpdate.busy = updated.busy;
       if (updated.activeStreamId !== state.activeStreamId) liveUpdate.activeStreamId = updated.activeStreamId;
       if (updated.lastUsage !== state.lastUsage) liveUpdate.lastUsage = updated.lastUsage;
+      if (updated.phase !== state.phase) liveUpdate.phase = updated.phase;
       return liveUpdate;
     }
     // Preserve ghost messages in background-session caches so queued/steered

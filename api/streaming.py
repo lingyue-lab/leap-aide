@@ -1337,6 +1337,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
     _agent_lock = None
     try:
         s = get_session(session_id)
+        put('phase', {'stage': 'initializing'})
         s.workspace = str(Path(workspace).expanduser().resolve())
         s.model = model
 
@@ -1506,8 +1507,6 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
 
             def _append_reasoning_text(text):
                 nonlocal _reasoning_text
-                if _reasoning_text is not None and _reasoning_text != '':
-                    _reasoning_text += f"\n{_REASONING_SEP_MARK}\n"
                 _reasoning_text += str(text)
 
             def _emit_metering():
@@ -1582,6 +1581,9 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 if event_type in ('reasoning.available', '_thinking'):
                     reason_text = preview if event_type == 'reasoning.available' else name
                     if reason_text and not (_reasoning_config and _reasoning_config.get("enabled") is False):
+                        # Insert separator at cross-source boundary (streaming → post-hoc summary)
+                        if _reasoning_text:
+                            _reasoning_text += f"\n{_REASONING_SEP_MARK}\n"
                         _append_reasoning_text(reason_text)
                         put('reasoning', {'text': str(reason_text)})
                         meter().record_reasoning(stream_id, len(_reasoning_text))
@@ -2033,6 +2035,8 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 f'=== FULL SYSTEM PROMPT ===\n{_full_sp}\n=== END ===',
                 flush=True,
             )
+
+            put('phase', {'stage': 'thinking'})
 
             result = agent.run_conversation(
                 user_message=workspace_ctx + msg_text,

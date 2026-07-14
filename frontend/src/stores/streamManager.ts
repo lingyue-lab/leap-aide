@@ -33,6 +33,8 @@ export interface SessionStreamState {
   completedAt: number | null;
   /** Error message if stream ended with an error */
   error: string | null;
+  /** Current generating phase: 'connecting' | 'initializing' | 'thinking' | null */
+  phase: string | null;
 }
 
 type ChangeListener = (sessionId: string, state: SessionStreamState) => void;
@@ -95,6 +97,7 @@ function _getOrCreateState(sessionId: string, streamId: string, initialMessages:
       streaming: true,
       completedAt: null,
       error: null,
+      phase: 'connecting',
     };
     _sessionStates.set(sessionId, state);
   }
@@ -175,7 +178,7 @@ function _attachEventListeners(es: EventSource, sessionId: string, streamId: str
     const s = _sessionStates.get(sessionId);
     if (!s) return;
     const newMsg: Message = { role: 'assistant', content: '', _ts: Date.now() / 1000, _live: true };
-    _sessionStates.set(sessionId, { ...s, messages: [...s.messages, newMsg] });
+    _sessionStates.set(sessionId, { ...s, messages: [...s.messages, newMsg], phase: null });
     _notifyImmediate(sessionId);
   });
 
@@ -221,7 +224,15 @@ function _attachEventListeners(es: EventSource, sessionId: string, streamId: str
     const newToolCall: ToolCall = {
       name: data.name, tid, args: data.args || {}, snippet: '', done: false, preview: data.preview || '',
     };
-    _sessionStates.set(sessionId, { ...s, messages: msgs, toolCalls: [...s.toolCalls, newToolCall] });
+    _sessionStates.set(sessionId, { ...s, messages: msgs, toolCalls: [...s.toolCalls, newToolCall], phase: 'running' });
+    _notifyImmediate(sessionId);
+  });
+
+  es.addEventListener('phase', (e: MessageEvent) => {
+    const s = _sessionStates.get(sessionId);
+    if (!s) return;
+    const { stage } = JSON.parse(e.data) as { stage: string };
+    _sessionStates.set(sessionId, { ...s, phase: stage });
     _notifyImmediate(sessionId);
   });
 
@@ -249,7 +260,8 @@ function _attachEventListeners(es: EventSource, sessionId: string, streamId: str
     const toolCalls = s.toolCalls.map((tc) =>
       tc.tid === tid ? { ...tc, snippet: output.substring(0, 200), done: true, duration: data.duration, is_error: data.is_error } : tc
     );
-    _sessionStates.set(sessionId, { ...s, messages: msgs, toolCalls });
+    // Re-show thinking indicator while waiting for next assistant token
+    _sessionStates.set(sessionId, { ...s, messages: msgs, toolCalls, phase: 'thinking' });
     _notifyImmediate(sessionId);
   });
 
@@ -295,6 +307,7 @@ function _attachEventListeners(es: EventSource, sessionId: string, streamId: str
       streaming: false,
       completedAt: Date.now(),
       lastUsage: data.usage || null,
+      phase: null,
     });
     _notifyImmediate(sessionId);
     // Notify UI that this session's stream is done (for sound / badge)
@@ -324,7 +337,7 @@ function _attachEventListeners(es: EventSource, sessionId: string, streamId: str
     else { errorMsg = `**Error:** ${data.message}`; if (data.hint) errorMsg += `\n\n*${data.hint}*`; }
     const errMsgObj: Message = { role: 'assistant', content: errorMsg, _ts: Date.now() / 1000 };
     _sessionStates.set(sessionId, {
-      ...s, busy: false, streaming: false, completedAt: Date.now(), error: errorMsg,
+      ...s, busy: false, streaming: false, completedAt: Date.now(), error: errorMsg, phase: null,
       messages: [...s.messages, errMsgObj],
     });
     _notifyImmediate(sessionId);
@@ -337,7 +350,7 @@ function _attachEventListeners(es: EventSource, sessionId: string, streamId: str
     _eventSources.delete(streamId);
     const errMsg = '**Error:** Connection lost';
     _sessionStates.set(sessionId, {
-      ...s, busy: false, streaming: false, completedAt: Date.now(), error: errMsg,
+      ...s, busy: false, streaming: false, completedAt: Date.now(), error: errMsg, phase: null,
       messages: [...s.messages, { role: 'assistant', content: errMsg, _ts: Date.now() / 1000 }],
     });
     _notifyImmediate(sessionId);
@@ -349,7 +362,7 @@ function _attachEventListeners(es: EventSource, sessionId: string, streamId: str
     es.close();
     _eventSources.delete(streamId);
     _sessionStates.set(sessionId, {
-      ...s, busy: false, streaming: false, completedAt: Date.now(),
+      ...s, busy: false, streaming: false, completedAt: Date.now(), phase: null,
       messages: [...s.messages, { role: 'assistant', content: '*Task cancelled.*', _ts: Date.now() / 1000 }],
     });
     _notifyImmediate(sessionId);
@@ -458,6 +471,7 @@ export function reconnectStream(
     streaming: true,
     completedAt: null,
     error: null,
+    phase: null,
   });
 
   // Use the replay endpoint so we get all past events before live ones

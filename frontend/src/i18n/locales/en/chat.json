@@ -12,6 +12,10 @@
     "plan_msg": "Break down the following task into steps"
   },
   "thinking": "Thinking...",
+  "connecting": "Connecting...",
+  "initializing": "Initializing agent...",
+  "thinking_phase": "Thinking...",
+  "running": "Running...",
   "composer": {
     "placeholder": "Message Hermes...",
     "attach": "Attach files",

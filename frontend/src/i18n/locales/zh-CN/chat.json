@@ -12,6 +12,10 @@
     "plan_msg": "将以下任务分解为步骤"
   },
   "thinking": "思考中...",
+  "connecting": "连接中...",
+  "initializing": "初始化Agent...",
+  "thinking_phase": "思考中...",
+  "running": "执行中...",
   "composer": {
     "placeholder": "向 Hermes 发送消息...",
     "attach": "附加文件",

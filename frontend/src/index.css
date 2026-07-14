@@ -87,18 +87,8 @@
   scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
 }
 
-:root[data-theme="light"] .msg-role.user {
-  color: #005fb8;
-}
-
 :root[data-theme="light"] .msg-role.assistant {
   color: #895503;
-}
-
-:root[data-theme="light"] .role-icon.user {
-  background: rgba(0, 95, 184, 0.1);
-  color: #005fb8;
-  border-color: rgba(0, 95, 184, 0.22);
 }
 
 :root[data-theme="light"] .role-icon.assistant {
@@ -743,10 +733,11 @@
   .messages-inner {
     flex: 1;
     width: 100%;
+    max-width: 768px;
+    margin: 0 auto;
     padding: 20px 32px 32px;
     display: flex;
     flex-direction: column;
-    max-width: 100%;
     box-sizing: border-box;
   }
 
@@ -846,13 +837,14 @@
     color: var(--muted);
     opacity: 0.5;
     margin-top: 4px;
-    padding-left: 30px;
+    padding-left: 16px;
     letter-spacing: 0.02em;
   }
 
-  .msg-row.user-message .msg-timestamp {
-    color: var(--muted);
-    opacity: 1;
+  .msg-timestamp--user {
+    text-align: right;
+    padding-right: 20px;
+    margin-top: 2px;
   }
 
   .msg-row.tool-message .msg-timestamp {
@@ -945,14 +937,14 @@
     50% { opacity: 0.8; }
   }
 
-  /* User message - subtle blue tint consistent with theme palette */
+  /* User message — subtle background lift, no card chrome */
   .msg-row.user-message {
-    background: color-mix(in srgb, var(--blue) 18%, var(--surface));
-    border: 1px solid color-mix(in srgb, var(--blue) 25%, transparent);
-    border-radius: 12px;
+    background: color-mix(in srgb, #fff 6%, var(--surface));
+    border: none;
+    border-radius: 8px;
     margin: 8px 0;
     padding: 12px 16px;
-    max-width: 75%;
+    max-width: 62%;  /* golden ratio (1:1.618) vs assistant full width */
     width: fit-content;
     margin-left: auto;
   }
@@ -961,16 +953,11 @@
     color: var(--blue);
   }
 
-  .msg-row.user-message .role-icon.user {
-    background: color-mix(in srgb, var(--blue) 22%, transparent);
-    color: var(--blue);
-    border: 1px solid color-mix(in srgb, var(--blue) 35%, transparent);
-  }
-
   .msg-row.user-message .msg-body {
     color: var(--text);
     overflow-wrap: break-word;
     word-break: break-word;
+    padding-left: 0;
   }
 
   .msg-row.user-message .msg-body a {
@@ -1001,10 +988,6 @@
     gap: 8px;
   }
 
-  .msg-role.user {
-    color: color-mix(in srgb, var(--blue) 65%, var(--muted));
-  }
-
   .msg-role.assistant {
     color: rgba(201, 168, 76, 0.6);
   }
@@ -1021,12 +1004,6 @@
     flex-shrink: 0;
   }
 
-  .role-icon.user {
-    background: rgba(124, 185, 255, 0.15);
-    color: var(--blue);
-    border: 1px solid rgba(124, 185, 255, 0.2);
-  }
-
   .role-icon.assistant {
     background: rgba(201, 168, 76, 0.15);
     color: var(--gold);
@@ -1037,7 +1014,7 @@
     font-size: 14px;
     line-height: 1.75;
     color: var(--text);
-    padding-left: 30px;
+    padding-left: 16px;
     flex: 1;
     min-width: 0;
     width: 100%;
@@ -1207,6 +1184,10 @@
     animation: queueBarFadeIn 0.3s ease;
     flex-shrink: 0;
     z-index: 9;
+    max-width: 768px;
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
   }
 
   @keyframes queueBarFadeIn {
@@ -1264,12 +1245,15 @@
 
   /* Composer */
   .composer-wrap {
-    border-top: 1px solid var(--border);
     padding: 12px 32px 16px;
     background: var(--bg);
     flex-shrink: 0;
     position: relative;
     z-index: 10;
+    max-width: 768px;
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
   }
 
   .composer-box {
@@ -2286,6 +2270,133 @@
     max-width: 320px;
   }
 
+  /* Thinking indicator wrapper */
+  .thinking-indicator {
+    padding: 8px 0;
+  }
+
+  /* Running variant: single pulsing icon instead of dots */
+  .thinking-indicator--running .thinking-running-icon {
+    color: var(--blue);
+    font-size: 14px;
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+
+  /* ── Conversation Minimap ── */
+  .conversation-minimap {
+    position: fixed;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 5;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    pointer-events: none;
+  }
+
+  .minimap-marks {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 10px;
+    padding: 10px 5px;
+    pointer-events: auto;
+    background: rgba(128, 128, 128, 0.06);
+    border-radius: 8px;
+    min-height: 40px;
+    max-height: 55vh;
+    overflow: hidden;
+  }
+
+  .minimap-mark {
+    width: 8px;
+    height: 3px;
+    border-radius: 1.5px;
+    background: rgba(255, 255, 255, 0.15);
+    cursor: pointer;
+    transition: background 0.15s;
+    flex-shrink: 0;
+  }
+
+  .minimap-mark:hover,
+  .minimap-mark.active {
+    background: var(--blue);
+  }
+
+  .minimap-panel {
+    position: fixed;
+    right: 40px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 0;
+    min-width: 240px;
+    max-width: 320px;
+    max-height: 60vh;
+    overflow-y: auto;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    z-index: 10;
+    pointer-events: auto;
+  }
+
+  .minimap-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--text);
+    transition: background 0.1s;
+  }
+
+  .minimap-item:hover {
+    background: var(--hover-bg);
+  }
+
+  .minimap-item.active {
+    background: color-mix(in srgb, var(--blue) 12%, transparent);
+    color: var(--blue);
+  }
+
+  .minimap-item-idx {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--border2);
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 600;
+  }
+
+  .minimap-item.active .minimap-item-idx {
+    background: var(--blue);
+    color: #fff;
+  }
+
+  .minimap-item-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.4;
+  }
+
+  /* Hide minimap on narrow screens */
+  @media (max-width: 900px) {
+    .conversation-minimap {
+      display: none;
+    }
+  }
+
   /* Thinking indicator */
   .thinking {
     display: flex;
@@ -2556,97 +2667,15 @@
     background: rgba(137, 85, 3, 0.04);
   }
 
-  /* Tool card */
-  .tool-card {
-    border-radius: 10px;
-    border: 1px solid var(--border);
-    margin: 8px 0;
-    overflow: hidden;
-    transition: border-color 0.15s, background 0.15s;
-    background: rgba(255, 255, 255, 0.02);
-    width: 100%;
-    box-sizing: border-box;
-  }
-
-  .tool-card:hover {
-    border-color: var(--border2);
-  }
-
-  .tool-card-header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 12px;
-    cursor: pointer;
-  }
-
-  .tool-card-name {
-    flex: 1;
-    font-size: 13px;
-    color: var(--text);
-    font-weight: 500;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .tool-card-icon {
-    font-size: 14px;
-    flex-shrink: 0;
-  }
-
-  .tool-card-toggle {
-    font-size: 10px;
-    color: var(--muted);
-    flex-shrink: 0;
-    margin-left: auto;
-  }
-
-  .tool-card-body {
-    padding: 0 12px 10px;
-    border-top: 1px solid var(--border);
-    background: rgba(255, 255, 255, 0.02);
-    width: 100%;
-    box-sizing: border-box;
-  }
-
-  .tool-card-args,
-  .tool-card-result {
-    font-size: 11px;
-    font-family: 'SF Mono', ui-monospace, monospace;
-    white-space: pre-wrap;
-    word-break: break-word;
-    margin: 8px 0;
-    color: var(--text);
-    width: 100%;
-    box-sizing: border-box;
-  }
-
-  .tool-card.error,
-  .tool-result.error {
-    border-color: rgba(233, 69, 96, 0.3);
-    background: rgba(233, 69, 96, 0.05);
-  }
-
-  .tool-card.error .tool-card-name,
-  .tool-result.error .tool-card-name {
-    color: #e94560;
-  }
-
-  .tool-cards-container {
-    margin-top: 8px;
-    width: 100%;
-    box-sizing: border-box;
-  }
-
-  /* Tool message row */
+  /* ── Tool Message Row (redesigned) ── */
   .tool-message {
     margin: 8px 0;
     width: 100%;
-    padding-left: 30px;
+    padding-left: 16px;
     box-sizing: border-box;
   }
 
+  /* Header: compact single-line flex row */
   .tool-message-header {
     display: flex;
     align-items: center;
@@ -2668,7 +2697,92 @@
     border-color: rgba(124, 185, 255, 0.25);
   }
 
-  /* Steer badge on tool messages that contain out-of-band user messages */
+  /* Status indicator */
+  .tool-status {
+    flex-shrink: 0;
+    font-size: 12px;
+    width: 16px;
+    text-align: center;
+  }
+
+  .tool-status.running {
+    color: var(--blue);
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+
+  .tool-status.done {
+    color: #73c991;
+  }
+
+  .tool-status.error {
+    color: #e94560;
+  }
+
+  /* Tool name */
+  .tool-name {
+    font-weight: 500;
+    color: var(--text);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  /* Duration */
+  .tool-duration {
+    color: var(--muted);
+    font-size: 11px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  /* Command snippet */
+  .tool-snippet {
+    color: var(--muted);
+    font-size: 12px;
+    font-family: 'SF Mono', ui-monospace, monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  /* Running label */
+  .tool-running-label {
+    color: var(--blue);
+    font-size: 11px;
+    font-style: italic;
+    white-space: nowrap;
+  }
+
+  /* Toggle */
+  .tool-card-toggle {
+    font-size: 10px;
+    color: var(--muted);
+    flex-shrink: 0;
+    margin-left: auto;
+  }
+
+  /* Running state: blue pulse on toggle */
+  .tool-message--running .tool-message-header {
+    border-color: rgba(124, 185, 255, 0.3);
+    background: rgba(124, 185, 255, 0.08);
+  }
+
+  .tool-message--running .tool-card-toggle {
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+
+  /* Error state: red border/background */
+  .tool-message--error .tool-message-header {
+    border-color: rgba(233, 69, 96, 0.35);
+    background: rgba(233, 69, 96, 0.06);
+  }
+
+  .tool-message--error .tool-message-header:hover {
+    border-color: rgba(233, 69, 96, 0.5);
+    background: rgba(233, 69, 96, 0.12);
+  }
+
+  /* Steer badge */
   .tool-steer-badge {
     display: inline-flex;
     align-items: center;
@@ -2693,15 +2807,148 @@
     background: rgba(212, 160, 20, 0.08);
   }
 
-  .tool-message .msg-body {
+  /* Expanded body */
+  .tool-message-body {
     padding: 12px 16px;
     margin-top: 4px;
     background: rgba(255, 255, 255, 0.02);
     border: 1px solid var(--border);
     border-radius: 8px;
     width: 100%;
-    padding-left: 0;
     box-sizing: border-box;
+  }
+
+  /* Command block */
+  .tool-cmd-block {
+    margin-bottom: 10px;
+  }
+
+  .tool-cmd-block:last-child {
+    margin-bottom: 0;
+  }
+
+  .tool-cmd-prompt {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    background: var(--code-bg);
+    color: var(--muted);
+    font-family: 'SF Mono', ui-monospace, monospace;
+    font-size: 11px;
+    margin-right: 8px;
+    vertical-align: middle;
+  }
+
+  .tool-cmd-code {
+    display: block;
+    font-size: 12px;
+    font-family: 'SF Mono', ui-monospace, monospace;
+    background: rgba(0, 0, 0, 0.15);
+    padding: 8px 10px;
+    border-radius: 6px;
+    overflow-x: auto;
+    color: var(--text);
+    margin: 4px 0 0 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  /* Inline arg: primary_key: value */
+  .tool-cmd-arg-inline {
+    display: block;
+    font-size: 13px;
+    color: var(--text);
+    padding: 6px 0;
+    word-break: break-all;
+  }
+
+  .tool-cmd-arg-inline em {
+    font-style: normal;
+    font-weight: 500;
+    color: var(--blue);
+  }
+
+  /* Block arg for long/multi-line values */
+  .tool-cmd-arg-block {
+    margin-bottom: 6px;
+  }
+
+  .tool-cmd-arg-key {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--blue);
+    margin-bottom: 4px;
+  }
+
+  /* Output block */
+  .tool-output-block {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* Large-output collapsible wrapper */
+  .tool-output-details {
+    margin: 0;
+  }
+
+  .tool-output-summary {
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 11px;
+    padding: 4px 0;
+    user-select: none;
+  }
+
+  .tool-output-summary:hover {
+    color: var(--text);
+  }
+
+  /* String list for array output */
+  .tool-output-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .tool-output-list-item {
+    padding: 3px 0;
+    font-size: 12px;
+    font-family: 'SF Mono', ui-monospace, monospace;
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .tool-output-list-item:last-child {
+    border-bottom: none;
+  }
+
+  /* Scalar key-value summary */
+  .tool-output-kv {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+  }
+
+  .tool-output-kv-item {
+    font-size: 12px;
+    color: var(--text);
+  }
+
+  .tool-output-kv-item em {
+    font-style: normal;
+    font-weight: 500;
+    color: var(--muted);
+  }
+
+  .tool-output-waiting {
+    color: var(--muted);
+    font-size: 11px;
+    font-style: italic;
   }
 
   .tool-result-pre {
@@ -2717,64 +2964,8 @@
     box-sizing: border-box;
   }
 
-  .role-icon.tool {
-    background: linear-gradient(135deg, rgba(124, 185, 255, 0.2), rgba(201, 168, 76, 0.15));
-    color: var(--blue);
-  }
-
-  .msg-role.tool {
-    color: var(--muted);
-    font-size: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .tool-card-section {
-    margin-top: 10px;
-  }
-
-  .tool-card-section:first-child {
-    margin-top: 8px;
-  }
-
-  .tool-card-section-title {
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--muted);
-    margin-bottom: 4px;
-  }
-
-  .tool-card-command {
-    font-size: 12px;
-    font-family: 'SF Mono', ui-monospace, monospace;
-    background: rgba(0, 0, 0, 0.15);
-    padding: 8px 10px;
-    border-radius: 6px;
-    overflow-x: auto;
-    color: var(--text);
-  }
-
-  .command-args {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 10px 12px;
-    margin: 0;
-  }
-
-  .command-args .json-key {
-    color: #7cb9ff;
-  }
-
-  .command-args .json-string {
-    color: #98c379;
-  }
-
-  .tool-card.error .tool-card-command {
-    background: rgba(233, 69, 96, 0.1);
+  .tool-message--error .tool-message-body {
+    border-color: rgba(233, 69, 96, 0.2);
   }
 
   /* Approval card */
@@ -3321,6 +3512,21 @@
 
   .mobile-hamburger {
     display: flex;
+  }
+
+  .messages-inner {
+    max-width: 100%;
+    padding: 12px 12px 16px;
+  }
+
+  .composer-wrap {
+    max-width: 100%;
+    padding: 8px 12px 12px;
+  }
+
+  .queue-status-bar {
+    max-width: 100%;
+    padding: 6px 12px;
   }
 }
 

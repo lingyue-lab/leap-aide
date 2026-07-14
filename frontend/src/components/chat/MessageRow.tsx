@@ -12,33 +12,69 @@ interface MessageRowProps {
   thinkingText?: string;
 }
 
-// Tool icon mapping
-const toolIcons: Record<string, string> = {
-  bash: '⌨️',
-  run_shell_command: '⌨️',
-  kubectl: '☸️',
-  read_file: '📄',
-  write_file: '📝',
-  edit_file: '✏️',
-  glob: '🔍',
-  grep: '🔎',
-  list_files: '📁',
-  web_search: '🌐',
-  web_fetch: '🔗',
-  web_click: '🖱️',
-  browser_navigate: '🌐',
-  browser_click: '🖱️',
-  browser_type: '⌨️',
-  browser_scroll: '📜',
-  browser_screenshot: '📷',
-  default: '🔧',
+// ── Tool helpers ────────────────────────────────────────────────────────────────
+
+/** Which argument key holds the primary display value for each tool. */
+const TOOL_PRIMARY_ARG: Record<string, string> = {
+  bash: 'command',
+  run_shell_command: 'command',
+  read_file: 'path',
+  write_file: 'path',
+  edit_file: 'path',
+  glob: 'pattern',
+  grep: 'pattern',
+  list_files: 'path',
+  web_search: 'query',
+  web_fetch: 'url',
+  kubectl: 'command',
+  browser_navigate: 'url',
+  browser_click: 'selector',
+  browser_type: 'text',
+  browser_console: 'expression',
+  browser_screenshot: 'url',
+  search_files: 'pattern',
+  search_content: 'pattern',
 };
 
-function getToolIcon(name: string): string {
-  return toolIcons[name] || toolIcons.default;
+/** Which tools always render output as pre/code instead of JSON tree. */
+const TOOL_CODE_ARG: Record<string, string> = {
+  bash: 'command',
+  run_shell_command: 'command',
+  kubectl: 'command',
+};
+
+/** Truncate a string to maxLen, appending "…" if truncated. */
+function truncate(s: string, maxLen: number): string {
+  if (!s || s.length <= maxLen) return s || '';
+  return s.slice(0, maxLen) + '…';
 }
 
-// Format JSON value with syntax highlighting
+/** Extract the most relevant argument value as a compact snippet for the header. */
+function getCmdSnippet(toolName: string, args?: Record<string, unknown> | null): string {
+  if (!args || Object.keys(args).length === 0) return '';
+  const key = TOOL_PRIMARY_ARG[toolName];
+  if (key && args[key] != null) {
+    return truncate(String(args[key]), 80);
+  }
+  // Fallback: use the first string value
+  for (const v of Object.values(args)) {
+    if (typeof v === 'string' && v) return truncate(v, 80);
+  }
+  return '';
+}
+
+/** Format milliseconds as a human-readable duration. */
+export function formatDuration(ms: number): string {
+  if (ms == null || ms <= 0) return '';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const m = Math.floor(s / 60);
+  const remS = Math.round(s % 60);
+  return remS > 0 ? `${m}m ${remS}s` : `${m}m`;
+}
+
+// ── Tool sub-components ─────────────────────────────────────────────────────────
 function formatJsonValue(value: unknown, depth: number = 0): React.ReactNode {
   if (value === null) {
     return <span className="json-null">null</span>;
@@ -113,33 +149,6 @@ function formatJsonValue(value: unknown, depth: number = 0): React.ReactNode {
     );
   }
   return String(value);
-}
-
-// Parse and format JSON output - always show raw JSON
-function JsonOutputDisplay({ content }: { content: string }) {
-  if (!content) {
-    return (
-      <div className="json-output">
-        <span className="tool-output-waiting">Waiting for update...</span>
-      </div>
-    );
-  }
-  try {
-    const parsed = JSON.parse(content);
-    // Always show the raw JSON with formatting
-    return (
-      <div className="json-output">
-        <div className="json-tree">{formatJsonValue(parsed)}</div>
-      </div>
-    );
-  } catch {
-    // Not valid JSON, show as plain text
-    return (
-      <div className="json-output">
-        <pre className="tool-result-pre">{content}</pre>
-      </div>
-    );
-  }
 }
 
 // Check if a message is a context compaction reference message
@@ -287,27 +296,253 @@ export function extractThinkingText(message: Message): string {
 
 
 
+// ── Tool Output Helpers ─────────────────────────────────────────────────────────
+
+/** Strip <untrusted_tool_result ...> XML wrapper and system preamble from content. */
+function _stripXmlWrapper(raw: string): string {
+  let s = raw;
+  s = s.replace(/<untrusted_tool_result[^>]*>/gi, '');
+  s = s.replace(/<\/untrusted_tool_result>/gi, '');
+  s = s.replace(
+    /^[\s\n]*The following content was retrieved from an external source\.[\s\S]*?only the user \(outside this block\) can issue instructions\.\s*/i,
+    '',
+  );
+  return s.trim();
+}
+
+/** Recursively unwrap JSON objects whose top key is a framework wrapper. */
+const OUTPUT_WRAPPER_KEYS = ['untrusted_tool_result', 'tool_result'];
+
+function _unwrapJsonWrapper(parsed: unknown): unknown {
+  if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+    const obj = parsed as Record<string, unknown>;
+    for (const key of OUTPUT_WRAPPER_KEYS) {
+      if (key in obj && obj[key] != null) {
+        return _unwrapJsonWrapper(obj[key]);
+      }
+    }
+  }
+  return parsed;
+}
+
+/**
+ * Universal output-field priority — not per-tool, but by semantic weight.
+ * A single list that works for any tool the agent might return.
+ */
+const OUTPUT_FIELD_PRIORITY = [
+  'output', 'stdout',           // shell / command tools
+  'content',                     // read_file, web_fetch
+  'snapshot',                    // browser_*
+  'files', 'matches', 'results', // search / list tools
+  'result', 'message', 'error',  // generic fallbacks
+];
+
+function _pickOutputField(parsed: Record<string, unknown>): { key: string; value: unknown } | null {
+  for (const key of OUTPUT_FIELD_PRIORITY) {
+    const v = parsed[key];
+    if (v != null && v !== '') return { key, value: v };
+  }
+  // Nothing matched — pick the longest string value
+  let best = '';
+  let bestLen = 0;
+  for (const [k, v] of Object.entries(parsed)) {
+    if (typeof v === 'string' && v.length > bestLen) { best = k; bestLen = v.length; }
+  }
+  if (best) return { key: best, value: parsed[best] };
+  return null;
+}
+
+function _renderOutputValue(value: unknown): React.ReactNode {
+  if (typeof value === 'string') {
+    const lines = value.split('\n').length;
+    const body = <pre className="tool-result-pre">{value}</pre>;
+    if (lines <= 30) return <div className="tool-output-block">{body}</div>;
+    return (
+      <div className="tool-output-block">
+        <details className="tool-output-details" open>
+          <summary className="tool-output-summary">{lines} lines</summary>
+          {body}
+        </details>
+      </div>
+    );
+  }
+  // Array of strings → list
+  if (Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === 'string')) {
+    return (
+      <div className="tool-output-block">
+        <ul className="tool-output-list">
+          {(value as string[]).map((item, i) => (
+            <li key={i} className="tool-output-list-item">{item}</li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
+  // Empty array / empty object
+  if ((Array.isArray(value) && value.length === 0) ||
+      (typeof value === 'object' && !Array.isArray(value) && Object.keys(value as object).length === 0)) {
+    return <div className="tool-output-block"><span className="tool-output-waiting">(empty)</span></div>;
+  }
+  // Scalar 0 / false
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return <div className="tool-output-block"><span className="tool-output-scalar">{String(value)}</span></div>;
+  }
+  // Small scalar-only object → inline KV
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.every(([, v]) => typeof v !== 'object' || v === null) && entries.length <= 5) {
+      return (
+        <div className="tool-output-block">
+          <div className="tool-output-kv">
+            {entries.map(([k, v]) => (
+              <span key={k} className="tool-output-kv-item">
+                <em>{k}</em> {String(v ?? '—')}
+              </span>
+            ))}
+          </div>
+        </div>
+      );
+    }
+  }
+  // Other → compact JSON tree
+  const jsonText = JSON.stringify(value, null, 2);
+  const lines = jsonText.split('\n').length;
+  return (
+    <div className="tool-output-block">
+      {lines > 15 ? (
+        <details className="tool-output-details">
+          <summary className="tool-output-summary">JSON · {lines} lines</summary>
+          <div className="json-tree">{formatJsonValue(value)}</div>
+        </details>
+      ) : (
+        <div className="json-tree">{formatJsonValue(value)}</div>
+      )}
+    </div>
+  );
+}
+
+// ── Tool Output Block ───────────────────────────────────────────────────────────
+
+function ToolOutputBlock({ toolName, content }: { toolName: string; content: string }) {
+  if (!content) {
+    return <div className="tool-output-block"><span className="tool-output-waiting">Waiting for update...</span></div>;
+  }
+
+  // Step 1: strip XML wrapper
+  const cleaned = _stripXmlWrapper(content);
+
+  // Bash tools: raw output directly
+  if (toolName in TOOL_CODE_ARG) {
+    return _renderOutputValue(cleaned || content);
+  }
+
+  if (!cleaned) {
+    return <div className="tool-output-block"><span className="tool-output-waiting">(empty)</span></div>;
+  }
+
+  // Step 2: try JSON → pick best field
+  try {
+    const parsed = JSON.parse(cleaned);
+    const unwrapped = _unwrapJsonWrapper(parsed);
+
+    if (typeof unwrapped === 'string') return _renderOutputValue(unwrapped);
+    if (unwrapped == null || (typeof unwrapped === 'object' && Object.keys(unwrapped as object).length === 0)) {
+      return <div className="tool-output-block"><span className="tool-output-waiting">(empty)</span></div>;
+    }
+
+    if (typeof unwrapped === 'object' && !Array.isArray(unwrapped)) {
+      const picked = _pickOutputField(unwrapped as Record<string, unknown>);
+      if (picked) {
+        return _renderOutputValue(picked.value);
+      }
+    }
+
+    return _renderOutputValue(unwrapped);
+  } catch {
+    return _renderOutputValue(cleaned);
+  }
+}
+
+// ── Tool Command Block ──────────────────────────────────────────────────────────
+// Same philosophy as output: show the meaningful value, not raw JSON.
+//   Shell tools → $ command_string
+//   Other tools → primary_arg_name: value
+//   Full args JSON folded behind "All args" toggle.
+
+function _renderArgValue(key: string, value: unknown): React.ReactNode {
+  const s = typeof value === 'string' ? value : JSON.stringify(value);
+  // Short value → inline
+  if (s.length <= 120 && !s.includes('\n')) {
+    return <span className="tool-cmd-arg-inline"><em>{key}</em>: {s}</span>;
+  }
+  // Long / multi-line → pre block
+  return (
+    <div className="tool-cmd-arg-block">
+      <span className="tool-cmd-arg-key">{key}:</span>
+      <pre className="tool-cmd-code">{s}</pre>
+    </div>
+  );
+}
+
+function ToolCommandBlock({ toolName, args }: { toolName: string; args?: Record<string, unknown> | null }) {
+  const isShell = toolName in TOOL_CODE_ARG;
+  const primaryKey = TOOL_PRIMARY_ARG[toolName];
+  const primaryVal = primaryKey && args?.[primaryKey] != null ? args[primaryKey] : null;
+
+  // Shell tools: show $ prompt + code block
+  if (isShell && primaryVal) {
+    return (
+      <div className="tool-cmd-block">
+        <div className="tool-cmd-prompt">$</div>
+        <pre className="tool-cmd-code">{String(primaryVal)}</pre>
+      </div>
+    );
+  }
+
+  if (!args || Object.keys(args).length === 0) {
+    return (
+      <div className="tool-cmd-block">
+        <pre className="tool-cmd-code">(no arguments)</pre>
+      </div>
+    );
+  }
+
+  // Pick primary arg, fallback to first entry
+  const entries = Object.entries(args);
+  const [showKey, showVal] = primaryVal != null
+    ? [primaryKey!, primaryVal]
+    : [entries[0][0], entries[0][1]];
+
+  return (
+    <div className="tool-cmd-block">
+      {_renderArgValue(showKey, showVal)}
+    </div>
+  );
+}
+
+// ── Tool Message Row ────────────────────────────────────────────────────────────
+
 function ToolMessageRow({ message, messages, toolCallMap }: { message: Message; messages: Message[]; toolCallMap: Map<string, ToolCall> }) {
   const [expanded, setExpanded] = useState(false);
-  
-  const content = typeof message.content === 'string' 
-    ? message.content 
+
+  const content = typeof message.content === 'string'
+    ? message.content
     : '';
-  
+
   // Find the corresponding tool_use block from assistant messages
   const toolCallId = message.tool_call_id || '';
   const toolCall = toolCallMap.get(toolCallId);
-  
+
   // Try to get tool name from multiple sources
   let toolName = toolCall?.name || message.tool_name || '';
-  
+
   // If no name yet, try to find from assistant message's tool_use blocks
   if (!toolName) {
     for (const msg of messages) {
       if (msg.role !== 'assistant') continue;
       const blocks = msg.content;
       if (!Array.isArray(blocks)) continue;
-      
+
       for (const block of blocks) {
         if (block.type === 'tool_use' && block.id === toolCallId) {
           toolName = block.name || '';
@@ -317,14 +552,14 @@ function ToolMessageRow({ message, messages, toolCallMap }: { message: Message; 
       if (toolName) break;
     }
   }
-  
+
   // Also try OpenAI format assistant messages
   if (!toolName) {
     for (const msg of messages) {
       if (msg.role !== 'assistant') continue;
       const toolCalls = (msg as Message).tool_calls;
       if (!toolCalls) continue;
-      
+
       for (const tc of toolCalls) {
         if (tc.id === toolCallId || tc.call_id === toolCallId) {
           toolName = tc.function?.name || '';
@@ -334,29 +569,25 @@ function ToolMessageRow({ message, messages, toolCallMap }: { message: Message; 
       if (toolName) break;
     }
   }
-  
+
   // Fallback to Unknown
   if (!toolName) {
     toolName = 'Unknown';
   }
-  
-  const icon = getToolIcon(toolName);
-  
+
   // Get command/arguments from multiple sources
   let commandArgs: Record<string, unknown> | null = null;
-  
-  // 1. Try from toolCall.args first (most reliable)
+
   if (toolCall?.args && Object.keys(toolCall.args).length > 0) {
     commandArgs = toolCall.args;
   }
-  
-  // 2. Try from assistant message's tool_use block
+
   if (!commandArgs) {
     for (const msg of messages) {
       if (msg.role !== 'assistant') continue;
       const blocks = msg.content;
       if (!Array.isArray(blocks)) continue;
-      
+
       for (const block of blocks) {
         if (block.type === 'tool_use' && block.id === toolCallId) {
           if (block.input && Object.keys(block.input).length > 0) {
@@ -368,8 +599,7 @@ function ToolMessageRow({ message, messages, toolCallMap }: { message: Message; 
       if (commandArgs) break;
     }
   }
-  
-  // 3. Try from message's own tool_calls (OpenAI format)
+
   if (!commandArgs && message.tool_calls) {
     for (const tc of message.tool_calls) {
       if (tc.id === toolCallId || tc.call_id === toolCallId) {
@@ -388,41 +618,72 @@ function ToolMessageRow({ message, messages, toolCallMap }: { message: Message; 
       }
     }
   }
-  
+
   // Detect out-of-band user messages (steer) embedded in tool output
   const hasOOB = typeof content === 'string' && content.includes('OUT-OF-BAND USER MESSAGE');
 
+  // Determine state
+  const isRunning = message._live === true;
+  const isError = toolCall?.is_error === true;
+  const duration = toolCall?.duration;
+  const cmdSnippet = getCmdSnippet(toolName, commandArgs);
+
+  // Build class list
+  const classes = [
+    'msg-row',
+    'tool-message',
+    hasOOB ? 'tool-message--steered' : '',
+    isRunning ? 'tool-message--running' : '',
+    isError ? 'tool-message--error' : '',
+  ].filter(Boolean).join(' ');
+
   return (
-    <div className={`msg-row tool-message${hasOOB ? ' tool-message--steered' : ''}`}>
+    <div className={classes}>
       <div
         className="tool-message-header"
         onClick={() => setExpanded(!expanded)}
       >
-        <div className="msg-role tool">
-          <div className="role-icon tool">{icon}</div>
-          <span>{toolName}</span>
-        </div>
+        {/* Status indicator: ◉ pulsing (running), ✓ complete, ✗ error */}
+        <span className={`tool-status ${isRunning ? 'running' : isError ? 'error' : 'done'}`}>
+          {isRunning ? '◉' : isError ? '✗' : '✓'}
+        </span>
+
+        {/* Tool name */}
+        <span className="tool-name">{toolName}</span>
+
+        {/* Duration */}
+        {!isRunning && duration != null && duration > 0 && (
+          <span className="tool-duration">· {formatDuration(duration * 1000)}</span>
+        )}
+
+        {/* Command snippet */}
+        {cmdSnippet && (
+          <span className="tool-snippet">{truncate(cmdSnippet, 60)}</span>
+        )}
+
+        {/* Running label */}
+        {isRunning && (
+          <span className="tool-running-label">Running…</span>
+        )}
+
         {hasOOB && (
           <span className="tool-steer-badge" title="This tool output contains a steered user message">↪ Steer</span>
         )}
+
+        {/* Flex spacer */}
+        <span style={{ flex: 1 }} />
+
+        {/* Toggle */}
         <span className="tool-card-toggle">{expanded ? '▼' : '▶'}</span>
       </div>
+
       {expanded && (
-        <div className="msg-body">
-          <div className="tool-card-section">
-            <div className="tool-card-section-title">Param</div>
-            {commandArgs ? (
-              <div className="json-tree command-args">{formatJsonValue(commandArgs)}</div>
-            ) : (
-              <pre className="tool-card-command">(no command info)</pre>
-            )}
-          </div>
-          <div className="tool-card-section">
-            <div className="tool-card-section-title">Output</div>
-            <JsonOutputDisplay content={content} />
-          </div>
+        <div className="tool-message-body">
+          <ToolCommandBlock toolName={toolName} args={commandArgs} />
+          <ToolOutputBlock toolName={toolName} content={content} />
         </div>
       )}
+
       {(() => {
         const ts = message._ts ?? message.timestamp;
         if (!ts) return null;
@@ -450,18 +711,6 @@ function fallbackCopy(text: string) {
 }
 
 function MessageRowComponent({ message, messages = [], toolCalls = [], isStreaming, streaming, thinkingText }: MessageRowProps) {
-  const roleClass = message.role === 'user' 
-    ? 'msg-role user' 
-    : message.role === 'tool'
-    ? 'msg-role tool'
-    : 'msg-role assistant';
-    
-  const roleText = message.role === 'user' 
-    ? 'You' 
-    : message.role === 'tool'
-    ? 'Tool'
-    : 'Hermes';
-
   // Build tool_call_id -> ToolCall mapping from session tool_calls
   const toolCallMap = useMemo(() => {
     const map = new Map<string, ToolCall>();
@@ -680,65 +929,67 @@ function MessageRowComponent({ message, messages = [], toolCalls = [], isStreami
   // Steer→queue fallback: message has both flags
   const isSteerFallback = isQueued && isSteered;
 
+  const isUser = message.role === 'user';
+
+  const timestampNode = (() => {
+    const ts = message._ts ?? message.timestamp;
+    if (!ts) return null;
+    const d = new Date(ts * 1000);
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    const ss = String(d.getSeconds()).padStart(2, '0');
+    return <div className={`msg-timestamp${isUser ? ' msg-timestamp--user' : ''}`}>{hh}:{mm}:{ss}</div>;
+  })();
+
   return (
-    <div
-      className={`msg-row${message.role === 'user' ? ' user-message' : ''}${isQueued ? ' msg-row--queued' : ''}`}
-      data-raw-text={typeof message.content === 'string' ? message.content : ''}
-    >
-      <div className={roleClass}>
-        <div className={`role-icon ${message.role}`}>
-          {message.role === 'user' ? 'Y' : 'H'}
+    <>
+      <div
+        className={`msg-row${isUser ? ' user-message' : ''}${isQueued ? ' msg-row--queued' : ''}`}
+        data-raw-text={typeof message.content === 'string' ? message.content : ''}
+      >
+        <div className="msg-body" ref={msgBodyRef}>
+          {thinkingText && (
+            <ReasoningBlock thinkingText={thinkingText} />
+          )}
+          {content}
+
+          {isQueued && (
+            <div className="msg-queued-indicator">
+              <span className="msg-queued-icon">⏳</span>
+              <span className="msg-queued-text">
+                {isSteerFallback ? '排队中（注入失败）' : '排队中'}
+              </span>
+              {queuePos != null && (
+                <span className="msg-queued-position">#{queuePos}</span>
+              )}
+            </div>
+          )}
+
+          {isSteered && !isQueued && streaming && (
+            <div className="msg-steered-indicator">
+              <span className="msg-steered-icon">↪</span>
+              <span className="msg-steered-text">Steered（已注入到当前对话）</span>
+            </div>
+          )}
+
+          {message.attachments && message.attachments.length > 0 && (
+            <div className="msg-files">
+              {message.attachments.map((file, idx) => (
+                <div key={idx} className="msg-file-badge">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                  </svg>
+                  <span>{file}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
-        <span>{roleText}</span>
+        {/* Assistant timestamp stays inside the row */}
+        {!isUser && timestampNode}
       </div>
-
-      <div className="msg-body" ref={msgBodyRef}>
-        {thinkingText && (
-          <ReasoningBlock thinkingText={thinkingText} />
-        )}
-        {content}
-
-        {isQueued && (
-          <div className="msg-queued-indicator">
-            <span className="msg-queued-icon">⏳</span>
-            <span className="msg-queued-text">
-              {isSteerFallback ? '排队中（注入失败）' : '排队中'}
-            </span>
-            {queuePos != null && (
-              <span className="msg-queued-position">#{queuePos}</span>
-            )}
-          </div>
-        )}
-
-        {isSteered && !isQueued && streaming && (
-          <div className="msg-steered-indicator">
-            <span className="msg-steered-icon">↪</span>
-            <span className="msg-steered-text">Steered（已注入到当前对话）</span>
-          </div>
-        )}
-
-        {message.attachments && message.attachments.length > 0 && (
-          <div className="msg-files">
-            {message.attachments.map((file, idx) => (
-              <div key={idx} className="msg-file-badge">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-                </svg>
-                <span>{file}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-      {(() => {
-        const ts = message._ts ?? message.timestamp;
-        if (!ts) return null;
-        const d = new Date(ts * 1000);
-        const hh = String(d.getHours()).padStart(2, '0');
-        const mm = String(d.getMinutes()).padStart(2, '0');
-        const ss = String(d.getSeconds()).padStart(2, '0');
-        return <div className="msg-timestamp">{hh}:{mm}:{ss}</div>;
-      })()}
-    </div>
+      {/* User timestamp sits outside the card */}
+      {isUser && timestampNode}
+    </>
   );
 }
