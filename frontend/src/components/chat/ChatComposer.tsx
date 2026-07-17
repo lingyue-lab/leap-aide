@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useChatStore } from '@/stores/useChatStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 import { useSessionStore } from '@/stores/useSessionStore';
+import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 import { modelsService, personalityService } from '@/services/api';
 import ModeSelector from '@/components/common/ModeSelector';
 import ApprovalIndicator from '@/components/common/ApprovalIndicator';
@@ -95,6 +96,43 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
   const [personalities, setPersonalities] = useState<Personality[]>([]);
 
   const effectivePersonality = currentSession?.personality || null;
+
+  // Workspace chip state
+  const [workspacePickerOpen, setWorkspacePickerOpen] = useState(false);
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const assignWorkspace = useSessionStore((s) => s.assignWorkspace);
+  const currentWorkspacePath: string | undefined = (currentSession as any)?.workspace;
+  const effectiveWorkspace = workspaces.find((w: any) => w.path === currentWorkspacePath) ?? null;
+  const effectiveWorkspaceName: string | null = effectiveWorkspace?.name ?? null;
+
+  // Close workspace popover on outside click
+  useEffect(() => {
+    if (!workspacePickerOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      const popoverEl = document.querySelector('.workspace-popover');
+      const chipEl = document.querySelector('.icon-btn.workspace');
+      if (
+        popoverEl && !popoverEl.contains(e.target as Node) &&
+        chipEl && !chipEl.contains(e.target as Node)
+      ) {
+        setWorkspacePickerOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [workspacePickerOpen]);
+
+  const handleSelectWorkspace = useCallback(async (workspacePath: string | null) => {
+    if (!currentSession) return;
+    try {
+      await assignWorkspace(currentSession.session_id, workspacePath || '');
+    } catch (err) {
+      console.error('Failed to assign workspace:', err);
+    }
+    setWorkspacePickerOpen(false);
+  }, [currentSession, assignWorkspace]);
+
+  const workspaceDisabled = !currentSession || (currentSession as any)?._readonly || compressing || (currentSession as any)?.is_cli_session;
 
   // Fetch available personalities on mount
   useEffect(() => {
@@ -739,6 +777,54 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
         </div>
       )}
 
+      {/* Workspace popover */}
+      {workspacePickerOpen && (
+        <div className="workspace-popover">
+          <div className="workspace-popover-header">Workspace</div>
+          <div className="workspace-popover-list">
+            {/* None option */}
+            <button
+              className={`workspace-popover-item${!currentWorkspacePath ? ' selected' : ''}`}
+              onClick={() => handleSelectWorkspace(null)}
+            >
+              <span className="ws-name">None</span>
+              {!currentWorkspacePath && (
+                <svg className="ws-check" width="14" height="14" viewBox="0 0 24 24"
+                     fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+              )}
+            </button>
+            {workspaces.length === 0 ? (
+              <div className="workspace-popover-empty">No workspaces added</div>
+            ) : (
+              workspaces.map((ws: any) => (
+                <button
+                  key={ws.path}
+                  className={`workspace-popover-item${currentWorkspacePath === ws.path ? ' selected' : ''}`}
+                  onClick={() => handleSelectWorkspace(ws.path)}
+                >
+                  <svg className="ws-icon" width="14" height="14" viewBox="0 0 24 24"
+                       fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                  </svg>
+                  <span className="ws-name">{ws.name}</span>
+                  {ws.readonly && (
+                    <span style={{fontSize: 10, opacity: 0.5, flexShrink: 0}}>RO</span>
+                  )}
+                  {currentWorkspacePath === ws.path && (
+                    <svg className="ws-check" width="14" height="14" viewBox="0 0 24 24"
+                         fill="none" stroke="currentColor" strokeWidth="2.5">
+                      <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                  )}
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Slash command autocomplete dropdown */}
       {slashOpen && (
         <div style={{ position: 'relative' }}>
@@ -891,28 +977,25 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
               </svg>
             </button>
             
-            <div className="composer-divider" />
-            
-            {/* Model chip */}
+            {/* Model — icon button (was chip) */}
             <button
               ref={modelChipRef}
-              className="chip model"
+              className="icon-btn model"
               onClick={() => setModelPickerOpen((v) => !v)}
-              title="Switch model"
+              title={`Model: ${displayModel}`}
               disabled={compressing}
               style={{ cursor: compressing ? 'not-allowed' : 'pointer' }}
             >
-              {displayModel}
-              <svg width="8" height="5" viewBox="0 0 8 5" fill="none" style={{ marginLeft: 4, opacity: 0.6 }}>
-                <path d="M1 4L4 1L7 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="2" y="3" width="20" height="14" rx="2"/>
+                <path d="M8 21h8M12 17v4"/>
               </svg>
             </button>
 
-            {/* Reasoning effort chip — after model chip */}
-            <div className="composer-divider" />
+            {/* Reasoning effort — icon button */}
             <button
               ref={reasoningChipRef}
-              className={`chip reasoning ${!currentModelSupportsThinking ? 'inactive' : ''}`}
+              className={`icon-btn reasoning${!currentModelSupportsThinking ? ' inactive' : ''}`}
               onClick={() => currentModelSupportsThinking && setReasoningPickerOpen((v) => !v)}
               title={
                 !currentModelSupportsThinking
@@ -922,25 +1005,56 @@ export default function ChatComposer({ onSend, onCancel, busy, streaming }: Chat
               disabled={compressing || !currentModelSupportsThinking}
               style={{ cursor: compressing || !currentModelSupportsThinking ? 'not-allowed' : 'pointer' }}
             >
-              {t(`reasoning.${effectiveReasoningEffort}`)}
-              <svg width="8" height="5" viewBox="0 0 8 5" fill="none" style={{ marginLeft: 4, opacity: 0.6 }}>
-                <path d="M1 4L4 1L7 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M12 1v4M12 19v4M4.2 4.2l2.8 2.8M17 17l2.8 2.8M1 12h4M19 12h4M4.2 19.8l2.8-2.8M17 7l2.8-2.8"/>
               </svg>
             </button>
 
-            {/* Personality chip — after reasoning effort chip */}
-            <div className="composer-divider" />
+            {/* Personality — icon button */}
             <button
               ref={personalityChipRef}
-              className="chip personality"
+              className="icon-btn personality"
               onClick={() => setPersonalityPickerOpen((v) => !v)}
               title={effectivePersonality ? `Personality: ${effectivePersonality}` : 'Personality (none)'}
               disabled={compressing}
               style={{ cursor: compressing ? 'not-allowed' : 'pointer' }}
             >
-              {effectivePersonality || 'None'}
-              <svg width="8" height="5" viewBox="0 0 8 5" fill="none" style={{ marginLeft: 4, opacity: 0.6 }}>
-                <path d="M1 4L4 1L7 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="8" r="4"/>
+                <path d="M6 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/>
+              </svg>
+            </button>
+
+            {/* Workspace — icon button */}
+            {!(currentSession as any)?.is_cli_session && (
+              <button
+                className={`icon-btn workspace${workspaceDisabled ? ' inactive' : ''}`}
+                onClick={() => !workspaceDisabled && setWorkspacePickerOpen(!workspacePickerOpen)}
+                title={effectiveWorkspaceName || 'Workspace'}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                </svg>
+              </button>
+            )}
+
+            {/* Skills — icon button, opens skills drawer */}
+            <button
+              className="icon-btn skills"
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent('hermes:toggle-skills-panel'));
+              }}
+              title={(() => {
+                const skills = (currentSession as any)?.skills;
+                if (!skills || skills.length === 0) return t('session_skills.none', { ns: 'common' });
+                return t('session_skills.count', { ns: 'common', count: skills.length });
+              })()}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/>
+                <line x1="16" y1="8" x2="2" y2="22"/>
+                <line x1="17.5" y1="15" x2="9" y2="15"/>
               </svg>
             </button>
           </div>

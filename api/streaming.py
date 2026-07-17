@@ -920,6 +920,9 @@ def _sanitize_messages_for_api(messages):
                 # Orphaned tool result — skip to avoid 400 from strict providers.
                 continue
         sanitized = {k: v for k, v in msg.items() if k in _API_SAFE_MSG_KEYS}
+        # Strip empty tool_calls — some providers (DeepSeek) reject []
+        if isinstance(sanitized.get('tool_calls'), list) and not sanitized['tool_calls']:
+            del sanitized['tool_calls']
         if sanitized.get('role'):
             clean.append(sanitized)
 
@@ -974,6 +977,9 @@ def _api_safe_message_positions(messages):
             if not tid or tid not in valid_tool_call_ids:
                 continue
         sanitized = {k: v for k, v in msg.items() if k in _API_SAFE_MSG_KEYS}
+        # Strip empty tool_calls — some providers (DeepSeek) reject []
+        if isinstance(sanitized.get('tool_calls'), list) and not sanitized['tool_calls']:
+            del sanitized['tool_calls']
         if sanitized.get('role'):
             out.append((idx, sanitized))
     return out
@@ -1040,7 +1046,10 @@ def _restore_reasoning_metadata(previous_messages, updated_messages):
     def _safe_projection(msg):
         if not isinstance(msg, dict):
             return None
-        return {k: v for k, v in msg.items() if k in _API_SAFE_MSG_KEYS and msg.get('role')}
+        proj = {k: v for k, v in msg.items() if k in _API_SAFE_MSG_KEYS and msg.get('role')}
+        if isinstance(proj.get('tool_calls'), list) and not proj['tool_calls']:
+            del proj['tool_calls']
+        return proj
 
     def _reasoning_only_assistant(msg):
         if not isinstance(msg, dict) or msg.get('role') != 'assistant' or not msg.get('reasoning'):
@@ -1131,7 +1140,7 @@ def _extract_tool_calls_from_messages(messages, live_tool_calls=None):
                             pending_names[tid] = part.get('name', '')
                             pending_args[tid] = part.get('input', {})
                             pending_asst_idx[tid] = msg_idx
-            for tc in m.get('tool_calls', []):
+            for tc in (m.get('tool_calls') or []):
                 if not isinstance(tc, dict):
                     continue
                 tid = tc.get('id', '') or tc.get('call_id', '')

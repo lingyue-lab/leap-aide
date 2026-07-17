@@ -66,31 +66,111 @@ if _MISSING_BINARIES:
 
 
 def purge_orphaned_configs() -> int:
-    """Delete SessionDisplay configs for sessions that no longer exist.
+    """Delete SessionDisplay configs for sessions that no longer exist
+    or are no longer pinned.
 
-    Called on server startup. Unlike the old purge_stale_configs()
-    which deleted everything, this only removes configs where the
-    corresponding session JSON file is gone (deleted while server
-    was down). Configs for pinned sessions that still exist are kept
-    so ensure_pinned_displays() can restart them.
+    Called on server startup.  Checks both state.db and JSON files for
+    session existence, and removes display configs for:
+      - Sessions that no longer exist in either store
+      - Sessions that exist but are NOT pinned (stale after crash/unpin race)
     """
     from api.config import SESSION_DIR
 
+    # ── Collect existing session IDs from both stores ──────────────────
+    existing_ids: set[str] = set()
+    pinned_ids: set[str] = set()
+
+    # 1. Check state.db (primary store)
+    try:
+        from api.models import _get_session_db
+        db = _get_session_db()
+        if db is not None:
+            import sqlite3
+            cur = db._conn.execute(
+                "SELECT id, pinned FROM sessions WHERE source='webui'"
+            )
+            for row in cur.fetchall():
+                sid = row[0] if isinstance(row, tuple) else row['id']
+                pinned = row[1] if isinstance(row, tuple) else row['pinned']
+                existing_ids.add(sid)
+                if pinned:
+                    pinned_ids.add(sid)
+    except Exception:
+        pass
+
+    # 2. Fallback: check JSON files (backward compat)
+    for f in SESSION_DIR.glob("*.json"):
+        sid = f.stem
+        if not sid.startswith('_'):
+            existing_ids.add(sid)
+
+    # ── Clean up ──────────────────────────────────────────────────────
     removed = 0
     if not SESSIONS_DISPLAY_DIR.exists():
         return removed
     for f in SESSIONS_DISPLAY_DIR.glob("*.json"):
         sid = f.stem
-        session_file = SESSION_DIR / f"{sid}.json"
-        if not session_file.exists():
+        if sid not in existing_ids:
+            # Session no longer exists at all
             try:
                 f.unlink()
                 removed += 1
+                logger.info("purge_orphaned: removed config for deleted session %s", sid)
+            except OSError:
+                pass
+        elif pinned_ids and sid not in pinned_ids:
+            # Session exists but is not pinned — stale display config
+            try:
+                f.unlink()
+                removed += 1
+                logger.info("purge_orphaned: removed config for unpinned session %s", sid)
             except OSError:
                 pass
     if removed:
         logger.info("Purged %d orphaned session display config(s)", removed)
     return removed
+
+
+def sync_gateway_session_cwd() -> int:
+    """Sync the cwd of gateway/CLI sessions to match current terminal.cwd.
+
+    Gateway sessions stored in state.db may have a stale ``cwd`` if the
+    terminal working directory was changed in config.yaml after the
+    session was created.  This runs once at startup to bring them in line.
+    """
+    try:
+        from api.models import _resolve_gateway_workspace, _get_session_db
+        current_cwd = _resolve_gateway_workspace()
+        db = _get_session_db()
+        if db is None:
+            return 0
+        updated = 0
+        # Only sync messaging platform sessions (weixin, telegram, etc.)
+        # where cwd is always controlled by the gateway config.
+        # CLI sessions can have arbitrary cwd — don't touch them.
+        cur = db._conn.execute(
+            "SELECT id, cwd FROM sessions "
+            "WHERE source IN ('weixin', 'telegram', 'whatsapp', 'signal', 'line', 'discord', 'slack')"
+        )
+        for row in cur.fetchall():
+            sid = row[0] if isinstance(row, tuple) else row['id']
+            old_cwd = row[1] if isinstance(row, tuple) else row['cwd']
+            if old_cwd and old_cwd != current_cwd:
+                db._conn.execute(
+                    "UPDATE sessions SET cwd = ? WHERE id = ?",
+                    (current_cwd, sid),
+                )
+                updated += 1
+                logger.info(
+                    "sync_gateway_cwd: %s cwd %s → %s", sid, old_cwd, current_cwd,
+                )
+        if updated:
+            db._conn.commit()
+            logger.info("Synced cwd for %d gateway session(s)", updated)
+        return updated
+    except Exception:
+        logger.debug("sync_gateway_session_cwd failed", exc_info=True)
+        return 0
 
 
 def ensure_pinned_displays() -> int:
@@ -515,8 +595,12 @@ class SessionDisplay:
         except OSError:
             pass
 
-# ── Module init: cleanup orphaned configs ──────────────────────────────────────
+# ── Module init: cleanup orphaned configs + sync gateway cwd ────────────────────
 
 _purge_count = purge_orphaned_configs()
 if _purge_count:
     logger.info("Cleaned up %d orphaned session display config(s) on startup", _purge_count)
+
+_sync_count = sync_gateway_session_cwd()
+if _sync_count:
+    logger.info("Synced cwd for %d gateway session(s) on startup", _sync_count)

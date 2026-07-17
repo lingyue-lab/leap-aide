@@ -206,7 +206,8 @@ def main() -> None:
 
     # Start SessionDisplay for all pinned sessions on server restart
     try:
-        from api.session_display import ensure_pinned_displays
+        from api.session_display import ensure_pinned_displays, sync_gateway_session_cwd
+        sync_gateway_session_cwd()
         ensure_pinned_displays()
     except Exception:
         logger.warning("Failed to start pinned session displays", exc_info=True)

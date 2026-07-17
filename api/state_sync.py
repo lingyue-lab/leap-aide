@@ -116,3 +116,27 @@ def sync_session_usage(session_id: str, input_tokens: int=0, output_tokens: int=
             db.close()
         except Exception:
             logger.debug("Failed to close state.db")
+
+
+def sync_session_save(session) -> None:
+    """Full session save → DB sync (delegates to Session._save_to_db).
+
+    State.db is now the primary store; this function delegates to the
+    Session's own DB write method.  Kept as a thin wrapper for backward
+    compatibility with existing callers.
+    """
+    db = _get_state_db()
+    if not db:
+        return
+    try:
+        session._save_to_db(db)
+    except Exception:
+        logger.debug("Failed to sync session %s to state.db", getattr(session, 'session_id', '?'))
+
+    except Exception:
+        logger.debug("Failed to sync session save to state.db")
+    finally:
+        try:
+            db.close()
+        except Exception:
+            logger.debug("Failed to close state.db")

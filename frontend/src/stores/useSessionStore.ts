@@ -8,11 +8,13 @@ interface SessionState {
   loading: boolean;
   error: string | null;
   gatewayOnline: boolean;
+  /** DB rowid of the search-hit message to scroll to after session loads */
+  matchMessageId: number | null;
 
   // Actions
   loadSessions: () => Promise<void>;
   createSession: (workspace?: string) => Promise<Session>;
-  selectSession: (id: string | null) => void;
+  selectSession: (id: string | null, matchMessageId?: number | null) => void;
   loadSession: (id: string) => Promise<void>;
   renameSession: (id: string, title: string) => Promise<void>;
   deleteSession: (id: string) => Promise<void>;
@@ -44,6 +46,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   loading: false,
   error: null,
   gatewayOnline: false,
+  matchMessageId: null,
 
   loadSessions: async () => {
     set({ loading: true, error: null });
@@ -88,8 +91,8 @@ export const useSessionStore = create<SessionState>((set) => ({
     }
   },
 
-  selectSession: (id) => {
-    set({ currentSessionId: id });
+  selectSession: (id, matchMessageId = null) => {
+    set({ currentSessionId: id, matchMessageId });
   },
 
   loadSession: async (id) => {

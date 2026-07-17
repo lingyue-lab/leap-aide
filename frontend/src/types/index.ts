@@ -40,6 +40,7 @@ export interface Session {
   last_prompt_tokens?: number;
   threshold_tokens?: number;
   last_compression_time?: number;  // epoch seconds — set by backend on compression
+  auto_compress_disabled?: boolean;  // set when auto-compress is ineffective
 }
 
 export interface SessionListItem {
@@ -66,11 +67,16 @@ export interface SessionListItem {
   _parent_session_id?: string | null;
   _readonly?: boolean;
   _compaction_n?: number;
+  // Search result fields
+  match_type?: 'title' | 'content';
+  match_message_id?: number;
+  match_snippet?: string;
 }
 
 // types/message.ts - 消息相关类型定义
 
 export interface Message {
+  id?: number;  // state.db rowid
   role: 'user' | 'assistant' | 'tool';
   content: string | ContentBlock[];
   timestamp?: number;

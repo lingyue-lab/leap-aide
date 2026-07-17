@@ -80,110 +80,7 @@ def _index_entry_exists(session_id: str, in_memory_ids=None) -> bool:
 
 
 def _write_session_index(updates=None):
-    """Update the session index file.
-
-    When *updates* is provided (a list of Session objects whose compact
-    entries should be refreshed), this does a targeted in-place update of
-    the existing index — O(1) for single-session changes.  When *updates*
-    is None, a full rebuild is performed (used on startup / first call).
-
-    LOCK protects in-memory state snapshots and payload construction only;
-    disk I/O (write/flush/fsync/replace) always runs outside LOCK.
-    """
-    _tmp = SESSION_INDEX_FILE.with_suffix(f'.tmp.{os.getpid()}.{threading.current_thread().ident}')
-
-    with _INDEX_WRITE_LOCK:
-        # Lazy full-rebuild path — used when index doesn't exist yet.
-        if updates is None or not SESSION_INDEX_FILE.exists():
-            _cleanup_stale_tmp_files()  # best-effort sweep on startup / first call
-            entries = []
-            for p in SESSION_DIR.glob('*.json'):
-                if p.name.startswith('_'):
-                    continue
-                try:
-                    s = Session.load(p.stem)
-                    if s:
-                        entries.append(s.compact())
-                except Exception:
-                    logger.debug("Failed to load session from %s", p)
-
-            with LOCK:
-                existing_ids = {e.get('session_id') for e in entries}
-                for s in SESSIONS.values():
-                    if s.session_id not in existing_ids:
-                        entries.append(s.compact())
-                entries.sort(key=lambda s: s.get('updated_at', 0), reverse=True)
-                _payload = json.dumps(entries, ensure_ascii=False, indent=2)
-
-            try:
-                with open(_tmp, 'w', encoding='utf-8') as f:
-                    f.write(_payload)
-                    f.flush()
-                    os.fsync(f.fileno())
-                os.replace(_tmp, SESSION_INDEX_FILE)
-            except Exception:
-                # Best-effort cleanup of stale tmp on failure
-                try:
-                    _tmp.unlink(missing_ok=True)
-                except Exception:
-                    pass
-                raise
-            return
-
-        # Fast path: patch existing index with updated sessions.
-        # This avoids loading every session file on every single save().
-        _fallback = False
-        try:
-            with LOCK:
-                existing = json.loads(SESSION_INDEX_FILE.read_text(encoding='utf-8'))
-                in_memory_ids = set(SESSIONS.keys())
-
-                # Avoid N filesystem exists() checks under LOCK by collecting
-                # on-disk IDs once.
-                on_disk_ids = {
-                    p.stem
-                    for p in SESSION_DIR.glob('*.json')
-                    if not p.name.startswith('_')
-                }
-
-                existing = [
-                    e for e in existing
-                    if (e.get('session_id') in in_memory_ids or e.get('session_id') in on_disk_ids)
-                ]
-
-                # Build lookup of updated entries
-                updated_map = {s.session_id: s.compact() for s in updates}
-                existing_ids = {e.get('session_id') for e in existing}
-                # Add any updated entries not yet in the index
-                for sid, entry in updated_map.items():
-                    if sid not in existing_ids:
-                        existing.append(entry)
-                # Replace matching entries in-place
-                for i, e in enumerate(existing):
-                    sid = e.get('session_id')
-                    if sid in updated_map:
-                        existing[i] = updated_map[sid]
-                existing.sort(key=lambda s: s.get('updated_at', 0), reverse=True)
-                _payload = json.dumps(existing, ensure_ascii=False, indent=2)
-
-            try:
-                with open(_tmp, 'w', encoding='utf-8') as f:
-                    f.write(_payload)
-                    f.flush()
-                    os.fsync(f.fileno())
-                os.replace(_tmp, SESSION_INDEX_FILE)
-            except Exception:
-                try:
-                    _tmp.unlink(missing_ok=True)
-                except Exception:
-                    pass
-                raise
-        except Exception:
-            _fallback = True
-
-    if _fallback:
-        # Corrupt or missing index — fall back to full rebuild (called outside LOCK to avoid deadlock)
-        _write_session_index(updates=None)
+    """No-op: state.db is the single source of truth for session listings."""
 
 
 def _active_stream_ids():
@@ -303,6 +200,125 @@ def _lookup_index_message_count(session_id):
     return None
 
 
+# ---------------------------------------------------------------------------
+# SessionDB singleton — long-lived read-write connection to state.db
+# ---------------------------------------------------------------------------
+
+_session_db = None
+_session_db_lock = threading.Lock()
+
+def _resolve_state_db_path() -> Path:
+    """Resolve the state.db path for the active profile."""
+    try:
+        from api.profiles import get_active_hermes_home
+        hermes_home = Path(get_active_hermes_home()).expanduser().resolve()
+    except Exception:
+        hermes_home = Path(os.getenv('HERMES_HOME', str(Path.home() / '.hermes')))
+    return hermes_home / 'state.db'
+
+
+def _get_session_db():
+    """Get or create the shared SessionDB singleton (read-write, WAL mode).
+
+    The connection is opened lazily on first access and reused across all
+    requests.  Thread safety is provided by SessionDB's internal
+    threading.Lock + SQLite WAL mode.
+    """
+    global _session_db
+    if _session_db is not None:
+        return _session_db
+    with _session_db_lock:
+        if _session_db is not None:
+            return _session_db
+        try:
+            from hermes_state import SessionDB
+        except ImportError:
+            logger.warning("hermes_state unavailable — falling back to JSON storage")
+            return None
+        db_path = _resolve_state_db_path()
+        if not db_path.exists():
+            # state.db doesn't exist yet (fresh install).  The first save()
+            # will create it; loads will return None.
+            return None
+        try:
+            _session_db = SessionDB(db_path)
+            # Trigger column reconciliation so any newly-added SCHEMA_SQL
+            # columns are added to the live DB before we read/write.
+            if not _session_db._fts_enabled:
+                # read_only path skipped FTS probe — but we're read-write,
+                # so _init_schema already ran and _fts_enabled should be set.
+                pass
+        except Exception:
+            logger.warning("Failed to open state.db — falling back to JSON storage",
+                           exc_info=True)
+            return None
+    return _session_db
+
+
+def _close_session_db():
+    """Close the shared SessionDB connection. Called on server shutdown."""
+    global _session_db
+    with _session_db_lock:
+        if _session_db is not None:
+            try:
+                _session_db.close()
+            except Exception:
+                pass
+            _session_db = None
+
+
+# ── Error-message filter ─────────────────────────────────────────────────
+
+# Error messages generated by the agent framework when a turn fails
+# (streaming.py apperror path) carry _error=True in memory, but this flag
+# is not stored in state.db.  After a session reload, error messages become
+# indistinguishable from real replies.  Filter them before persistence.
+_ERROR_MSG_PREFIXES = (
+    '**Error:**',
+    '**No response received:**',
+    '**Authentication failed:**',
+    '**Out of credits:**',
+    '**Request timed out:**',
+)
+
+
+def _filter_persistable_messages(messages):
+    """Return messages with error-turn pairs stripped.
+
+    When an assistant message matches an error pattern, both it and the
+    preceding user message (the failed turn) are removed from the
+    persisted set.  Messages remain in the in-memory session so the UI
+    still shows the inline error for the current page session.
+    """
+    if not messages:
+        return messages
+    # Find indices of error assistant messages
+    error_indices = set()
+    for i, m in enumerate(messages):
+        if not isinstance(m, dict):
+            continue
+        # _error flag (in-memory marker from streaming.py)
+        if m.get('_error'):
+            error_indices.add(i)
+            continue
+        # Content-pattern match (defense-in-depth for reloaded sessions)
+        if m.get('role') == 'assistant':
+            content = str(m.get('content', '') or '')
+            for prefix in _ERROR_MSG_PREFIXES:
+                if content.startswith(prefix):
+                    error_indices.add(i)
+                    break
+    if not error_indices:
+        return messages
+    # Also strip the preceding user message for each error
+    for i in list(error_indices):
+        for j in range(i - 1, -1, -1):
+            if isinstance(messages[j], dict) and messages[j].get('role') == 'user':
+                error_indices.add(j)
+                break
+    return [m for i, m in enumerate(messages) if i not in error_indices]
+
+
 class Session:
     def __init__(self, session_id: str=None, title: str='Untitled',
                  workspace=str(DEFAULT_WORKSPACE), model=DEFAULT_MODEL,
@@ -386,12 +402,164 @@ class Session:
     def path(self):
         return SESSION_DIR / f'{self.session_id}.json'
 
-    def save(self, touch_updated_at: bool = True, skip_index: bool = False) -> None:
+    def save(self, touch_updated_at: bool = True, skip_index: bool = False,
+             sync_db: bool = True, write_json: bool = False) -> None:
+        """Persist session to state.db (primary) and optionally to JSON (backup).
+
+        State.db is the primary store; the JSON file write is retained as a
+        safety net during the transition period and can be disabled with
+        ``write_json=False`` once migration is complete.
+        """
         if touch_updated_at:
             self.updated_at = time.time()
-        # Write metadata fields first so load_metadata_only() can read them
-        # without parsing the full messages array (which may be 400KB+).
-        # Fields are listed in the order they should appear in the JSON file.
+
+        # ── Stamp timestamps on messages lacking one ────────────────────
+        _now_ts = int(time.time())
+        for _m in self.messages:
+            if isinstance(_m, dict) and not _m.get('timestamp') and not _m.get('_ts'):
+                _m['timestamp'] = _now_ts
+
+        # ── Strip error messages before persisting ────────────────────
+        # Error assistant messages carry _error=True in memory but the flag
+        # is not stored in state.db.  Once a session is reloaded, error
+        # messages become indistinguishable from real replies and are sent
+        # to the LLM as context.  Filter them out before any persistence.
+        _persistable = _filter_persistable_messages(self.messages)
+
+        # ── Primary: write to state.db ──────────────────────────────────
+        db = _get_session_db()
+        if db is not None:
+            try:
+                self._save_to_db(db, _persistable)
+            except Exception:
+                logger.warning("state.db save failed for %s", self.session_id,
+                               exc_info=True)
+
+        # ── Backup: write JSON file (transition safety net) ─────────────
+        if write_json:
+            self._save_to_json(_persistable)
+
+        # ── Update sidebar index ────────────────────────────────────────
+        if not skip_index:
+            _write_session_index(updates=[self])
+
+    # ── Internal save helpers ──────────────────────────────────────────
+
+    def _save_to_db(self, db, messages=None) -> None:
+        """Write session metadata + messages to state.db.
+
+        If *messages* is provided, those are written; otherwise ``self.messages``.
+        """
+        sid = self.session_id
+        _msgs = messages if messages is not None else self.messages
+
+        # ── Ensure session row exists + update metadata ─────────────
+        def _do_write(conn):
+            conn.execute(
+                """INSERT OR IGNORE INTO sessions (id, source, model, cwd,
+                   parent_session_id, started_at)
+                   VALUES (?, 'webui', ?, ?, ?, ?)""",
+                (sid,
+                 self.model,
+                 self.workspace,
+                 getattr(self, 'parent_session_id', None),
+                 self.created_at or time.time()),
+            )
+            conn.execute(
+                """UPDATE sessions SET
+                   pinned = ?,
+                   archived = ?,
+                   project_id = ?,
+                   profile = ?,
+                   input_tokens = ?,
+                   output_tokens = ?,
+                   estimated_cost_usd = ?,
+                   personality = ?,
+                   reasoning_effort = ?,
+                   service_tier = ?,
+                   skills = ?,
+                   mode = ?,
+                   compression_anchor_visible_idx = ?,
+                   compression_anchor_message_key = ?,
+                   last_seen_msg_count = ?,
+                   last_compression_time = ?,
+                   session_approved = ?,
+                   last_message_at = ?,
+                   lineage_root_id = ?,
+                   lineage_tip_id = ?,
+                   compression_segment_count = ?,
+                   context_length = ?,
+                   last_prompt_tokens = ?,
+                   threshold_tokens = ?,
+                   auto_compress_disabled = ?,
+                   auto_compress_fail_count = ?,
+                   message_count = ?,
+                   cwd = COALESCE(?, cwd)
+                   WHERE id = ?""",
+                (
+                    int(bool(self.pinned)),
+                    int(bool(self.archived)),
+                    self.project_id,
+                    self.profile,
+                    self.input_tokens or 0,
+                    self.output_tokens or 0,
+                    self.estimated_cost,
+                    self.personality,
+                    getattr(self, 'reasoning_effort', None),
+                    getattr(self, 'service_tier', None),
+                    json.dumps(self.skills) if self.skills else None,
+                    getattr(self, '_mode', 'manual'),
+                    self.compression_anchor_visible_idx,
+                    json.dumps(self.compression_anchor_message_key) if self.compression_anchor_message_key else None,
+                    self.last_seen_msg_count,
+                    self.last_compression_time or None,
+                    json.dumps(getattr(self, 'session_approved', None))
+                        if getattr(self, 'session_approved', None) else None,
+                    self.updated_at,
+                    getattr(self, 'lineage_root_id', None),
+                    getattr(self, 'lineage_tip_id', None),
+                    getattr(self, 'compression_segment_count', 0) or 0,
+                    getattr(self, 'context_length', 0) or 0,
+                    getattr(self, 'last_prompt_tokens', 0) or 0,
+                    getattr(self, 'threshold_tokens', 0) or 0,
+                    int(bool(getattr(self, 'auto_compress_disabled', False))),
+                    getattr(self, 'auto_compress_fail_count', 0) or 0,
+                    len(_msgs),
+                    self.workspace,
+                    sid,
+                ),
+            )
+
+        db._execute_write(_do_write)
+
+        # ── Title: set via set_session_title() which handles the UNIQUE
+        # constraint (appends " #2", " #3", etc. on duplicates)
+        final_title = self.title
+        try:
+            db.set_session_title(sid, final_title)
+        except ValueError:
+            base = self.title
+            for n in range(2, 100):
+                candidate = f"{base} #{n}"
+                try:
+                    db.set_session_title(sid, candidate)
+                    final_title = candidate
+                    break
+                except ValueError:
+                    continue
+        if final_title != self.title:
+            self.title = final_title
+
+        # ── Write messages ──────────────────────────────────────────────
+        if _msgs:
+            try:
+                db.replace_messages(sid, _msgs)
+            except Exception:
+                logger.debug("Failed to sync messages to state.db for %s", sid)
+
+    def _save_to_json(self, messages=None) -> None:
+        """Write session to JSON file (backup / transition safety net)."""
+        _msgs = messages if messages is not None else self.messages
         METADATA_FIELDS = [
             'session_id', 'title', 'workspace', 'model', 'created_at', 'updated_at',
             'pinned', 'archived', 'project_id', 'profile',
@@ -405,19 +573,9 @@ class Session:
             'last_compression_time',
             'lineage_root_id', 'lineage_tip_id',
         ]
-        # Stamp timestamps on any messages that don't have one yet.
-        # The streaming code normally handles this, but messages added via other
-        # paths (e.g. direct session manipulation, CLI tools) may lack timestamps.
-        # Without a timestamp, the frontend sorts them to epoch 0 and they appear
-        # at the wrong position, making them effectively invisible to the user.
-        _now_ts = int(time.time())
-        for _m in self.messages:
-            if isinstance(_m, dict) and not _m.get('timestamp') and not _m.get('_ts'):
-                _m['timestamp'] = _now_ts
         meta = {k: getattr(self, k, None) for k in METADATA_FIELDS}
-        meta['messages'] = self.messages
+        meta['messages'] = _msgs
         meta['tool_calls'] = self.tool_calls
-        # Fields not in METADATA_FIELDS (e.g. last_usage, message_count) go at the end
         extra = {k: v for k, v in self.__dict__.items()
                  if k not in METADATA_FIELDS and k not in ('messages', 'tool_calls')
                  and not k.startswith('_')}
@@ -435,14 +593,110 @@ class Session:
             except Exception:
                 pass
             raise
-        if not skip_index:
-            _write_session_index(updates=[self])
+
+    # ── DB column → Session field mapping ──────────────────────────────
+    # Columns that map directly (same name in both)
+    _DB_DIRECT_FIELDS = (
+        'title', 'model', 'pinned', 'archived', 'project_id', 'profile',
+        'input_tokens', 'output_tokens', 'personality', 'reasoning_effort',
+        'service_tier', 'skills', 'mode', 'parent_session_id',
+        'compression_segment_count', 'compression_anchor_visible_idx',
+        'compression_anchor_message_key', 'last_seen_msg_count',
+        'last_compression_time', 'lineage_root_id', 'lineage_tip_id',
+        'context_length', 'last_prompt_tokens', 'threshold_tokens',
+        'auto_compress_disabled', 'auto_compress_fail_count',
+    )
+    # Columns that need name mapping or type conversion
+    _DB_MAPPED_FIELDS = {
+        'id': 'session_id',
+        'cwd': 'workspace',
+        'started_at': 'created_at',
+        'last_message_at': 'updated_at',
+        'estimated_cost_usd': 'estimated_cost',
+    }
+
+    @classmethod
+    def _from_db_row(cls, row: dict, messages: list = None):
+        """Build a Session from a state.db sessions table row + message list.
+
+        ``row`` is a dict from ``SessionDB.get_session()``.
+        ``messages`` is a list of message dicts from ``SessionDB.get_messages()``.
+        """
+        kwargs = {}
+
+        # Direct-mapped fields
+        for field in cls._DB_DIRECT_FIELDS:
+            if field in row and row[field] is not None:
+                kwargs[field] = row[field]
+
+        # Name-mapped fields
+        for db_col, session_attr in cls._DB_MAPPED_FIELDS.items():
+            if db_col in row and row[db_col] is not None:
+                kwargs[session_attr] = row[db_col]
+
+        # Deserialize JSON columns
+        for col in ('skills', 'session_approved', 'compression_anchor_message_key'):
+            val = row.get(col)
+            if isinstance(val, str) and val:
+                try:
+                    kwargs[col] = json.loads(val)
+                except (json.JSONDecodeError, TypeError):
+                    kwargs[col] = None
+            elif val is not None:
+                kwargs[col] = val
+
+        # Boolean columns stored as INTEGER
+        for col in ('pinned', 'archived', 'auto_compress_disabled'):
+            if col in kwargs:
+                kwargs[col] = bool(kwargs[col])
+
+        # Carry through any extra DB columns as kwargs so they survive
+        # round-trips (e.g. llm_title_generated, session_approved already handled above)
+        known = set(cls._DB_DIRECT_FIELDS) | set(cls._DB_MAPPED_FIELDS.keys())
+        for k, v in row.items():
+            if k not in known and v is not None and not k.startswith('_'):
+                kwargs[k] = v
+
+        kwargs['messages'] = messages or []
+        # Gateway/CLI sessions are read-only
+        if row.get('source') and row['source'] != 'webui':
+            kwargs['_readonly'] = True
+            kwargs['is_cli_session'] = True
+            kwargs['source_tag'] = row['source']
+        # Normalize: strip empty tool_calls (JSON "[]" stored in DB)
+        # and convert None→absent. LLM APIs reject empty tool_calls arrays.
+        for _m in kwargs['messages']:
+            if isinstance(_m, dict):
+                _tc = _m.get('tool_calls')
+                if _tc is None or (isinstance(_tc, list) and not _tc):
+                    _m.pop('tool_calls', None)
+        kwargs['tool_calls'] = []
+        return cls(**kwargs)
 
     @classmethod
     def load(cls, sid):
-        # Validate session ID format to prevent path traversal
+        """Load a full session (metadata + messages) from state.db."""
         if not sid or not all(c in '0123456789abcdefghijklmnopqrstuvwxyz_' for c in sid):
             return None
+        db = _get_session_db()
+        if db is None:
+            return cls._load_json_fallback(sid)
+        try:
+            row = db.get_session(sid)
+        except Exception:
+            logger.debug("state.db read failed for %s — falling back to JSON", sid)
+            return cls._load_json_fallback(sid)
+        if row is None:
+            return cls._load_json_fallback(sid)
+        try:
+            messages = db.get_messages(sid, include_inactive=True)
+        except Exception:
+            messages = []
+        return cls._from_db_row(row, messages)
+
+    @classmethod
+    def _load_json_fallback(cls, sid):
+        """Fallback: load session from JSON file (used when state.db unavailable)."""
         p = SESSION_DIR / f'{sid}.json'
         if not p.exists():
             return None
@@ -450,15 +704,33 @@ class Session:
 
     @classmethod
     def load_metadata_only(cls, sid):
-        """Load only the compact metadata fields, skipping the messages array.
+        """Load session metadata from state.db without messages.
 
-        Session JSON files have metadata fields (session_id, title, model, etc.)
-        at the top level, before the large messages array. Read only up to the
-        top-level "messages" field and synthesize a small metadata-only object.
-        Falls back to load() for legacy or unexpected file layouts.
+        Used for fast sidebar switching — avoids loading the full message
+        array.  Falls back to JSON when state.db is unavailable.
         """
         if not sid or not all(c in '0123456789abcdefghijklmnopqrstuvwxyz_' for c in sid):
             return None
+        db = _get_session_db()
+        if db is None:
+            return cls._load_json_metadata_fallback(sid)
+        try:
+            row = db.get_session(sid)
+        except Exception:
+            logger.debug("state.db metadata read failed for %s", sid)
+            return cls._load_json_metadata_fallback(sid)
+        if row is None:
+            return cls._load_json_metadata_fallback(sid)
+        session = cls._from_db_row(row, [])
+        # message_count from DB is authoritative; use it for the metadata hint
+        msg_count = row.get('message_count')
+        if isinstance(msg_count, int) and msg_count >= 0:
+            session._metadata_message_count = msg_count
+        return session
+
+    @classmethod
+    def _load_json_metadata_fallback(cls, sid):
+        """Fallback: load metadata from JSON prefix (used when state.db unavailable)."""
         p = SESSION_DIR / f'{sid}.json'
         if not p.exists():
             return None
@@ -476,7 +748,6 @@ class Session:
             session._metadata_message_count = _lookup_index_message_count(sid)
             return session
         except Exception:
-            # Corrupt prefix or decode error — fall back to full load
             return cls.load(sid)
 
     def compact(self, include_runtime=False, active_stream_ids=None) -> dict:
@@ -528,6 +799,11 @@ class Session:
             'is_streaming': _is_streaming_session(
                 self.active_stream_id, active_stream_ids
             ) if include_runtime else False,
+            # Gateway/CLI session markers (set by _from_db_row for non-webui sessions)
+            '_readonly': getattr(self, '_readonly', None),
+            'is_cli_session': getattr(self, 'is_cli_session', None),
+            'source_tag': getattr(self, 'source_tag', None),
+            'auto_compress_disabled': getattr(self, 'auto_compress_disabled', False),
         }
 
 def get_session(sid, metadata_only=False):
@@ -540,8 +816,15 @@ def get_session(sid, metadata_only=False):
     """
     with LOCK:
         if sid in SESSIONS:
-            SESSIONS.move_to_end(sid)  # LRU: mark as recently used
-            return SESSIONS[sid]
+            cached = SESSIONS[sid]
+            # External-source sessions (gateway/CLI) are written by a
+            # separate process — always reload from state.db so new
+            # messages are visible without a server restart.
+            if not getattr(cached, 'is_cli_session', None):
+                SESSIONS.move_to_end(sid)
+                return cached
+            # Stale cache for external session — evict and fall through to reload
+            SESSIONS.pop(sid, None)
     if metadata_only:
         s = Session.load_metadata_only(sid)
         if s:
@@ -693,62 +976,164 @@ def _append_archived_sessions(result):
 
 
 def all_sessions():
+    """Return compact session list for the sidebar.
+
+    Primary: query state.db via list_sessions_rich for O(1) indexed access.
+    Fallback: JSON index file or directory scan when state.db is unavailable.
+    """
     active_stream_ids = _active_stream_ids()
+
+    # ── Primary: state.db query ────────────────────────────────────────
+    db = _get_session_db()
+    if db is not None:
+        try:
+            result = _all_sessions_from_db(db, active_stream_ids)
+            if result is not None:
+                return result
+        except Exception:
+            logger.debug("state.db session list failed, falling back to JSON index")
+
+    # ── Fallback: JSON index or directory scan ─────────────────────────
+    return _all_sessions_from_json(active_stream_ids)
+
+
+def _all_sessions_from_db(db, active_stream_ids):
+    """Build session list from state.db."""
+    try:
+        rows = db.list_sessions_rich(source='webui', order_by_last_active=True)
+    except Exception:
+        return None
+    if not rows:
+        return []
+
+    compact_list = []
+    for row in rows:
+        sid = row.get('id') or row.get('session_id')
+        compact = {
+            'session_id': sid,
+            'title': row.get('title', 'Untitled'),
+            'workspace': row.get('cwd', ''),
+            'model': row.get('model', ''),
+            'message_count': row.get('message_count', 0),
+            'created_at': row.get('started_at', 0),
+            'updated_at': row.get('last_message_at') or row.get('started_at', 0),
+            'last_message_at': row.get('last_message_at') or row.get('started_at', 0),
+            'pinned': bool(row.get('pinned', False)),
+            'archived': bool(row.get('archived', False)),
+            'project_id': row.get('project_id'),
+            'profile': row.get('profile') or 'default',
+            'input_tokens': row.get('input_tokens', 0),
+            'output_tokens': row.get('output_tokens', 0),
+            'estimated_cost': row.get('estimated_cost_usd'),
+            'personality': row.get('personality'),
+            'reasoning_effort': row.get('reasoning_effort'),
+            'service_tier': row.get('service_tier'),
+            'skills': _deserialize_json_field(row.get('skills')),
+            'last_seen_msg_count': row.get('last_seen_msg_count'),
+            'compression_anchor_visible_idx': row.get('compression_anchor_visible_idx'),
+            'compression_anchor_message_key': row.get('compression_anchor_message_key'),
+            'mode': row.get('mode', 'manual'),
+            '_parent_session_id': row.get('parent_session_id'),
+            '_compression_segment_count': row.get('compression_segment_count', 0) or 0,
+            '_lineage_root_id': row.get('lineage_root_id'),
+            '_lineage_tip_id': row.get('lineage_tip_id'),
+            'context_length': row.get('context_length', 0) or 0,
+            'last_prompt_tokens': row.get('last_prompt_tokens', 0) or 0,
+            'threshold_tokens': row.get('threshold_tokens', 0) or 0,
+            'last_compression_time': row.get('last_compression_time', 0) or 0,
+            'is_streaming': False,
+        }
+        compact_list.append(compact)
+
+    # Overlay in-memory sessions (may have runtime state not yet flushed to DB)
+    with LOCK:
+        for s in SESSIONS.values():
+            found = False
+            for c in compact_list:
+                if c['session_id'] == s.session_id:
+                    c.update(s.compact(include_runtime=True,
+                                       active_stream_ids=active_stream_ids))
+                    found = True
+                    break
+            if not found:
+                compact_list.append(s.compact(include_runtime=True,
+                                               active_stream_ids=active_stream_ids))
+
+    # Filter empty Untitled sessions
+    result = [s for s in compact_list if not (
+        s.get('title', 'Untitled') == 'Untitled'
+        and s.get('message_count', 0) == 0
+        and (s.get('input_tokens') or 0) == 0
+        and abs((s.get('updated_at') or 0) - (s.get('created_at') or 0)) < 5
+    )]
+    result = [s for s in result if not _hide_from_default_sidebar(s)]
+    result = _append_archived_sessions(result)
+    return result
+
+
+def _deserialize_json_field(val):
+    """Deserialize a JSON-encoded TEXT column, or pass through if already parsed."""
+    if isinstance(val, str):
+        try:
+            return json.loads(val)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    return val
+
+
+def _all_sessions_from_index(active_stream_ids):
+    """Build session list from _index.json (legacy fast path)."""
+    index = json.loads(SESSION_INDEX_FILE.read_text(encoding='utf-8'))
+    index = [
+        s for s in index
+        if _index_entry_exists(s.get('session_id'))
+    ]
+    backfilled = []
+    for i, s in enumerate(index):
+        if 'last_message_at' not in s:
+            full = Session.load(s.get('session_id'))
+            if full:
+                index[i] = full.compact()
+                backfilled.append(full)
+    if backfilled:
+        try:
+            _write_session_index(updates=backfilled)
+        except Exception:
+            logger.debug("Failed to persist last_message_at backfill")
+    for s in index:
+        s['is_streaming'] = _is_streaming_session(
+            s.get('active_stream_id'),
+            active_stream_ids,
+        )
+    # Overlay any in-memory sessions that may be newer than the index
+    index_map = {s['session_id']: s for s in index}
+    with LOCK:
+        for s in SESSIONS.values():
+            index_map[s.session_id] = s.compact(
+                include_runtime=True,
+                active_stream_ids=active_stream_ids,
+            )
+    result = sorted(index_map.values(), key=lambda s: (s.get('pinned', False), _session_sort_timestamp(s)), reverse=True)
+    result = [s for s in result if not (
+        s.get('title', 'Untitled') == 'Untitled'
+        and s.get('message_count', 0) == 0
+        and (s.get('input_tokens') or 0) == 0
+        and abs((s.get('updated_at') or 0) - (s.get('created_at') or 0)) < 5
+    )]
+    result = [s for s in result if not _hide_from_default_sidebar(s)]
+    for s in result:
+        if not s.get('profile'):
+            s['profile'] = 'default'
+    result = _append_archived_sessions(result)
+    return result
+
+
+def _all_sessions_from_json(active_stream_ids):
+    """Legacy fallback: build session list from JSON index or directory scan."""
     # Phase C: try index first for O(1) read; fall back to full scan
     if SESSION_INDEX_FILE.exists():
         try:
-            index = json.loads(SESSION_INDEX_FILE.read_text(encoding='utf-8'))
-            index = [
-                s for s in index
-                if _index_entry_exists(s.get('session_id'))
-            ]
-            backfilled = []
-            for i, s in enumerate(index):
-                if 'last_message_at' not in s:
-                    full = Session.load(s.get('session_id'))
-                    if full:
-                        index[i] = full.compact()
-                        backfilled.append(full)
-            if backfilled:
-                try:
-                    _write_session_index(updates=backfilled)
-                except Exception:
-                    logger.debug("Failed to persist last_message_at backfill")
-            for s in index:
-                s['is_streaming'] = _is_streaming_session(
-                    s.get('active_stream_id'),
-                    active_stream_ids,
-                )
-            # Overlay any in-memory sessions that may be newer than the index
-            index_map = {s['session_id']: s for s in index}
-            with LOCK:
-                for s in SESSIONS.values():
-                    index_map[s.session_id] = s.compact(
-                        include_runtime=True,
-                        active_stream_ids=active_stream_ids,
-                    )
-            result = sorted(index_map.values(), key=lambda s: (s.get('pinned', False), _session_sort_timestamp(s)), reverse=True)
-            # Hide empty Untitled sessions from the UI entirely — they are ephemeral
-            # scratch pads that only become real once the first message is sent (#1171).
-            # No grace window: a 0-message Untitled session is never shown in the list
-            # regardless of age. This means page refreshes and accidental New Conversation
-            # clicks never leave orphan entries in the sidebar.
-            # Exception: sessions that have had prior activity (input_tokens > 0 or
-            # updated_at > created_at) are NOT hidden — they may have been cleared
-            # intentionally and should remain visible in the sidebar.
-            result = [s for s in result if not (
-                s.get('title', 'Untitled') == 'Untitled'
-                and s.get('message_count', 0) == 0
-                and (s.get('input_tokens') or 0) == 0
-                and abs((s.get('updated_at') or 0) - (s.get('created_at') or 0)) < 5
-            )]
-            result = [s for s in result if not _hide_from_default_sidebar(s)]
-            # Backfill: sessions created before Sprint 22 have no profile tag.
-            for s in result:
-                if not s.get('profile'):
-                    s['profile'] = 'default'
-            result = _append_archived_sessions(result)
-            return result
+            return _all_sessions_from_index(active_stream_ids)
         except Exception:
             logger.debug("Failed to load session index, falling back to full scan")
     # Full scan fallback
@@ -792,6 +1177,83 @@ def title_from(messages, fallback: str='Untitled'):
             if text:
                 return text[:64]
     return fallback
+
+
+# ── Migration: JSON → state.db ──────────────────────────────────────────────
+
+_MIGRATION_META_KEY = 'webui_migration_complete'
+
+
+def migrate_json_sessions_to_db(force: bool = False) -> dict:
+    """One-time migration: import all JSON sessions into state.db.
+
+    Scans ``SESSION_DIR/*.json``, loads each session, and writes it to
+    state.db.  Idempotent — sessions that already exist in state.db are
+    skipped.  Tracks completion via a ``state_meta`` key so subsequent
+    startups skip the migration automatically.
+
+    Set ``force=True`` to re-run even if the migration marker exists.
+
+    Returns a dict with ``{imported, skipped, errors, total}`` counts.
+    """
+    db = _get_session_db()
+    if db is None:
+        return {'imported': 0, 'skipped': 0, 'errors': 0, 'total': 0,
+                'message': 'state.db unavailable'}
+
+    # Check if already migrated
+    if not force:
+        try:
+            marker = db.get_meta(_MIGRATION_META_KEY)
+            if marker and marker.get('value') == '1':
+                return {'imported': 0, 'skipped': 0, 'errors': 0, 'total': 0,
+                        'message': 'already migrated'}
+        except Exception:
+            pass  # state_meta table might not exist yet
+
+    json_files = sorted(SESSION_DIR.glob('*.json'))
+    result = {'imported': 0, 'skipped': 0, 'errors': 0, 'total': len(json_files)}
+
+    for p in json_files:
+        if p.name.startswith('_'):
+            result['skipped'] += 1
+            continue
+        sid = p.stem
+        try:
+            # Check if already in state.db
+            existing = db.get_session(sid)
+            if existing is not None and not force:
+                result['skipped'] += 1
+                continue
+
+            # Load from JSON and save to state.db
+            data = json.loads(p.read_text(encoding='utf-8'))
+            messages = data.pop('messages', [])
+            data.pop('tool_calls', None)
+            # Remove runtime-only fields that shouldn't be persisted
+            for rk in ('active_stream_id', 'pending_user_message',
+                       'pending_attachments', 'pending_started_at'):
+                data.pop(rk, None)
+            s = Session(**data)
+            s.messages = messages
+            s.save(write_json=False, skip_index=True)
+            result['imported'] += 1
+            logger.info("Migrated session %s to state.db", sid)
+        except Exception:
+            logger.warning("Failed to migrate session %s to state.db", sid,
+                           exc_info=True)
+            result['errors'] += 1
+
+    # Mark migration complete
+    try:
+        db.set_meta(_MIGRATION_META_KEY, '1')
+    except Exception:
+        logger.debug("Failed to set migration marker")
+
+    logger.info("JSON→DB migration: %d imported, %d skipped, %d errors, %d total",
+                result['imported'], result['skipped'], result['errors'],
+                result['total'])
+    return result
 
 
 # ── Project helpers ──────────────────────────────────────────────────────────

@@ -1657,6 +1657,14 @@ def handle_post(handler, parsed) -> bool:
             SESSION_INDEX_FILE.unlink(missing_ok=True)
         except Exception:
             logger.debug("Failed to unlink session index")
+        # Also delete from state.db (primary store)
+        try:
+            from api.models import _get_session_db
+            db = _get_session_db()
+            if db is not None:
+                db.delete_session(sid)
+        except Exception:
+            logger.debug("Failed to delete session %s from state.db", sid)
         # Also delete from CLI state.db (for CLI sessions shown in sidebar)
         try:
             from api.models import delete_cli_session
@@ -1712,6 +1720,9 @@ def handle_post(handler, parsed) -> bool:
             # messages (last_seen=351) then gets cleared to 0 would compute
             # unread = max(0, new_count - 351) = 0 even when new messages arrive.
             s.last_seen_msg_count = len(s.messages)
+            # Reset auto-compress throttle on clear
+            s.auto_compress_disabled = False
+            s.auto_compress_fail_count = 0
             s.pending_user_message = None
             s.pending_attachments = []
             s.active_stream_id = None
@@ -2488,9 +2499,11 @@ def _handle_session_export(handler, parsed):
 
 def _handle_sessions_search(handler, parsed):
     qs = parse_qs(parsed.query)
-    q = qs.get("q", [""])[0].lower().strip()
+    q = qs.get("q", [""])[0].strip()
     content_search = qs.get("content", ["1"])[0] == "1"
-    depth = int(qs.get("depth", ["5"])[0])
+    depth = int(qs.get("depth", ["0"])[0])  # 0 = all messages (FTS5 preferred)
+
+    # Empty query → return all sessions (compact format)
     if not q:
         safe_sessions = []
         for s in all_sessions():
@@ -2498,10 +2511,106 @@ def _handle_sessions_search(handler, parsed):
             if isinstance(item.get("title"), str):
                 item["title"] = _redact_text(item["title"])
             safe_sessions.append(item)
-        return j(handler, {"sessions": safe_sessions})
+        return j(handler, {"sessions": safe_sessions, "query": "", "count": len(safe_sessions)})
+
+    # Try FTS5 search via SessionDB first
+    try:
+        from hermes_state import SessionDB, get_last_init_error
+        if get_last_init_error() is not None:
+            raise RuntimeError("SessionDB unavailable")
+
+        # Resolve hermes home
+        import os
+        from pathlib import Path
+        try:
+            from api.profiles import get_active_hermes_home
+            hermes_home = Path(get_active_hermes_home()).expanduser().resolve()
+        except Exception:
+            hermes_home = Path(os.getenv('HERMES_HOME', str(Path.home() / '.hermes')))
+
+        db_path = hermes_home / 'state.db'
+        if not db_path.exists():
+            raise FileNotFoundError("state.db not found")
+
+        db = SessionDB(db_path, read_only=True)
+        try:
+            # Sanitize query for FTS5
+            sanitized = SessionDB._sanitize_fts5_query(q)
+            if not sanitized:
+                return j(handler, {"sessions": [], "query": q, "count": 0})
+
+            # Search across all sessions (no source filter — user expects
+            # to find matches in gateway/CLI sessions as well)
+            matches = db.search_messages(
+                query=sanitized,
+                source_filter=None,
+                limit=200,
+            )
+
+            # Build results with session metadata + match_type
+            seen = set()
+            results = []
+            # First check title matches against all_sessions (fast path)
+            all_sessions_list = all_sessions()
+            session_map = {s['session_id']: s for s in all_sessions_list}
+
+            # Check title matches first
+            q_lower = q.lower()
+            for s in all_sessions_list:
+                sid = s['session_id']
+                if sid in seen:
+                    continue
+                if q_lower in (s.get('title') or '').lower():
+                    item = dict(s)
+                    if isinstance(item.get("title"), str):
+                        item["title"] = _redact_text(item["title"])
+                    item["match_type"] = "title"
+                    results.append(item)
+                    seen.add(sid)
+
+            # Add content matches from FTS5
+            if content_search:
+                for match in matches:
+                    sid = match.get('session_id')
+                    if sid in seen:
+                        # Already matched by title or earlier content match;
+                        # keep the first match timestamp for scroll-to.
+                        continue
+                    seen.add(sid)
+                    # Build compact session dict
+                    s = session_map.get(sid)
+                    if s:
+                        item = dict(s)
+                    else:
+                        item = {
+                            'session_id': sid,
+                            'title': match.get('title', 'Untitled'),
+                            'workspace': match.get('cwd'),
+                            'model': match.get('model'),
+                            'message_count': match.get('message_count', 0),
+                            'created_at': match.get('started_at', 0),
+                            'updated_at': match.get('last_message_at', 0),
+                            'pinned': bool(match.get('pinned', False)),
+                        }
+                    if isinstance(item.get("title"), str):
+                        item["title"] = _redact_text(item["title"])
+                    item["match_type"] = "content"
+                    item["match_message_id"] = match.get('id')
+                    item["match_snippet"] = match.get('snippet', '')
+                    results.append(item)
+        finally:
+            db.close()
+
+        return j(handler, {"sessions": results, "query": q, "count": len(results)})
+
+    except Exception:
+        pass  # Fallback to legacy Python linear scan
+
+    # Legacy fallback: Python linear scan (when SessionDB unavailable)
+    q_lower = q.lower()
     results = []
     for s in all_sessions():
-        title_match = q in (s.get("title") or "").lower()
+        title_match = q_lower in (s.get("title") or "").lower()
         if title_match:
             item = dict(s, match_type="title")
             if isinstance(item.get("title"), str):
@@ -2520,7 +2629,7 @@ def _handle_sessions_search(handler, parsed):
                             for p in c
                             if isinstance(p, dict) and p.get("type") == "text"
                         )
-                    if q in str(c).lower():
+                    if q_lower in str(c).lower():
                         item = dict(s, match_type="content")
                         if isinstance(item.get("title"), str):
                             item["title"] = _redact_text(item["title"])
@@ -3711,11 +3820,15 @@ def _handle_chat_start(handler, body):
         threshold_str = str(load_settings().get("auto_compress_threshold", "0")).strip()
         threshold = int(threshold_str) if threshold_str.isdigit() else 0
         if threshold > 0 and len(s.messages) >= threshold and not getattr(s, "active_stream_id", None):
-            _auto_compress_session(s)
-            # Re-read session so the agent thread picks up the compressed messages.
-            s = get_session(s.session_id)
+            # Respect auto-compress disable flag (set after 3 consecutive poor compressions)
+            if not getattr(s, 'auto_compress_disabled', False):
+                _auto_compress_session(s)
+                # Re-read session so the agent thread picks up the compressed messages.
+                s = get_session(s.session_id)
     except Exception as _auto_compress_err:
         logger.debug("Auto-compress skipped for session %s: %s", s.session_id, _auto_compress_err)
+        print(f"[auto-compress] FAILED for {s.session_id}: {_auto_compress_err}", flush=True)
+        import traceback; traceback.print_exc()
 
     stream_id = uuid.uuid4().hex
     with _get_session_agent_lock(s.session_id):
@@ -3859,7 +3972,11 @@ def _handle_chat_sync(handler, body):
             if id(_m) not in _prev_msg_ids and isinstance(_m, dict) and not _m.get('timestamp') and not _m.get('_ts'):
                 _m['timestamp'] = int(time.time())
         # Only auto-generate title when still default; preserves user renames
-        if s.title == "Untitled":
+        # Auto-title: matches bare "Untitled" and uniqueness-suffixed
+        # variants like "Untitled #3" (from state.db's UNIQUE title index)
+        if s.title == "Untitled" or (
+            s.title.startswith("Untitled #") and s.title[9:].isdigit()
+        ):
             s.title = title_from(s.messages, s.title)
         s.save()
     # Sync to state.db for /insights (opt-in setting)
@@ -4455,9 +4572,6 @@ def _archive_session_before_compress(s):
     Returns the archive path on success or None (never blocks compression).
     """
     try:
-        src = SESSION_DIR / f'{s.session_id}.json'
-        if not src.exists():
-            return None
         import json as _json
         archive_dir = SESSION_DIR / f'{s.session_id}_archived'
         archive_dir.mkdir(parents=True, exist_ok=True)
@@ -4469,10 +4583,15 @@ def _archive_session_before_compress(s):
         )
         next_n = existing[-1] + 1 if existing else 1
         archived_id = f'compaction_{next_n}'
-        data = _json.loads(src.read_text(encoding='utf-8'))
-        data['session_id'] = archived_id
-        data['_parent_session_id'] = s.session_id
-        data['_readonly'] = True
+        # Build archive from in-memory session (not stale JSON on disk)
+        data = s.compact() | {
+            'session_id': archived_id,
+            '_parent_session_id': s.session_id,
+            '_readonly': True,
+            '_compaction_n': next_n,
+            'messages': s.messages,
+            'tool_calls': s.tool_calls,
+        }
         data['_compaction_n'] = next_n
         # Keep the original title for display
         dst = archive_dir / f'{archived_id}.json'
@@ -4548,7 +4667,32 @@ def _auto_compress_session(s) -> None:
         s.messages = compressed
         s.tool_calls = []
         s.last_compression_time = time.time()
+
+        # ── Compression quality tracking ──────────────────────────────
+        # If compression reduces messages by <50%, count it as a poor
+        # attempt.  After 3 consecutive poor attempts, disable auto-
+        # compress for this session until the user clears history.
+        _before = len(messages)
+        _after = len(compressed)
+        _ratio = _after / max(_before, 1)
+        _poor = _ratio > 0.5  # less than 50% reduction
+        _fail_count = getattr(s, 'auto_compress_fail_count', 0)
+        if _poor:
+            _fail_count += 1
+            s.auto_compress_fail_count = _fail_count
+            if _fail_count >= 3:
+                s.auto_compress_disabled = True
+                print(f"[auto-compress] DISABLED for {s.session_id}: "
+                      f"{_before} → {_after} msgs (ratio={_ratio:.1%}) after {_fail_count} poor attempts",
+                      flush=True)
+        else:
+            s.auto_compress_fail_count = 0
+            s.auto_compress_disabled = False
+
+        print(f"[auto-compress] saving session {s.session_id}: "
+              f"{_before} → {_after} messages", flush=True)
         s.save()
+        print(f"[auto-compress] save OK for {s.session_id}", flush=True)
 
 
 def _handle_session_compress(handler, body):

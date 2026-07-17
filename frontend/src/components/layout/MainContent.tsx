@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
@@ -16,7 +16,6 @@ import MemoryDetail from '@/components/memory/MemoryDetail';
 import WorkspaceDetail from '@/components/workspace/WorkspaceDetail';
 import WorkspaceForm from '@/components/workspace/WorkspaceForm';
 import TodosDrawer from '@/components/layout/TodosDrawer';
-import SessionSkillsSelector from '@/components/chat/SessionSkillsSelector';
 import SkillsDrawer from '@/components/chat/SkillsDrawer';
 import TerminalView from '@/components/terminal/TerminalView';
 import VncView from '@/components/vnc/VncView';
@@ -147,12 +146,6 @@ function NonTerminalContent({
         </div>
 
         <div className="topbar-chips">
-          {!currentSession?._readonly && (
-            <SessionSkillsSelector
-              onClick={() => setSkillsPanelOpen(!skillsPanelOpen)}
-              isOpen={skillsPanelOpen}
-            />
-          )}
           <button
             className={`chip workspace-toggle-btn ${todosPanelOpen ? 'active' : ''}`}
             onClick={() => setTodosPanelOpen(!todosPanelOpen)}
@@ -166,7 +159,6 @@ function NonTerminalContent({
               <path d="M13 12h8" />
               <path d="M13 18h8" />
             </svg>
-            <span className="workspace-toggle-label">{t('todos.title')}</span>
           </button>
           {!currentSession?._readonly && (
             <button
@@ -177,13 +169,12 @@ function NonTerminalContent({
                 try { await observerService.getInfo(sid); } catch { /* ignore */ }
                 window.open('/api/observer/' + encodeURIComponent(sid), '_blank');
               } : undefined}
-              title={currentSession?.pinned ? 'Observe session' : '请先 Pin 此会话以启用观察'}
+              title={currentSession?.pinned ? t('vnc.observe', 'Observe') : t('vnc.pin_to_observe', 'Pin session to observe')}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
                 <circle cx="12" cy="12" r="3" />
               </svg>
-              <span>Observe</span>
             </button>
           )}
         </div>
@@ -203,6 +194,12 @@ function NonTerminalContent({
 export default function MainContent({ children }: MainContentProps) {
   const [todosPanelOpen, setTodosPanelOpen] = useState(false);
   const [skillsPanelOpen, setSkillsPanelOpen] = useState(false);
+  // Listen for composer skills button
+  useEffect(() => {
+    const handler = () => setSkillsPanelOpen((v) => !v);
+    window.addEventListener('hermes:toggle-skills-panel', handler);
+    return () => window.removeEventListener('hermes:toggle-skills-panel', handler);
+  }, []);
   useWorkspaceStore(); // subscribe for side effects
 
   const terminalTabActive = useTerminalStore((s) => s.terminalTabActive);

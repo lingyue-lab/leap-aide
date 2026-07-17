@@ -2,6 +2,7 @@ import React, { forwardRef, useEffect, useRef, useMemo } from 'react';
 import type { Message, ToolCall } from '@/types';
 import MessageRow, { extractThinkingText, isContextCompactionMessage, ContextCompactionMessageRow } from './MessageRow';
 import { useChatStore } from '@/stores/useChatStore';
+import { useSessionStore } from '@/stores/useSessionStore';
 import ThinkingIndicator from './ThinkingIndicator';
 import ConversationMinimap from './ConversationMinimap';
 
@@ -73,6 +74,30 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
       el.current.scrollTop = el.current.scrollHeight;
     }, [streaming, messages]);
 
+    // Scroll to matching message when coming from search
+    const matchMessageId = useSessionStore((s) => s.matchMessageId);
+    const clearMatch = useSessionStore((s) => () => s.selectSession(s.currentSessionId, null));
+    const lastMatchRef = useRef<number | null>(null);
+    useEffect(() => {
+      if (matchMessageId == null) return;
+      // Already scrolled to this ID
+      if (lastMatchRef.current === matchMessageId) return;
+      // Check if target is in the current messages array (avoids DOM race with session switch)
+      if (!messages.some(m => m.id === matchMessageId)) return;
+      // Defer to next frame so React has rendered the messages
+      requestAnimationFrame(() => {
+        const el = (scrollRef as React.RefObject<HTMLDivElement>).current;
+        if (!el) return;
+        const target = el.querySelector(`[data-msg-id="${matchMessageId}"]`);
+        if (!target) return;
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        target.classList.add('msg-search-highlight');
+        setTimeout(() => target.classList.remove('msg-search-highlight'), 2000);
+        lastMatchRef.current = matchMessageId;
+        clearMatch();
+      });
+    }, [matchMessageId, messages]);
+
     // Messages are displayed in their original array order (the order they
     // appear in the session JSON). The backend appends messages in
     // chronological order, so no timestamp-based sorting is needed.
@@ -138,14 +163,6 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
                   // Check for context compaction message - render as collapsed card
                   if (isContextCompactionMessage(message)) {
                     result.push(
-                      <div key={`compaction-sep-${i}`} className="msg-row hermes-separator compaction-separator">
-                        <div className="msg-role assistant">
-                          <div className="role-icon assistant">H</div>
-                          <span>Hermes</span>
-                        </div>
-                      </div>
-                    );
-                    result.push(
                       <ContextCompactionMessageRow
                         key={`compaction-${i}`}
                         message={message}
@@ -179,7 +196,7 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
 
                   // Render assistant message
                   result.push(
-                    <div key={`msg-wrap-${i}`} data-msg-idx={i}>
+                    <div key={`msg-wrap-${i}`} data-msg-idx={i} data-msg-id={message.id}>
                       <MessageRow
                         key={`msg-${i}`}
                         message={message}
@@ -204,7 +221,7 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
                     if (isStreamingAssistant || toolCallIds.has(tcId) || toolCallIds.size === 0) {
                       renderedIndices.add(j);
                       result.push(
-                        <div key={`msg-wrap-${j}`} data-msg-idx={j}>
+                        <div key={`msg-wrap-${j}`} data-msg-idx={j} data-msg-id={nextMsg.id}>
                           <MessageRow
                             key={`msg-${j}`}
                             message={nextMsg}
@@ -224,7 +241,7 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
                   // Orphaned tool message (without preceding assistant)
                   renderedIndices.add(i);
                   result.push(
-                    <div key={`msg-wrap-${i}`} data-msg-idx={i}>
+                    <div key={`msg-wrap-${i}`} data-msg-idx={i} data-msg-id={message.id}>
                       <MessageRow
                         key={`msg-${i}`}
                         message={message}
@@ -244,6 +261,7 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
                     <div
                       key={`msg-wrap-${i}`}
                       data-msg-idx={i}
+                      data-msg-id={message.id}
                       {...(isUser ? { 'data-user-msg-idx': i } : {})}
                     >
                       <MessageRow

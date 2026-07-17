@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
@@ -10,6 +10,11 @@ export default function SessionList() {
   const { sessions, currentSessionId, currentSession, loadSessions, createSession, selectSession, gatewayOnline } = useSessionStore();
   const { workspaces } = useWorkspaceStore();
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<any[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const DEBOUNCE_MS = 280;
+
   // Set of collapsed workspace keys; first group is expanded by default (not in set)
   const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(new Set());
   // Track whether we have initialized collapse state from the first render
@@ -46,13 +51,16 @@ export default function SessionList() {
     }
   }, [sessions, currentSessionId, autoSelectDone, selectSession]);
 
-  // Filter sessions by search query
+  // Filter sessions: server-side search when searchResults is set, else client-side fallback
   const filteredSessions = useMemo(() => {
     const sessionList = sessions || [];
+    // Use server search results if available
+    if (searchResults !== null) return searchResults;
+    // Client-side fallback (no search active)
     if (!searchQuery.trim()) return sessionList;
     const query = searchQuery.toLowerCase();
     return sessionList.filter((s) => s.title.toLowerCase().includes(query));
-  }, [sessions, searchQuery]);
+  }, [sessions, searchQuery, searchResults]);
 
   // Resolve a workspace path to a display label
   const wsLabel = useMemo(() => {
@@ -161,9 +169,49 @@ export default function SessionList() {
     await createSession(activeWs || undefined);
   };
 
-  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setSearchQuery(e.target.value);
-  };
+  const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const query = e.target.value;
+    setSearchQuery(query);
+
+    // Clear pending debounce
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
+
+    // Clear search results when input is empty
+    if (!query.trim()) {
+      setSearchResults(null);
+      setSearching(false);
+      return;
+    }
+
+    // Debounce the API call
+    setSearching(true);
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `/api/sessions/search?q=${encodeURIComponent(query)}&content=1&depth=0`,
+          { credentials: 'include' }
+        );
+        const data = await res.json();
+        if (data.sessions) {
+          // Merge with existing session data for workspace/pinned/etc
+          const sessionMap = new Map((sessions || []).map(s => [s.session_id, s]));
+          const merged = data.sessions.map((sr: any) => {
+            const existing = sessionMap.get(sr.session_id);
+            return existing ? { ...existing, ...sr } : sr;
+          });
+          setSearchResults(merged);
+        }
+      } catch {
+        // Fall back to client-side filtering on error
+        setSearchResults(null);
+      } finally {
+        setSearching(false);
+      }
+    }, DEBOUNCE_MS);
+  }, [sessions]);
 
   const handleCleanupOpen = (sourceTag?: string) => {
     setCleanupSource(sourceTag || '');
@@ -204,41 +252,102 @@ export default function SessionList() {
 
   return (
     <>
-      <div className="sidebar-section">
-        <button className="new-chat-btn" onClick={handleNewChat}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-            <line x1="12" y1="5" x2="12" y2="19" />
-            <line x1="5" y1="12" x2="19" y2="12" />
+      {/* Sidebar toolbar — single-row header */}
+      <div className="sidebar-toolbar">
+        {/* Search — expandable input */}
+        <div className="sidebar-toolbar-search">
+          <svg className="sidebar-toolbar-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
-          <span>{t('sessions.new_conversation')}</span>
-          <span className="text-xs opacity-50 ml-1">Cmd+K</span>
-        </button>
+          <input
+            type="text"
+            placeholder={t('sessions.filter')}
+            value={searchQuery}
+            onChange={handleSearchChange}
+          />
+          {searchQuery && (
+            <button
+              className="sidebar-toolbar-search-clear"
+              onClick={() => { setSearchQuery(''); setSearchResults(null); }}
+              aria-label="Clear search"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <line x1="18" y1="6" x2="6" y2="18"/>
+                <line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
+          )}
+        </div>
+
+        {/* Secondary actions */}
+        <div className="sidebar-toolbar-actions">
+          {showCliSessions && (
+            <button
+              className="sidebar-toolbar-btn"
+              onClick={() => handleCleanupOpen()}
+              title="Clean up old gateway sessions"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="3 6 5 6 21 6" />
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+              </svg>
+            </button>
+          )}
+          {showCliSessions && !gatewayOnline && (
+            <span className="sidebar-toolbar-warn" title="Gateway offline">⚠</span>
+          )}
+          {/* New Conversation — placed right of cleanup */}
+          <button
+            className="sidebar-toolbar-btn sidebar-toolbar-btn--primary"
+            onClick={handleNewChat}
+            title={t('sessions.new_conversation') + ' (Cmd+K)'}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </button>
+        </div>
       </div>
-      
-      <div className="session-search">
-        <input
-          type="text"
-          placeholder={t('sessions.filter')}
-          value={searchQuery}
-          onChange={handleSearchChange}
-        />
-      </div>
-      
+
       <div className="session-list">
-        {groupedSessions.length > 0 && (
+        {/* Search results header */}
+        {searchResults !== null && (
+          <div style={{ padding: '6px 10px', fontSize: 11, color: 'var(--muted)' }}>
+            {searching ? (
+              'Searching…'
+            ) : (
+              `${searchResults.length} result${searchResults.length !== 1 ? 's' : ''} for "${searchQuery}"`
+            )}
+          </div>
+        )}
+
+        {/* No matching results */}
+        {searchResults !== null && searchResults.length === 0 && !searching && (
+          <div className="text-center text-[var(--muted)] text-sm py-4">
+            No matching conversations
+          </div>
+        )}
+
+        {/* Search active: flat list without workspace grouping */}
+        {searchResults !== null && searchResults.length > 0 && (
           <div className="webui-sessions-section">
-            <div className="flex items-center justify-between px-2 py-1">
-              {showCliSessions && (
-                <button
-                  className="text-xs text-[var(--muted)] hover:text-[var(--accent)] transition-colors"
-                  onClick={() => handleCleanupOpen()}
-                  title="Clean up old gateway sessions"
-                >
-                  🧹 Clean
-                </button>
-              )}
-              {showCliSessions && !gatewayOnline && <span className="text-xs text-[var(--accent)]" title="Gateway offline">⚠</span>}
-            </div>
+            {searchResults.map((session) => (
+              <SessionItem
+                key={session.session_id}
+                session={session}
+                isActive={currentSessionId === session.session_id}
+                onClick={() => selectSession(session.session_id, (session as any).match_message_id ?? null)}
+                archivedChildren={archivedMap.get(session.session_id)}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Normal grouped view (when not searching) */}
+        {searchResults === null && groupedSessions.length > 0 && (
+          <div className="webui-sessions-section">
             {groupedSessions.map((group) => {
               const collapsed = collapsedKeys.has(group.key);
               return (
@@ -268,7 +377,7 @@ export default function SessionList() {
                       key={session.session_id}
                       session={session}
                       isActive={currentSessionId === session.session_id}
-                      onClick={() => selectSession(session.session_id)}
+                      onClick={() => selectSession(session.session_id, (session as any).match_message_id ?? null)}
                       archivedChildren={archivedMap.get(session.session_id)}
                     />
                   ))}
@@ -278,7 +387,7 @@ export default function SessionList() {
           </div>
         )}
 
-        {groupedSessions.length === 0 && archivedMap.size === 0 && (
+        {searchResults === null && groupedSessions.length === 0 && archivedMap.size === 0 && (
           <div className="text-center text-[var(--muted)] text-sm py-4">
             {searchQuery ? t('sessions.no_results') : t('sessions.empty')}
           </div>

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { UsageInfo, Session } from '../../types';
 import { sessionService } from '../../services/api';
 import { useSessionStore } from '../../stores/useSessionStore';
+import { useChatStore } from '../../stores/useChatStore';
 
 // Hardcoded colour thresholds (v1, not user-configurable)
 const THRESHOLD_WARN = 0.60;   // Green → Yellow at 60%
@@ -99,7 +100,13 @@ const ContextUsageIndicator: React.FC<ContextUsageIndicatorProps> = ({
     setCompressing(true);
     onCompressingChange?.(true);
     try {
-      await sessionService.compressSession(sid);
+      const result = await sessionService.compressSession(sid);
+      // Update the chat store directly — ChatInterface only syncs
+      // messages on sessionId change, but compress stays on the same session.
+      if (result?.session?.messages) {
+        useChatStore.getState().setMessages(result.session.messages);
+        useChatStore.getState().clearCache(sid);
+      }
       await loadSession(sid);
       // Refresh sidebar session list so new compaction snapshot appears
       await loadSessions();
@@ -172,10 +179,12 @@ const ContextUsageIndicator: React.FC<ContextUsageIndicatorProps> = ({
       : t('context_usage.click_to_compress');
 
   const canClick = !streaming && !compressing && !!session?.session_id;
+  const autoCompressDisabled = (session as any)?.auto_compress_disabled === true;
 
   return (
     <div
       className={`context-usage-indicator${canClick ? ' context-usage-clickable' : ''}`}
+      title={autoCompressDisabled ? 'Auto-compress disabled due to poor compression ratio. Clear history to re-enable.' : undefined}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       onClick={handleClick}

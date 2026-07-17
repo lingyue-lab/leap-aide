@@ -628,12 +628,11 @@ function ToolMessageRow({ message, messages, toolCallMap }: { message: Message; 
   const duration = toolCall?.duration;
   const cmdSnippet = getCmdSnippet(toolName, commandArgs);
 
-  // Build class list
+  // Build class list — no per-tool running state: ThinkIndicator already shows it
   const classes = [
     'msg-row',
     'tool-message',
     hasOOB ? 'tool-message--steered' : '',
-    isRunning ? 'tool-message--running' : '',
     isError ? 'tool-message--error' : '',
   ].filter(Boolean).join(' ');
 
@@ -643,10 +642,12 @@ function ToolMessageRow({ message, messages, toolCallMap }: { message: Message; 
         className="tool-message-header"
         onClick={() => setExpanded(!expanded)}
       >
-        {/* Status indicator: ◉ pulsing (running), ✓ complete, ✗ error */}
-        <span className={`tool-status ${isRunning ? 'running' : isError ? 'error' : 'done'}`}>
-          {isRunning ? '◉' : isError ? '✗' : '✓'}
-        </span>
+        {/* Status indicator: ✓ complete, ✗ error; nothing while running (ThinkIndicator handles it) */}
+        {!isRunning && (
+          <span className={`tool-status ${isError ? 'error' : 'done'}`}>
+            {isError ? '✗' : '✓'}
+          </span>
+        )}
 
         {/* Tool name */}
         <span className="tool-name">{toolName}</span>
@@ -659,11 +660,6 @@ function ToolMessageRow({ message, messages, toolCallMap }: { message: Message; 
         {/* Command snippet */}
         {cmdSnippet && (
           <span className="tool-snippet">{truncate(cmdSnippet, 60)}</span>
-        )}
-
-        {/* Running label */}
-        {isRunning && (
-          <span className="tool-running-label">Running…</span>
         )}
 
         {hasOOB && (

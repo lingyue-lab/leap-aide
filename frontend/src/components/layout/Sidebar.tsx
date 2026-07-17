@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import NavTabs from '@/components/sidebar/NavTabs';
 import SessionList from '@/components/sidebar/SessionList';
 import TasksPanel from '@/components/sidebar/TasksPanel';
@@ -17,9 +17,28 @@ interface SidebarProps {
 
 export default function Sidebar({ width = 300, onResizeStart }: SidebarProps) {
   const [activePanel, setActivePanel] = useState<NavPanel>('chat');
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    const saved = localStorage.getItem('hermes_sidebar_open');
+    return saved !== null ? saved === 'true' : true;
+  });
+
+  // Persist sidebarOpen to localStorage
+  useEffect(() => {
+    localStorage.setItem('hermes_sidebar_open', String(sidebarOpen));
+  }, [sidebarOpen]);
 
   const closeSidebar = () => setSidebarOpen(false);
+
+  const handlePanelChange = (panel: NavPanel) => {
+    if (panel === activePanel) {
+      // Clicking the active tab toggles sidebar open/close
+      setSidebarOpen(prev => !prev);
+    } else {
+      // Different tab — switch panel and ensure sidebar is open
+      setActivePanel(panel);
+      setSidebarOpen(true);
+    }
+  };
 
   return (
     <>
@@ -30,54 +49,58 @@ export default function Sidebar({ width = 300, onResizeStart }: SidebarProps) {
           onClick={closeSidebar}
         />
       )}
-      
-      <aside 
+
+      <aside
         className={`sidebar ${sidebarOpen ? 'open' : ''}`}
-        style={{ width: `${width}px`, minWidth: `${width}px` }}
+        style={{ width: sidebarOpen ? `${width}px` : '48px', minWidth: sidebarOpen ? `${width}px` : '48px' }}
       >
-        <NavTabs activePanel={activePanel} onPanelChange={setActivePanel} />
-        
-        <div className="sidebar-content">
-          <div className={`panel-view ${activePanel === 'chat' ? 'active' : ''}`} id="panelChat">
-            <SessionList />
-          </div>
-          
-          <div className={`panel-view ${activePanel === 'tasks' ? 'active' : ''}`} id="panelTasks">
-            <TasksPanel />
-          </div>
-          
-          <div className={`panel-view ${activePanel === 'skills' ? 'active' : ''}`} id="panelSkills">
-            <SkillsPanel />
-          </div>
-          
-          <div className={`panel-view ${activePanel === 'memory' ? 'active' : ''}`} id="panelMemory">
-            <MemoryPanel />
-          </div>
-          
-          <div className={`panel-view ${activePanel === 'workspaces' ? 'active' : ''}`} id="panelWorkspaces">
-            <WorkspacesPanel />
-          </div>
+        <NavTabs activePanel={activePanel} onPanelChange={handlePanelChange} />
 
-          <div className={`panel-view ${activePanel === 'terminal' ? 'active' : ''}`} id="panelTerminal">
-            <TerminalPanel />
-          </div>
+        {sidebarOpen && (
+          <div className="sidebar-content">
+            <div className={`panel-view ${activePanel === 'chat' ? 'active' : ''}`} id="panelChat">
+              <SessionList />
+            </div>
 
-          <div className={`panel-view ${activePanel === 'vnc' ? 'active' : ''}`} id="panelVnc">
-            <VncPanel />
-          </div>
+            <div className={`panel-view ${activePanel === 'tasks' ? 'active' : ''}`} id="panelTasks">
+              <TasksPanel />
+            </div>
 
-          <div className={`panel-view ${activePanel === 'settings' ? 'active' : ''}`} id="panelSettings">
-            <SettingsPanel />
+            <div className={`panel-view ${activePanel === 'skills' ? 'active' : ''}`} id="panelSkills">
+              <SkillsPanel />
+            </div>
+
+            <div className={`panel-view ${activePanel === 'memory' ? 'active' : ''}`} id="panelMemory">
+              <MemoryPanel />
+            </div>
+
+            <div className={`panel-view ${activePanel === 'workspaces' ? 'active' : ''}`} id="panelWorkspaces">
+              <WorkspacesPanel />
+            </div>
+
+            <div className={`panel-view ${activePanel === 'terminal' ? 'active' : ''}`} id="panelTerminal">
+              <TerminalPanel />
+            </div>
+
+            <div className={`panel-view ${activePanel === 'vnc' ? 'active' : ''}`} id="panelVnc">
+              <VncPanel />
+            </div>
+
+            <div className={`panel-view ${activePanel === 'settings' ? 'active' : ''}`} id="panelSettings">
+              <SettingsPanel />
+            </div>
           </div>
-        </div>
-        
-        {/* Resize handle */}
-        <div 
-          className="resize-handle" 
-          onMouseDown={onResizeStart}
-          aria-label="Resize sidebar"
-          role="separator"
-        />
+        )}
+
+        {/* Resize handle — hidden when collapsed */}
+        {sidebarOpen && (
+          <div
+            className="resize-handle"
+            onMouseDown={onResizeStart}
+            aria-label="Resize sidebar"
+            role="separator"
+          />
+        )}
       </aside>
     </>
   );

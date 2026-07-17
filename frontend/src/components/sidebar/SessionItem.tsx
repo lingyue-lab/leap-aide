@@ -1,10 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { formatDistanceToNow } from 'date-fns';
-import { zhCN, enUS } from 'date-fns/locale';
 import type { SessionListItem } from '@/types';
 import { useSessionStore } from '@/stores/useSessionStore';
-import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 import { useChatStore } from '@/stores/useChatStore';
 import { isSessionStreaming, subscribe as subscribeStream } from '@/stores/streamManager';
 import { sessionService } from '@/services/api';
@@ -17,9 +15,8 @@ interface SessionItemProps {
 }
 
 export default function SessionItem({ session, isActive, onClick, archivedChildren }: SessionItemProps) {
-  const { t, i18n } = useTranslation('common');
-  const { renameSession, deleteSession, pinSession, assignWorkspace, updateSessionLastSeen, loadSession, selectSession, currentSessionId } = useSessionStore();
-  const { workspaces } = useWorkspaceStore();
+  const { t } = useTranslation('common');
+  const { renameSession, deleteSession, pinSession, updateSessionLastSeen, loadSession, selectSession, currentSessionId } = useSessionStore();
 
   // Unread count: how many messages were added since the user last viewed this session
   const sessionMsgCount = session.message_count ?? 0;
@@ -30,7 +27,6 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
   const [archivedExpanded, setArchivedExpanded] = useState(false);
   const [editTitle, setEditTitle] = useState(session.title);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [showWorkspaceMenu, setShowWorkspaceMenu] = useState(false);
   const [compressing, setCompressing] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [showClearModal, setShowClearModal] = useState(false);
@@ -46,26 +42,34 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
   const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
-  const dateLocale = i18n.language === 'zh-CN' ? zhCN : enUS;
-
   // Read-only marker for gateway/CLI sessions and compaction snapshots
-  const readOnlyMarker = (session.is_cli_session || session._readonly) ? (
-    <span className="session-readonly-marker" title={session.is_cli_session ? t('sessions.readonly_gateway') : t('sessions.readonly_snapshot')}>🔒</span>
-  ) : null;
-
   // Platform icon mapping for gateway sessions
   const platformIcon = (() => {
     if (!session.is_cli_session) return null;
     const tag = (session.source_tag || '').toLowerCase();
     switch (tag) {
       case 'weixin':
-        return <span className="gateway-icon weixin" title="WeChat">💬</span>;
+        return <span className="gateway-icon weixin" data-tooltip="WeChat">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+        </span>;
       case 'telegram':
-        return <span className="gateway-icon telegram" title="Telegram">✈</span>;
+        return <span className="gateway-icon telegram" data-tooltip="Telegram">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13"/>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+          </svg>
+        </span>;
       case 'cli':
-        return <span className="gateway-icon cli" title="CLI">▸</span>;
+        return <span className="gateway-icon cli" data-tooltip="CLI">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="4 17 10 11 4 5"/>
+            <line x1="12" y1="19" x2="20" y2="19"/>
+          </svg>
+        </span>;
       default:
-        return tag ? <span className="gateway-icon generic" title={session.source_tag}>{tag.charAt(0).toUpperCase()}</span> : null;
+        return tag ? <span className="gateway-icon generic" data-tooltip={session.source_tag}>{tag.charAt(0).toUpperCase()}</span> : null;
     }
   })();
 
@@ -110,29 +114,16 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
     const rect = buttonRef.current?.getBoundingClientRect();
     if (rect) {
       setMenuPosition({
-        top: rect.bottom + window.scrollY,
-        left: rect.left + window.scrollX,
+        top: rect.top + window.scrollY,
+        left: rect.right + 4,
       });
     }
-    setShowWorkspaceMenu(false);
     setMenuOpen(true);
   };
 
   const handleStartEdit = () => {
     setIsEditing(true);
     setMenuOpen(false);
-  };
-
-  const handleAssignWorkspace = () => {
-    setShowWorkspaceMenu((prev) => !prev);
-  };
-
-  const handleSelectWorkspace = async (workspacePath: string) => {
-    try {
-      await assignWorkspace(session.session_id, workspacePath);
-    } catch (err) {
-      console.error('Failed to assign workspace:', err);
-    }
   };
 
   const handleSaveEdit = async () => {
@@ -172,8 +163,13 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
     if (!confirm(t('sessions.compress_confirm'))) return;
     setCompressing(true);
     try {
-      await sessionService.compressSession(session.session_id);
-      // Reload the session so the chat view shows the compressed messages
+      const result = await sessionService.compressSession(session.session_id);
+      // Update the chat store directly — ChatInterface only syncs
+      // messages on sessionId change, but compress stays on the same session.
+      if (result?.session?.messages) {
+        useChatStore.getState().setMessages(result.session.messages);
+        useChatStore.getState().clearCache(session.session_id);
+      }
       await loadSession(session.session_id);
     } catch (err) {
       alert(`Compression failed: ${(err as Error).message}`);
@@ -195,6 +191,7 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
   const handleClearConfirm = async () => {
     setShowClearModal(false);
     setClearing(true);
+    window.dispatchEvent(new CustomEvent('hermes:clear-history'));
     const keepN = Math.max(0, parseInt(keepLast, 10) || 0);
     try {
       await sessionService.clearHistory(session.session_id, keepN);
@@ -212,19 +209,29 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
       alert(`Clear failed: ${(err as Error).message}`);
     } finally {
       setClearing(false);
+      window.dispatchEvent(new CustomEvent('hermes:clear-history-done'));
     }
   };
 
   const handlePin = async () => {
     setMenuOpen(false);
-    setShowWorkspaceMenu(false);
     await pinSession(session.session_id, !session.pinned);
   };
 
-  const relativeTime = formatDistanceToNow(new Date(session.created_at * 1000), {
-    addSuffix: false,
-    locale: dateLocale,
-  });
+  // Compact relative time: "5d", "3h", "12m", "just now"
+  const relativeTime = (() => {
+    const diffMs = Date.now() - session.created_at * 1000;
+    const mins = Math.floor(diffMs / 60000);
+    if (mins < 1) return 'now';
+    if (mins < 60) return `${mins}m`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h`;
+    const days = Math.floor(hours / 24);
+    if (days < 30) return `${days}d`;
+    const months = Math.floor(days / 30);
+    if (months < 12) return `${months}m`;
+    return `${Math.floor(months / 12)}y`;
+  })();
 
   const handleClick = () => {
     onClick();
@@ -250,16 +257,6 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
       >
         <div className="session-text">
           <div className="session-title-row">
-            {session.pinned && (
-              <span className="session-pin-indicator" title={t('sessions.pinned')}>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M16 1L23 8L17.5 13.5L17.5 16L13.5 16L12 17.5L12 20L10 20L10 17.5L8.5 16L6.5 16L6.5 13.5C4.5 13.5 2 11 1 8L8.5 8L16 1Z" />
-                  <line x1="8" y1="16" x2="2" y2="22" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                </svg>
-              </span>
-            )}
-            {platformIcon}
-            {readOnlyMarker}
             {isEditing ? (
               <input
                 ref={inputRef}
@@ -276,20 +273,55 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
             )}
             {/* Background streaming indicator — shown only when NOT the active session */}
             {bgStreaming && !isActive && (
-              <span className="session-bg-streaming-dot" title="Running in background" />
+              <span className="session-icon-wrap" data-tooltip="Running in background">
+                <span className="session-bg-streaming-dot" />
+              </span>
             )}
             {/* Unread badge — shown after stream completes and user hasn't visited this session */}
             {unreadCount > 0 && !isActive && !bgStreaming && (
-              <span className="session-unread-badge" title={`${unreadCount} new response(s)`}>
+              <span className="session-unread-badge" data-tooltip={`${unreadCount} new response(s)`}>
                 +{unreadCount}
               </span>
             )}
           </div>
-          <div className="session-meta">{relativeTime}</div>
         </div>
 
-        {!session.is_cli_session && (
-          <div className="session-actions">
+        <div className="session-actions">
+          {session.pinned && (
+            <span className="session-pin-indicator" data-tooltip={t('sessions.pinned')}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="12" y1="22" x2="12" y2="13"/>
+                <line x1="7" y1="13" x2="17" y2="13"/>
+                <line x1="7" y1="9"  x2="17" y2="9"/>
+                <line x1="7" y1="5"  x2="17" y2="5"/>
+                <line x1="12" y1="5"  x2="12" y2="2"/>
+              </svg>
+            </span>
+          )}
+          {platformIcon}
+          {archivedChildren && archivedChildren.length > 0 && (
+            <span
+              className="session-archived-badge"
+              data-tooltip={`${archivedChildren.length} snapshot${archivedChildren.length > 1 ? 's' : ''}`}
+              onClick={(e) => { e.stopPropagation(); setArchivedExpanded(!archivedExpanded); }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" y1="13" x2="8" y2="13"/>
+                <line x1="16" y1="17" x2="8" y2="17"/>
+              </svg>
+            </span>
+          )}
+          <span className="session-time">{relativeTime}</span>
+          {session.is_cli_session || session._readonly ? (
+            <span className="session-actions-trigger" style={{cursor: 'default', opacity: 0.45}} title={session.is_cli_session ? t('sessions.readonly_gateway') : t('sessions.readonly_snapshot')}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+              </svg>
+            </span>
+          ) : (
             <button
               ref={buttonRef}
               className={`session-actions-trigger ${menuOpen ? 'active' : ''}`}
@@ -299,16 +331,16 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
               }}
               aria-label={t('sessions.actions')}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="1" />
                 <circle cx="12" cy="5" r="1" />
                 <circle cx="12" cy="19" r="1" />
               </svg>
             </button>
-          </div>
-        )}
+          )}
+        </div>
 
-        {menuOpen && (
+        {menuOpen && createPortal(
           <div
             ref={menuRef}
             className="session-action-menu open"
@@ -316,7 +348,7 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
               position: 'fixed',
               top: menuPosition.top,
               left: menuPosition.left,
-              minWidth: showWorkspaceMenu ? 220 : 140,
+              minWidth: 140,
             }}
           >
             {!session.is_cli_session && (
@@ -340,48 +372,6 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
                   </span>
                 </button>
               </>
-            )}
-            {!session.is_cli_session && (
-              <button className="session-action-opt" onClick={handleAssignWorkspace}>
-                <span className="ws-opt-action">
-                  <svg className="ws-opt-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                  </svg>
-                  <span className="ws-opt-name">{t('sessions.assign_workspace')}</span>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginLeft: 'auto', opacity: 0.5 }}>
-                    <polyline points={showWorkspaceMenu ? '18 15 12 9 6 15' : '9 18 15 12 9 6'}/>
-                  </svg>
-                </span>
-              </button>
-            )}
-            {showWorkspaceMenu && (
-              <div className="session-workspace-submenu">
-                {workspaces.length === 0 ? (
-                  <div className="session-workspace-empty">{t('workspaces.empty')}</div>
-                ) : (
-                  workspaces.map((ws) => (
-                    <button
-                      key={ws.path}
-                      className="session-action-opt"
-                      onClick={() => handleSelectWorkspace(ws.path)}
-                    >
-                      <span className="ws-opt-action">
-                        <svg className="ws-opt-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                        </svg>
-                        <span className="ws-opt-name ws-opt-name--ellipsis">
-                          {ws.name}
-                        </span>
-                        {session.workspace === ws.path && (
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ marginLeft: 'auto', flexShrink: 0, opacity: 0.6 }}>
-                            <polyline points="20 6 9 17 4 12"/>
-                          </svg>
-                        )}
-                      </span>
-                    </button>
-                  ))
-                )}
-              </div>
             )}
             {!session.is_cli_session && (session.message_count ?? 0) > 50 && (
               <button
@@ -442,25 +432,14 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
                 </span>
               </button>
             )}
-          </div>
+          </div>,
+          document.body
         )}
       </div>
 
       {/* Archived (compaction) child sessions — collapsible, read-only */}
       {archivedChildren && archivedChildren.length > 0 && (
         <div className="session-archived-section">
-          <div
-            className="session-archived-toggle"
-            onClick={(e) => {
-              e.stopPropagation();
-              setArchivedExpanded(!archivedExpanded);
-            }}
-          >
-            <span className={`session-archived-caret ${archivedExpanded ? 'expanded' : ''}`}>▸</span>
-            <span className="session-archived-count">
-              {archivedChildren.length} snapshot{archivedChildren.length > 1 ? 's' : ''}
-            </span>
-          </div>
           {archivedExpanded && (
             <div className="session-archived-children">
               {[...archivedChildren]
@@ -474,7 +453,14 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
                   >
                     <div className="session-text">
                       <div className="session-title-row">
-                        <span className="session-archived-icon">📜</span>
+                        <span className="session-archived-icon" data-tooltip="Archived snapshot">
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                            <polyline points="14 2 14 8 20 8"/>
+                            <line x1="16" y1="13" x2="8" y2="13"/>
+                            <line x1="16" y1="17" x2="8" y2="17"/>
+                          </svg>
+                        </span>
                         <span className="session-title">
                           #{child._compaction_n} · {child.message_count ?? 0} msgs
                         </span>

@@ -1,4 +1,4 @@
-import { useRef, useCallback, useEffect } from 'react';
+import { useRef, useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useChatStore } from '@/stores/useChatStore';
 import { useSessionStore } from '@/stores/useSessionStore';
@@ -29,6 +29,18 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const prevSessionIdRef = useRef<string | null>(null);
   const { currentSession, loadSession } = useSessionStore();
+  const [sessionLoading, setSessionLoading] = useState(false);
+  // Listen for clear-history operation from sidebar
+  useEffect(() => {
+    const onClear = () => setSessionLoading(true);
+    const onClearDone = () => setSessionLoading(false);
+    window.addEventListener('hermes:clear-history', onClear);
+    window.addEventListener('hermes:clear-history-done', onClearDone);
+    return () => {
+      window.removeEventListener('hermes:clear-history', onClear);
+      window.removeEventListener('hermes:clear-history-done', onClearDone);
+    };
+  }, []);
   const { messages, busy, activeStreamId, setMessages, setToolCalls } = useChatStore();
   const { startStream, cancelStream, streaming } = useChatStream();
   useModeSync(sessionId ?? null);
@@ -75,6 +87,8 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
     if (!sessionId) return;
     if (prevId === sessionId) return;
 
+    setSessionLoading(true);
+
     // Tell the store which session is "current" so updateSessionCache knows
     // whether to update live state or just the cache.
     useChatStore.getState().setCurrentSessionId(sessionId);
@@ -95,9 +109,10 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
     // ── Helper: refresh session data from backend and reconnect to any active stream ──
     const refreshFromBackend = async (sid: string) => {
       const session = useSessionStore.getState().currentSession;
-      if (!session) return;
+      if (!session) { setSessionLoading(false); return; }
       if (session.messages) setMessages(session.messages);
       if (session.tool_calls) setToolCalls(session.tool_calls);
+      setSessionLoading(false);
 
       // Restore context usage from persisted compressor data.
       if (session.context_length || session.last_prompt_tokens) {
@@ -159,6 +174,7 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
     // 2. Try restoring from cache for instant display, then refresh from backend.
     const cached = useChatStore.getState().restoreFromCache(sessionId);
     if (cached) {
+      setSessionLoading(false);
       loadSession(sessionId).then(() => refreshFromBackend(sessionId));
       return;
     }
@@ -205,6 +221,14 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
 
   return (
     <div className="chat-interface">
+      {sessionLoading && (
+        <div className="session-loading-overlay">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: 'spin 0.8s linear infinite' }}>
+            <circle cx="12" cy="12" r="10" strokeOpacity="0.25"/>
+            <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round"/>
+          </svg>
+        </div>
+      )}
       <ChatMessages
         ref={scrollContainerRef}
         messages={messages}
