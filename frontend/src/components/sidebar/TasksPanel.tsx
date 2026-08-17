@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { cronService } from '@/services/api';
 import { useCronStore } from '@/stores/useCronStore';
+import CustomScrollbar from '@/components/common/CustomScrollbar';
+import { Icon } from '@/components/common/Icons';
 
 export default function TasksPanel() {
   const { t } = useTranslation('common');
@@ -14,7 +16,6 @@ export default function TasksPanel() {
   const selectJob = useCronStore((s) => s.selectJob);
   const setStoreJobs = useCronStore((s) => s.setJobs);
   const setShowNewJobForm = useCronStore((s) => s.setShowNewJobForm);
-  const unreadJobIds = useCronStore((s) => s.unreadJobIds);
 
   useEffect(() => {
     loadJobs();
@@ -44,21 +45,23 @@ export default function TasksPanel() {
   return (
     <div className="tasks-panel">
       {/* Header */}
-      <div className="flex items-center justify-between p-2 border-b border-[var(--border)]">
-        <span className="text-xs font-bold uppercase tracking-wider text-[var(--muted)]">
+      <div className="sidebar-header">
+        <span className="sidebar-header-title">
           {t('tasks.scheduled_jobs') || 'Scheduled Jobs'}
         </span>
-        <button
-          className="cron-btn run text-xs px-2 py-1"
-          onClick={() => setShowNewJobForm(true)}
-          title="New Job"
-        >
-          +
-        </button>
+        <div className="sidebar-header-actions">
+          <button
+            className="icon-btn"
+            onClick={() => setShowNewJobForm(true)}
+            title="New Job"
+          >
+            <Icon name="add" size={18} />
+          </button>
+        </div>
       </div>
 
       {/* Job List */}
-      <div className="cron-list flex-1 overflow-y-auto">
+      <CustomScrollbar className="flex-1">
         {error && (
           <div className="p-2 text-sm text-[var(--accent)]">{error}</div>
         )}
@@ -70,56 +73,34 @@ export default function TasksPanel() {
         {jobs.map((job) => (
           <div
             key={job.id}
-            className={`cron-item p-2 border-b border-[var(--border2)] cursor-pointer hover:bg-[rgba(255,255,255,0.04)] ${!job.enabled ? 'opacity-60' : ''} ${selectedJob?.id === job.id ? 'bg-[rgba(255,255,255,0.07)]' : ''}`}
+            className={`sidebar-item${!job.enabled ? ' opacity-[0.38]' : ''}${selectedJob?.id === job.id ? ' active' : ''}`}
             onClick={() => selectJob(job)}
           >
-            <div className="flex items-start gap-2">
-              {/* Blinking green dot for enabled jobs */}
-              <div className="flex-shrink-0 mt-1.5">
-                {job.enabled ? (
-                  <span className="relative flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
-                  </span>
-                ) : (
-                  <span className="inline-flex rounded-full h-2 w-2 bg-[var(--muted)] opacity-40" />
-                )}
+            <div className="sidebar-item-text">
+              <div className="sidebar-item-title-row">
+                <span className="sidebar-item-title">
+                  {job.name || job.prompt.slice(0, 30) + '...'}
+                </span>
               </div>
-
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-1">
-                  <span className="cron-name text-sm font-medium truncate">
-                    {job.name || job.prompt.slice(0, 30) + '...'}
-                  </span>
-                  {unreadJobIds.has(job.id) && selectedJob?.id !== job.id && (
-                    <span className="inline-flex rounded-full h-2 w-2 bg-[#e5363b] flex-shrink-0" />
-                  )}
-                  {!job.enabled && (
-                    <span className="text-xs text-[var(--muted)] flex-shrink-0">(paused)</span>
-                  )}
+              {job.last_run && (
+                <div className="text-sm text-[var(--muted)] mt-0.5">
+                  Last run: {new Date(job.last_run * 1000).toLocaleString()}
                 </div>
-                <div className="text-xs text-[var(--muted)] mt-0.5">
-                  <span className="cron-schedule">
-                    {typeof job.schedule === 'object' && job.schedule !== null
-                      ? (job.schedule as { display?: string }).display ?? JSON.stringify(job.schedule)
-                      : job.schedule}
-                  </span>
+              )}
+              {job.error && (
+                <div className="text-sm text-[var(--accent)] mt-0.5 truncate">
+                  Error: {job.error}
                 </div>
-                {job.last_run && (
-                  <div className="text-xs text-[var(--muted)] mt-0.5">
-                    Last run: {new Date(job.last_run * 1000).toLocaleString()}
-                  </div>
-                )}
-                {job.error && (
-                  <div className="text-xs text-[var(--accent)] mt-0.5 truncate">
-                    Error: {job.error}
-                  </div>
-                )}
-              </div>
+              )}
+            </div>
+            <div className="sidebar-item-actions">
+              <span className="sidebar-item-dot-wrap">
+                <span className={`sidebar-item-streaming-dot${job.enabled ? '' : ' inactive'}`} />
+              </span>
             </div>
           </div>
         ))}
-      </div>
+      </CustomScrollbar>
     </div>
   );
 }

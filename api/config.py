@@ -544,9 +544,10 @@ _PROVIDER_DISPLAY = {
     "deepseek": "DeepSeek",
     "minimax": "MiniMax",
     "google": "Google",
+    "gemini": "Google Gemini",
     "meta-llama": "Meta Llama",
     "huggingface": "HuggingFace",
-    "alibaba": "Alibaba",
+    "alibaba": "Qwen",
     "ollama": "Ollama",
     "ollama-cloud": "Ollama Cloud",
     "opencode-zen": "OpenCode Zen",
@@ -555,6 +556,7 @@ _PROVIDER_DISPLAY = {
     "mistralai": "Mistral",
     "qwen": "Qwen",
     "x-ai": "xAI",
+    "xai": "xAI",
 }
 
 # Provider alias → canonical slug.  Users configure providers using the
@@ -775,6 +777,37 @@ _PROVIDER_MODELS = {
     ],
 }
 
+# Provider *card* dedup: OpenRouter namespace prefix → canonical provider card.
+# These prefixes are OpenRouter's model-id namespaces (qwen/, google/, x-ai/),
+# which belong to the same company as the canonical provider slug used for the
+# Settings card.  Distinct from _PROVIDER_ALIASES (input→canonical routing,
+# which also carries non-brand mappings like "ollama" → "custom").
+_PROVIDER_CARD_ALIASES = {
+    "qwen": "alibaba",
+    "google": "gemini",
+    "x-ai": "xai",
+}
+
+
+def get_provider_card_models(card_id: str) -> list[dict]:
+    """Return the merged model list for a canonical provider card.
+
+    Folds in any OpenRouter-prefix keys that alias to *card_id* (per
+    _PROVIDER_CARD_ALIASES), deduped by model id.  Shared by the Settings
+    provider list and the live-models static fallback so the two never drift.
+    """
+    seen: set[str] = set()
+    out: list[dict] = []
+    for mkey, mlist in _PROVIDER_MODELS.items():
+        if _PROVIDER_CARD_ALIASES.get(mkey, mkey) != card_id:
+            continue
+        for m in mlist:
+            mid = m.get("id")
+            if mid and mid not in seen:
+                seen.add(mid)
+                out.append(m)
+    return out
+
 
 _AMBIENT_GH_CLI_MARKERS = frozenset({"gh_cli", "gh auth token"})
 
@@ -952,6 +985,25 @@ def get_effective_default_model(config_data: dict | None = None) -> str:
     if env_model:
         default_model = env_model.strip()
     return default_model
+
+
+def get_first_available_model() -> str:
+    """Return the first available model ID from the model list.
+
+    Calls get_available_models() and picks the first model from the
+    first provider group.  Falls back to get_effective_default_model()
+    when the model list is empty or unavailable.
+    """
+    try:
+        available = get_available_models()
+        groups = available.get('groups', [])
+        if groups:
+            models = groups[0].get('models', [])
+            if models:
+                return models[0]['id']
+    except Exception:
+        pass
+    return get_effective_default_model()
 
 
 # ── Reasoning config (CLI parity for /reasoning) ─────────────────────────────
@@ -1893,9 +1945,20 @@ class ReplayableStream:
       join the live feed seamlessly.
 
     Thread-safety: all mutable state is protected by a single internal lock.
-    Memory: _history is capped at MAX_HISTORY entries (oldest are evicted).
+    Memory: _history is capped at MAX_HISTORY entries.  When the cap is hit,
+    low-value events (token, metering) are evicted first; structural events
+    (message_start, tool, tool_complete, done, etc.) are preserved.
     """
-    MAX_HISTORY = 2000
+    MAX_HISTORY = 20000000
+
+    # Events that are essential for rebuilding the message structure during
+    # replay.  When the history buffer overflows, we drop token/metering
+    # events before touching these.
+    _STRUCTURAL_EVENTS = frozenset({
+        'message_start', 'tool', 'tool_complete',
+        'done', 'stream_end', 'error', 'cancel', 'apperror',
+        'clarify', 'approval', 'compressed', 'title',
+    })
 
     def __init__(self):
         import queue as _queue
@@ -1909,7 +1972,16 @@ class ReplayableStream:
         import queue as _queue
         with self._lock:
             if len(self._history) >= self.MAX_HISTORY:
-                self._history.pop(0)
+                # Smart eviction: drop low-value events (token, metering)
+                # before touching structural events needed for replay.
+                _evicted = False
+                for _i in range(len(self._history)):
+                    if self._history[_i][0] not in self._STRUCTURAL_EVENTS:
+                        self._history.pop(_i)
+                        _evicted = True
+                        break
+                if not _evicted:
+                    self._history.pop(0)
             self._history.append((event, data))
             if event in ('done', 'stream_end', 'error', 'cancel', 'apperror'):
                 self._done = True
@@ -2046,7 +2118,7 @@ def _get_session_agent_lock(session_id: str) -> threading.Lock:
         leak.  The streaming thread already holds the Lock during this
         migration, so the reference stays alive even after the dict entry is
         removed.
-      - Lock contract: hold for the in-memory mutation + s.save() only; never
+      - Lock contract: hold for the in-memory mutation + s.sync_webui_metadata() only; never
         across network I/O (LLM calls, HTTP requests).
     """
     with SESSION_AGENT_LOCKS_LOCK:
@@ -2061,16 +2133,13 @@ _SETTINGS_DEFAULTS = {
     "default_workspace": str(DEFAULT_WORKSPACE),
     "onboarding_completed": False,
     "send_key": "enter",  # 'enter' or 'ctrl+enter'
-    "show_token_usage": False,  # show input/output token badge below assistant messages
-    "show_cli_sessions": True,  # merge CLI sessions from state.db into the sidebar
-    "sync_to_insights": False,  # mirror WebUI token usage to state.db for /insights
+    "show_cli_sessions": True,  # show hermes CLI sessions from state.db in the sidebar
+    "show_messaging_sessions": True,  # show IM/gateway sessions (weixin, telegram, discord, ...) in the sidebar
+    "show_cron_sessions": False,  # show cron job sessions in the sidebar
     "check_for_updates": True,  # check if webui/agent repos are behind upstream
     "theme": "dark",  # light | dark | system
     "skin": "default",  # accent color skin: default | ares | mono | slate | poseidon | sisyphus | charizard
     "language": "en",  # UI locale code; must match a key in static/i18n.js LOCALES
-    "bot_name": os.getenv(
-        "HERMES_WEBUI_BOT_NAME", "Hermes"
-    ),  # display name for the assistant
     "sound_enabled": False,  # play notification sound when assistant finishes
     "notifications_enabled": False,  # browser notification when tab is in background
     "show_thinking": True,  # show/hide thinking/reasoning blocks in chat view
@@ -2079,14 +2148,16 @@ _SETTINGS_DEFAULTS = {
     "busy_input_mode": "interrupt",  # behavior when sending while agent is running: interrupt | queue | steer
     "session_poll_interval_sec": "10",  # frontend session polling interval in seconds, 0=disabled
     "font_size": "medium",  # UI font size / zoom level: small | medium | large
-    "auto_compress_threshold": "0",  # Path 1 — auto-compress by message count (0=off, 100/200/500)
+    "auto_compress_threshold": "0",  # Path 1 — auto-compress by message count (0=off, 30/50/100/200/500)
     "auto_compress_token_threshold": "0",  # Path 3 — auto-compress by token % of context (0=off, 0.50/0.60/0.70/0.85)
+    "auto_compress_poor_ratio": "0.5",  # quality gate: remaining ratio > this → "poor" compression
+    "auto_compress_disable_after": "3",  # quality gate: consecutive poor compressions before disabling auto-compress
     "max_compaction_snapshots": "5",  # max archived compaction snapshots to retain per session
     "last_seen_cron_ts_map": {},  # per-job {job_id: epoch_seconds} — drives +N unread badge
     "password_hash": None,  # PBKDF2-HMAC-SHA256 hash; None = auth disabled
     "default_mode": "manual",  # approval mode for new sessions: manual | smart | yolo
 }
-_SETTINGS_LEGACY_DROP_KEYS = {"assistant_language", "bubble_layout", "default_model"}
+_SETTINGS_LEGACY_DROP_KEYS = {"assistant_language", "bubble_layout", "default_model", "show_token_usage", "sync_to_insights"}
 _SETTINGS_THEME_VALUES = {"light", "dark", "system"}
 _SETTINGS_SKIN_VALUES = {
     "default",
@@ -2187,16 +2258,18 @@ _SETTINGS_ENUM_VALUES = {
     "auto_title_refresh_every": {"0", "5", "10", "20"},
     "busy_input_mode": {"queue", "interrupt", "steer"},
     "font_size": {"small", "medium", "large"},
-    "auto_compress_threshold": {"0", "100", "200", "500"},
+    "auto_compress_threshold": {"0", "30", "50", "100", "200", "500"},
     "auto_compress_token_threshold": {"0", "0.05", "0.50", "0.60", "0.70", "0.85"},
+    "auto_compress_poor_ratio": {"0.25", "0.5", "0.6", "0.7", "0.8"},
+    "auto_compress_disable_after": {"1", "2", "3", "5", "10"},
     "max_compaction_snapshots": {"3", "5", "10", "20"},
     "default_mode": {"manual", "smart", "yolo"},
 }
 _SETTINGS_BOOL_KEYS = {
     "onboarding_completed",
-    "show_token_usage",
     "show_cli_sessions",
-    "sync_to_insights",
+    "show_messaging_sessions",
+    "show_cron_sessions",
     "check_for_updates",
     "sound_enabled",
     "notifications_enabled",

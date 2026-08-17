@@ -32,7 +32,7 @@ def retry_last(session_id: str) -> dict[str, Any]:
     # checkpoint thread, cancel_stream, and all other session writers.
     # Lock ordering: _agent_lock → LOCK → _write_session_index (LOCK).
     with _get_session_agent_lock(session_id):
-        # get_session() and Session.save() both acquire the module-level LOCK
+        # get_session() and Session.sync_webui_metadata() both acquire the module-level LOCK
         # internally (the latter via _write_session_index()), and LOCK is a
         # non-reentrant threading.Lock — so they MUST be called outside our
         # own `with LOCK:` block to avoid self-deadlocking.
@@ -63,7 +63,19 @@ def retry_last(session_id: str) -> dict[str, Any]:
             last_user_text = _extract_text(history[last_user_idx].get('content', ''))
             removed_count = len(history) - last_user_idx
             s.messages = history[:last_user_idx]
-        s.save()
+
+            # ── Soft-delete rewound messages in state.db ──
+            _target_msg = history[last_user_idx]
+            _target_id = _target_msg.get('id') if isinstance(_target_msg, dict) else None
+            if _target_id is not None:
+                try:
+                    from api.models import _get_session_db
+                    _db = _get_session_db()
+                    if _db is not None:
+                        _db.rewind_to_message(session_id, _target_id)
+                except Exception:
+                    logger.debug("rewind_to_message failed for %s", session_id)
+        s.sync_webui_metadata()
     return {'last_user_text': last_user_text, 'removed_count': removed_count}
 
 
@@ -98,7 +110,19 @@ def undo_last(session_id: str) -> dict[str, Any]:
             removed_text = _extract_text(history[last_user_idx].get('content', ''))
             removed_count = len(history) - last_user_idx
             s.messages = history[:last_user_idx]
-        s.save()  # outside LOCK -- save() re-acquires LOCK via _write_session_index()
+
+            # ── Soft-delete rewound messages in state.db ──
+            _target_msg = history[last_user_idx]
+            _target_id = _target_msg.get('id') if isinstance(_target_msg, dict) else None
+            if _target_id is not None:
+                try:
+                    from api.models import _get_session_db
+                    _db = _get_session_db()
+                    if _db is not None:
+                        _db.rewind_to_message(session_id, _target_id)
+                except Exception:
+                    logger.debug("rewind_to_message failed for %s", session_id)
+        s.sync_webui_metadata()  # outside LOCK -- save() re-acquires LOCK via _write_session_index()
     preview = (removed_text[:40] + '...') if len(removed_text) > 40 else removed_text
     return {
         'removed_count': removed_count,

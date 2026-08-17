@@ -87,11 +87,11 @@ def purge_orphaned_configs() -> int:
         if db is not None:
             import sqlite3
             cur = db._conn.execute(
-                "SELECT id, pinned FROM sessions WHERE source='webui'"
+                "SELECT id, pinned__webui FROM sessions WHERE source='webui'"
             )
             for row in cur.fetchall():
                 sid = row[0] if isinstance(row, tuple) else row['id']
-                pinned = row[1] if isinstance(row, tuple) else row['pinned']
+                pinned = row[1] if isinstance(row, tuple) else row['pinned__webui']
                 existing_ids.add(sid)
                 if pinned:
                     pinned_ids.add(sid)
@@ -139,7 +139,7 @@ def sync_gateway_session_cwd() -> int:
     session was created.  This runs once at startup to bring them in line.
     """
     try:
-        from api.models import _resolve_gateway_workspace, _get_session_db
+        from api.models import _resolve_gateway_workspace, _get_session_db, MESSAGING_SOURCE_TAGS
         current_cwd = _resolve_gateway_workspace()
         db = _get_session_db()
         if db is None:
@@ -148,9 +148,10 @@ def sync_gateway_session_cwd() -> int:
         # Only sync messaging platform sessions (weixin, telegram, etc.)
         # where cwd is always controlled by the gateway config.
         # CLI sessions can have arbitrary cwd — don't touch them.
+        placeholders = ", ".join("?" for _ in MESSAGING_SOURCE_TAGS)
         cur = db._conn.execute(
-            "SELECT id, cwd FROM sessions "
-            "WHERE source IN ('weixin', 'telegram', 'whatsapp', 'signal', 'line', 'discord', 'slack')"
+            f"SELECT id, cwd FROM sessions WHERE source IN ({placeholders})",
+            tuple(sorted(MESSAGING_SOURCE_TAGS)),
         )
         for row in cur.fetchall():
             sid = row[0] if isinstance(row, tuple) else row['id']

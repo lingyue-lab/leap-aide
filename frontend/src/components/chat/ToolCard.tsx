@@ -1,35 +1,25 @@
-import { useState } from 'react';
 import type { ToolCall } from '@/types';
+import CollapseCard from './CollapseCard';
+import { Icon } from '@/components/common/Icons';
 
 interface ToolCardProps {
   toolCall: ToolCall;
 }
 
 export default function ToolCard({ toolCall }: ToolCardProps) {
-  const [expanded, setExpanded] = useState(false);
-
   const getStatusIcon = () => {
     if (toolCall.is_error) {
       return (
-        <svg className="text-[var(--accent)]" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <circle cx="12" cy="12" r="10" />
-          <line x1="15" y1="9" x2="9" y2="15" />
-          <line x1="9" y1="9" x2="15" y2="15" />
-        </svg>
+        <Icon name="cancel" size={18} className="text-[var(--accent)]" />
       );
     }
     if (toolCall.done) {
       return (
-        <svg className="text-[var(--blue)]" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-          <polyline points="20 6 9 17 4 12" />
-        </svg>
+        <Icon name="check" size={18} className="text-[var(--blue)]" />
       );
     }
     return (
-      <svg className="animate-spin text-[var(--blue)]" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <circle cx="12" cy="12" r="10" strokeOpacity="0.25" />
-        <path d="M12 2a10 10 0 0 1 10 10" />
-      </svg>
+      <Icon name="progress_activity" size={18} className="animate-spin text-[var(--blue)]" />
     );
   };
 
@@ -48,36 +38,32 @@ export default function ToolCard({ toolCall }: ToolCardProps) {
   };
 
   return (
-    <div className={`tool-card ${toolCall.is_error ? 'error' : ''}`}>
-      <div className="tool-card-header" onClick={() => setExpanded(!expanded)}>
-        {getStatusIcon()}
-        <span className="tool-card-name">{toolCall.name}</span>
-        <span className="tool-card-preview">{getPreviewText()}</span>
-        {!toolCall.done && (
-          <svg className="ml-auto animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="12" cy="12" r="10" strokeOpacity="0.25" />
-            <path d="M12 2a10 10 0 0 1 10 10" />
-          </svg>
-        )}
-        {toolCall.duration !== undefined && (
-          <span className="ml-auto text-xs text-[var(--muted)]">{toolCall.duration}ms</span>
-        )}
-      </div>
-      
-      {expanded && (
-        <div className="tool-card-body">
-          {toolCall.snippet && (
-            <pre className="text-xs overflow-auto max-h-48 p-2 bg-[var(--code-bg)] rounded">
-              {toolCall.snippet}
-            </pre>
+    <CollapseCard
+      tone={toolCall.is_error ? 'error' : 'tool'}
+      title={toolCall.name}
+      icon={getStatusIcon()}
+      snippet={getPreviewText()}
+      extra={
+        <>
+          {!toolCall.done && (
+            <Icon name="progress_activity" size={18} className="animate-spin" />
           )}
-          {toolCall.args && Object.keys(toolCall.args).length > 0 && (
-            <pre className="text-xs overflow-auto max-h-48 p-2 bg-[var(--code-bg)] rounded mt-2">
-              {JSON.stringify(toolCall.args, null, 2)}
-            </pre>
+          {toolCall.duration !== undefined && (
+            <span className="text-xs text-[var(--muted)]">{toolCall.duration}ms</span>
           )}
-        </div>
+        </>
+      }
+    >
+      {toolCall.snippet && (
+        <pre className="text-xs overflow-auto max-h-48 p-2 bg-[var(--code-bg)] rounded">
+          {toolCall.snippet}
+        </pre>
       )}
-    </div>
+      {toolCall.args && Object.keys(toolCall.args).length > 0 && (
+        <pre className="text-xs overflow-auto max-h-48 p-2 bg-[var(--code-bg)] rounded mt-2">
+          {JSON.stringify(toolCall.args, null, 2)}
+        </pre>
+      )}
+    </CollapseCard>
   );
 }

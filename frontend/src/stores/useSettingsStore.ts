@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import i18n from '@/i18n/config';
 import type { Settings, Theme } from '@/types';
+import { FONT_ZOOM_MAP } from '@/constants';
 
 interface SettingsState {
   settings: Settings | null;
@@ -22,13 +23,14 @@ const defaultSettings: Settings = {
   font_size: 'medium',
   sound_enabled: true,
   notifications_enabled: false,
-  show_token_usage: true,
   show_cli_sessions: true,
-  sync_insights: false,
-  check_updates: true,
-  bot_name: 'Hermes',
+  show_messaging_sessions: true,
+  show_cron_sessions: false,
+  check_for_updates: true,
   busy_input_mode: 'interrupt',
   session_poll_interval_sec: '10',
+  approval_timeout_sec: '60',
+  clarify_timeout_sec: '600',
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -47,13 +49,16 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         settings.model = settings.default_model;
       }
       const merged = { ...defaultSettings, ...settings };
+      // Clamp legacy theme values (slate/solarized/monokai/nord/oled) to a valid one.
+      if (merged.theme !== 'system' && merged.theme !== 'dark' && merged.theme !== 'light') {
+        merged.theme = 'dark';
+      }
       set({ settings: merged, loading: false });
 
       // Apply font size immediately after load
       const fontSize = merged.font_size || 'medium';
       document.documentElement.setAttribute('data-font-size', fontSize);
-      const zoomMap: Record<string, string> = { small: '0.8', medium: '1', large: '1.3' };
-      document.documentElement.style.setProperty('--app-zoom', zoomMap[fontSize] || '1');
+      document.documentElement.style.setProperty('--app-zoom', FONT_ZOOM_MAP[fontSize] || FONT_ZOOM_MAP.medium);
       localStorage.setItem('hermes-font-size', fontSize);
 
       // Apply language immediately after load
@@ -91,8 +96,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       // Apply font size change immediately
       if (updates.font_size) {
         document.documentElement.setAttribute('data-font-size', updates.font_size);
-        const zoomMap: Record<string, string> = { small: '0.8', medium: '1', large: '1.3' };
-        document.documentElement.style.setProperty('--app-zoom', zoomMap[updates.font_size] || '1');
+        document.documentElement.style.setProperty('--app-zoom', FONT_ZOOM_MAP[updates.font_size] || FONT_ZOOM_MAP.medium);
         localStorage.setItem('hermes-font-size', updates.font_size);
       }
     } catch (err) {

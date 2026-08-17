@@ -17,6 +17,8 @@ export interface Session {
   tool_calls?: ToolCall[];
   active_stream_id?: string | null;
   pending_user_message?: string | null;
+  pending_original_message?: string | null;
+  pending_user_message_ts?: number | null;
   pending_attachments?: string[];
   pinned?: boolean;
   input_tokens?: number;
@@ -60,6 +62,8 @@ export interface SessionListItem {
   source_tag?: string;
   is_cli_session?: boolean;
   user_id?: string;
+  // Active stream indicator — non-null means a backend stream is running for this session
+  active_stream_id?: string | null;
   // Compression chain metadata (v1 — WebUI-native sessions only)
   _compression_segment_count?: number;
   _lineage_root_id?: string | null;
@@ -80,7 +84,7 @@ export interface Message {
   role: 'user' | 'assistant' | 'tool';
   content: string | ContentBlock[];
   timestamp?: number;
-  _ts?: number;
+  timestamp__webui?: number;        // WebUI display timestamp captured during streaming (Unix seconds)
   _live?: boolean;
   attachments?: string[];
   reasoning?: string;
@@ -91,7 +95,7 @@ export interface Message {
   _queued?: boolean;               // True when message is waiting in the busy-mode queue
   _queue_position?: number;        // 1-based position in the queue
   _steered?: boolean;              // True when message was injected via steer mode
-  original_content?: string;        // User's original input when expanded via skill command (FR-008)
+  original_content__webui?: string;  // User's original input when expanded via skill command (WebUI-only)
 }
 
 /** Tracks a message waiting in the session's busy-mode queue. */
@@ -148,7 +152,7 @@ export interface Workspace {
   name: string;
   path: string;
   display_name?: string;
-  readonly?: boolean;
+  external?: boolean;
 }
 
 export interface DirEntry {
@@ -160,7 +164,7 @@ export interface DirEntry {
 // types/settings.ts - 设置相关类型定义
 
 export type SendKey = 'enter' | 'ctrl+enter';
-export type Theme = 'system' | 'dark' | 'light' | 'slate' | 'solarized' | 'monokai' | 'nord' | 'oled';
+export type Theme = 'system' | 'dark' | 'light';
 export type FontSize = 'small' | 'medium' | 'large';
 
 export interface Settings {
@@ -171,19 +175,22 @@ export interface Settings {
   font_size: FontSize;
   sound_enabled: boolean;
   notifications_enabled: boolean;
-  show_token_usage: boolean;
   show_cli_sessions: boolean;
-  sync_insights: boolean;
-  check_updates: boolean;
-  bot_name: string;
+  show_messaging_sessions: boolean;
+  show_cron_sessions: boolean;
+  check_for_updates: boolean;
   auto_compress_threshold?: string;       // Path 1 — auto-compress by message count
   auto_compress_token_threshold?: string;  // Path 3 — auto-compress by token % of context
+  auto_compress_poor_ratio?: string;       // quality gate: remaining ratio > this → "poor" compression
+  auto_compress_disable_after?: string;    // quality gate: consecutive poor compressions before disabling auto-compress
   max_compaction_snapshots?: string;       // max archived compaction snapshots to retain
   last_seen_cron_ts?: number;  // DEPRECATED — replaced by last_seen_cron_ts_map
   last_seen_cron_ts_map?: Record<string, number>;  // per-job {job_id: epoch_seconds}
   default_mode?: 'manual' | 'smart' | 'yolo';
   busy_input_mode?: 'interrupt' | 'queue' | 'steer' | 'reject';  // behavior when sending while agent is running
   session_poll_interval_sec?: string;  // frontend session polling interval in seconds
+  approval_timeout_sec?: string;        // Approval card auto-dismiss timeout (backend default: 60s)
+  clarify_timeout_sec?: string;         // Clarify card auto-dismiss timeout (backend default: 600s)
 }
 
 // types/approval.ts - 审批相关类型定义
@@ -221,6 +228,7 @@ export interface ClarifyRequest {
   choices_offered?: string[];
   choices?: string[];
   _session_id?: string;
+  clarify_id?: string;
 }
 
 export interface ClarifyResponse {
@@ -305,7 +313,7 @@ export interface CompressionChainSegment {
 
 // types/nav.ts - 导航相关类型定义
 
-export type NavPanel = 'chat' | 'tasks' | 'skills' | 'memory' | 'workspaces' | 'terminal' | 'vnc' | 'settings';
+export type NavPanel = 'chat' | 'tasks' | 'skills' | 'memory' | 'workspaces' | 'terminal' | 'settings';
 
 export interface NavTab {
   panel: NavPanel;
@@ -327,6 +335,7 @@ export interface CronJob {
   name?: string;
   schedule: string | CronSchedule;
   prompt: string;
+  model?: string;
   deliver: 'local' | 'discord' | 'telegram';
   skills?: string[];
   enabled: boolean;
@@ -343,6 +352,7 @@ export interface CronCreateRequest {
   name?: string;
   schedule: string;
   prompt: string;
+  model?: string;
   deliver: 'local' | 'discord' | 'telegram';
   skills?: string[];
 }

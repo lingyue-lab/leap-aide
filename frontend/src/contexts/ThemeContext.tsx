@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 
-export type Theme = 'system' | 'dark' | 'light' | 'slate' | 'solarized' | 'monokai' | 'nord' | 'oled';
+export type Theme = 'system' | 'dark' | 'light';
 
 interface ThemeContextValue {
   theme: Theme;
@@ -17,7 +17,7 @@ const ThemeContext = createContext<ThemeContextValue>({
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setThemeState] = useState<Theme>(() => {
     const stored = localStorage.getItem('hermes-theme') as Theme;
-    return stored || 'dark';
+    return stored === 'system' || stored === 'dark' || stored === 'light' ? stored : 'dark';
   });
 
   const [effectiveTheme, setEffectiveTheme] = useState<'dark' | 'light'>('dark');

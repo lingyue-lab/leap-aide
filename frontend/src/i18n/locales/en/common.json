@@ -4,8 +4,11 @@
     "loading": "Loading...",
     "error": "Error"
   },
+  "logout": "Sign out",
   "common": {
     "loading": "Loading...",
+    "add": "Add",
+    "adding": "Adding...",
     "save": "Save",
     "saving": "Saving...",
     "cancel": "Cancel",
@@ -26,12 +29,10 @@
     "memory_title": "Learned preferences",
     "workspaces": "Workspaces",
     "workspaces_title": "Project directories",
-    "todos": "To-dos",
+    "todos": "Todo",
     "todos_title": "Task management",
     "terminal": "Terminal",
-    "terminal_title": "Open terminal shell",
-    "vnc": "VNC",
-    "vnc_title": "Remote desktop viewer"
+    "terminal_title": "Open terminal shell"
   },
   "sessions": {
     "new_conversation": "New conversation",
@@ -53,6 +54,7 @@
     "delete": "Delete",
     "pin": "Pin",
     "unpin": "Unpin",
+    "unpin_to_delete": "Unpin before deleting",
     "assign_workspace": "Assign Workspace",
     "workspace_assigned": "Workspace assigned",
     "no_workspace": "No Workspace",
@@ -66,7 +68,9 @@
     "clear_confirm": "Clear all messages in this session? This cannot be undone.",
     "clear_keep_desc": "How many recent messages do you want to keep? Enter 0 to delete all.",
     "clear_keep_label": "Messages to keep (0 = delete all)",
-    "clear_streaming_warn": "Cannot clear history while the session is streaming. Please wait for the response to finish."
+    "clear_streaming_warn": "Cannot clear history while the session is streaming. Please wait for the response to finish.",
+    "compress_min_count": "At least 50 messages required",
+    "clear_empty": "No messages to clear"
   },
   "settings": {
     "preferences": "Settings & Preferences",
@@ -74,15 +78,19 @@
     "groups": {
       "appearance": "Appearance",
       "appearance_desc": "Theme, language, layout",
-      "model": "Input",
-      "model_desc": "Send key, bot name",
+      "input": "Input",
+      "input_desc": "Send key, busy input behavior",
+      "sessions": "Sessions",
+      "sessions_desc": "Session source display, polling interval",
+      "agent": "Agent Behavior",
+      "agent_desc": "Reasoning effort, approval mode & timeouts",
       "notifications": "Notifications",
-      "notifications_desc": "Sound, alerts, display options",
+      "notifications_desc": "Sound, desktop notifications",
       "about": "About",
-      "about_desc": "Version, updates, info",
+      "about_desc": "Version & license",
       "config": "Config File",
       "config_desc": "Edit config.yaml directly",
-      "providers": "Providers",
+      "providers": "Model Providers",
       "providers_desc": "API keys for AI providers",
       "history": "History",
       "history_desc": "Context compression, auto-cleanup"
@@ -104,42 +112,41 @@
       "busy_input_mode_hint": "Controls what happens when you send a message while the agent is running",
       "session_poll_interval": "Session Poll Interval",
       "session_poll_interval_hint": "How often to check for externally added messages (seconds, 0=off)",
-      "bot_name": "Bot Name",
-      "bot_name_hint": "Display name shown for the assistant",
+      "approval_timeout": "Approval Timeout",
+      "approval_timeout_hint": "Auto-deny after N seconds. Backend default: 60s. Keep this ≤ backend timeout.",
+      "clarify_timeout": "Clarify Timeout",
+      "clarify_timeout_hint": "Auto-pick first choice after N seconds. Backend default: 600s. Keep this ≤ backend timeout.",
       "default_reasoning_effort": "Default Reasoning Effort",
       "default_reasoning_effort_hint": "Set the global default reasoning effort for new sessions (config.yaml)",
       "sound_effects": "Sound effects",
       "sound_effects_hint": "Play sounds on message receive",
       "desktop_notifications": "Desktop notifications",
       "desktop_notifications_hint": "Show OS-level notifications",
-      "show_token_usage": "Show token usage",
-      "show_token_usage_hint": "Display token count and estimated cost",
       "show_cli_sessions": "Show CLI sessions",
       "show_cli_sessions_hint": "Include command-line sessions in the sidebar",
-      "sync_insights": "Sync insights",
-      "sync_insights_hint": "Enable cross-session insight syncing",
+      "show_messaging_sessions": "Show messaging sessions",
+      "show_messaging_sessions_hint": "Include messaging platform sessions (WeChat, Telegram, Discord, ...) in the sidebar",
+      "show_cron_sessions": "Show scheduled task sessions",
+      "show_cron_sessions_hint": "Include cron job sessions in the sidebar",
       "version": "Version",
-      "check_updates": "Check for updates",
-      "check_updates_hint": "Automatically check for new versions",
-      "managed_via_settings": "Managed via settings",
+      "license": "License",
       "auto_compress_threshold": "Auto-compress threshold",
       "auto_compress_threshold_hint": "Automatically compress session history when message count exceeds this limit. Uses AI to summarize older exchanges, freeing up context window space.",
       "auto_compress_msg_threshold": "Auto-compress (message count)",
       "auto_compress_msg_threshold_hint": "Path 1 — Trigger compression when the session reaches this many messages. Compresses in-place in the same session.",
       "auto_compress_token_threshold": "Auto-compress (token threshold)",
       "auto_compress_token_threshold_hint": "Trigger compression when prompt tokens reach this percentage of the model's context window. Like the message-count path, compresses in-place in the same session.",
+      "auto_compress_poor_ratio": "Auto-compress quality ratio (retained)",
+      "auto_compress_poor_ratio_hint": "A compression counts as \"poor\" when the retained message ratio exceeds this value. Consecutive poor compressions disable auto-compress until history is cleared or a compression is effective.",
+      "auto_compress_disable_after": "Auto-compress disable threshold (poor attempts)",
+      "auto_compress_disable_after_hint": "Disable auto-compress for the session after this many consecutive poor compressions.",
       "max_compaction_snapshots": "Max compaction snapshots",
       "max_compaction_snapshots_hint": "Maximum number of read-only archived snapshots to keep per session. Older snapshots beyond this limit are automatically deleted."
     },
     "themes": {
-      "dark": "Dark (VSCode Dark Modern)",
-      "light": "Light (VSCode Light Modern)",
-      "system": "System",
-      "slate": "Slate",
-      "solarized": "Solarized Dark",
-      "monokai": "Monokai",
-      "nord": "Nord",
-      "oled": "OLED Black"
+      "dark": "Dark",
+      "light": "Light",
+      "system": "System"
     },
     "send_keys": {
       "enter": "Enter",
@@ -160,7 +167,6 @@
       "saving": "Saving…",
       "saved": "✓ Saved"
     },
-    "about_text": "An open-source web interface for AI coding assistants.<br />Built with React + TypeScript + Python.",
     "providers": {
       "hint": "Configure API keys for AI providers. Keys are stored in ~/.hermes/.env. Providers with keys set in config.yaml are shown as read-only.",
       "no_key": "No key",
@@ -190,9 +196,11 @@
   "tasks": {
     "scheduled_jobs": "Scheduled Jobs",
     "new_job": "New Job",
+    "edit_job": "Edit Job",
     "create_job": "Create Job",
     "confirm_delete": "Delete this job?",
     "empty": "No scheduled jobs",
+    "placeholder_hint": "Select a job from the sidebar to view its details and run history.",
     "run_now": "Run now",
     "pause": "Pause",
     "resume": "Resume"
@@ -205,6 +213,7 @@
     "confirm_delete": "Delete this skill?",
     "empty": "No skills",
     "no_results": "No matching skills",
+    "placeholder_hint": "Select a skill from the sidebar to view its details and configuration.",
     "edit": "Edit skill"
   },
   "memory": {
@@ -219,18 +228,25 @@
     "title": "Workspaces",
     "desc": "Add and switch workspaces for your sessions.",
     "add": "Add",
+    "new_workspace": "New Workspace",
     "empty": "No workspaces added",
     "path_placeholder": "Workspace path (e.g. /home/user/project)",
     "name_placeholder": "Display name (optional)",
     "confirm_remove": "Remove this workspace?"
   },
   "todos": {
-    "title": "To-dos",
+    "title": "Todo",
     "new": "New task",
     "empty": "No active tasks",
     "placeholder": "Enter task description...",
     "show_panel": "Show todos panel",
-    "hide_panel": "Hide todos panel"
+    "hide_panel": "Hide todos panel",
+    "readonly_no_todos": "Read-only session — todos not available"
+  },
+  "vnc": {
+    "observe": "Observe",
+    "pin_to_observe": "Pin session to observe",
+    "readonly_no_observe": "Read-only session — observation not available"
   },
   "context_usage": {
     "context": "Context",
@@ -243,6 +259,45 @@
     "click_to_compress": "Click to compress immediately",
     "click_disabled_streaming": "Click to compress — unavailable while streaming",
     "compressing": "Compressing…"
+  },
+  "empty": {
+    "hints": [
+      "Ask me to explain code in your codebase.",
+      "Use /review to check code changes.",
+      "Try describing your task in natural language.",
+      "Create a new session to get started.",
+      "Type /help to see all available commands.",
+      "I can read, write, and edit files in your workspace.",
+      "Use Shift+Tab to cycle through approval modes."
+    ],
+    "tasks_hints": [
+      "Schedule recurring tasks to automate your workflow.",
+      "Cron jobs run automatically at specified intervals.",
+      "Create a job to run daily reports or maintenance tasks.",
+      "Select a job from the sidebar to view its run history.",
+      "Jobs can be paused and resumed at any time."
+    ],
+    "skills_hints": [
+      "Skills extend the agent with custom capabilities.",
+      "Each skill defines specialized tools and prompts.",
+      "Create a skill to teach the agent new workflows.",
+      "Select a skill to view its configuration and content.",
+      "Skills can be imported from the community or created from scratch."
+    ],
+    "memory_hints": [
+      "Memory stores preferences the agent learns about you.",
+      "USER.md contains personal preferences across all projects.",
+      "MEMORY.md stores project-specific knowledge and conventions.",
+      "The agent reads memory files to personalize its responses.",
+      "Edit memory files to guide how the agent works with your codebase."
+    ],
+    "workspaces_hints": [
+      "Add a workspace to give the agent access to your project files.",
+      "Workspaces define the directories the agent can read and edit.",
+      "Switch between workspaces to work on different projects.",
+      "Each session can be assigned to a specific workspace.",
+      "The agent browses your workspace to understand the codebase."
+    ]
   },
   "chat": {
     "input_placeholder": "Type a message...",

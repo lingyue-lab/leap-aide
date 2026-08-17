@@ -1,14 +1,24 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSkillStore } from '@/stores/useSkillStore';
+import { useSessionStore } from '@/stores/useSessionStore';
+import { skillsService } from '@/services/api';
 import type { Skill } from '@/types';
+import CustomScrollbar from '@/components/common/CustomScrollbar';
+import SessionSearchModal from '@/components/common/SessionSearchModal';
+import { TrashMultiIcon, Icon } from '@/components/common/Icons';
 
-export default function SkillsPanel() {
+const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform || '');
+
+const UNCATEGORIZED = 'uncategorized';
+
+export default function SkillsPanel({ isActive = false }: { isActive?: boolean }) {
   const { t } = useTranslation('common');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [showSearchModal, setShowSearchModal] = useState(false);
 
   const selectedSkill = useSkillStore((s) => s.selectedSkill);
   const selectSkill = useSkillStore((s) => s.selectSkill);
@@ -18,31 +28,23 @@ export default function SkillsPanel() {
   const storeSkills = useSkillStore((s) => s.skills);
   const loadSkillsFromStore = useSkillStore((s) => s.loadSkills);
   const setShowNewSkillForm = useSkillStore((s) => s.setShowNewSkillForm);
+  const sessions = useSessionStore((s) => s.sessions);
 
   useEffect(() => {
     loadSkills();
   }, []);
 
   useEffect(() => {
-    if (storeSkills.length > 0 && !selectedSkill) {
-      selectSkill(storeSkills[0]);
-    }
-  }, [storeSkills]);
-
-  useEffect(() => {
     if (skillsTabActive && storeSkills.length > 0) {
       const firstSkill = storeSkills[0];
-      const firstCat = firstSkill.category || 'Uncategorized';
+      const firstCat = firstSkill.category || UNCATEGORIZED;
       // Collapse all groups, only expand the one containing the first skill
-      const allCats = Array.from(new Set(storeSkills.map((s) => s.category || 'Uncategorized')));
+      const allCats = Array.from(new Set(storeSkills.map((s) => s.category || UNCATEGORIZED)));
       const collapsed: Record<string, boolean> = {};
       for (const cat of allCats) {
         collapsed[cat] = cat !== firstCat;
       }
       setCollapsedGroups(collapsed);
-      if (!selectedSkill) {
-        selectSkill(firstSkill);
-      }
     }
   }, [skillsTabActive]);
 
@@ -55,6 +57,25 @@ export default function SkillsPanel() {
       setError(err instanceof Error ? err.message : 'Failed to load skills');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDeleteSkill = async (skill: Skill) => {
+    const using = sessions.filter((s) => s.skills?.includes(skill.name));
+    if (using.length > 0) {
+      const names = using.map((s) => `"${s.title}"`).join(', ');
+      alert(`Cannot delete skill: it is used by ${using.length} session${using.length > 1 ? 's' : ''}: ${names}`);
+      return;
+    }
+    if (!confirm(t('skills.confirm_delete') || 'Delete this skill?')) return;
+    try {
+      await skillsService.delete(skill.name);
+      if (selectedSkill?.name === skill.name) {
+        clearSelection();
+      }
+      await loadSkillsFromStore();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to delete skill');
     }
   };
 
@@ -73,13 +94,13 @@ export default function SkillsPanel() {
   // Group skills by category
   const groupedSkills: Record<string, Skill[]> = {};
   for (const skill of filteredSkills) {
-    const cat = skill.category || 'Uncategorized';
+    const cat = skill.category || UNCATEGORIZED;
     if (!groupedSkills[cat]) groupedSkills[cat] = [];
     groupedSkills[cat].push(skill);
   }
   const sortedCategories = Object.keys(groupedSkills).sort((a, b) => {
-    if (a === 'Uncategorized') return 1;
-    if (b === 'Uncategorized') return -1;
+    if (a === UNCATEGORIZED) return 1;
+    if (b === UNCATEGORIZED) return -1;
     return a.localeCompare(b);
   });
 
@@ -87,31 +108,46 @@ export default function SkillsPanel() {
     setCollapsedGroups((prev) => ({ ...prev, [cat]: !prev[cat] }));
   };
 
+  const handleOpenSearch = useCallback(() => {
+    setShowSearchModal(true);
+  }, []);
+
+  const handleCloseSearch = useCallback(() => {
+    setShowSearchModal(false);
+    setSearchQuery('');
+  }, []);
+
+  // Select a skill from search results and close the palette
+  const handleSelectSkill = useCallback((skill: Skill) => {
+    cancelEditing();
+    selectSkill(skill);
+    handleCloseSearch();
+  }, [cancelEditing, selectSkill, handleCloseSearch]);
+
+  // Keyboard shortcut: Cmd/Ctrl+F (only when skills panel is active)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        if (!isActive) return;  // let browser Ctrl+F work on other panels
+        e.preventDefault();
+        setShowSearchModal(true);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isActive]);
+
   const renderSkillGroups = () => {
     return sortedCategories.map((cat) => (
       <div key={cat} className="skill-group">
         {sortedCategories.length > 1 && (
           <div
-            className="skill-group-header flex items-center gap-1.5 px-2 py-1.5 text-xs font-semibold cursor-pointer select-none sticky top-0 z-10"
-            style={{
-              color: 'var(--foreground)',
-              background: 'color-mix(in srgb, var(--border) 80%, transparent)',
-              borderBottom: '1px solid var(--border)',
-              borderTop: '1px solid var(--border2)',
-            }}
+            className={`sidebar-items-group-header${collapsedGroups[cat] ? ' collapsed' : ''}`}
             onClick={() => toggleGroup(cat)}
           >
-            <svg
-              width="10" height="10" viewBox="0 0 10 6"
-              className={`transition-transform flex-shrink-0 ${collapsedGroups[cat] ? '-rotate-90' : ''}`}
-              style={{ opacity: 0.7 }}
-            >
-              <path d="M1 1 L5 5 L9 1" fill="none" stroke="currentColor" strokeWidth="1.5" />
-            </svg>
-            <span className="uppercase tracking-wider">{cat}</span>
-            <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--border)] text-[var(--muted)]">
-              {groupedSkills[cat].length}
-            </span>
+            <Icon name="keyboard_arrow_down" size={14} className="sidebar-items-group-caret" />
+            <span className="sidebar-items-group-label">{cat}</span>
+            <span className="sidebar-items-group-count">{groupedSkills[cat].length}</span>
           </div>
         )}
         {!collapsedGroups[cat] && groupedSkills[cat].map((skill) => {
@@ -119,29 +155,29 @@ export default function SkillsPanel() {
           return (
             <div
               key={skill.name}
-              className={`skill-item p-2 pl-4 border-b border-[var(--border2)] cursor-pointer transition-colors ${
-                isSelected
-                  ? 'bg-[var(--hover-bg)]'
-                  : 'hover:bg-[color-mix(in_srgb,var(--hover-bg)_50%,transparent)]'
-              }`}
+              className={`sidebar-item${isSelected ? ' active' : ''}`}
               onClick={() => { cancelEditing(); selectSkill(skill); }}
             >
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="skill-name text-sm font-medium">
+              <div className="sidebar-item-text">
+                <div className="sidebar-item-title-row">
+                  <span className="sidebar-item-title">
                     {skill.label || skill.name}
                   </span>
-                  {skill.category && sortedCategories.length === 1 && (
-                    <span className="text-xs text-[var(--muted)] bg-[var(--border)] px-1.5 py-0.5 rounded">
-                      {skill.category}
-                    </span>
-                  )}
                 </div>
                 {skill.description && (
-                  <div className="text-xs text-[var(--muted)] mt-1 line-clamp-2">
+                  <div className="text-sm text-[var(--muted)] mt-1 line-clamp-2">
                     {skill.description}
                   </div>
                 )}
+              </div>
+              <div className="sidebar-item-actions">
+                <button
+                  className="sidebar-item-actions-trigger"
+                  onClick={(e) => { e.stopPropagation(); handleDeleteSkill(skill); }}
+                  title={t('sessions.delete') || 'Delete skill'}
+                >
+                  <TrashMultiIcon size={16} />
+                </button>
               </div>
             </div>
           );
@@ -160,25 +196,64 @@ export default function SkillsPanel() {
 
   return (
     <div className="skills-panel">
+      {/* Search Modal (shared command palette) */}
+      <SessionSearchModal
+        open={showSearchModal}
+        onClose={handleCloseSearch}
+        placeholder={t('skills.search') || 'Search skills...'}
+        value={searchQuery}
+        onChange={(e) => setSearchQuery(e.target.value)}
+      >
+        {searchQuery.trim() && filteredSkills.length > 0 && (
+          <div className="session-search-results">
+            {filteredSkills.map((skill) => (
+              <div
+                key={skill.name}
+                className="sidebar-item"
+                onClick={() => handleSelectSkill(skill)}
+              >
+                <div className="sidebar-item-text">
+                  <div className="sidebar-item-title-row">
+                    <span className="sidebar-item-title">{skill.label || skill.name}</span>
+                  </div>
+                  {skill.description && (
+                    <div className="text-sm text-[var(--muted)] mt-1 line-clamp-2">
+                      {skill.description}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {searchQuery.trim() && filteredSkills.length === 0 && (
+          <div className="session-search-empty">{t('skills.no_results') || 'No matching skills'}</div>
+        )}
+      </SessionSearchModal>
+
       {/* Header */}
-      <div className="flex items-center gap-2 p-2 border-b border-[var(--border)]">
-        <input
-          type="text"
-          placeholder={t('skills.search') || 'Search skills...'}
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="flex-1 px-2 py-1 text-sm bg-[rgba(255,255,255,0.05)] border border-[var(--border2)] rounded"
-        />
-        <button
-          className="cron-btn run text-xs px-2 py-1"
-          onClick={() => { cancelEditing(); clearSelection(); setShowNewSkillForm(true); }}
-        >
-          +
-        </button>
+      <div className="sidebar-header">
+        <span className="sidebar-header-title">{t('tabs.skills')}</span>
+        <div className="sidebar-header-actions">
+          <button
+            className="icon-btn"
+            onClick={handleOpenSearch}
+            title={`${t('skills.search') || 'Search skills...'} (${isMac ? '⌘' : 'Ctrl+'}F)`}
+          >
+            <Icon name="search" size={18} />
+          </button>
+          <button
+            className="icon-btn"
+            onClick={() => { cancelEditing(); clearSelection(); setShowNewSkillForm(true); }}
+            title="New Skill"
+          >
+            <Icon name="add" size={18} />
+          </button>
+        </div>
       </div>
 
       {/* Skills List */}
-      <div className="skills-list flex-1 overflow-y-auto">
+      <CustomScrollbar className="flex-1">
         {error && (
           <div className="p-2 text-sm text-[var(--accent)]">{error}</div>
         )}
@@ -188,7 +263,7 @@ export default function SkillsPanel() {
           </div>
         )}
         {renderSkillGroups()}
-      </div>
+      </CustomScrollbar>
     </div>
   );
 }

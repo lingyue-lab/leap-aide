@@ -5,7 +5,6 @@ Mirrors WebUI session metadata (token usage, title, model) into the
 hermes-agent state.db so that /insights, session lists, and cost
 tracking include WebUI activity.
 
-This is opt-in via the 'sync_to_insights' setting (default: off).
 All operations are wrapped in try/except -- if state.db is unavailable,
 locked, or the schema doesn't match, the WebUI continues normally.
 
@@ -63,54 +62,6 @@ def sync_session_start(session_id: str, model=None) -> None:
         )
     except Exception:
         logger.debug("Failed to sync session start to state.db")
-    finally:
-        try:
-            db.close()
-        except Exception:
-            logger.debug("Failed to close state.db")
-
-
-def sync_session_usage(session_id: str, input_tokens: int=0, output_tokens: int=0,
-                       estimated_cost=None, model=None, title: str=None,
-                       message_count: int=None) -> None:
-    """Update token usage and title for a WebUI session in state.db.
-    Called after each turn completes. Uses absolute=True to set totals
-    (the WebUI Session already accumulates across turns).
-    """
-    db = _get_state_db()
-    if not db:
-        return
-    try:
-        # Ensure session exists first (idempotent)
-        db.ensure_session(session_id=session_id, source='webui', model=model)
-        # Set absolute token counts
-        db.update_token_counts(
-            session_id=session_id,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            estimated_cost_usd=estimated_cost,
-            model=model,
-            absolute=True,
-        )
-        # Update title if we have one, using the public API
-        if title:
-            try:
-                db.set_session_title(session_id, title)
-            except Exception:
-                logger.debug("Failed to sync session title to state.db")
-        # Update message count
-        if message_count is not None:
-            try:
-                def _set_msg_count(conn):
-                    conn.execute(
-                        "UPDATE sessions SET message_count = ? WHERE id = ?",
-                        (message_count, session_id),
-                    )
-                db._execute_write(_set_msg_count)
-            except Exception:
-                logger.debug("Failed to sync message count to state.db")
-    except Exception:
-        logger.debug("Failed to sync session usage to state.db")
     finally:
         try:
             db.close()

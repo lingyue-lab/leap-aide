@@ -50,8 +50,12 @@ export default function ConversationMinimap({ messages, containerRef }: Conversa
     messages.forEach((m, i) => {
       if (m.role !== 'user') return;
       seq++;
-      const content = typeof m.content === 'string' ? m.content : '';
-      const text = stripMarkdown(content) || `#${seq}`;
+      const rawContent = typeof m.content === 'string' ? m.content : '';
+      // Prefer original_content__webui so skill-invocation expanded text
+      // (which includes [IMPORTANT...] activation notes) doesn't leak into
+      // the minimap tooltip — matches MessageRow display behaviour.
+      const displayContent = (m.original_content__webui as string) || rawContent;
+      const text = stripMarkdown(displayContent) || displayContent.substring(0, 60) || `#${seq}`;
       markers.push({ idx: i, text, isActive: i === activeIdx });
     });
     return markers;

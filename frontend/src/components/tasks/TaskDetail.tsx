@@ -3,6 +3,7 @@ import { useCronStore } from '@/stores/useCronStore';
 import { cronService } from '@/services/api';
 import type { CronSchedule } from '@/types';
 import { renderMarkdown } from '@/utils/markdown';
+import { ChevronRightIcon } from '@/components/common/Icons';
 
 function parseTimestamp(val: string | number | null | undefined): Date | null {
   if (!val) return null;
@@ -35,14 +36,39 @@ function getScheduleDisplay(schedule: string | CronSchedule | null | undefined):
   return { kind: 'Cron 表达式', display: schedule };
 }
 
-// Parse run timestamp from filename like "20240101_120000.md" or "1700000000.md"
+// Extract Response / Error content from raw cron output.
+// System fields (Job ID, Run Time, Schedule) are stripped — they repeat across
+// every record and are already visible in the job detail panel above.
+function extractCronResponse(raw: string): { response: string; error: string | null } {
+  const sections = raw.split(/\n## /);
+  let response = '';
+  let error: string | null = null;
+
+  for (let i = 1; i < sections.length; i++) {
+    const s = sections[i];
+    if (s.startsWith('Response')) {
+      response = s.replace(/^Response\n?/, '').trim();
+    } else if (s.startsWith('Error')) {
+      error = s.replace(/^Error\n?/, '').trim();
+    }
+  }
+
+  return { response, error };
+}
+
+// Parse run timestamp from filename like "2026-07-28_11-20-38.md" or "20260728_112038.md"
 function parseFilenameTimestamp(filename: string): string {
-  // Try pattern: YYYYMMDD_HHMMSS
-  const isoMatch = filename.match(/(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/);
-  if (isoMatch) {
-    const [, y, mo, d, h, mi, s] = isoMatch;
-    const dt = new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}`);
-    if (!isNaN(dt.getTime())) return dt.toLocaleString();
+  // Try new format: YYYY-MM-DD_HH-MM-SS
+  const newMatch = filename.match(/(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})/);
+  if (newMatch) {
+    const [, y, mo, d, h, mi, s] = newMatch;
+    return `${y}-${mo}-${d} ${h}:${mi}:${s}`;
+  }
+  // Try legacy format: YYYYMMDD_HHMMSS
+  const legacyMatch = filename.match(/(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/);
+  if (legacyMatch) {
+    const [, y, mo, d, h, mi, s] = legacyMatch;
+    return `${y}-${mo}-${d} ${h}:${mi}:${s}`;
   }
   // Try unix timestamp
   const tsMatch = filename.match(/^(\d{10,13})/);
@@ -156,135 +182,115 @@ export default function TaskDetail() {
   };
 
   return (
-    <div className="task-detail p-4 overflow-y-auto h-full">
-      {/* Title + Action Bar */}
-      <div className="flex items-start justify-between mb-4 gap-4">
-        <div className="min-w-0">
-          <h2 className="text-lg font-semibold text-[var(--fg)] leading-snug">
+    <div className="task-detail flex flex-col overflow-hidden h-full">
+      <div className="topbar">
+        <div className="flex-1 min-w-0 overflow-hidden">
+          <div className="topbar-title">
             {selectedJob.name || selectedJob.prompt.slice(0, 40) + (selectedJob.prompt.length > 40 ? '...' : '')}
-          </h2>
-          <div className="text-xs text-[var(--muted)] mt-1">ID: {selectedJob.id}</div>
+          </div>
+          <div className="topbar-meta">ID: {selectedJob.id}</div>
         </div>
 
-        {/* Action Buttons */}
-        <div className="flex items-center gap-1.5 flex-shrink-0">
+        <div className="topbar-chips">
           {/* Pause / Resume */}
           {selectedJob.enabled ? (
             <button
-              className="flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-md bg-[rgba(255,255,255,0.06)] hover:bg-[rgba(255,255,255,0.1)] text-[var(--fg)] transition-colors disabled:opacity-50"
+              className="cron-btn text-sm"
               onClick={handlePause}
               disabled={!!actionLoading}
               title="Pause"
             >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="6" y="4" width="4" height="16" />
-                <rect x="14" y="4" width="4" height="16" />
-              </svg>
               Pause
             </button>
           ) : (
             <button
-              className="flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-md bg-[rgba(255,255,255,0.06)] hover:bg-[rgba(255,255,255,0.1)] text-[var(--fg)] transition-colors disabled:opacity-50"
+              className="cron-btn text-sm"
               onClick={handleResume}
               disabled={!!actionLoading}
               title="Resume"
             >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M2.5 2v6h6M21.5 22v-6h-6" />
-                <path d="M22 11.5A10 10 0 0 0 3.2 7.2M2 12.5a10 10 0 0 0 18.8 4.2" />
-              </svg>
               Resume
             </button>
           )}
 
           {/* Run Now */}
           <button
-            className="flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-md bg-[rgba(255,255,255,0.06)] hover:bg-[rgba(255,255,255,0.1)] text-[var(--fg)] transition-colors disabled:opacity-50"
+            className="cron-btn text-sm"
             onClick={handleRun}
             disabled={!!actionLoading}
             title="Run now"
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-              <polygon points="5 3 19 12 5 21 5 3" />
-            </svg>
             Run Now
           </button>
 
           {/* Edit */}
           <button
-            className="flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-md bg-[rgba(255,255,255,0.06)] hover:bg-[rgba(255,255,255,0.1)] text-[var(--fg)] transition-colors disabled:opacity-50"
+            className="cron-btn text-sm"
             onClick={() => setShowEditJobForm(true)}
             disabled={!!actionLoading}
             title="Edit"
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-            </svg>
             Edit
           </button>
 
           {/* Delete */}
           <button
-            className="flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-md bg-[rgba(255,0,0,0.08)] hover:bg-[rgba(255,0,0,0.15)] text-[var(--accent)] transition-colors disabled:opacity-50"
+            className="cron-btn danger text-sm"
             onClick={handleDelete}
             disabled={!!actionLoading}
             title="Delete"
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polyline points="3 6 5 6 21 6" />
-              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-              <path d="M10 11v6M14 11v6" />
-              <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-            </svg>
             Delete
           </button>
         </div>
       </div>
 
+      <div className="flex-1 overflow-y-auto p-4">
+      <div className="max-w-2xl mx-auto">
+
       {/* Info Grid */}
       <div className="grid gap-3 mb-5">
 
         {/* Schedule */}
-        <div className="p-3 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-lg">
-          <div className="text-xs text-[var(--muted)] mb-0.5">定时计划</div>
-          <div className="text-sm font-medium text-[var(--fg)]">{scheduleInfo.display}</div>
-          <div className="text-xs text-[var(--muted)] mt-0.5">{scheduleInfo.kind}</div>
+        <div className="p-4 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-xl">
+          <div className="text-base font-medium text-[var(--muted)] mb-0.5">定时计划</div>
+          <div className="text-base text-[var(--fg)]">{scheduleInfo.display}</div>
+          <div className="text-sm text-[var(--muted)] mt-0.5">{scheduleInfo.kind}</div>
         </div>
 
         {/* Last run */}
-        <div className="p-3 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-lg">
-          <div className="text-xs text-[var(--muted)] mb-0.5">上次执行时间</div>
-          <div className="text-sm font-medium text-[var(--fg)]">
+        <div className="p-4 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-xl">
+          <div className="text-base font-medium text-[var(--muted)] mb-0.5">上次执行时间</div>
+          <div className="text-base text-[var(--fg)]">
             {formatDate(selectedJob.last_run_at || selectedJob.last_run)}
           </div>
           {selectedJob.last_status && (
-            <div className={`text-xs mt-0.5 ${selectedJob.last_status === 'error' ? 'text-[var(--accent)]' : 'text-[var(--muted)]'}`}>
+            <div className={`text-sm mt-0.5 ${selectedJob.last_status === 'error' ? 'text-[var(--accent)]' : 'text-[var(--muted)]'}`}>
               状态: {selectedJob.last_status}
             </div>
           )}
         </div>
 
         {/* Next run */}
-        <div className="p-3 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-lg">
-          <div className="text-xs text-[var(--muted)] mb-0.5">下次预计执行时间</div>
-          <div className="text-sm font-medium text-[var(--fg)]">
+        <div className="p-4 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-xl">
+          <div className="text-base font-medium text-[var(--muted)] mb-0.5">下次预计执行时间</div>
+          <div className="text-base text-[var(--fg)]">
             {selectedJob.next_run_at ? formatDate(selectedJob.next_run_at) : (selectedJob.enabled ? '待计算' : '已暂停')}
           </div>
         </div>
 
         {/* Deliver / output channel */}
-        <div className="p-3 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-lg">
-          <div className="text-xs text-[var(--muted)] mb-0.5">输出通道</div>
-          <div className="text-sm font-medium text-[var(--fg)] capitalize">
+        <div className="p-4 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-xl">
+          <div className="text-base font-medium text-[var(--muted)] mb-0.5">输出通道</div>
+          <div className="text-base text-[var(--fg)] capitalize">
             {selectedJob.deliver === 'local' ? '本地 (仅保存输出)' : selectedJob.deliver}
           </div>
         </div>
 
         {/* Prompt */}
-        <div className="p-3 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-lg">
-          <div className="text-xs text-[var(--muted)] mb-1.5">Prompt</div>
-          <pre className="text-sm text-[var(--fg)] whitespace-pre-wrap break-words font-sans leading-relaxed">
+        <div className="p-4 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-xl">
+          <div className="text-base font-medium text-[var(--muted)] mb-1.5">Prompt</div>
+          <pre className="text-base text-[var(--fg)] whitespace-pre-wrap break-words font-sans leading-relaxed">
             {selectedJob.prompt}
           </pre>
         </div>
@@ -293,7 +299,7 @@ export default function TaskDetail() {
 
       {/* Execution History */}
       <div>
-        <div className="text-xs font-bold uppercase tracking-wider text-[var(--muted)] mb-2">
+        <div className="text-base font-medium text-[var(--muted)] mb-2">
           历次执行记录
         </div>
 
@@ -312,24 +318,17 @@ export default function TaskDetail() {
           return (
             <div
               key={output.filename}
-              className="mb-2 border border-[var(--border2)] rounded-lg overflow-hidden"
+              className="mb-2 border border-[var(--border2)] rounded-xl overflow-hidden"
             >
               <button
                 className="w-full flex items-center justify-between px-3 py-2 bg-[rgba(255,255,255,0.03)] hover:bg-[rgba(255,255,255,0.06)] text-left transition-colors"
                 onClick={() => toggleOutput(output.filename)}
               >
-                <span className="text-sm text-[var(--fg)]">{timeStr}</span>
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  className={`text-[var(--muted)] transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}
-                >
-                  <polyline points="6 9 12 15 18 9" />
-                </svg>
+                <span className="text-base text-[var(--fg)]">{timeStr}</span>
+                <ChevronRightIcon
+                  size={18}
+                  className={`text-[var(--muted)] transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`}
+                />
               </button>
 
               <div
@@ -340,16 +339,37 @@ export default function TaskDetail() {
                 }}
               >
                 <div style={{ overflow: 'hidden' }}>
-                  <div
-                    className="p-3 text-sm text-[var(--fg)] border-t border-[var(--border2)] bg-[rgba(0,0,0,0.15)] prose prose-sm max-w-none"
-                    style={{ color: 'var(--fg)' }}
-                    dangerouslySetInnerHTML={{ __html: renderMarkdown(output.content) }}
-                  />
+                  {(() => {
+                    const { response, error } = extractCronResponse(output.content);
+                    if (!response && !error) return null;
+                    return (
+                      <div className="border-t border-[var(--border2)] bg-[rgba(0,0,0,0.15)]">
+                        <div className="pb-4 text-base text-[var(--fg)]">
+                          {/* Response label — muted, distinct from AI content */}
+                          {response && (
+                            <>
+                              <div className="px-4 pt-3 pb-2 mb-2 border-b border-[var(--border2)] text-[var(--muted)] text-base font-medium">Response</div>
+                              <div className="px-4" dangerouslySetInnerHTML={{ __html: renderMarkdown(response) }} />
+                            </>
+                          )}
+                          {/* Error section */}
+                          {error && (
+                            <>
+                              <div className="px-4 pt-3 pb-2 text-[var(--accent)] text-base font-medium">Error</div>
+                              <div className="px-4" dangerouslySetInnerHTML={{ __html: renderMarkdown(error) }} />
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             </div>
           );
         })}
+      </div>
+      </div>
       </div>
     </div>
   );

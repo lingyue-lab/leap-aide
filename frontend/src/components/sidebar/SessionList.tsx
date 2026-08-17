@@ -3,11 +3,16 @@ import { useTranslation } from 'react-i18next';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
+import { resolveWorkspaceDisplay } from '@/hooks/useWorkspaceDisplay';
 import SessionItem from './SessionItem';
+import CustomScrollbar from '@/components/common/CustomScrollbar';
+import SessionSearchModal from '@/components/common/SessionSearchModal';
+import { Icon } from '@/components/common/Icons';
+
 
 export default function SessionList() {
   const { t } = useTranslation('common');
-  const { sessions, currentSessionId, currentSession, loadSessions, createSession, selectSession, gatewayOnline } = useSessionStore();
+  const { sessions, currentSessionId, currentSession, loadSessions, createSession, selectSession } = useSessionStore();
   const { workspaces } = useWorkspaceStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
@@ -25,54 +30,52 @@ export default function SessionList() {
   const [cleanupDays, setCleanupDays] = useState(30);
   const [cleanupPreview, setCleanupPreview] = useState<number | null>(null);
   const [cleanupRunning, setCleanupRunning] = useState(false);
+  const [showSearchModal, setShowSearchModal] = useState(false);
 
-  const showCliSessions = useSettingsStore((s) => s.settings?.show_cli_sessions ?? false);
+  const showCliSessions = useSettingsStore((s) => s.settings?.show_cli_sessions ?? true);
+  const showMessagingSessions = useSettingsStore((s) => s.settings?.show_messaging_sessions ?? true);
+  const showCronSessions = useSettingsStore((s) => s.settings?.show_cron_sessions ?? false);
 
-  // Load sessions on mount
+  // Load sessions on mount, and re-load whenever any source toggle changes so
+  // the sidebar immediately reflects the new visibility.
   useEffect(() => {
     loadSessions();
-  }, [loadSessions]);
+  }, [loadSessions, showCliSessions, showMessagingSessions, showCronSessions]);
 
-  // Subscribe to Gateway SSE for real-time session updates
+  // Subscribe to Gateway SSE for real-time session updates (CLI + messaging only;
+  // cron sessions are static and arrive via loadSessions).
   useEffect(() => {
-    if (!showCliSessions) return;
+    if (!showCliSessions && !showMessagingSessions) return;
     const unsubscribe = useSessionStore.getState().subscribeGatewaySSE();
     return unsubscribe;
-  }, [showCliSessions]);
+  }, [showCliSessions, showMessagingSessions]);
 
-  // Auto-select first session on initial load (e.g. after page refresh or restart).
-  // Pinned sessions sort first, so they get priority.
-  const [autoSelectDone, setAutoSelectDone] = useState(false);
-  useEffect(() => {
-    if (autoSelectDone) return;
-    if (sessions.length > 0 && !currentSessionId) {
-      setAutoSelectDone(true);
-      selectSession(sessions[0].session_id);
-    }
-  }, [sessions, currentSessionId, autoSelectDone, selectSession]);
+  // Client-side source filter — mirrors backend session_visible(). This is a
+  // final display gate so SSE-pushed sessions also respect the three toggles.
+  const isVisibleBySource = useCallback((s: any) => {
+    if (!s.is_cli_session) return true;               // WebUI session — always visible
+    const tag = s.source_tag;
+    if (tag === 'cli') return showCliSessions;
+    if (tag === 'cron') return showCronSessions;
+    return showMessagingSessions;                     // messaging platforms + any future gateway
+  }, [showCliSessions, showMessagingSessions, showCronSessions]);
 
   // Filter sessions: server-side search when searchResults is set, else client-side fallback
   const filteredSessions = useMemo(() => {
-    const sessionList = sessions || [];
-    // Use server search results if available
+    // Use server search results if available (already server-filtered by source)
     if (searchResults !== null) return searchResults;
+    const sessionList = (sessions || []).filter(isVisibleBySource);
     // Client-side fallback (no search active)
     if (!searchQuery.trim()) return sessionList;
     const query = searchQuery.toLowerCase();
     return sessionList.filter((s) => s.title.toLowerCase().includes(query));
-  }, [sessions, searchQuery, searchResults]);
+  }, [sessions, searchQuery, searchResults, isVisibleBySource]);
 
   // Resolve a workspace path to a display label
   const wsLabel = useMemo(() => {
-    const map = new Map<string, string>();
-    workspaces.forEach((ws) => {
-      map.set(ws.path, ws.display_name || ws.name);
-    });
+    const noWsLabel = t('sessions.no_workspace') || 'No Workspace';
     return (path: string | undefined): string => {
-      if (!path) return t('sessions.no_workspace') || 'No Workspace';
-      if (map.has(path)) return map.get(path)!;
-      // Fallback: last segment of the path
-      return path.split('/').filter(Boolean).pop() || path;
+      return resolveWorkspaceDisplay(path, workspaces, noWsLabel).label;
     };
   }, [workspaces, t]);
 
@@ -169,6 +172,30 @@ export default function SessionList() {
     await createSession(activeWs || undefined);
   };
 
+  const runSearch = useCallback(async (query: string) => {
+    try {
+      const res = await fetch(
+        `/api/sessions/search?q=${encodeURIComponent(query)}&content=1&depth=0`,
+        { credentials: 'include' }
+      );
+      const data = await res.json();
+      if (data.sessions) {
+        // Merge with existing session data for workspace/pinned/etc
+        const sessionMap = new Map((sessions || []).map(s => [s.session_id, s]));
+        const merged = data.sessions.map((sr: any) => {
+          const existing = sessionMap.get(sr.session_id);
+          return existing ? { ...existing, ...sr } : sr;
+        });
+        setSearchResults(merged);
+      }
+    } catch {
+      // Fall back to client-side filtering on error
+      setSearchResults(null);
+    } finally {
+      setSearching(false);
+    }
+  }, [sessions]);
+
   const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const query = e.target.value;
     setSearchQuery(query);
@@ -188,30 +215,30 @@ export default function SessionList() {
 
     // Debounce the API call
     setSearching(true);
-    debounceRef.current = setTimeout(async () => {
-      try {
-        const res = await fetch(
-          `/api/sessions/search?q=${encodeURIComponent(query)}&content=1&depth=0`,
-          { credentials: 'include' }
-        );
-        const data = await res.json();
-        if (data.sessions) {
-          // Merge with existing session data for workspace/pinned/etc
-          const sessionMap = new Map((sessions || []).map(s => [s.session_id, s]));
-          const merged = data.sessions.map((sr: any) => {
-            const existing = sessionMap.get(sr.session_id);
-            return existing ? { ...existing, ...sr } : sr;
-          });
-          setSearchResults(merged);
-        }
-      } catch {
-        // Fall back to client-side filtering on error
-        setSearchResults(null);
-      } finally {
-        setSearching(false);
-      }
+    debounceRef.current = setTimeout(() => {
+      runSearch(query);
     }, DEBOUNCE_MS);
-  }, [sessions]);
+  }, [runSearch]);
+
+  // Re-run the active server search when source toggles change, so search
+  // results stay in sync with what the sidebar shows.
+  useEffect(() => {
+    if (searchQuery.trim() && searchResults !== null) {
+      setSearching(true);
+      runSearch(searchQuery);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showCliSessions, showMessagingSessions, showCronSessions]);
+
+  const handleOpenSearch = useCallback(() => {
+    setShowSearchModal(true);
+  }, []);
+
+  const handleCloseSearch = useCallback(() => {
+    setShowSearchModal(false);
+    setSearchQuery('');
+    setSearchResults(null);
+  }, []);
 
   const handleCleanupOpen = (sourceTag?: string) => {
     setCleanupSource(sourceTag || '');
@@ -252,100 +279,68 @@ export default function SessionList() {
 
   return (
     <>
-      {/* Sidebar toolbar — single-row header */}
-      <div className="sidebar-toolbar">
-        {/* Search — expandable input */}
-        <div className="sidebar-toolbar-search">
-          <svg className="sidebar-toolbar-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <circle cx="11" cy="11" r="8" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
-          <input
-            type="text"
-            placeholder={t('sessions.filter')}
-            value={searchQuery}
-            onChange={handleSearchChange}
-          />
-          {searchQuery && (
-            <button
-              className="sidebar-toolbar-search-clear"
-              onClick={() => { setSearchQuery(''); setSearchResults(null); }}
-              aria-label="Clear search"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <line x1="18" y1="6" x2="6" y2="18"/>
-                <line x1="6" y1="6" x2="18" y2="18"/>
-              </svg>
-            </button>
-          )}
-        </div>
-
-        {/* Secondary actions */}
-        <div className="sidebar-toolbar-actions">
-          {showCliSessions && (
-            <button
-              className="sidebar-toolbar-btn"
-              onClick={() => handleCleanupOpen()}
-              title="Clean up old gateway sessions"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="3 6 5 6 21 6" />
-                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-              </svg>
-            </button>
-          )}
-          {showCliSessions && !gatewayOnline && (
-            <span className="sidebar-toolbar-warn" title="Gateway offline">⚠</span>
-          )}
-          {/* New Conversation — placed right of cleanup */}
-          <button
-            className="sidebar-toolbar-btn sidebar-toolbar-btn--primary"
-            onClick={handleNewChat}
-            title={t('sessions.new_conversation') + ' (Cmd+K)'}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-              <line x1="12" y1="5" x2="12" y2="19" />
-              <line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-          </button>
-        </div>
-      </div>
-
-      <div className="session-list">
-        {/* Search results header */}
-        {searchResults !== null && (
-          <div style={{ padding: '6px 10px', fontSize: 11, color: 'var(--muted)' }}>
-            {searching ? (
-              'Searching…'
-            ) : (
-              `${searchResults.length} result${searchResults.length !== 1 ? 's' : ''} for "${searchQuery}"`
-            )}
+      {/* ── Search Modal (DeepSeek-style centred command palette) ── */}
+      <SessionSearchModal
+        open={showSearchModal}
+        onClose={handleCloseSearch}
+        placeholder={t('sessions.filter')}
+        value={searchQuery}
+        onChange={handleSearchChange}
+      >
+        {searchQuery && !searching && searchResults !== null && (
+          <div className="session-search-info">
+            {`${searchResults.length} result${searchResults.length !== 1 ? 's' : ''}`}
           </div>
         )}
-
-        {/* No matching results */}
-        {searchResults !== null && searchResults.length === 0 && !searching && (
-          <div className="text-center text-[var(--muted)] text-sm py-4">
-            No matching conversations
-          </div>
-        )}
-
-        {/* Search active: flat list without workspace grouping */}
-        {searchResults !== null && searchResults.length > 0 && (
-          <div className="webui-sessions-section">
+        {searchQuery && !searching && searchResults !== null && searchResults.length > 0 && (
+          <div className="session-search-results">
             {searchResults.map((session) => (
               <SessionItem
                 key={session.session_id}
                 session={session}
                 isActive={currentSessionId === session.session_id}
-                onClick={() => selectSession(session.session_id, (session as any).match_message_id ?? null)}
+                onClick={() => { handleCloseSearch(); selectSession(session.session_id, (session as any).match_message_id ?? null); }}
                 archivedChildren={archivedMap.get(session.session_id)}
               />
             ))}
           </div>
         )}
+        {searchQuery && !searching && searchResults?.length === 0 && (
+          <div className="session-search-empty">No matching conversations</div>
+        )}
+      </SessionSearchModal>
 
-        {/* Normal grouped view (when not searching) */}
+      <div className="sidebar-header">
+        <span className="sidebar-header-title">{t('tabs.chat')}</span>
+        <div className="sidebar-header-actions">
+          <button
+            className="icon-btn"
+            onClick={handleOpenSearch}
+            title={t('sessions.filter')}
+          >
+            <Icon name="search" size={18} />
+          </button>
+          {(showCliSessions || showMessagingSessions || showCronSessions) && (
+            <button
+              className="icon-btn"
+              onClick={() => handleCleanupOpen()}
+              title="Clean up old gateway sessions"
+            >
+              <Icon name="delete" size={18} />
+            </button>
+          )}
+          <button
+            className="icon-btn"
+            onClick={handleNewChat}
+            title={t('sessions.new_conversation') + ' (Cmd+K)'}
+          >
+            <Icon name="add" size={18} />
+          </button>
+        </div>
+      </div>
+
+      <CustomScrollbar className="session-list">
+        {/* Normal grouped view (only when not searching) */}
         {searchResults === null && groupedSessions.length > 0 && (
           <div className="webui-sessions-section">
             {groupedSessions.map((group) => {
@@ -353,24 +348,12 @@ export default function SessionList() {
               return (
                 <div key={group.key}>
                   <div
-                    className={`session-ws-header${collapsed ? ' collapsed' : ''}`}
+                    className={`sidebar-items-group-header${collapsed ? ' collapsed' : ''}`}
                     onClick={() => toggleGroup(group.key)}
                   >
-                    <svg
-                      className="session-ws-caret"
-                      width="12"
-                      height="12"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <polyline points="6 9 12 15 18 9" />
-                    </svg>
-                    <span className="session-ws-label">{group.label}</span>
-                    <span className="session-ws-count">{group.sessions.length}</span>
+                    <Icon name="keyboard_arrow_down" size={14} className="sidebar-items-group-caret" />
+                    <span className="sidebar-items-group-label">{group.label}</span>
+                    <span className="sidebar-items-group-count">{group.sessions.length}</span>
                   </div>
                   {!collapsed && group.sessions.map((session) => (
                     <SessionItem
@@ -392,7 +375,7 @@ export default function SessionList() {
             {searchQuery ? t('sessions.no_results') : t('sessions.empty')}
           </div>
         )}
-      </div>
+      </CustomScrollbar>
 
       {/* Cleanup Modal */}
       {showCleanupModal && (
@@ -411,10 +394,11 @@ export default function SessionList() {
                 onChange={(e) => setCleanupSource(e.target.value)}
               >
                 <option value="">-- Select --</option>
+                <option value="all">All</option>
                 <option value="webui">Web UI</option>
-                {(() => [...new Set(filteredSessions.filter(s => s.is_cli_session).map(s => s.source_tag).filter(Boolean) as string[])].sort())().map((tag) => (
-                  <option key={tag} value={tag}>{tag}</option>
-                ))}
+                <option value="cron">Cron Jobs</option>
+                <option value="cli">CLI</option>
+                <option value="weixin">Weixin</option>
               </select>
             </div>
             <div className="clear-history-modal__field">

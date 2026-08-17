@@ -1,5 +1,6 @@
 import React from 'react';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
+import { Icon } from '@/components/common/Icons';
 
 export default function BreadcrumbBar() {
   const { currentDir, loadDir, gitInfo } = useWorkspaceStore();
@@ -32,11 +33,7 @@ export default function BreadcrumbBar() {
       ))}
       {gitInfo?.branch && (
         <span className="git-branch ml-auto flex items-center gap-1 text-[var(--muted)]">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="18" cy="18" r="3" />
-            <circle cx="6" cy="6" r="3" />
-            <path d="M6 21V9a9 9 0 0 0 9 9" />
-          </svg>
+          <Icon name="account_tree" size={14} />
           {gitInfo.branch}
           {gitInfo.modified !== undefined && gitInfo.modified > 0 && (
             <span className="git-modified text-[var(--gold)]">{gitInfo.modified}*</span>

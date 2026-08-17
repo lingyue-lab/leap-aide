@@ -33,8 +33,8 @@ export interface SessionStreamState {
   completedAt: number | null;
   /** Error message if stream ended with an error */
   error: string | null;
-  /** Current generating phase: 'connecting' | 'initializing' | 'thinking' | null */
-  phase: string | null;
+  /** Number of messages before the current stream started (used to identify new messages for timestamp POST) */
+  initialMessageCount: number;
 }
 
 type ChangeListener = (sessionId: string, state: SessionStreamState) => void;
@@ -84,6 +84,21 @@ function _notifyImmediate(sessionId: string) {
   _notify(sessionId);
 }
 
+// ── Compressing spinner tracking ──────────────────────────────────────────────
+// Sessions currently showing the transient "Auto-compressing…" InfoCard (loading,
+// noDismiss). Tracked so terminal SSE events (done/stream_end/error/apperror/cancel)
+// can dismiss it as a safety net — the card must never outlive the stream, even if
+// the backend `compressed` event is dropped (e.g. compression was a no-op).
+const _compressingSessions = new Set<string>();
+
+function _dismissCompressing(sessionId: string) {
+  if (!_compressingSessions.has(sessionId)) return;
+  _compressingSessions.delete(sessionId);
+  import('@/components/dialogs/InfoCard').then(({ dismissInfoCard }) => {
+    dismissInfoCard(sessionId);
+  });
+}
+
 function _getOrCreateState(sessionId: string, streamId: string, initialMessages: Message[]): SessionStreamState {
   let state = _sessionStates.get(sessionId);
   if (!state) {
@@ -97,7 +112,7 @@ function _getOrCreateState(sessionId: string, streamId: string, initialMessages:
       streaming: true,
       completedAt: null,
       error: null,
-      phase: 'connecting',
+      initialMessageCount: initialMessages.length,
     };
     _sessionStates.set(sessionId, state);
   }
@@ -163,6 +178,13 @@ function _appendContentBlock(messages: Message[], block: ContentBlock): Message[
   return msgs;
 }
 
+function _lastAssistant(messages: Message[]): Message | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'assistant') return messages[i];
+  }
+  return undefined;
+}
+
 function _updateToolMessage(messages: Message[], toolCallId: string, updates: Partial<Message>): Message[] {
   return messages.map((m) =>
     m.role === 'tool' && m.tool_call_id === toolCallId ? { ...m, ...updates } : m
@@ -174,11 +196,15 @@ function _updateToolMessage(messages: Message[], toolCallId: string, updates: Pa
  * Shared by startBackgroundStream() and reconnectStream() to avoid duplication.
  */
 function _attachEventListeners(es: EventSource, sessionId: string, streamId: string): void {
-  es.addEventListener('message_start', () => {
+  es.addEventListener('message_start', (e: MessageEvent) => {
     const s = _sessionStates.get(sessionId);
     if (!s) return;
-    const newMsg: Message = { role: 'assistant', content: '', _ts: Date.now() / 1000, _live: true };
-    _sessionStates.set(sessionId, { ...s, messages: [...s.messages, newMsg], phase: null });
+    const data = JSON.parse(e.data);
+    // Backend-provided timestamp (Unix seconds) for stable timestamps across replays.
+    // Falls back to Date.now() for backward compatibility with older backends.
+    const ts = data.ts ?? (Date.now() / 1000);
+    const newMsg: Message = { role: 'assistant', content: '', timestamp__webui: ts, _live: true };
+    _sessionStates.set(sessionId, { ...s, messages: [...s.messages, newMsg] });
     _notifyImmediate(sessionId);
   });
 
@@ -186,7 +212,12 @@ function _attachEventListeners(es: EventSource, sessionId: string, streamId: str
     const s = _sessionStates.get(sessionId);
     if (!s) return;
     const { text } = JSON.parse(e.data);
-    _sessionStates.set(sessionId, { ...s, messages: _appendToLastAssistant(s.messages, text) });
+    const msgs = s.messages;
+    const updated = _appendToLastAssistant(msgs, text);
+    _sessionStates.set(sessionId, {
+      ...s,
+      messages: updated,
+    });
     _notifyThrottled(sessionId);
   });
 
@@ -201,16 +232,18 @@ function _attachEventListeners(es: EventSource, sessionId: string, streamId: str
   es.addEventListener('tool', (e: MessageEvent) => {
     const s = _sessionStates.get(sessionId);
     if (!s) return;
-    const data = JSON.parse(e.data) as { name: string; tid?: string; preview?: string; args?: Record<string, unknown> };
-    if (data.name === 'clarify') return;
-
+    const data = JSON.parse(e.data) as { name: string; tid?: string; preview?: string; args?: Record<string, unknown>; ts?: number };
     const tid = data.tid || `live-${data.name}-${Date.now()}`;
 
-    // Ensure assistant message exists
+    // ── Unified message_start: backend now emits message_start before
+    //     every tool, so an assistant row always exists.  We just need
+    //     to append the tool_use block and create the tool message.
     let msgs = s.messages;
-    if (!msgs.some((m) => m.role === 'assistant')) {
-      msgs = [...msgs, { role: 'assistant', content: '', _ts: Date.now() / 1000, _live: true }];
-    }
+
+    // Prefer the tool event's own timestamp (per-message granularity).
+    // Fall back to inheriting from the last assistant for backward
+    // compatibility with older backends that don't send ts in tool events.
+    const _toolTs = data.ts ?? _lastAssistant(msgs)?.timestamp__webui;
 
     const toolUseBlock: ContentBlock = {
       type: 'tool_use', id: tid, name: data.name, input: data.args || {},
@@ -218,22 +251,19 @@ function _attachEventListeners(es: EventSource, sessionId: string, streamId: str
     msgs = _appendContentBlock(msgs, toolUseBlock);
     msgs = [...msgs, {
       role: 'tool', content: '', tool_call_id: tid, tool_name: data.name,
-      _ts: Date.now() / 1000, _live: true,
+      timestamp__webui: _toolTs, _live: true,
     }];
 
     const newToolCall: ToolCall = {
       name: data.name, tid, args: data.args || {}, snippet: '', done: false, preview: data.preview || '',
     };
-    _sessionStates.set(sessionId, { ...s, messages: msgs, toolCalls: [...s.toolCalls, newToolCall], phase: 'running' });
+    _sessionStates.set(sessionId, { ...s, messages: msgs, toolCalls: [...s.toolCalls, newToolCall] });
     _notifyImmediate(sessionId);
   });
 
-  es.addEventListener('phase', (e: MessageEvent) => {
-    const s = _sessionStates.get(sessionId);
-    if (!s) return;
-    const { stage } = JSON.parse(e.data) as { stage: string };
-    _sessionStates.set(sessionId, { ...s, phase: stage });
-    _notifyImmediate(sessionId);
+  es.addEventListener('phase', () => {
+    // Kept as a no-op listener — the backend may still emit phase events,
+    // but the frontend no longer tracks a phase state.
   });
 
   es.addEventListener('tool_complete', (e: MessageEvent) => {
@@ -248,7 +278,6 @@ function _attachEventListeners(es: EventSource, sessionId: string, streamId: str
       is_error?: boolean;
       todos?: Array<{ id: string; content: string; status: string }>;
     };
-    if (data.name === 'clarify') return;
     const tid = data.tid;
     if (!tid) return;
     // If the backend attached a full todos list (write_todo tool), use it as the
@@ -260,41 +289,41 @@ function _attachEventListeners(es: EventSource, sessionId: string, streamId: str
     const toolCalls = s.toolCalls.map((tc) =>
       tc.tid === tid ? { ...tc, snippet: output.substring(0, 200), done: true, duration: data.duration, is_error: data.is_error } : tc
     );
-    // Re-show thinking indicator while waiting for next assistant token
-    _sessionStates.set(sessionId, { ...s, messages: msgs, toolCalls, phase: 'thinking' });
+    _sessionStates.set(sessionId, { ...s, messages: msgs, toolCalls });
     _notifyImmediate(sessionId);
   });
 
-  es.addEventListener('compressed', (e: MessageEvent) => {
-    const s = _sessionStates.get(sessionId);
-    if (!s) return;
+  es.addEventListener('compressing', (e: MessageEvent) => {
     const data = JSON.parse(e.data);
-    const msg: Message = {
-      role: 'assistant',
-      content: `*[${data.message || 'Context compressed'}]*`,
-      _ts: Date.now() / 1000,
-      // Attach structured compression metadata for CompressionCard rendering
-      _compression: data.saved_messages != null ? {
-        compression_time: Date.now() / 1000,
-        messages_before: (data.saved_messages || 0) + (s.messages.length || 0),
-        messages_after: s.messages.length || 0,
-        approx_tokens_before: data.approx_tokens_before || 0,
-        approx_tokens_after: data.approx_tokens_after || 0,
-        summary_text: null,
-        trigger: 'auto' as const,
-      } : undefined,
-    };
-    _sessionStates.set(sessionId, { ...s, messages: [...s.messages, msg] });
-    _notifyImmediate(sessionId);
+    const reason = data.reason ? ` (${data.reason})` : '';
+    _compressingSessions.add(sessionId);
+    import('@/components/dialogs/InfoCard').then(({ showInfoCard }) => {
+      showInfoCard(sessionId, `Auto-compressing${reason}...`, {
+        loading: true,
+        noDismiss: true,
+      });
+    });
+  });
+
+  es.addEventListener('compressed', (_e: MessageEvent) => {
+    console.log('[compressed] SSE event received — sessionId=', sessionId);
+    // Dismiss the compressing InfoCard
+    _dismissCompressing(sessionId);
+    // Trigger a session reload so the frontend picks up the compressed
+    // message list (includes the context compaction summary as a regular
+    // message row).
+    window.dispatchEvent(new CustomEvent('compressed-reload', { detail: { sessionId } }));
   });
 
   es.addEventListener('title', (e: MessageEvent) => {
     // Title updates are dispatched as a custom event so SessionStore can handle it
     const data = JSON.parse(e.data);
+    console.log('[title-sync] streamManager title SSE received', { dataSessionId: data.session_id?.slice(0,8), localSessionId: sessionId.slice(0,8), title: data.title });
     window.dispatchEvent(new CustomEvent('bg-stream-title', { detail: { sessionId, title: data.title } }));
   });
 
   es.addEventListener('done', (e: MessageEvent) => {
+    _dismissCompressing(sessionId);
     const s = _sessionStates.get(sessionId);
     if (!s) return;
     const data = JSON.parse(e.data);
@@ -307,63 +336,65 @@ function _attachEventListeners(es: EventSource, sessionId: string, streamId: str
       streaming: false,
       completedAt: Date.now(),
       lastUsage: data.usage || null,
-      phase: null,
     });
     _notifyImmediate(sessionId);
+
     // Notify UI that this session's stream is done (for sound / badge)
     window.dispatchEvent(new CustomEvent('bg-stream-done', { detail: { sessionId, streamId } }));
   });
 
   es.addEventListener('stream_end', () => {
-    // Close the EventSource now that all post-done events (e.g. title) have been sent
+    _dismissCompressing(sessionId);
+    // Close the EventSource now that all post-done events (e.g. title) have been sent.
+    // State (busy/streaming/completedAt) is already set by the 'done' handler;
+    // no _notifyImmediate here — that would trigger a duplicate loadSession.
     es.close();
     _eventSources.delete(streamId);
-    const s = _sessionStates.get(sessionId);
-    if (s) {
-      _sessionStates.set(sessionId, { ...s, streaming: false, busy: false });
-      _notifyImmediate(sessionId);
-    }
   });
 
   es.addEventListener('apperror', (e: MessageEvent) => {
+    _dismissCompressing(sessionId);
     const s = _sessionStates.get(sessionId);
     if (!s) return;
     const data = JSON.parse(e.data);
     es.close();
     _eventSources.delete(streamId);
     let errorMsg = data.message || 'Unknown error';
-    if (data.type === 'rate_limit') errorMsg = `**Rate limit reached:** ${data.message}`;
-    else if (data.type === 'no_response') errorMsg = '**No response received.** Check your API key and model selection.';
-    else { errorMsg = `**Error:** ${data.message}`; if (data.hint) errorMsg += `\n\n*${data.hint}*`; }
-    const errMsgObj: Message = { role: 'assistant', content: errorMsg, _ts: Date.now() / 1000 };
+    if (data.type === 'rate_limit') errorMsg = `Rate limit reached: ${data.message}`;
+    else if (data.type === 'no_response') errorMsg = 'No response received. Check your API key and model selection.';
+    else { errorMsg = data.message; if (data.hint) errorMsg += `\n\n${data.hint}`; }
+    // Show via InfoCard rather than appending an error message to conversation
+    // history, keeping the chat clean.
+    window.dispatchEvent(new CustomEvent('app-error-card', { detail: { sessionId, message: errorMsg } }));
     _sessionStates.set(sessionId, {
-      ...s, busy: false, streaming: false, completedAt: Date.now(), error: errorMsg, phase: null,
-      messages: [...s.messages, errMsgObj],
+      ...s, busy: false, streaming: false, completedAt: Date.now(), error: errorMsg,
     });
     _notifyImmediate(sessionId);
   });
 
   es.addEventListener('error', () => {
+    _dismissCompressing(sessionId);
     const s = _sessionStates.get(sessionId);
     if (!s) return;
     es.close();
     _eventSources.delete(streamId);
-    const errMsg = '**Error:** Connection lost';
+    const errMsg = 'Connection lost';
+    window.dispatchEvent(new CustomEvent('app-error-card', { detail: { sessionId, message: errMsg } }));
     _sessionStates.set(sessionId, {
-      ...s, busy: false, streaming: false, completedAt: Date.now(), error: errMsg, phase: null,
-      messages: [...s.messages, { role: 'assistant', content: errMsg, _ts: Date.now() / 1000 }],
+      ...s, busy: false, streaming: false, completedAt: Date.now(), error: errMsg,
     });
     _notifyImmediate(sessionId);
   });
 
   es.addEventListener('cancel', () => {
+    _dismissCompressing(sessionId);
     const s = _sessionStates.get(sessionId);
     if (!s) return;
     es.close();
     _eventSources.delete(streamId);
     _sessionStates.set(sessionId, {
-      ...s, busy: false, streaming: false, completedAt: Date.now(), phase: null,
-      messages: [...s.messages, { role: 'assistant', content: '*Task cancelled.*', _ts: Date.now() / 1000 }],
+      ...s, busy: false, streaming: false, completedAt: Date.now(),
+      messages: [...s.messages, { role: 'assistant', content: '*Task cancelled.*', timestamp: Date.now() / 1000 }],
     });
     _notifyImmediate(sessionId);
     window.dispatchEvent(new CustomEvent('bg-stream-done', { detail: { sessionId, streamId } }));
@@ -410,7 +441,20 @@ export function startBackgroundStream(
   // Seed the state with existing history + the new user message
   const seedMessages = [...initialMessages, userMessage];
   const state = _getOrCreateState(sessionId, streamId, seedMessages);
-  _sessionStates.set(sessionId, { ...state, streamId, busy: true, streaming: true, completedAt: null, error: null, messages: seedMessages, toolCalls: [] });
+  _sessionStates.set(sessionId, {
+    ...state,
+    streamId,
+    busy: true,
+    streaming: true,
+    completedAt: null,
+    error: null,
+    messages: seedMessages,
+    toolCalls: [],
+    // Record how many messages the backend already has (before the user message
+    // and the streaming response).  Used at stream-end to compute how many new
+    // timestamps to POST.
+    initialMessageCount: initialMessages.length,
+  });
 
   // Open SSE connection
   const es = chatService.createSSEConnection(streamId);
@@ -447,7 +491,9 @@ export function reconnectStream(
   sessionId: string,
   streamId: string,
   pendingUserMsg: string,
-  existingMessages: Message[]
+  existingMessages: Message[],
+  pendingOriginalMsg?: string,
+  pendingUserMsgTs?: number,
 ): void {
   // Close any pre-existing stream/state for this session
   stopBackgroundStream(sessionId);
@@ -457,7 +503,8 @@ export function reconnectStream(
   const userMsg: Message = {
     role: 'user',
     content: pendingUserMsg,
-    _ts: Date.now() / 1000,
+    timestamp__webui: pendingUserMsgTs ?? (Date.now() / 1000),  // fallback for older backends
+    ...(pendingOriginalMsg ? { original_content__webui: pendingOriginalMsg } : {}),
   };
   const seedMessages = [...existingMessages, userMsg];
 
@@ -471,7 +518,8 @@ export function reconnectStream(
     streaming: true,
     completedAt: null,
     error: null,
-    phase: null,
+    // Reconnect: all existing messages are already in the backend.
+    initialMessageCount: existingMessages.length,
   });
 
   // Use the replay endpoint so we get all past events before live ones
@@ -520,19 +568,32 @@ export function stopBackgroundStream(sessionId: string): void {
     clearTimeout(pending);
     _pendingNotifies.delete(sessionId);
   }
+  // Mark as no longer streaming so the UI (ThinkingIndicator, sidebar pulse)
+  // reflects the stopped state even if state persists for a while.
+  _sessionStates.set(sessionId, { ...s, streaming: false, busy: false });
+  _notify(sessionId);
 }
 
 /** Remove all state for a session (call after done event is handled by UI) */
 export function clearSessionStream(sessionId: string): void {
+  // ── Notify subscribers BEFORE deleting state ──────────────────────────
+  // stopBackgroundStream already sets busy=false, streaming=false and calls
+  // _notify.  But _notify reads from _sessionStates, so we must ensure the
+  // state still exists with the terminal flags when subscribers fire.
+  // After the delete, _notify returns early (state is null), which was the
+  // root cause of stale busy=true surviving clearSessionStream.
   stopBackgroundStream(sessionId);
-  _sessionStates.delete(sessionId);
-  // Cancel any pending throttled notification before immediate notify
+
+  // Cancel any pending throttled notification — the final _notify in
+  // stopBackgroundStream already delivered the terminal state.
   const pending = _pendingNotifies.get(sessionId);
   if (pending) {
     clearTimeout(pending);
     _pendingNotifies.delete(sessionId);
   }
-  _notify(sessionId);
+
+  // Now safe to delete — subscribers have already seen busy=false
+  _sessionStates.delete(sessionId);
 }
 
 /** Get the current stream state for a session (null if no stream) */
@@ -544,6 +605,16 @@ export function getSessionStreamState(sessionId: string): SessionStreamState | n
 export function isSessionStreaming(sessionId: string): boolean {
   const s = _sessionStates.get(sessionId);
   return !!(s && s.streaming);
+}
+
+/** Replace the message list for a session in the internal buffer.
+ *  Used after compression to keep _sessionStates in sync with Zustand
+ *  so subsequent SSE events don't push stale pre-compression data back. */
+export function replaceSessionMessages(sessionId: string, messages: Message[]): void {
+  const s = _sessionStates.get(sessionId);
+  if (s) {
+    _sessionStates.set(sessionId, { ...s, messages });
+  }
 }
 
 /** Subscribe to state changes for any session */

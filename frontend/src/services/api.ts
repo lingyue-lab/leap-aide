@@ -23,12 +23,13 @@ export async function api<T>(
     let message = `HTTP ${response.status}`;
     try {
       const error = await response.json();
-      message = error.message || message;
+      message = error.error || error.message || message;
     } catch {
       // Ignore JSON parse errors
     }
-    const error: ApiError = { message, status: response.status };
-    throw error;
+    const err = new Error(message) as Error & { status: number };
+    err.status = response.status;
+    throw err;
   }
 
   return response.json();
@@ -328,12 +329,13 @@ export const clarifyService = {
     );
   },
 
-  respond: async (sessionId: string, response: string) => {
+  respond: async (sessionId: string, response: string, clarifyId?: string | null) => {
     return api('/api/clarify/respond', {
       method: 'POST',
       body: JSON.stringify({
         session_id: sessionId,
         response,
+        clarify_id: clarifyId,
       }),
     });
   },
@@ -411,20 +413,6 @@ export const cronService = {
       body: JSON.stringify({ id: jobId }),
     });
   },
-
-  recent: async (since: number) => {
-    return api<{ completions: import('@/types').CronCompletion[]; since: number }>(
-      `/api/crons/recent?since=${since}`
-    );
-  },
-
-  seen: async (jobId?: string) => {
-    const body = jobId ? { job_id: jobId } : {};
-    return api<{ ok: boolean; last_seen_cron_ts_map: Record<string, number> }>('/api/crons/seen', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
-  },
 };
 
 // Skills API 服务
@@ -469,6 +457,27 @@ export const skillsService = {
         body: JSON.stringify({ name, file: filePath, content }),
       }
     );
+  },
+
+  deleteFile: async (name: string, filePath: string) => {
+    return api<{ ok: boolean }>('/api/skills/file/delete', {
+      method: 'POST',
+      body: JSON.stringify({ name, file: filePath }),
+    });
+  },
+
+  createFile: async (name: string, filePath: string, content?: string, isDir?: boolean) => {
+    return api<{ ok: boolean; path: string; is_dir: boolean }>('/api/skills/file/create', {
+      method: 'POST',
+      body: JSON.stringify({ name, file: filePath, content: content || '', is_dir: isDir || false }),
+    });
+  },
+
+  renameFile: async (name: string, oldPath: string, newPath: string) => {
+    return api<{ ok: boolean; old_path: string; new_path: string }>('/api/skills/file/rename', {
+      method: 'POST',
+      body: JSON.stringify({ name, old_file: oldPath, new_file: newPath }),
+    });
   },
 
   importDir: async (
@@ -552,11 +561,11 @@ export const observerService = {
       cdp_port?: number;
       status?: string;
       error?: string;
-    }>(`/api/observer/${encodeURIComponent(sessionId)}/info`),
+    }>(`/observations/${encodeURIComponent(sessionId)}/info`),
 
   openPage: (sessionId: string) =>
     window.open(
-      `/api/observer/${encodeURIComponent(sessionId)}`,
+      `/observations/${encodeURIComponent(sessionId)}`,
       '_blank',
       'noopener,noreferrer'
     ),

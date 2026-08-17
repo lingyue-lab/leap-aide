@@ -1,8 +1,4 @@
 {
-  "empty": {
-    "title": "How can Hermes help you?",
-    "subtitle": "Start a conversation or select an example below"
-  },
   "suggestions": {
     "files": "Analyze project files",
     "files_msg": "List all Python files and explain their purpose",
@@ -11,13 +7,9 @@
     "plan": "Create an execution plan",
     "plan_msg": "Break down the following task into steps"
   },
-  "thinking": "Thinking...",
-  "connecting": "Connecting...",
-  "initializing": "Initializing agent...",
-  "thinking_phase": "Thinking...",
-  "running": "Running...",
+  "working": "Working...",
   "composer": {
-    "placeholder": "Message Hermes...",
+    "placeholder": "Message Leap Aide...",
     "attach": "Attach files",
     "send": "Send message",
     "stop": "Stop generating",
@@ -35,7 +27,8 @@
   "clarify": {
     "title": "Question",
     "submit": "Continue",
-    "other": "Other..."
+    "other": "Other...",
+    "timeout": "Clarify card timed out"
   },
   "messages": {
     "copy": "Copy",

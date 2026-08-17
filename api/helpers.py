@@ -70,7 +70,7 @@ def j(handler, payload, status: int=200, extra_headers: dict=None) -> None:
     *extra_headers*: optional dict of additional headers to include
     (e.g., {'Set-Cookie': '...'}).  Headers are sent before end_headers().
     """
-    body = _json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8')
+    body = _json.dumps(payload, ensure_ascii=False, indent=None, separators=(',', ':')).encode('utf-8')
     handler.send_response(status)
     handler.send_header('Content-Type', 'application/json; charset=utf-8')
 

@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { useSessionStore } from '@/stores/useSessionStore';
 
 export interface BackgroundTaskInfo {
@@ -10,37 +10,80 @@ export interface BackgroundTaskInfo {
   prompt: string;
 }
 
-const AUTO_DISMISS_MS = 10000;
+// Per-session Map for card state storage
+const _cards = new Map<string, BackgroundTaskInfo>();
 
-// Module-level setter — set by the component on mount, cleared on unmount.
-let _setTask: ((task: BackgroundTaskInfo) => void) | null = null;
+// Current session ID
+let _currentSessionId: string | null = null;
 
-/** Show a background-task-started card.  Safe to call before the component mounts. */
-export function showBackgroundTaskCard(task: BackgroundTaskInfo) {
-  if (_setTask) {
-    _setTask(task);
+// Visible-change callback
+let _onVisibleChange: ((visible: boolean) => void) | null = null;
+
+// Internal setters
+let _renderTask: ((task: BackgroundTaskInfo | null) => void) | null = null;
+let _renderVisible: ((v: boolean) => void) | null = null;
+
+/** Show a background-task-started card for a specific session.
+ *  If sessionId ≠ current session, stores but does not display. */
+export function showBackgroundTaskCard(sessionId: string, task: BackgroundTaskInfo) {
+  _cards.set(sessionId, task);
+
+  if (sessionId === _currentSessionId) {
+    _renderTask?.(task);
+    _renderVisible?.(true);
+    _onVisibleChange?.(true);
+  }
+}
+
+/** Dismiss the background task card for a specific session. */
+export function dismissBackgroundTaskCard(sessionId: string) {
+  _cards.delete(sessionId);
+  if (sessionId === _currentSessionId) {
+    _renderTask?.(null);
+    _renderVisible?.(false);
+    _onVisibleChange?.(false);
+  }
+}
+
+/** Register a callback that fires when card visibility changes. */
+export function onBackgroundTaskCardVisibleChange(fn: (visible: boolean) => void): () => void {
+  _onVisibleChange = fn;
+  return () => { _onVisibleChange = null; };
+}
+
+/** Notify BackgroundTaskCard of a session change. */
+export function setBgTaskCardCurrentSessionId(sessionId: string | null) {
+  _currentSessionId = sessionId;
+  if (sessionId) {
+    const pending = _cards.get(sessionId);
+    if (pending) {
+      _renderTask?.(pending);
+      _renderVisible?.(true);
+      _onVisibleChange?.(true);
+    } else {
+      _renderVisible?.(false);
+      _onVisibleChange?.(false);
+    }
+  } else {
+    _renderVisible?.(false);
+    _onVisibleChange?.(false);
   }
 }
 
 export default function BackgroundTaskCard() {
   const [visible, setVisible] = useState(false);
   const [task, setTask] = useState<BackgroundTaskInfo | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    _setTask = (t: BackgroundTaskInfo) => {
+    _renderTask = (t: BackgroundTaskInfo | null) => {
       setTask(t);
-      setVisible(true);
-      // Auto-dismiss
-      if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => {
-        setVisible(false);
-        setTask(null);
-      }, AUTO_DISMISS_MS);
+    };
+    _renderVisible = (v: boolean) => {
+      setVisible(v);
     };
     return () => {
-      _setTask = null;
-      if (timerRef.current) clearTimeout(timerRef.current);
+      _renderTask = null;
+      _renderVisible = null;
     };
   }, []);
 
@@ -49,15 +92,15 @@ export default function BackgroundTaskCard() {
     const { selectSession } = useSessionStore.getState();
     selectSession(task.session_id);
     window.history.pushState(null, '', `?session=${encodeURIComponent(task.session_id)}`);
-    setVisible(false);
-    setTask(null);
-    if (timerRef.current) clearTimeout(timerRef.current);
+    handleDismiss();
   };
 
   const handleDismiss = () => {
+    if (!_currentSessionId) return;
+    _cards.delete(_currentSessionId);
     setVisible(false);
     setTask(null);
-    if (timerRef.current) clearTimeout(timerRef.current);
+    _onVisibleChange?.(false);
   };
 
   if (!visible || !task) return null;
@@ -67,24 +110,17 @@ export default function BackgroundTaskCard() {
   return (
     <div className={`bg-task-card ${visible ? 'visible' : ''}`}>
       <div className="bg-task-inner">
-        <div className="bg-task-header">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-            <circle cx="12" cy="12" r="10" />
-            <polyline points="12 6 12 12 16 14" />
-          </svg>
-          <span>Background Task</span>
-          <button className="bg-task-close" onClick={handleDismiss} aria-label="Dismiss" title="Dismiss">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
-        </div>
-        <div className="bg-task-desc">{promptText}</div>
-        <div className="bg-task-btns">
-          <button className="bg-task-btn view" onClick={handleView}>
-            View
-          </button>
+        <div className="bg-task-content">
+          <div className="bg-task-desc">
+            <span>Background Task</span>
+            {promptText && <div style={{ marginTop: 4, opacity: 0.7 }}>{promptText}</div>}
+          </div>
+          <div className="bg-task-sider">
+            <div className="bg-task-btns">
+              <button className="bg-task-btn bg-task-btn--primary" onClick={handleView}>View</button>
+              <button className="bg-task-close" onClick={handleDismiss} aria-label="Dismiss">Close</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>

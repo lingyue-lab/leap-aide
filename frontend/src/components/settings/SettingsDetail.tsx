@@ -1,21 +1,21 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-// @ts-ignore – @monaco-editor/react is installed on the server; run npm install
-import Editor from '@monaco-editor/react';
 import { useSettingsTabStore } from '@/stores/useSettingsTabStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 import { useTheme } from '@/contexts/ThemeContext';
 import { configFileService, providersService } from '@/services/api';
+import FileView from '@/components/shared/FileView';
+import { EditIcon, Icon } from '@/components/common/Icons';
 import type { Settings, Theme, SendKey, FontSize, Provider } from '@/types';
 
 // ─── Reusable field components ────────────────────────────────────────────────
 
 function FieldRow({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '12px 0', borderBottom: '1px solid var(--border2)' }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '12px 0', borderBottom: '1px solid var(--md-outline-variant)' }}>
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text)', lineHeight: 1.4 }}>{label}</div>
-        {hint && <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 3, lineHeight: 1.4 }}>{hint}</div>}
+        <div style={{ fontSize: 16, fontWeight: 500, color: 'var(--md-on-surface)', lineHeight: 1.4 }}>{label}</div>
+        {hint && <div style={{ fontSize: 14, color: 'var(--md-on-surface-variant)', marginTop: 3, lineHeight: 1.4 }}>{hint}</div>}
       </div>
       <div style={{ flexShrink: 0 }}>{children}</div>
     </div>
@@ -32,11 +32,11 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
         width: 40,
         height: 22,
         borderRadius: 11,
-        border: 'none',
+        border: checked ? 'none' : '1px solid var(--md-outline)',
         cursor: 'pointer',
-        background: checked ? 'var(--blue)' : 'var(--border2)',
+        background: checked ? 'var(--md-primary)' : 'var(--md-surface-container-highest)',
         position: 'relative',
-        transition: 'background 0.2s',
+        transition: 'background 0.2s, border-color 0.2s',
         flexShrink: 0,
       }}
     >
@@ -48,7 +48,7 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
           width: 16,
           height: 16,
           borderRadius: '50%',
-          background: '#fff',
+          background: checked ? 'var(--md-on-primary)' : 'var(--md-outline)',
           transition: 'left 0.2s',
           boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
         }}
@@ -63,28 +63,34 @@ function SelectField({ value, onChange, options }: {
   options: { value: string; label: string }[];
 }) {
   return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      style={{
-        padding: '5px 28px 5px 10px',
-        borderRadius: 6,
-        border: '1px solid var(--border2)',
-        background: 'var(--input-bg)',
-        color: 'var(--text)',
-        fontSize: 12,
-        cursor: 'pointer',
-        minWidth: 120,
-        appearance: 'none',
-        backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23888' stroke-width='1.5' fill='none'/%3E%3C/svg%3E")`,
-        backgroundRepeat: 'no-repeat',
-        backgroundPosition: 'right 8px center',
-      }}
-    >
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>{o.label}</option>
-      ))}
-    </select>
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        style={{
+          padding: '5px 28px 5px 10px',
+          borderRadius: 'var(--md-shape-xs)',
+          border: '1px solid var(--md-outline)',
+          background: 'var(--md-surface-container-highest)',
+          color: 'var(--md-on-surface)',
+          fontSize: 16,
+          cursor: 'pointer',
+          // 统一下限 200px（对齐 TextInput），上限 280px（M3 菜单 max-width）
+          minWidth: 200,
+          maxWidth: 280,
+          appearance: 'none',
+        }}
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+      <Icon
+        name="keyboard_arrow_down"
+        size={10}
+        style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--md-on-surface-variant)' }}
+      />
+    </div>
   );
 }
 
@@ -97,11 +103,11 @@ function TextInput({ value, onChange, placeholder }: { value: string; onChange: 
       placeholder={placeholder}
       style={{
         padding: '5px 10px',
-        borderRadius: 6,
-        border: '1px solid var(--border2)',
-        background: 'var(--input-bg)',
-        color: 'var(--text)',
-        fontSize: 12,
+        borderRadius: 'var(--md-shape-xs)',
+        border: '1px solid var(--md-outline)',
+        background: 'var(--md-surface-container-highest)',
+        color: 'var(--md-on-surface)',
+        fontSize: 16,
         width: 200,
       }}
     />
@@ -123,11 +129,6 @@ function AppearanceGroup({ form, set }: GroupProps) {
     { value: 'dark',      label: t('settings.themes.dark') },
     { value: 'light',     label: t('settings.themes.light') },
     { value: 'system',    label: t('settings.themes.system') },
-    { value: 'slate',     label: t('settings.themes.slate') },
-    { value: 'solarized', label: t('settings.themes.solarized') },
-    { value: 'monokai',   label: t('settings.themes.monokai') },
-    { value: 'nord',      label: t('settings.themes.nord') },
-    { value: 'oled',      label: t('settings.themes.oled') },
   ];
 
   const LANGUAGES = [
@@ -168,14 +169,35 @@ function AppearanceGroup({ form, set }: GroupProps) {
           options={FONT_SIZES}
         />
       </FieldRow>
-      <FieldRow label={t('settings.fields.default_mode')} hint={t('settings.fields.default_mode_hint')}>
+    </>
+  );
+}
+
+function InputGroup({ form, set }: GroupProps) {
+  const { t } = useTranslation();
+
+  const SEND_KEYS: { value: SendKey; label: string }[] = [
+    { value: 'enter',      label: t('settings.send_keys.enter') },
+    { value: 'ctrl+enter', label: t('settings.send_keys.ctrl_enter') },
+  ];
+
+  return (
+    <>
+      <FieldRow label={t('settings.fields.send_key')} hint={t('settings.fields.send_key_hint')}>
         <SelectField
-          value={form.default_mode ?? 'manual'}
-          onChange={(v) => set('default_mode', v as 'manual' | 'smart' | 'yolo')}
+          value={form.send_key ?? 'enter'}
+          onChange={(v) => set('send_key', v as SendKey)}
+          options={SEND_KEYS}
+        />
+      </FieldRow>
+      <FieldRow label={t('settings.fields.busy_input_mode')} hint={t('settings.fields.busy_input_mode_hint')}>
+        <SelectField
+          value={form.busy_input_mode ?? 'interrupt'}
+          onChange={(v) => set('busy_input_mode', v as 'interrupt' | 'queue' | 'steer')}
           options={[
-            { value: 'manual', label: t('mode.manual', { ns: 'chat' }) },
-            { value: 'smart', label: t('mode.smart', { ns: 'chat' }) },
-            { value: 'yolo', label: t('mode.yolo', { ns: 'chat' }) },
+            { value: 'interrupt', label: t('settings.busy_input_modes.interrupt') },
+            { value: 'queue', label: t('settings.busy_input_modes.queue') },
+            { value: 'steer', label: t('settings.busy_input_modes.steer') },
           ]}
         />
       </FieldRow>
@@ -183,13 +205,32 @@ function AppearanceGroup({ form, set }: GroupProps) {
   );
 }
 
-function ModelGroup({ form, set }: GroupProps) {
+function SessionsGroup({ form, set }: GroupProps) {
   const { t } = useTranslation();
+  return (
+    <>
+      <FieldRow label={t('settings.fields.show_cli_sessions')} hint={t('settings.fields.show_cli_sessions_hint')}>
+        <Toggle checked={form.show_cli_sessions ?? true} onChange={(v) => set('show_cli_sessions', v)} />
+      </FieldRow>
+      <FieldRow label={t('settings.fields.show_messaging_sessions')} hint={t('settings.fields.show_messaging_sessions_hint')}>
+        <Toggle checked={form.show_messaging_sessions ?? true} onChange={(v) => set('show_messaging_sessions', v)} />
+      </FieldRow>
+      <FieldRow label={t('settings.fields.show_cron_sessions')} hint={t('settings.fields.show_cron_sessions_hint')}>
+        <Toggle checked={form.show_cron_sessions ?? false} onChange={(v) => set('show_cron_sessions', v)} />
+      </FieldRow>
+      <FieldRow label={t('settings.fields.session_poll_interval')} hint={t('settings.fields.session_poll_interval_hint')}>
+        <TextInput
+          value={form.session_poll_interval_sec ?? '10'}
+          onChange={(v) => set('session_poll_interval_sec', v)}
+          placeholder="10"
+        />
+      </FieldRow>
+    </>
+  );
+}
 
-  const SEND_KEYS: { value: SendKey; label: string }[] = [
-    { value: 'enter',      label: t('settings.send_keys.enter') },
-    { value: 'ctrl+enter', label: t('settings.send_keys.ctrl_enter') },
-  ];
+function AgentGroup({ form, set }: GroupProps) {
+  const { t } = useTranslation();
 
   // Global default reasoning effort (from config.yaml, not WebUI settings)
   const [globalEffort, setGlobalEffort] = useState<string>('');
@@ -231,43 +272,36 @@ function ModelGroup({ form, set }: GroupProps) {
 
   return (
     <>
-      <FieldRow label={t('settings.fields.send_key')} hint={t('settings.fields.send_key_hint')}>
-        <SelectField
-          value={form.send_key ?? 'enter'}
-          onChange={(v) => set('send_key', v as SendKey)}
-          options={SEND_KEYS}
-        />
-      </FieldRow>
-      <FieldRow label={t('settings.fields.busy_input_mode')} hint={t('settings.fields.busy_input_mode_hint')}>
-        <SelectField
-          value={form.busy_input_mode ?? 'interrupt'}
-          onChange={(v) => set('busy_input_mode', v as 'interrupt' | 'queue' | 'steer')}
-          options={[
-            { value: 'interrupt', label: t('settings.busy_input_modes.interrupt') },
-            { value: 'queue', label: t('settings.busy_input_modes.queue') },
-            { value: 'steer', label: t('settings.busy_input_modes.steer') },
-          ]}
-        />
-      </FieldRow>
-      <FieldRow label={t('settings.fields.session_poll_interval')} hint={t('settings.fields.session_poll_interval_hint')}>
-        <TextInput
-          value={form.session_poll_interval_sec ?? '10'}
-          onChange={(v) => set('session_poll_interval_sec', v)}
-          placeholder="10"
-        />
-      </FieldRow>
-      <FieldRow label={t('settings.fields.bot_name')} hint={t('settings.fields.bot_name_hint')}>
-        <TextInput
-          value={form.bot_name ?? ''}
-          onChange={(v) => set('bot_name', v)}
-          placeholder="Hermes"
-        />
-      </FieldRow>
       <FieldRow label={t('settings.fields.default_reasoning_effort')} hint={t('settings.fields.default_reasoning_effort_hint')}>
         <SelectField
           value={globalEffort}
           onChange={handleGlobalEffortChange}
           options={EFFORT_OPTIONS}
+        />
+      </FieldRow>
+      <FieldRow label={t('settings.fields.default_mode')} hint={t('settings.fields.default_mode_hint')}>
+        <SelectField
+          value={form.default_mode ?? 'manual'}
+          onChange={(v) => set('default_mode', v as 'manual' | 'smart' | 'yolo')}
+          options={[
+            { value: 'manual', label: t('mode.manual', { ns: 'chat' }) },
+            { value: 'smart', label: t('mode.smart', { ns: 'chat' }) },
+            { value: 'yolo', label: t('mode.yolo', { ns: 'chat' }) },
+          ]}
+        />
+      </FieldRow>
+      <FieldRow label={t('settings.fields.approval_timeout')} hint={t('settings.fields.approval_timeout_hint')}>
+        <TextInput
+          value={form.approval_timeout_sec ?? '60'}
+          onChange={(v) => set('approval_timeout_sec', v)}
+          placeholder="60"
+        />
+      </FieldRow>
+      <FieldRow label={t('settings.fields.clarify_timeout')} hint={t('settings.fields.clarify_timeout_hint')}>
+        <TextInput
+          value={form.clarify_timeout_sec ?? '600'}
+          onChange={(v) => set('clarify_timeout_sec', v)}
+          placeholder="600"
         />
       </FieldRow>
     </>
@@ -293,15 +327,6 @@ function NotificationsGroup({ form, set }: GroupProps) {
           }}
         />
       </FieldRow>
-      <FieldRow label={t('settings.fields.show_token_usage')} hint={t('settings.fields.show_token_usage_hint')}>
-        <Toggle checked={form.show_token_usage ?? true} onChange={(v) => set('show_token_usage', v)} />
-      </FieldRow>
-      <FieldRow label={t('settings.fields.show_cli_sessions')} hint={t('settings.fields.show_cli_sessions_hint')}>
-        <Toggle checked={form.show_cli_sessions ?? false} onChange={(v) => set('show_cli_sessions', v)} />
-      </FieldRow>
-      <FieldRow label={t('settings.fields.sync_insights')} hint={t('settings.fields.sync_insights_hint')}>
-        <Toggle checked={form.sync_insights ?? false} onChange={(v) => set('sync_insights', v)} />
-      </FieldRow>
     </>
   );
 }
@@ -312,6 +337,8 @@ function HistoryGroup({ form, set }: GroupProps) {
   const { t } = useTranslation();
   const MSG_THRESHOLDS = [
     { value: '0',   label: t('common:disabled', 'Disabled') },
+    { value: '30',  label: '30 messages' },
+    { value: '50',  label: '50 messages' },
     { value: '100', label: '100 messages' },
     { value: '200', label: '200 messages' },
     { value: '500', label: '500 messages' },
@@ -323,6 +350,20 @@ function HistoryGroup({ form, set }: GroupProps) {
     { value: '0.60', label: '60% of context' },
     { value: '0.70', label: '70% of context' },
     { value: '0.85', label: '85% of context' },
+  ];
+  const POOR_RATIOS = [
+    { value: '0.25', label: '25% retained' },
+    { value: '0.5',  label: '50% retained' },
+    { value: '0.6',  label: '60% retained' },
+    { value: '0.7',  label: '70% retained' },
+    { value: '0.8',  label: '80% retained' },
+  ];
+  const DISABLE_AFTER = [
+    { value: '1',  label: '1 poor attempt' },
+    { value: '2',  label: '2 poor attempts' },
+    { value: '3',  label: '3 poor attempts' },
+    { value: '5',  label: '5 poor attempts' },
+    { value: '10', label: '10 poor attempts' },
   ];
   return (
     <>
@@ -344,6 +385,26 @@ function HistoryGroup({ form, set }: GroupProps) {
           value={String(form.auto_compress_token_threshold ?? '0')}
           onChange={(v) => set('auto_compress_token_threshold', v)}
           options={TOKEN_THRESHOLDS}
+        />
+      </FieldRow>
+      <FieldRow
+        label={t('settings.fields.auto_compress_poor_ratio')}
+        hint={t('settings.fields.auto_compress_poor_ratio_hint')}
+      >
+        <SelectField
+          value={String(form.auto_compress_poor_ratio ?? '0.5')}
+          onChange={(v) => set('auto_compress_poor_ratio', v)}
+          options={POOR_RATIOS}
+        />
+      </FieldRow>
+      <FieldRow
+        label={t('settings.fields.auto_compress_disable_after')}
+        hint={t('settings.fields.auto_compress_disable_after_hint')}
+      >
+        <SelectField
+          value={String(form.auto_compress_disable_after ?? '3')}
+          onChange={(v) => set('auto_compress_disable_after', v)}
+          options={DISABLE_AFTER}
         />
       </FieldRow>
       <FieldRow
@@ -429,15 +490,15 @@ function ProviderRow({ provider }: { provider: Provider }) {
       config_yaml: 'config.yaml',
       oauth: 'OAuth',
     };
-    return { label: src[provider.key_source] ?? provider.key_source, color: '#4ade80' };
+    return { label: src[provider.key_source] ?? provider.key_source, color: 'var(--md-success)' };
   };
 
   const badge = keySourceBadge();
 
   return (
     <div style={{
-      border: '1px solid var(--border2)',
-      borderRadius: 8,
+      border: '1px solid var(--md-outline)',
+      borderRadius: 'var(--md-shape-sm)',
       marginBottom: 8,
       overflow: 'hidden',
     }}>
@@ -454,15 +515,15 @@ function ProviderRow({ provider }: { provider: Provider }) {
           width: 8,
           height: 8,
           borderRadius: '50%',
-          background: hasKey ? '#4ade80' : 'var(--border2)',
+          background: hasKey ? 'var(--md-success)' : 'var(--md-outline)',
           flexShrink: 0,
-          border: `1px solid ${hasKey ? '#22c55e' : 'var(--border)'}`,
+          border: `1px solid ${hasKey ? 'var(--md-success)' : 'var(--md-outline-variant)'}`,
         }} />
-        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', flex: 1 }}>
+        <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--md-on-surface)', flex: 1 }}>
           {provider.display_name}
         </span>
         {badge && (
-          <span style={{ fontSize: 11, color: badge.color, background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border2)', borderRadius: 4, padding: '1px 6px' }}>
+          <span style={{ fontSize: 14, color: badge.color, background: 'var(--md-state-hover)', border: '1px solid var(--md-outline)', borderRadius: 'var(--md-shape-xs)', padding: '1px 6px' }}>
             {badge.label}
           </span>
         )}
@@ -470,16 +531,16 @@ function ProviderRow({ provider }: { provider: Provider }) {
 
       {/* API key row — only for configurable providers */}
       {provider.configurable && (
-        <div style={{ padding: '10px 14px', background: 'rgba(0,0,0,0.08)', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ padding: '10px 14px', background: 'var(--md-surface-container-high)', display: 'flex', alignItems: 'center', gap: 8 }}>
           {hasKey ? (
             /* Has key: show masked display + clear button only */
             <>
               <span style={{
                 flex: 1,
                 padding: '5px 10px',
-                fontSize: 12,
+                fontSize: 16,
                 fontFamily: 'monospace',
-                color: 'var(--muted)',
+                color: 'var(--md-on-surface-variant)',
                 letterSpacing: 2,
               }}>
                 {MASKED}
@@ -490,15 +551,9 @@ function ProviderRow({ provider }: { provider: Provider }) {
                 onClick={handleDelete}
                 disabled={deleting}
                 title={t('settings.providers.clear_key')}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, color: '#f87171', flexShrink: 0, opacity: deleting ? 0.5 : 1 }}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, color: 'var(--md-error)', flexShrink: 0, opacity: deleting ? 0.5 : 1 }}
               >
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="3 6 5 6 21 6"/>
-                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                  <path d="M10 11v6"/>
-                  <path d="M14 11v6"/>
-                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-                </svg>
+                <Icon name="delete" size={17} />
               </button>
             </>
           ) : (
@@ -513,11 +568,11 @@ function ProviderRow({ provider }: { provider: Provider }) {
                 style={{
                   flex: 1,
                   padding: '5px 10px',
-                  borderRadius: 6,
-                  border: '1px solid var(--border2)',
-                  background: 'var(--input-bg)',
-                  color: 'var(--text)',
-                  fontSize: 12,
+                  borderRadius: 'var(--md-shape-xs)',
+                  border: '1px solid var(--md-outline)',
+                  background: 'var(--md-surface-container-highest)',
+                  color: 'var(--md-on-surface)',
+                  fontSize: 16,
                   fontFamily: 'monospace',
                   minWidth: 0,
                 }}
@@ -528,13 +583,9 @@ function ProviderRow({ provider }: { provider: Provider }) {
                 onClick={handleSave}
                 disabled={saving || !apiKey.trim()}
                 title={t('settings.providers.save_key')}
-                style={{ background: 'none', border: 'none', cursor: apiKey.trim() ? 'pointer' : 'not-allowed', padding: 4, color: apiKey.trim() ? 'var(--blue)' : 'var(--border2)', flexShrink: 0, opacity: saving ? 0.5 : 1 }}
+                style={{ background: 'none', border: 'none', cursor: apiKey.trim() ? 'pointer' : 'not-allowed', padding: 4, color: apiKey.trim() ? 'var(--md-primary)' : 'var(--md-outline)', flexShrink: 0, opacity: saving ? 0.5 : 1 }}
               >
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-                  <polyline points="17 21 17 13 7 13 7 21"/>
-                  <polyline points="7 3 7 8 15 8"/>
-                </svg>
+                <Icon name="save" size={17} />
               </button>
             </>
           )}
@@ -543,7 +594,7 @@ function ProviderRow({ provider }: { provider: Provider }) {
 
       {/* Non-configurable hint */}
       {!provider.configurable && (
-        <div style={{ padding: '6px 14px 8px', fontSize: 11, color: 'var(--muted)' }}>
+        <div style={{ padding: '6px 14px 8px', fontSize: 14, color: 'var(--md-on-surface-variant)' }}>
           {provider.is_oauth
             ? t('settings.providers.oauth_hint')
             : t('settings.providers.not_configurable_hint')}
@@ -552,7 +603,7 @@ function ProviderRow({ provider }: { provider: Provider }) {
 
       {/* Feedback message */}
       {feedback && (
-        <div style={{ padding: '4px 14px 8px', fontSize: 11, color: feedback.type === 'ok' ? '#4ade80' : '#f87171' }}>
+        <div style={{ padding: '4px 14px 8px', fontSize: 14, color: feedback.type === 'ok' ? 'var(--md-success)' : 'var(--md-error)' }}>
           {feedback.msg}
         </div>
       )}
@@ -576,14 +627,14 @@ function ProvidersGroup() {
 
   if (loading) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 120, color: 'var(--muted)', fontSize: 13 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 120, color: 'var(--md-on-surface-variant)', fontSize: 16 }}>
         {t('common.loading')}
       </div>
     );
   }
 
   if (error) {
-    return <div style={{ color: '#f87171', fontSize: 13 }}>{error}</div>;
+    return <div style={{ color: 'var(--md-error)', fontSize: 16 }}>{error}</div>;
   }
 
   // Sort: has_key first, then configurable, then alphabetical
@@ -595,7 +646,7 @@ function ProvidersGroup() {
 
   return (
     <div>
-      <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14, lineHeight: 1.5 }}>
+      <div style={{ fontSize: 14, color: 'var(--md-on-surface-variant)', marginBottom: 14, lineHeight: 1.5 }}>
         {t('settings.providers.hint')}
       </div>
       {sorted.map((p) => (
@@ -605,32 +656,20 @@ function ProvidersGroup() {
   );
 }
 
-// ─── Monaco theme map ─────────────────────────────────────────────────────────
-const MONACO_THEME: Record<string, string> = {
-  dark:      'vs-dark',
-  light:     'light',
-  system:    'vs-dark',
-  slate:     'vs-dark',
-  solarized: 'vs-dark',
-  monokai:   'vs-dark',
-  nord:      'vs-dark',
-  oled:      'vs-dark',
-};
-
 interface ConfigGroupProps {
   editing: boolean;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  editorRef: React.MutableRefObject<any>;
+  editContent: string;
+  onEditChange: (v: string) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  saving: boolean;
+  saveError: string | null;
+  loadError: string | null;
   onContentLoaded: (raw: string) => void;
   onLoadError: (msg: string) => void;
 }
 
-function ConfigGroup({ editing, editorRef, onContentLoaded, onLoadError }: ConfigGroupProps) {
-  const { t } = useTranslation();
-  const { settings } = useSettingsStore();
-  const currentTheme = (settings as (Settings & { theme?: string }) | null)?.theme ?? 'dark';
-  const monacoTheme = MONACO_THEME[currentTheme] ?? 'vs-dark';
-
+function ConfigGroup({ editing, editContent, onEditChange, onSave, onCancel, saving, saveError, loadError, onContentLoaded, onLoadError }: ConfigGroupProps) {
   const [content, setContent] = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -642,41 +681,21 @@ function ConfigGroup({ editing, editorRef, onContentLoaded, onLoadError }: Confi
       .finally(() => setLoading(false));
   }, []);
 
-  if (loading) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 200, color: 'var(--muted)', fontSize: 13 }}>
-        {t('common.loading')}
-      </div>
-    );
-  }
-
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {/* Monaco Editor */}
-      <div style={{ flex: 1, border: '1px solid var(--border2)', borderRadius: '8px 8px 0 0', overflow: 'hidden', minHeight: 0 }}>
-        <Editor
-          height="100%"
-          language="yaml"
-          theme={monacoTheme}
-          value={content}
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          onMount={(editor: any) => { editorRef.current = editor; }}
-          options={{
-            minimap: { enabled: false },
-            fontSize: 13,
-            lineNumbers: 'on',
-            scrollBeyondLastLine: false,
-            wordWrap: 'on',
-            tabSize: 2,
-            automaticLayout: true,
-            readOnly: !editing,
-          }}
-        />
-      </div>
-      <div style={{ fontSize: 11, color: 'var(--muted)', lineHeight: 1.5, padding: '6px 0 10px', flexShrink: 0 }}>
-        {t('settings.config_file_hint', 'Editing ~/.hermes/config.yaml for the active profile. Changes take effect immediately after saving.')}
-      </div>
-    </div>
+    <FileView
+      content={content}
+      fileType="text"
+      filePath="config.yaml"
+      loading={loading}
+      error={loadError || undefined}
+      editing={editing}
+      editContent={editContent}
+      onEditChange={onEditChange}
+      onSave={onSave}
+      onCancel={onCancel}
+      saving={saving}
+      editError={saveError || undefined}
+    />
   );
 }
 
@@ -688,17 +707,15 @@ function AboutGroup() {
   return (
     <>
       <FieldRow label={t('settings.fields.version')}>
-        <span style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'monospace' }}>
+        <span style={{ fontSize: 14, color: 'var(--md-on-surface-variant)', fontFamily: 'monospace' }}>
           {version ?? '—'}
         </span>
       </FieldRow>
-      <FieldRow label={t('settings.fields.check_updates')} hint={t('settings.fields.check_updates_hint')}>
-        <span style={{ fontSize: 12, color: 'var(--muted)' }}>{t('settings.fields.managed_via_settings')}</span>
+      <FieldRow label={t('settings.fields.license')}>
+        <span style={{ fontSize: 14, color: 'var(--md-on-surface-variant)', fontFamily: 'monospace' }}>
+          MIT License
+        </span>
       </FieldRow>
-      <div style={{ marginTop: 20, padding: '14px', background: 'rgba(255,255,255,0.03)', borderRadius: 10, border: '1px solid var(--border)' }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Hermes WebUI</div>
-        <div style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }} dangerouslySetInnerHTML={{ __html: t('settings.about_text') }} />
-      </div>
     </>
   );
 }
@@ -717,13 +734,13 @@ export default function SettingsDetail() {
   const [error, setError] = useState<string | null>(null);
 
   // ── Config group state (lifted from ConfigGroup) ──────────────────────────
-  const [configEditing, setConfigEditing]   = useState(false);
-  const [configSaving, setConfigSaving]     = useState(false);
-  const [configSaved, setConfigSaved]       = useState(false);
-  const [configError, setConfigError]       = useState<string | null>(null);
-  const [configSource, setConfigSource]     = useState(''); // last-saved server content
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const configEditorRef = useRef<any>(null);
+  const [configEditing, setConfigEditing]     = useState(false);
+  const [configSaving, setConfigSaving]       = useState(false);
+  const [configSaved, setConfigSaved]         = useState(false);
+  const [configLoadError, setConfigLoadError] = useState<string | null>(null);
+  const [configSaveError, setConfigSaveError] = useState<string | null>(null);
+  const [configSource, setConfigSource]       = useState(''); // last-saved server content
+  const [configEditContent, setConfigEditContent] = useState(''); // draft while editing
 
   useEffect(() => {
     if (!settings) loadSettings();
@@ -738,7 +755,9 @@ export default function SettingsDetail() {
     setSaved(false);
     setError(null);
     setConfigEditing(false);
-    setConfigError(null);
+    setConfigLoadError(null);
+    setConfigSaveError(null);
+    setConfigEditContent('');
     setConfigSaved(false);
   }, [selectedGroup]);
 
@@ -761,29 +780,29 @@ export default function SettingsDetail() {
   };
 
   const handleConfigEdit = () => {
+    setConfigEditContent(configSource);
     setConfigEditing(true);
-    setConfigError(null);
+    setConfigSaveError(null);
     setConfigSaved(false);
   };
 
   const handleConfigCancel = () => {
-    configEditorRef.current?.setValue(configSource);
     setConfigEditing(false);
-    setConfigError(null);
+    setConfigEditContent('');
+    setConfigSaveError(null);
   };
 
   const handleConfigSave = async () => {
-    const val = configEditorRef.current ? configEditorRef.current.getValue() : configSource;
     setConfigSaving(true);
-    setConfigError(null);
+    setConfigSaveError(null);
     try {
-      await configFileService.saveRaw(val);
-      setConfigSource(val);
+      await configFileService.saveRaw(configEditContent);
+      setConfigSource(configEditContent);
       setConfigSaved(true);
       setConfigEditing(false);
       setTimeout(() => setConfigSaved(false), 2500);
     } catch (e) {
-      setConfigError((e as Error).message);
+      setConfigSaveError((e as Error).message);
     } finally {
       setConfigSaving(false);
     }
@@ -795,92 +814,75 @@ export default function SettingsDetail() {
 
   return (
     <div className="settings-detail">
-      {/* Header bar */}
-      <div className="topbar">
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="topbar-title">{t(`settings.groups.${selectedGroup}`)}</div>
-          <div className="topbar-meta">{t('settings.preferences')}</div>
-        </div>
-
-        {/* Normal settings Save button */}
-        {!isAbout && !isConfig && !isProviders && (
-          <div style={{ flexShrink: 0 }}>
-            {error && (
-              <span style={{ fontSize: 12, color: '#f87171', marginRight: 12 }}>{error}</span>
-            )}
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className="cron-btn run"
-              style={{
-                padding: '6px 16px',
-                fontSize: 13,
-                background: saved ? 'color-mix(in srgb, var(--blue) 30%, var(--surface))' : undefined,
-                transition: 'background 0.2s',
-                opacity: saving ? 0.7 : 1,
-              }}
-            >
-              {saving ? t('settings.actions.saving') : saved ? t('settings.actions.saved') : t('settings.actions.save')}
-            </button>
+      {/* Header bar — hidden for config while editing (EditorView provides its own toolbar) */}
+      {!(isConfig && configEditing) && (
+        <div className="topbar">
+          <div className="flex-1 min-w-0 overflow-hidden">
+            <div className="topbar-title">{t(`settings.groups.${selectedGroup}`)}</div>
+            <div className="topbar-meta">{t('settings.preferences')}</div>
           </div>
-        )}
 
-        {/* Config File Edit / Cancel / Save buttons */}
-        {isConfig && (
-          <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-            {configError && (
-              <span style={{ fontSize: 12, color: '#f87171' }}>{configError}</span>
-            )}
-            {configSaved && !configEditing && (
-              <span style={{ fontSize: 12, color: 'var(--blue)' }}>{t('settings.actions.saved')}</span>
-            )}
-            {!configEditing ? (
+          {isConfig ? (
+            <div className="flex items-center gap-2">
+              {configSaved && (
+                <span className="text-sm text-[var(--md-primary)]">{t('settings.actions.saved')}</span>
+              )}
               <button
+                className="icon-btn"
                 onClick={handleConfigEdit}
-                className="cron-btn"
-                style={{ padding: '6px 16px', fontSize: 13 }}
+                title={t('common.edit')}
               >
-                {t('common.edit')}
+                <EditIcon />
               </button>
-            ) : (
-              <>
+            </div>
+          ) : (
+            /* Normal settings Save button */
+            !isAbout && !isProviders && (
+              <div className="topbar-chips">
+                {error && (
+                  <span className="text-sm text-[var(--md-error)]">{error}</span>
+                )}
                 <button
-                  onClick={handleConfigCancel}
-                  disabled={configSaving}
-                  className="cron-btn"
-                  style={{ padding: '6px 14px', fontSize: 13, opacity: configSaving ? 0.6 : 1 }}
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="cron-btn run text-sm"
+                  style={{
+                    background: saved ? 'var(--md-primary-container)' : undefined,
+                    color: saved ? 'var(--md-on-primary-container)' : undefined,
+                    opacity: saving ? 0.7 : 1,
+                  }}
                 >
-                  {t('common.cancel')}
+                  {saving ? t('settings.actions.saving') : saved ? t('settings.actions.saved') : t('settings.actions.save')}
                 </button>
-                <button
-                  onClick={handleConfigSave}
-                  disabled={configSaving}
-                  className="cron-btn run"
-                  style={{ padding: '6px 16px', fontSize: 13, transition: 'background 0.2s', opacity: configSaving ? 0.7 : 1 }}
-                >
-                  {configSaving ? t('settings.actions.saving') : t('settings.actions.save')}
-                </button>
-              </>
-            )}
-          </div>
-        )}
-      </div>
+              </div>
+            )
+          )}
+        </div>
+      )}
 
       {/* Content */}
       {isConfig ? (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '8px 16px 0' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <ConfigGroup
             editing={configEditing}
-            editorRef={configEditorRef}
+            editContent={configEditContent}
+            onEditChange={setConfigEditContent}
+            onSave={handleConfigSave}
+            onCancel={handleConfigCancel}
+            saving={configSaving}
+            saveError={configSaveError}
+            loadError={configLoadError}
             onContentLoaded={(raw) => setConfigSource(raw)}
-            onLoadError={(msg) => setConfigError(msg)}
+            onLoadError={(msg) => setConfigLoadError(msg)}
           />
         </div>
       ) : (
         <div style={{ flex: 1, overflowY: 'auto', padding: '8px 24px 24px' }}>
           <div style={{ maxWidth: 560, margin: '0 auto' }}>
             {selectedGroup === 'appearance' && <AppearanceGroup form={form} set={setField} />}
-            {selectedGroup === 'model' && <ModelGroup form={form} set={setField} />}
+            {selectedGroup === 'input' && <InputGroup form={form} set={setField} />}
+            {selectedGroup === 'sessions' && <SessionsGroup form={form} set={setField} />}
+            {selectedGroup === 'agent' && <AgentGroup form={form} set={setField} />}
             {selectedGroup === 'notifications' && <NotificationsGroup form={form} set={setField} />}
             {selectedGroup === 'history' && <HistoryGroup form={form} set={setField} />}
             {selectedGroup === 'about' && <AboutGroup />}

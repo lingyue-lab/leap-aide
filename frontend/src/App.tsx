@@ -8,15 +8,14 @@ import { useSessionStore } from './stores/useSessionStore';
 import { useSettingsStore } from './stores/useSettingsStore';
 import { useTheme } from './contexts/ThemeContext';
 import { ProtectedRoute } from './contexts/AuthContext';
-import { useCronNotify } from './hooks/useCronNotify';
 import { useStreamNotify } from './hooks/useStreamNotify';
+import { FONT_ZOOM_MAP } from './constants';
 
 function App() {
   const { i18n } = useTranslation();
   const { currentSessionId } = useSessionStore();
   const { settings, loadSettings } = useSettingsStore();
   const { setTheme } = useTheme();
-  useCronNotify();
   useStreamNotify();
 
   // Load settings on mount
@@ -43,8 +42,7 @@ function App() {
     const fontSize = settings?.font_size || 'medium';
     document.documentElement.setAttribute('data-font-size', fontSize);
     // Apply zoom to the root element for global scaling
-    const zoomMap: Record<string, string> = { small: '0.8', medium: '1', large: '1.3' };
-    document.documentElement.style.setProperty('--app-zoom', zoomMap[fontSize] || '1');
+    document.documentElement.style.setProperty('--app-zoom', FONT_ZOOM_MAP[fontSize] || FONT_ZOOM_MAP.medium);
   }, [settings?.font_size]);
 
   return (
@@ -53,7 +51,7 @@ function App() {
         <Routes>
           <Route path="/" element={<ChatInterface sessionId={currentSessionId} />} />
           <Route path="/session/:sessionId" element={<ChatInterface />} />
-          <Route path="/observer/:sessionId" element={<ObserverPage />} />
+          <Route path="/observations/:sessionId" element={<ObserverPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Layout>

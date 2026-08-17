@@ -187,8 +187,13 @@ def wait_for_health(url: str, timeout: float = 25.0) -> bool:
     while time.time() < deadline:
         try:
             with urllib.request.urlopen(url, timeout=2, context=_ctx) as response:  # nosec B310
-                if b'"status": "ok"' in response.read():
-                    return True
+                body = response.read()
+                try:
+                    import json as _json
+                    if _json.loads(body).get("status") == "ok":
+                        return True
+                except (ValueError, KeyError):
+                    pass
         except Exception:
             time.sleep(0.4)
     return False

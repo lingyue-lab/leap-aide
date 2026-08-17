@@ -1,8 +1,10 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { FormField, TextField } from '../components/common/FormField';
 
 interface AuthContextValue {
   isAuthenticated: boolean;
   isLoading: boolean;
+  authEnabled: boolean;
   login: (password: string) => Promise<boolean>;
   logout: () => Promise<void>;
   checkAuth: () => Promise<void>;
@@ -11,6 +13,7 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue>({
   isAuthenticated: false,
   isLoading: true,
+  authEnabled: false,
   login: async () => false,
   logout: async () => {},
   checkAuth: async () => {},
@@ -19,6 +22,7 @@ const AuthContext = createContext<AuthContextValue>({
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [authEnabled, setAuthEnabled] = useState(false);
 
   const checkAuth = useCallback(async () => {
     try {
@@ -26,6 +30,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         credentials: 'include',
       });
       const data = await response.json();
+      setAuthEnabled(data.auth_enabled);
       setIsAuthenticated(data.auth_enabled ? data.logged_in : true);
     } catch {
       setIsAuthenticated(false);
@@ -73,7 +78,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [checkAuth]);
 
   return (
-    <AuthContext.Provider value={{ isAuthenticated, isLoading, login, logout, checkAuth }}>
+    <AuthContext.Provider value={{ isAuthenticated, isLoading, authEnabled, login, logout, checkAuth }}>
       {children}
     </AuthContext.Provider>
   );
@@ -127,38 +132,35 @@ function LoginPage() {
       <form onSubmit={handleSubmit} className="w-full max-w-sm p-8">
         <div className="text-center mb-8">
           <div className="empty-logo mx-auto mb-4">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-              <defs>
-                <linearGradient id="hermes-gold-login" x1="0%" y1="0%" x2="0%" y2="100%">
-                  <stop offset="0%" style={{ stopColor: '#F5C542', stopOpacity: 1 }} />
-                  <stop offset="100%" style={{ stopColor: '#D4961C', stopOpacity: 1 }} />
-                </linearGradient>
-              </defs>
-              <rect x="30" y="10" width="4" height="46" rx="2" fill="url(#hermes-gold-login)" />
-              <path d="M30 18 C24 14, 14 14, 10 18 C14 16, 22 16, 28 20" fill="#F5C542" opacity="0.9" />
-              <path d="M30 22 C26 19, 18 19, 14 22 C18 20, 24 20, 28 24" fill="#D4961C" opacity="0.8" />
-              <path d="M34 18 C40 14, 50 14, 54 18 C50 16, 42 16, 36 20" fill="#F5C542" opacity="0.9" />
-              <path d="M34 22 C38 19, 46 19, 50 22 C46 20, 40 20, 36 24" fill="#D4961C" opacity="0.8" />
-              <circle cx="32" cy="10" r="4" fill="#F5C542" />
-              <circle cx="32" cy="10" r="2" fill="#FFF8E1" opacity="0.7" />
+            <svg
+              width="72"
+              height="72"
+              viewBox="0 0 24 24"
+              fill="none"
+              style={{ stroke: 'var(--brand-primary)' }}
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="m8 3 4 8 5-5 5 15H2L8 3z" />
+              <path d="M4.14 15.08c2.62-1.57 5.24-1.43 7.86.42 2.74 1.94 5.49 2 8.23.19" />
             </svg>
           </div>
-          <h1 className="text-xl font-bold text-[var(--text)]">Hermes WebUI</h1>
-          <p className="text-sm text-[var(--muted)] mt-2">Enter password to continue</p>
+          <h1 className="text-2xl font-medium text-[var(--text)]">Leap Aide</h1>
         </div>
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          placeholder="Password"
-          className="w-full px-4 py-3 rounded-lg mb-4"
-          autoFocus
-        />
-        {error && <p className="text-sm text-[var(--accent)] mb-4">{error}</p>}
+        <FormField label="Password" className="mb-4" error={error}>
+          <TextField
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoFocus
+          />
+        </FormField>
         <button
           type="submit"
           disabled={loading || !password}
-          className="w-full py-3 rounded-lg bg-[var(--blue)] text-white font-semibold disabled:opacity-50"
+          className="btn-filled w-full"
         >
           {loading ? 'Logging in...' : 'Login'}
         </button>

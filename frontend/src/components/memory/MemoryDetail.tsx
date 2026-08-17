@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useMemoryStore } from '@/stores/useMemoryStore';
 import type { MemoryFile } from '@/stores/useMemoryStore';
+import FileView from '@/components/shared/FileView';
+import { Icon } from '@/components/common/Icons';
 
 const FILE_LABELS: Record<MemoryFile, { filename: string; title: string }> = {
   memory: { filename: 'USER.md', title: 'Personal Memory' },
@@ -20,6 +22,10 @@ export default function MemoryDetail() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
 
+  // Guard: rendered by MainContent only when selectedFile is set,
+  // but protect against direct mount with null selection.
+  if (!selectedFile) return null;
+
   useEffect(() => {
     if (!memoryData) {
       loadMemory();
@@ -36,7 +42,6 @@ export default function MemoryDetail() {
   const info = FILE_LABELS[selectedFile];
   const section = selectedFile === 'memory' ? memoryData?.user_memory : memoryData?.project_memory;
   const content = section?.content ?? '';
-  const updatedAt = section?.updated_at;
 
   const handleEdit = () => {
     setEditContent(content);
@@ -66,102 +71,44 @@ export default function MemoryDetail() {
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* Topbar */}
-      <div className="topbar">
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="flex-shrink-0 text-[var(--muted)]"
-          >
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-            <polyline points="14 2 14 8 20 8" />
-          </svg>
-          <div className="topbar-title font-mono">{info.filename}</div>
-          <div className="topbar-meta">{info.title}</div>
-        </div>
+      {/* Topbar — hidden when editing (EditorView provides its own toolbar) */}
+      {!editing && (
+        <div className="topbar">
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            <Icon name="description" size={18} className="flex-shrink-0 text-[var(--muted)]" />
+            <div className="topbar-title font-mono">{info.filename}</div>
+            <div className="topbar-meta">{info.title}</div>
+          </div>
 
-        <div className="flex items-center gap-2">
-          {!editing && (
+          <div className="flex items-center gap-2">
             <button
-              className="cron-btn run text-xs px-3 py-1"
+              className="icon-btn"
               onClick={handleEdit}
               disabled={loading}
+              title="Edit"
             >
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="inline mr-1">
-                <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-              </svg>
-              Edit
+              <Icon name="edit" size={18} />
             </button>
-          )}
-          {editing && (
-            <>
-              <button
-                className="cron-btn run text-xs px-3 py-1"
-                onClick={handleSave}
-                disabled={saving}
-              >
-                {saving ? 'Saving...' : 'Save'}
-              </button>
-              <button
-                className="cron-btn text-xs px-3 py-1"
-                onClick={handleCancel}
-                disabled={saving}
-              >
-                Cancel
-              </button>
-            </>
-          )}
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Content */}
-      <div className="flex-1 overflow-auto p-4">
-        {loading && (
-          <div className="text-sm text-[var(--muted)] text-center mt-8">Loading...</div>
-        )}
-        {error && !loading && (
-          <div className="text-sm text-[var(--accent)] p-2">{error}</div>
-        )}
-        {saveError && (
-          <div className="text-sm text-[var(--accent)] mb-2">{saveError}</div>
-        )}
-
-        {!loading && editing && (
-          <textarea
-            className="w-full h-full min-h-[400px] px-3 py-2 text-sm bg-[rgba(255,255,255,0.04)] border border-[var(--border2)] rounded font-mono resize-none focus:outline-none focus:border-[var(--accent)]"
-            value={editContent}
-            onChange={(e) => setEditContent(e.target.value)}
-            placeholder={`Enter content for ${info.filename}...`}
-            autoFocus
-          />
-        )}
-
-        {!loading && !editing && (
-          <>
-            {content ? (
-              <pre className="text-sm whitespace-pre-wrap text-[var(--text)] font-mono leading-relaxed">
-                {content}
-              </pre>
-            ) : (
-              <div className="text-sm text-[var(--muted)] italic text-center mt-8">
-                {info.filename} is empty. Click Edit to add content.
-              </div>
-            )}
-            {updatedAt && (
-              <div className="text-[11px] text-[var(--muted)] mt-4">
-                Last modified: {new Date(updatedAt * 1000).toLocaleString()}
-              </div>
-            )}
-          </>
-        )}
-      </div>
+      {/* Content body — delegated to FileView */}
+      <FileView
+        content={content}
+        fileType="markdown"
+        filePath={info.filename}
+        loading={loading}
+        error={error}
+        editing={editing}
+        editContent={editContent}
+        onEditChange={setEditContent}
+        onSave={handleSave}
+        onCancel={handleCancel}
+        saving={saving}
+        editError={saveError}
+        emptyMessage={`${info.filename} is empty. Click Edit to add content.`}
+      />
     </div>
   );
 }

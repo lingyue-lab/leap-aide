@@ -3,6 +3,7 @@ import { useChatStore } from '@/stores/useChatStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 import { useSessionStore } from '@/stores/useSessionStore';
 import * as StreamManager from '@/stores/streamManager';
+import { getIsSessionBusy } from '@/utils/sessionBusy';
 import { chatService } from '@/services/api';
 
 /** Track which stream we've already reconnected to (avoid duplicate connections). */
@@ -20,7 +21,7 @@ const _reconnectedStreams = new Set<string>();
  *   unnecessary re-renders.
  */
 export function useSessionPolling(sessionId: string | null): void {
-  const busy = useChatStore((s) => s.busy);
+  // Use StreamManager as the single source of truth for busy state
   const setMessages = useChatStore((s) => s.setMessages);
   const settings = useSettingsStore((s) => s.settings);
   const loadSession = useSessionStore((s) => s.loadSession);
@@ -50,13 +51,19 @@ export function useSessionPolling(sessionId: string | null): void {
 
     intervalRef.current = setInterval(async () => {
       // Skip when busy in THIS tab (don't interfere with local streaming)
-      if (useChatStore.getState().busy) {
+      if (getIsSessionBusy()) {
         return;
       }
 
       try {
         const prevCount = lastMessageCountRef.current;
         await useSessionStore.getState().loadSession(sessionId);
+        // Guard against a stale poll: if the user switched sessions while this
+        // poll was in flight, its late response must not overwrite the current
+        // session's messages.
+        if (useSessionStore.getState().currentSessionId !== sessionId) {
+          return;
+        }
         const session = useSessionStore.getState().currentSession;
         if (!session) return;
 
@@ -68,11 +75,13 @@ export function useSessionPolling(sessionId: string | null): void {
         // the stream FIRST, before the message count early-return below.
         const remoteStreamId = session.active_stream_id;
         const pendingMsg = session.pending_user_message;
+        const pendingOriginalMsg = session.pending_original_message ?? undefined;
+        const pendingUserMsgTs = session.pending_user_message_ts ?? undefined;
         if (
           remoteStreamId &&
           pendingMsg &&
           !_reconnectedStreams.has(remoteStreamId) &&
-          !useChatStore.getState().busy  // don't interfere with local stream
+          !getIsSessionBusy()  // don't interfere with local stream
         ) {
           try {
             const status = await chatService.checkStreamStatus(remoteStreamId);
@@ -83,8 +92,11 @@ export function useSessionPolling(sessionId: string | null): void {
                 remoteStreamId,
                 pendingMsg,
                 session.messages ?? [],
+                pendingOriginalMsg,
+                pendingUserMsgTs,
               );
-              useChatStore.setState({ busy: true, activeStreamId: remoteStreamId });
+              // StreamManager.reconnectStream sets busy=true internally.
+              // useIsBusy() will pick it up via the subscriber.
             }
           } catch {
             // Stream may have finished — next poll will try again
@@ -99,6 +111,7 @@ export function useSessionPolling(sessionId: string | null): void {
         const storeState = useChatStore.getState();
         if (storeState.activeStreamId === null || storeState.activeStreamId === undefined) {
           storeState.setMessages(session.messages ?? []);
+          storeState.setToolCalls(session.tool_calls ?? []);
         }
 
         // Reload sidebar list to update message_count → triggers unread badge
@@ -114,6 +127,6 @@ export function useSessionPolling(sessionId: string | null): void {
         intervalRef.current = null;
       }
     };
-  }, [sessionId, busy, settings?.session_poll_interval_sec, currentSession?.message_count,
+  }, [sessionId, settings?.session_poll_interval_sec, currentSession?.message_count,
       setMessages, loadSession, updateSessionListTitle]);
 }

@@ -186,13 +186,13 @@ def _cleanup_state_db():
 # ── Tests ──────────────────────────────────────────────────────────────────
 
 def test_gateway_sessions_appear_when_enabled():
-    """Gateway sessions from state.db appear in /api/sessions when show_cli_sessions is on."""
+    """Gateway sessions from state.db appear in /api/sessions when show_messaging_sessions is on."""
     conn = _ensure_state_db()
     try:
         _insert_gateway_session(conn, session_id='gw_test_tg_001', source='telegram', title='TG Test Chat')
 
         # Enable the setting
-        post('/api/settings', {'show_cli_sessions': True})
+        post('/api/settings', {'show_messaging_sessions': True})
 
         data, status = get('/api/sessions')
         assert status == 200
@@ -205,7 +205,7 @@ def test_gateway_sessions_appear_when_enabled():
             conn.close()
         except Exception:
             pass
-        post('/api/settings', {'show_cli_sessions': False})
+        post('/api/settings', {'show_messaging_sessions': False})
 
 
 def test_gateway_sessions_without_messages_are_hidden_from_sidebar():
@@ -221,7 +221,7 @@ def test_gateway_sessions_without_messages_are_hidden_from_sidebar():
         conn.execute("DELETE FROM messages WHERE session_id = ?", (empty_sid,))
         conn.commit()
 
-        post('/api/settings', {'show_cli_sessions': True})
+        post('/api/settings', {'show_cron_sessions': True})
 
         data, status = get('/api/sessions')
         assert status == 200
@@ -236,7 +236,7 @@ def test_gateway_sessions_without_messages_are_hidden_from_sidebar():
             conn.close()
         except Exception:
             pass
-        post('/api/settings', {'show_cli_sessions': False})
+        post('/api/settings', {'show_cron_sessions': False})
 
 
 def test_gateway_watcher_hides_sessions_without_messages(monkeypatch):
@@ -315,7 +315,7 @@ def test_compression_chain_collapses_to_latest_tip_in_sidebar():
             messages=2,
         )
 
-        post('/api/settings', {'show_cli_sessions': True})
+        post('/api/settings', {'show_messaging_sessions': True})
         data, status = get('/api/sessions')
         assert status == 200
         ids = {s.get('session_id') for s in data.get('sessions', [])}
@@ -349,7 +349,7 @@ def test_compression_chain_collapses_to_latest_tip_in_sidebar():
             conn.close()
         except Exception:
             pass
-        post('/api/settings', {'show_cli_sessions': False})
+        post('/api/settings', {'show_messaging_sessions': False})
 
 
 def test_compression_chain_with_empty_latest_tip_falls_back_to_latest_importable_segment():
@@ -376,7 +376,7 @@ def test_compression_chain_with_empty_latest_tip_falls_back_to_latest_importable
             messages=0,
         )
 
-        post('/api/settings', {'show_cli_sessions': True})
+        post('/api/settings', {'show_messaging_sessions': True})
         data, status = get('/api/sessions')
         assert status == 200
         ids = {s.get('session_id') for s in data.get('sessions', [])}
@@ -391,7 +391,7 @@ def test_compression_chain_with_empty_latest_tip_falls_back_to_latest_importable
             conn.close()
         except Exception:
             pass
-        post('/api/settings', {'show_cli_sessions': False})
+        post('/api/settings', {'show_messaging_sessions': False})
 
 
 def test_compression_chain_with_all_empty_segments_is_hidden():
@@ -418,7 +418,7 @@ def test_compression_chain_with_all_empty_segments_is_hidden():
             messages=0,
         )
 
-        post('/api/settings', {'show_cli_sessions': True})
+        post('/api/settings', {'show_messaging_sessions': True})
         data, status = get('/api/sessions')
         assert status == 200
         ids = {s.get('session_id') for s in data.get('sessions', [])}
@@ -431,7 +431,7 @@ def test_compression_chain_with_all_empty_segments_is_hidden():
             conn.close()
         except Exception:
             pass
-        post('/api/settings', {'show_cli_sessions': False})
+        post('/api/settings', {'show_messaging_sessions': False})
 
 
 def test_non_compression_child_is_not_collapsed_into_parent():
@@ -623,13 +623,13 @@ def test_compression_chain_bubbles_to_top_by_tip_activity():
 
 
 def test_gateway_sessions_excluded_when_disabled():
-    """Gateway sessions are NOT returned when show_cli_sessions is off."""
+    """Gateway sessions are NOT returned when show_messaging_sessions is off."""
     conn = _ensure_state_db()
     try:
         _insert_gateway_session(conn, session_id='gw_test_dc_001', source='discord', title='DC Test Chat')
 
         # Ensure setting is off
-        post('/api/settings', {'show_cli_sessions': False})
+        post('/api/settings', {'show_messaging_sessions': False})
 
         data, status = get('/api/sessions')
         assert status == 200
@@ -650,7 +650,7 @@ def test_gateway_session_has_correct_metadata():
     try:
         _insert_gateway_session(conn, session_id='gw_meta_001', source='telegram', title='Meta Test')
 
-        post('/api/settings', {'show_cli_sessions': True})
+        post('/api/settings', {'show_messaging_sessions': True})
 
         data, status = get('/api/sessions')
         assert status == 200
@@ -666,7 +666,7 @@ def test_gateway_session_has_correct_metadata():
             conn.close()
         except Exception:
             pass
-        post('/api/settings', {'show_cli_sessions': False})
+        post('/api/settings', {'show_messaging_sessions': False})
 
 
 def test_imported_cron_sessions_hidden_from_sidebar_by_default(cleanup_test_sessions):
@@ -696,7 +696,7 @@ def test_cron_sessions_hidden_from_sidebar_by_default():
         _insert_gateway_session(conn, session_id='cron_job123_20260427', source='cron', title='Nightly Cleanup')
         _insert_gateway_session(conn, session_id='gw_noncron_001', source='telegram', title='Visible Chat')
 
-        post('/api/settings', {'show_cli_sessions': True})
+        post('/api/settings', {'show_messaging_sessions': True})
 
         data, status = get('/api/sessions')
         assert status == 200
@@ -710,7 +710,7 @@ def test_cron_sessions_hidden_from_sidebar_by_default():
             conn.close()
         except Exception:
             pass
-        post('/api/settings', {'show_cli_sessions': False})
+        post('/api/settings', {'show_messaging_sessions': False})
 
 
 def test_importable_agent_rows_can_opt_into_cron_source():
@@ -744,7 +744,7 @@ def test_gateway_session_has_message_count():
     try:
         _insert_gateway_session(conn, session_id='gw_msg_001', source='discord', title='Msg Count Test', message_count=5)
 
-        post('/api/settings', {'show_cli_sessions': True})
+        post('/api/settings', {'show_messaging_sessions': True})
 
         data, status = get('/api/sessions')
         assert status == 200
@@ -758,7 +758,7 @@ def test_gateway_session_has_message_count():
             conn.close()
         except Exception:
             pass
-        post('/api/settings', {'show_cli_sessions': False})
+        post('/api/settings', {'show_messaging_sessions': False})
 
 
 def test_gateway_sessions_multiple_sources():
@@ -769,7 +769,7 @@ def test_gateway_sessions_multiple_sources():
         _insert_gateway_session(conn, session_id='gw_multi_dc', source='discord', title='DC Chat')
         _insert_gateway_session(conn, session_id='gw_multi_sl', source='slack', title='SL Chat')
 
-        post('/api/settings', {'show_cli_sessions': True})
+        post('/api/settings', {'show_messaging_sessions': True})
 
         data, status = get('/api/sessions')
         assert status == 200
@@ -782,7 +782,7 @@ def test_gateway_sessions_multiple_sources():
             conn.close()
         except Exception:
             pass
-        post('/api/settings', {'show_cli_sessions': False})
+        post('/api/settings', {'show_messaging_sessions': False})
 
 
 def test_gateway_session_messages_readable():
@@ -791,7 +791,7 @@ def test_gateway_session_messages_readable():
     try:
         _insert_gateway_session(conn, session_id='gw_read_001', source='telegram', title='Readable')
 
-        post('/api/settings', {'show_cli_sessions': True})
+        post('/api/settings', {'show_messaging_sessions': True})
 
         data, status = get(f'/api/session?session_id=gw_read_001')
         assert status == 200
@@ -805,7 +805,7 @@ def test_gateway_session_messages_readable():
             conn.close()
         except Exception:
             pass
-        post('/api/settings', {'show_cli_sessions': False})
+        post('/api/settings', {'show_messaging_sessions': False})
 
 
 def test_importing_older_gateway_session_preserves_original_timestamps_and_order():
@@ -832,7 +832,7 @@ def test_importing_older_gateway_session_preserves_original_timestamps_and_order
             title='Older imported gateway session',
             started_at=older_started_at,
         )
-        post('/api/settings', {'show_cli_sessions': True})
+        post('/api/settings', {'show_messaging_sessions': True})
 
         imported, imported_status = post('/api/session/import_cli', {'session_id': imported_sid})
         assert imported_status == 200, imported
@@ -862,13 +862,13 @@ def test_importing_older_gateway_session_preserves_original_timestamps_and_order
                 post('/api/session/delete', {'session_id': newer_webui_sid})
             except Exception:
                 pass
-        post('/api/settings', {'show_cli_sessions': False})
+        post('/api/settings', {'show_messaging_sessions': False})
 
 
 
 def test_gateway_sse_stream_endpoint_exists():
     """GET /api/sessions/gateway/stream returns a response (200 or 200-range)."""
-    # The SSE endpoint requires show_cli_sessions to be enabled
+    # The SSE endpoint requires show_cli_sessions or show_messaging_sessions to be enabled
     post('/api/settings', {'show_cli_sessions': True})
     try:
         req = urllib.request.Request(BASE + '/api/sessions/gateway/stream')
@@ -917,7 +917,7 @@ def test_gateway_webui_sessions_not_duplicated():
         _insert_gateway_session(conn, session_id=webui_sid, source='telegram', title='Dup Test')
         conn.close()
 
-        post('/api/settings', {'show_cli_sessions': True})
+        post('/api/settings', {'show_messaging_sessions': True})
 
         data, status = get('/api/sessions')
         assert status == 200
@@ -932,7 +932,7 @@ def test_gateway_webui_sessions_not_duplicated():
         except Exception:
             pass
         post('/api/session/delete', {'session_id': webui_sid})
-        post('/api/settings', {'show_cli_sessions': False})
+        post('/api/settings', {'show_messaging_sessions': False})
 
 
 def test_gateway_sessions_no_state_db():
@@ -950,26 +950,71 @@ def test_gateway_sessions_no_state_db():
 
 
 def test_cli_sessions_still_work():
-    """CLI sessions (source='cli') still appear alongside gateway sessions."""
+    """CLI sessions (source='cli') appear alongside messaging sessions when both toggles are on."""
     conn = _ensure_state_db()
     try:
         _insert_gateway_session(conn, session_id='cli_legacy_001', source='cli', title='CLI Legacy')
         _insert_gateway_session(conn, session_id='gw_new_001', source='telegram', title='GW New')
 
-        post('/api/settings', {'show_cli_sessions': True})
+        post('/api/settings', {'show_cli_sessions': True, 'show_messaging_sessions': True})
 
         data, status = get('/api/sessions')
         assert status == 200
         sessions = data.get('sessions', [])
         agent_ids = {s['session_id'] for s in sessions if s.get('session_id') in ('cli_legacy_001', 'gw_new_001')}
-        assert len(agent_ids) == 2, f"Expected 2 agent sessions (cli + gateway), got {len(agent_ids)}"
+        assert len(agent_ids) == 2, f"Expected 2 agent sessions (cli + messaging), got {len(agent_ids)}"
     finally:
         try:
             _remove_test_sessions(conn, 'cli_legacy_001', 'gw_new_001')
             conn.close()
         except Exception:
             pass
-        post('/api/settings', {'show_cli_sessions': False})
+        post('/api/settings', {'show_cli_sessions': False, 'show_messaging_sessions': False})
+
+
+def test_cli_sessions_hidden_when_cli_toggle_off():
+    """CLI sessions (source='cli') are hidden when show_cli_sessions is off,
+    while messaging sessions remain visible."""
+    conn = _ensure_state_db()
+    try:
+        _insert_gateway_session(conn, session_id='cli_hidden_001', source='cli', title='Hidden CLI')
+        _insert_gateway_session(conn, session_id='msg_visible_001', source='telegram', title='Visible MSG')
+
+        post('/api/settings', {'show_cli_sessions': False, 'show_messaging_sessions': True})
+
+        data, status = get('/api/sessions')
+        assert status == 200
+        ids = {s['session_id'] for s in data.get('sessions', [])}
+        assert 'cli_hidden_001' not in ids, "CLI session should be hidden when show_cli_sessions is off"
+        assert 'msg_visible_001' in ids, "Messaging session should still appear"
+    finally:
+        try:
+            _remove_test_sessions(conn, 'cli_hidden_001', 'msg_visible_001')
+            conn.close()
+        except Exception:
+            pass
+        post('/api/settings', {'show_cli_sessions': True, 'show_messaging_sessions': True})
+
+
+def test_cron_sessions_appear_when_enabled():
+    """Cron sessions appear in the sidebar when show_cron_sessions is enabled."""
+    conn = _ensure_state_db()
+    try:
+        _insert_gateway_session(conn, session_id='cron_toggle_001', source='cron', title='Visible Cron')
+
+        post('/api/settings', {'show_cron_sessions': True})
+
+        data, status = get('/api/sessions')
+        assert status == 200
+        ids = {s['session_id'] for s in data.get('sessions', [])}
+        assert 'cron_toggle_001' in ids, "Cron session should appear when show_cron_sessions is on"
+    finally:
+        try:
+            _remove_test_sessions(conn, 'cron_toggle_001')
+            conn.close()
+        except Exception:
+            pass
+        post('/api/settings', {'show_cron_sessions': False})
 
 
 # ── Unit tests for _gateway_sse_probe_payload ────────────────────────────────
@@ -983,14 +1028,24 @@ from api.routes import _gateway_sse_probe_payload
 
 
 def test_probe_payload_when_disabled():
-    """Probe returns 404 when show_cli_sessions is False."""
-    body, status = _gateway_sse_probe_payload({'show_cli_sessions': False}, watcher=None)
+    """Probe returns 404 when both non-webui source toggles are off."""
+    body, status = _gateway_sse_probe_payload({'show_cli_sessions': False, 'show_messaging_sessions': False}, watcher=None)
     assert status == 404
     assert body['ok'] is False
     assert body['enabled'] is False
     assert body['watcher_running'] is False
     assert body['error'] == 'agent sessions not enabled'
     assert body['fallback_poll_ms'] == 30000
+
+
+def test_probe_payload_when_messaging_only_enabled():
+    """Probe is enabled when only show_messaging_sessions is on."""
+    body, status = _gateway_sse_probe_payload({'show_cli_sessions': False, 'show_messaging_sessions': True}, watcher=None)
+    assert status == 503
+    assert body['ok'] is False
+    assert body['enabled'] is True
+    assert body['watcher_running'] is False
+    assert body['error'] == 'watcher not started'
 
 
 def test_probe_payload_when_watcher_missing():

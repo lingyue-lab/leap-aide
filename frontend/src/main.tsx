@@ -6,6 +6,7 @@ import App from './App';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { AuthProvider } from './contexts/AuthContext';
 import i18n from './i18n/config';
+import 'material-symbols/rounded.css';
 import './index.css';
 
 // Set router basename from server config

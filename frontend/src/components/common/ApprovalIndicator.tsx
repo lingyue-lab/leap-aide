@@ -1,12 +1,14 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useApprovalStore } from '@/stores/useApprovalStore';
 import { useSessionStore } from '@/stores/useSessionStore';
+import { Icon } from '@/components/common/Icons';
 
 export default function ApprovalIndicator() {
   const { sessionApproved, permanentApproved, loadApproved, revokeApproved } = useApprovalStore();
   const { currentSession } = useSessionStore();
   const sessionId = currentSession?.session_id ?? null;
   const [open, setOpen] = useState(false);
+  const [popoverStyle, setPopoverStyle] = useState<React.CSSProperties>({});
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Load approved patterns when session changes
@@ -16,17 +18,25 @@ export default function ApprovalIndicator() {
     }
   }, [sessionId, loadApproved]);
 
-  // Dismiss on outside click
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
+  const close = useCallback(() => setOpen(false), []);
+
+  const toggle = useCallback(() => {
+    setOpen((v) => {
+      if (!v && containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        const POPOVER_W = 280;
+        setPopoverStyle({
+          position: 'fixed',
+          top: rect.top - 8,
+          left: Math.max(8, rect.left + rect.width / 2 - POPOVER_W / 2),
+          minWidth: POPOVER_W,
+          maxWidth: 360,
+          transform: 'translateY(-100%)',
+        });
       }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [open]);
+      return !v;
+    });
+  }, []);
 
   const handleRevoke = async (patternKey: string) => {
     if (!sessionId) return;
@@ -41,24 +51,22 @@ export default function ApprovalIndicator() {
   return (
     <div className="approval-indicator" ref={containerRef}>
       <button
-        className={`approval-indicator-chip${hasAny ? ' has-approvals' : ''}`}
-        onClick={() => setOpen((v) => !v)}
+        className={`icon-btn${hasAny ? ' has-approvals' : ''}`}
+        onClick={toggle}
         title="Manage session approvals"
         aria-label="Manage session approvals"
       >
-        <svg width="10" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-        </svg>
-        {totalSession > 0 && (
-          <span className="approval-indicator-count">{totalSession}</span>
-        )}
+        <Icon name="shield" size={18} style={{ flexShrink: 0 }} />
       </button>
 
       {open && (
-        <div className="approval-popover">
-          <div className="approval-popover-header">
-            Session Approvals
-            {totalSession > 0 && <span className="approval-popover-badge">{totalSession}</span>}
+        <div className="approval-popover" style={popoverStyle}>
+          <div className="ss-topbar">
+            <div className="approval-popover-header">
+              Session Approvals
+              {totalSession > 0 && <span className="approval-popover-badge">{totalSession}</span>}
+            </div>
+            <Icon name="close" size={18} className="ss-close" onClick={close} />
           </div>
 
           {totalSession > 0 ? (
@@ -72,10 +80,7 @@ export default function ApprovalIndicator() {
                     title={`Revoke approval for "${pattern}"`}
                     aria-label={`Revoke "${pattern}"`}
                   >
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <line x1="18" y1="6" x2="6" y2="18" />
-                      <line x1="6" y1="6" x2="18" y2="18" />
-                    </svg>
+                    <Icon name="close" size={18} />
                   </button>
                 </div>
               ))}

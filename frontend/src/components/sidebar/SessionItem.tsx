@@ -4,8 +4,10 @@ import { useTranslation } from 'react-i18next';
 import type { SessionListItem } from '@/types';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { useChatStore } from '@/stores/useChatStore';
-import { isSessionStreaming, subscribe as subscribeStream } from '@/stores/streamManager';
+import { subscribe as subscribeStream } from '@/stores/streamManager';
+import { getIsSessionBusy } from '@/utils/sessionBusy';
 import { sessionService } from '@/services/api';
+import { TrashMultiIcon, Icon } from '@/components/common/Icons';
 
 interface SessionItemProps {
   session: SessionListItem;
@@ -18,9 +20,10 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
   const { t } = useTranslation('common');
   const { renameSession, deleteSession, pinSession, updateSessionLastSeen, loadSession, selectSession, currentSessionId } = useSessionStore();
 
-  // Unread count: how many messages were added since the user last viewed this session
+  // Unread count: how many messages were added since the user last viewed this session.
+  // When last_seen_msg_count is null (never tracked), treat as fully seen.
   const sessionMsgCount = session.message_count ?? 0;
-  const lastSeenMsgCount = session.last_seen_msg_count ?? 0;
+  const lastSeenMsgCount = session.last_seen_msg_count ?? sessionMsgCount;
   const unreadCount = Math.max(0, sessionMsgCount - lastSeenMsgCount);
 
   const [isEditing, setIsEditing] = useState(false);
@@ -31,8 +34,12 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
   const [clearing, setClearing] = useState(false);
   const [showClearModal, setShowClearModal] = useState(false);
   const [keepLast, setKeepLast] = useState('0');
-  /** True when this session has a live background stream */
-  const [bgStreaming, setBgStreaming] = useState(() => isSessionStreaming(session.session_id));
+  /** True when this session has a live background stream.
+   *  Initialise from active_stream_id (survives page refresh) and
+   *  StreamManager (more precise for already-reconnected sessions). */
+  const [bgStreaming, setBgStreaming] = useState(() =>
+    !!session.active_stream_id || getIsSessionBusy(session.session_id)
+  );
   const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
 
   // [DEBUG] Log only when badge state changes meaningfully
@@ -50,23 +57,15 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
     switch (tag) {
       case 'weixin':
         return <span className="gateway-icon weixin" data-tooltip="WeChat">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-          </svg>
+          <Icon name="chat_bubble" size={16} />
         </span>;
       case 'telegram':
         return <span className="gateway-icon telegram" data-tooltip="Telegram">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="22" y1="2" x2="11" y2="13"/>
-            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-          </svg>
+          <Icon name="send" size={16} />
         </span>;
       case 'cli':
         return <span className="gateway-icon cli" data-tooltip="CLI">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="4 17 10 11 4 5"/>
-            <line x1="12" y1="19" x2="20" y2="19"/>
-          </svg>
+          <Icon name="terminal_2" size={16} />
         </span>;
       default:
         return tag ? <span className="gateway-icon generic" data-tooltip={session.source_tag}>{tag.charAt(0).toUpperCase()}</span> : null;
@@ -84,11 +83,19 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
     setEditTitle(session.title);
   }, [session.title]);
 
+  // When the backend clears active_stream_id (stream ended), turn off the dot
+  // even if we never reconnected to that stream.
+  useEffect(() => {
+    if (!session.active_stream_id) {
+      setBgStreaming(false);
+    }
+  }, [session.active_stream_id]);
+
   // Subscribe to StreamManager to reflect background streaming state
   useEffect(() => {
     const unsub = subscribeStream((sid) => {
       if (sid === session.session_id) {
-        setBgStreaming(isSessionStreaming(session.session_id));
+        setBgStreaming(getIsSessionBusy(session.session_id));
       }
     });
     return unsub;
@@ -168,6 +175,7 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
       // messages on sessionId change, but compress stays on the same session.
       if (result?.session?.messages) {
         useChatStore.getState().setMessages(result.session.messages);
+        useChatStore.getState().setToolCalls(result.session.tool_calls ?? []);
         useChatStore.getState().clearCache(session.session_id);
       }
       await loadSession(session.session_id);
@@ -204,6 +212,10 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
         chatStore.setMessages(currentSession?.messages ?? []);
         chatStore.setToolCalls(currentSession?.tool_calls ?? []);
         chatStore.setActiveStreamId(currentSession?.active_stream_id ?? null);
+        // Reset live usage so ContextUsageIndicator falls back to session
+        // data (which was zeroed by the backend) instead of showing stale
+        // values from before the clear.
+        chatStore.setLastUsage(null);
       }
     } catch (err) {
       alert(`Clear failed: ${(err as Error).message}`);
@@ -250,18 +262,18 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
   return (
     <>
       <div
-        className={`session-item ${isActive ? 'active' : ''} ${bgStreaming && !isActive ? 'bg-streaming' : ''}`}
+        className={`sidebar-item ${isActive && !isEditing ? 'active' : ''} ${bgStreaming && !isActive ? 'bg-streaming' : ''}`}
         onClick={isEditing ? undefined : handleClick}
         onContextMenu={handleContextMenu}
         data-session-id={session.session_id}
       >
-        <div className="session-text">
-          <div className="session-title-row">
+        <div className="sidebar-item-text">
+          <div className="sidebar-item-title-row">
             {isEditing ? (
               <input
                 ref={inputRef}
                 type="text"
-                className="session-title-input"
+                className="sidebar-item-title-input"
                 value={editTitle}
                 onChange={(e) => setEditTitle(e.target.value)}
                 onBlur={handleSaveEdit}
@@ -269,73 +281,55 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
                 onClick={(e) => e.stopPropagation()}
               />
             ) : (
-              <span className="session-title">{session.title}</span>
-            )}
-            {/* Background streaming indicator — shown only when NOT the active session */}
-            {bgStreaming && !isActive && (
-              <span className="session-icon-wrap" data-tooltip="Running in background">
-                <span className="session-bg-streaming-dot" />
-              </span>
+              <span className="sidebar-item-title">{session.title}</span>
             )}
             {/* Unread badge — shown after stream completes and user hasn't visited this session */}
             {unreadCount > 0 && !isActive && !bgStreaming && (
-              <span className="session-unread-badge" data-tooltip={`${unreadCount} new response(s)`}>
-                +{unreadCount}
+              <span className="sidebar-item-unread" data-tooltip={`${unreadCount} new response(s)`}>
+                {unreadCount > 99 ? '99+' : `+${unreadCount}`}
               </span>
             )}
           </div>
         </div>
 
-        <div className="session-actions">
+        <div className="sidebar-item-actions">
+          {/* Streaming pulse — visible even when this session is active */}
+          {bgStreaming && (
+            <span className="sidebar-item-icon-wrap" data-tooltip={isActive ? 'Streaming' : 'Running in background'}>
+              <span className="sidebar-item-streaming-dot" />
+            </span>
+          )}
           {session.pinned && (
-            <span className="session-pin-indicator" data-tooltip={t('sessions.pinned')}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="12" y1="22" x2="12" y2="13"/>
-                <line x1="7" y1="13" x2="17" y2="13"/>
-                <line x1="7" y1="9"  x2="17" y2="9"/>
-                <line x1="7" y1="5"  x2="17" y2="5"/>
-                <line x1="12" y1="5"  x2="12" y2="2"/>
-              </svg>
+            <span className="sidebar-item-pin-indicator" data-tooltip={t('sessions.pinned')}>
+              <Icon name="keep" size={16} />
             </span>
           )}
           {platformIcon}
           {archivedChildren && archivedChildren.length > 0 && (
             <span
-              className="session-archived-badge"
+              className="sidebar-item-archived-badge"
               data-tooltip={`${archivedChildren.length} snapshot${archivedChildren.length > 1 ? 's' : ''}`}
               onClick={(e) => { e.stopPropagation(); setArchivedExpanded(!archivedExpanded); }}
             >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                <polyline points="14 2 14 8 20 8"/>
-                <line x1="16" y1="13" x2="8" y2="13"/>
-                <line x1="16" y1="17" x2="8" y2="17"/>
-              </svg>
+              <Icon name="description" size={16} />
             </span>
           )}
-          <span className="session-time">{relativeTime}</span>
+          <span className="sidebar-item-time">{relativeTime}</span>
           {session.is_cli_session || session._readonly ? (
-            <span className="session-actions-trigger" style={{cursor: 'default', opacity: 0.45}} title={session.is_cli_session ? t('sessions.readonly_gateway') : t('sessions.readonly_snapshot')}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-              </svg>
+            <span className="sidebar-item-actions-trigger" style={{cursor: 'default', opacity: 0.45}} title={session.is_cli_session ? t('sessions.readonly_gateway') : t('sessions.readonly_snapshot')}>
+              <Icon name="lock" size={16} />
             </span>
           ) : (
             <button
               ref={buttonRef}
-              className={`session-actions-trigger ${menuOpen ? 'active' : ''}`}
+              className={`sidebar-item-actions-trigger ${menuOpen ? 'active' : ''}`}
               onClick={(e) => {
                 e.stopPropagation();
                 handleContextMenu(e);
               }}
               aria-label={t('sessions.actions')}
             >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="1" />
-                <circle cx="12" cy="5" r="1" />
-                <circle cx="12" cy="19" r="1" />
-              </svg>
+              <Icon name="more_vert" size={16} />
             </button>
           )}
         </div>
@@ -343,7 +337,7 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
         {menuOpen && createPortal(
           <div
             ref={menuRef}
-            className="session-action-menu open"
+            className="sidebar-item-action-menu open"
             style={{
               position: 'fixed',
               top: menuPosition.top,
@@ -353,19 +347,15 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
           >
             {!session.is_cli_session && (
               <>
-                <button className="session-action-opt" onClick={handleStartEdit}>
+                <button className="sidebar-item-action-opt" onClick={handleStartEdit}>
                   <span className="ws-opt-action">
-                    <svg className="ws-opt-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                    </svg>
+                    <Icon name="edit" size={16} className="ws-opt-icon" />
                     <span className="ws-opt-name">{t('sessions.rename')}</span>
                   </span>
                 </button>
-                <button className="session-action-opt" onClick={handlePin}>
+                <button className="sidebar-item-action-opt" onClick={handlePin}>
                   <span className="ws-opt-action">
-                    <svg className="ws-opt-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M12 17v-7m-4 4l4-4 4 4" />
-                    </svg>
+                    <Icon name="keep" size={16} className="ws-opt-icon" />
                     <span className="ws-opt-name">
                       {session.pinned ? t('sessions.unpin') : t('sessions.pin')}
                     </span>
@@ -373,61 +363,60 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
                 </button>
               </>
             )}
-            {!session.is_cli_session && (session.message_count ?? 0) > 50 && (
-              <button
-                className="session-action-opt"
-                onClick={handleCompress}
-                disabled={compressing || clearing}
-              >
-                <span className="ws-opt-action">
-                  {compressing ? (
-                    <svg className="ws-opt-icon ws-opt-icon--spin" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-                    </svg>
-                  ) : (
-                    <svg className="ws-opt-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M6 9l6 6 6-6"/>
-                      <path d="M6 15l6 6 6-6" opacity="0.5"/>
-                    </svg>
-                  )}
-                  <span className="ws-opt-name">
-                    {compressing ? t('sessions.compressing') : t('sessions.compress_history')}
-                  </span>
-                </span>
-              </button>
-            )}
-            {!session.is_cli_session && (session.message_count ?? 0) > 0 && (
-              <button
-                className="session-action-opt"
-                onClick={handleClear}
-                disabled={clearing || compressing}
-              >
-                <span className="ws-opt-action">
-                  {clearing ? (
-                    <svg className="ws-opt-icon ws-opt-icon--spin" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-                    </svg>
-                  ) : (
-                    <svg className="ws-opt-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M3 6h18"/>
-                      <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
-                      <path d="M19 6l-1 14c0 1-1 2-2 2H8c-1 0-2-1-2-2L5 6"/>
-                      <line x1="10" y1="11" x2="10" y2="17"/>
-                      <line x1="14" y1="11" x2="14" y2="17"/>
-                    </svg>
-                  )}
-                  <span className="ws-opt-name">
-                    {clearing ? t('sessions.clearing') : t('sessions.clear_history')}
-                  </span>
-                </span>
-              </button>
+            {!session.is_cli_session && (
+              <>
+                {(() => {
+                  const canCompress = (session.message_count ?? 0) > 50;
+                  return (
+                    <button
+                      className={`sidebar-item-action-opt${!canCompress ? ' disabled' : ''}`}
+                      onClick={() => { if (canCompress) handleCompress(); }}
+                      {...(!canCompress ? { 'data-tooltip': t('sessions.compress_min_count') } : {})}
+                    >
+                      <span className="ws-opt-action">
+                        {compressing ? (
+                          <Icon name="progress_activity" size={16} className="ws-opt-icon ws-opt-icon--spin" />
+                        ) : (
+                          <Icon name="compress" size={16} className="ws-opt-icon" />
+                        )}
+                        <span className="ws-opt-name">
+                          {compressing ? t('sessions.compressing') : t('sessions.compress_history')}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })()}
+                {(() => {
+                  const canClear = (session.message_count ?? 0) > 0;
+                  return (
+                    <button
+                      className={`sidebar-item-action-opt${!canClear ? ' disabled' : ''}`}
+                      onClick={() => { if (canClear) handleClear(); }}
+                      {...(!canClear ? { 'data-tooltip': t('sessions.clear_empty') } : {})}
+                    >
+                      <span className="ws-opt-action">
+                        {clearing ? (
+                          <Icon name="progress_activity" size={16} className="ws-opt-icon ws-opt-icon--spin" />
+                        ) : (
+                          <Icon name="delete" size={16} className="ws-opt-icon" />
+                        )}
+                        <span className="ws-opt-name">
+                          {clearing ? t('sessions.clearing') : t('sessions.clear_history')}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })()}
+              </>
             )}
             {!session.is_cli_session && (
-              <button className="session-action-opt danger" onClick={handleDelete}>
+              <button
+                className={`sidebar-item-action-opt danger${session.pinned ? ' disabled' : ''}`}
+                onClick={() => { if (!session.pinned) handleDelete(); }}
+                {...(session.pinned ? { 'data-tooltip': t('sessions.unpin_to_delete') } : {})}
+              >
                 <span className="ws-opt-action">
-                  <svg className="ws-opt-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                  </svg>
+                    <TrashMultiIcon size={16} className="ws-opt-icon" />
                   <span className="ws-opt-name">{t('sessions.delete')}</span>
                 </span>
               </button>
@@ -439,35 +428,37 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
 
       {/* Archived (compaction) child sessions — collapsible, read-only */}
       {archivedChildren && archivedChildren.length > 0 && (
-        <div className="session-archived-section">
+        <div className="sidebar-item-archived-section">
           {archivedExpanded && (
-            <div className="session-archived-children">
-              {[...archivedChildren]
-                .sort((a, b) => (b._compaction_n || 0) - (a._compaction_n || 0))
-                .map((child) => (
+            <div className="sidebar-item-archived-children">
+              {(() => {
+                const sorted = [...archivedChildren].sort((a, b) => (b._compaction_n || 0) - (a._compaction_n || 0));
+                const total = sorted.length;
+                return sorted.map((child, i) => {
+                  const ordinal = total - i; // 1 = oldest, total = most recent
+                  const label = ordinal === total ? t('sessions.latest_snapshot', 'Latest')
+                    : t('sessions.prev_snapshot', { defaultValue: `Recent {{n}}`, n: total - ordinal });
+                  return (
                   <div
                     key={child.session_id}
-                    className={`session-item session-item-archived ${currentSessionId === child.session_id ? 'active' : ''}`}
+                    className={`sidebar-item sidebar-item-archived ${currentSessionId === child.session_id ? 'active' : ''}`}
                     onClick={(e) => { e.stopPropagation(); selectSession(child.session_id); }}
                     data-session-id={child.session_id}
                   >
-                    <div className="session-text">
-                      <div className="session-title-row">
-                        <span className="session-archived-icon" data-tooltip="Archived snapshot">
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                            <polyline points="14 2 14 8 20 8"/>
-                            <line x1="16" y1="13" x2="8" y2="13"/>
-                            <line x1="16" y1="17" x2="8" y2="17"/>
-                          </svg>
+                    <div className="sidebar-item-text">
+                      <div className="sidebar-item-title-row">
+                        <span className="sidebar-item-archived-icon" data-tooltip="Archived snapshot">
+                          <Icon name="description" size={16} />
                         </span>
-                        <span className="session-title">
-                          #{child._compaction_n} · {child.message_count ?? 0} msgs
+                        <span className="sidebar-item-title">
+                          {label} · {child.message_count ?? 0} msgs
                         </span>
                       </div>
                     </div>
                   </div>
-                ))}
+                );
+                });
+              })()}
             </div>
           )}
         </div>

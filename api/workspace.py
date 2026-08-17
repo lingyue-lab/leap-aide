@@ -220,6 +220,22 @@ def set_last_workspace(path: str) -> None:
         logger.debug("Failed to set last workspace")
 
 
+def get_first_non_external_workspace() -> str:
+    """Return the first non-external workspace path.
+
+    The default workspace (profile_default_workspace) is considered
+    external.  Returns the first user-added workspace that is not the
+    default.  Falls back to profile_default_workspace() when no
+    non-external workspace exists.
+    """
+    workspaces = load_workspaces()
+    default_ws = profile_default_workspace()
+    for w in workspaces:
+        if w.get('path') != default_ws:
+            return w['path']
+    return default_ws
+
+
 def _safe_resolve(p: Path) -> Path:
     """Path.resolve() that never raises — falls back to the input path on error."""
     try:

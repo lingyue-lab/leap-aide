@@ -6,7 +6,6 @@ import { useSkillStore } from '@/stores/useSkillStore';
 import { useCronStore } from '@/stores/useCronStore';
 import { useMemoryStore } from '@/stores/useMemoryStore';
 import { useTerminalStore } from '@/stores/useTerminalStore';
-import { useVncStore } from '@/stores/useVncStore';
 import { useSettingsTabStore } from '@/stores/useSettingsTabStore';
 import SkillDetail from '@/components/skills/SkillDetail';
 import SkillForm from '@/components/skills/SkillForm';
@@ -16,11 +15,13 @@ import MemoryDetail from '@/components/memory/MemoryDetail';
 import WorkspaceDetail from '@/components/workspace/WorkspaceDetail';
 import WorkspaceForm from '@/components/workspace/WorkspaceForm';
 import TodosDrawer from '@/components/layout/TodosDrawer';
-import SkillsDrawer from '@/components/chat/SkillsDrawer';
 import TerminalView from '@/components/terminal/TerminalView';
-import VncView from '@/components/vnc/VncView';
+
 import SettingsDetail from '@/components/settings/SettingsDetail';
+import { EmptyState, TASKS_ICON, SKILLS_ICON, MEMORY_ICON, WORKSPACE_ICON } from '@/components/common/Placeholder';
 import { observerService } from '@/services/api';
+import Tooltip from '@/components/common/Tooltip';
+import { Icon } from '@/components/common/Icons';
 
 
 interface MainContentProps {
@@ -36,15 +37,15 @@ interface MainContentProps {
 function NonTerminalContent({
   children,
   todosPanelOpen,
-  skillsPanelOpen,
-  setTodosPanelOpen,
-  setSkillsPanelOpen,
+  sessionLoading,
+  toggleTodos,
+  closeAllPanels,
 }: {
   children: React.ReactNode;
   todosPanelOpen: boolean;
-  skillsPanelOpen: boolean;
-  setTodosPanelOpen: (v: boolean) => void;
-  setSkillsPanelOpen: (v: boolean) => void;
+  sessionLoading: boolean;
+  toggleTodos: () => void;
+  closeAllPanels: () => void;
 }) {
   const { t } = useTranslation('common');
   const { currentSession } = useSessionStore();
@@ -62,8 +63,10 @@ function NonTerminalContent({
   const setShowEditJobForm = useCronStore((s) => s.setShowEditJobForm);
 
   const memoryTabActive = useMemoryStore((s) => s.memoryTabActive);
+  const selectedMemoryFile = useMemoryStore((s) => s.selectedFile);
 
   const workspacesTabActive = useWorkspaceStore((s) => s.workspacesTabActive);
+  const currentWorkspace = useWorkspaceStore((s) => s.currentWorkspace);
   const showNewWorkspaceForm = useWorkspaceStore((s) => s.showNewWorkspaceForm);
   const setShowNewWorkspaceForm = useWorkspaceStore((s) => s.setShowNewWorkspaceForm);
 
@@ -102,7 +105,7 @@ function NonTerminalContent({
   if (tasksTabActive && selectedJob) {
     return <TaskDetail />;
   }
-  if (memoryTabActive) {
+  if (memoryTabActive && selectedMemoryFile) {
     return <MemoryDetail />;
   }
   if (workspacesTabActive && showNewWorkspaceForm) {
@@ -113,79 +116,107 @@ function NonTerminalContent({
       />
     );
   }
-  if (workspacesTabActive) {
+  if (workspacesTabActive && currentWorkspace) {
     return <WorkspaceDetail />;
   }
   if (settingsTabActive) {
     return <SettingsDetail />;
   }
 
+  // ── Panel placeholders (tab active but no item selected) ────────────────────
+  if (tasksTabActive) {
+    return <EmptyState hintsKey="empty.tasks_hints">{TASKS_ICON}</EmptyState>;
+  }
+  if (skillsTabActive) {
+    return <EmptyState hintsKey="empty.skills_hints">{SKILLS_ICON}</EmptyState>;
+  }
+  if (memoryTabActive) {
+    return <EmptyState hintsKey="empty.memory_hints">{MEMORY_ICON}</EmptyState>;
+  }
+  if (workspacesTabActive) {
+    return <EmptyState hintsKey="empty.workspaces_hints">{WORKSPACE_ICON}</EmptyState>;
+  }
+
   // ── Default: chat view ──────────────────────────────────────────────────────
-  const title = currentSession?.title || 'Hermes';
+  const title = currentSession?.title || 'Leap Aide';
 
   return (
     <>
-      <div className="topbar">
-        <button
-          className="mobile-hamburger"
-          onClick={() => {/* Toggle mobile sidebar */}}
-          title="Menu"
-        >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <line x1="3" y1="6" x2="21" y2="6" />
-            <line x1="3" y1="12" x2="21" y2="12" />
-            <line x1="3" y1="18" x2="21" y2="18" />
-          </svg>
-        </button>
-
-        <div className="flex-1 min-w-0 overflow-hidden">
-          <div className="topbar-title">{title}</div>
-          <div className="topbar-meta">
-            {currentSession ? t('chat.active_session') : t('chat.new_conversation')}
-          </div>
-        </div>
-
-        <div className="topbar-chips">
-          <button
-            className={`chip workspace-toggle-btn ${todosPanelOpen ? 'active' : ''}`}
-            onClick={() => setTodosPanelOpen(!todosPanelOpen)}
-            title={todosPanelOpen ? t('todos.hide_panel') : t('todos.show_panel')}
-            aria-pressed={todosPanelOpen}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <rect x="3" y="5" width="6" height="6" rx="1" />
-              <path d="m3 17 2 2 4-4" />
-              <path d="M13 6h8" />
-              <path d="M13 12h8" />
-              <path d="M13 18h8" />
-            </svg>
-          </button>
-          {!currentSession?._readonly && (
+      <div className="main-with-right-panel">
+        <div className="main-chat-area">
+          {!sessionLoading && (
+            <div className="topbar">
             <button
-              className={`chip observe-btn${currentSession?.pinned ? '' : ' disabled'}`}
-              onClick={currentSession?.pinned ? async () => {
-                const sid = currentSession?.session_id;
-                if (!sid) return;
-                try { await observerService.getInfo(sid); } catch { /* ignore */ }
-                window.open('/api/observer/' + encodeURIComponent(sid), '_blank');
-              } : undefined}
-              title={currentSession?.pinned ? t('vnc.observe', 'Observe') : t('vnc.pin_to_observe', 'Pin session to observe')}
+              className="mobile-hamburger"
+              onClick={() => {/* Toggle mobile sidebar */}}
+              title="Menu"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                <circle cx="12" cy="12" r="3" />
-              </svg>
+              <Icon name="menu" size={24} />
             </button>
+
+            <div className="flex-1 min-w-0 overflow-hidden">
+              <div className="topbar-title">{title}</div>
+              <div className="topbar-meta">
+                {currentSession ? currentSession.session_id : 'Beyond assistance.'}
+              </div>
+            </div>
+
+            <div className="topbar-chips">
+              {currentSession && (() => {
+                const isReadonly = !!currentSession._readonly;
+                const isPinned = !!currentSession.pinned;
+                const canObserve = !isReadonly && isPinned;
+                const observeTooltip = isReadonly
+                  ? t('vnc.readonly_no_observe', 'Read-only session — observation not available')
+                  : !isPinned
+                    ? t('vnc.pin_to_observe', 'Pin session to observe')
+                    : t('vnc.observe', 'Observe');
+                const todosTooltip = isReadonly
+                  ? t('todos.readonly_no_todos', 'Read-only session — todos not available')
+                  : todosPanelOpen
+                    ? t('todos.hide_panel')
+                    : t('todos.show_panel');
+
+                return (
+                  <>
+                    <Tooltip text={todosTooltip}>
+                      <button
+                        className={`icon-btn${todosPanelOpen ? ' active' : ''}`}
+                        onClick={() => { if (!isReadonly) toggleTodos(); }}
+                        disabled={isReadonly}
+                        aria-pressed={todosPanelOpen}
+                      >
+                        <Icon name="checklist" size={18} />
+                      </button>
+                    </Tooltip>
+                    <Tooltip text={observeTooltip}>
+                      <button
+                        className="icon-btn"
+                        onClick={canObserve ? async () => {
+                          const sid = currentSession.session_id;
+                          if (!sid) return;
+                          try { await observerService.getInfo(sid); } catch { /* ignore */ }
+                          window.open('/observations/' + encodeURIComponent(sid), '_blank');
+                        } : undefined}
+                        disabled={!canObserve || isReadonly}
+                      >
+                        <Icon name="visibility" size={18} />
+                      </button>
+                    </Tooltip>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+          )}
+          {children}
+          {sessionLoading && (
+            <div className="session-loading-overlay">
+              <Icon name="progress_activity" size={27} style={{ animation: 'spin 0.8s linear infinite' }} />
+            </div>
           )}
         </div>
-      </div>
-
-      <div className={`main-with-right-panel ${todosPanelOpen || skillsPanelOpen ? 'right-panel-open' : ''}`}>
-        <div className="main-chat-area">
-          {children}
-        </div>
-        <SkillsDrawer isOpen={skillsPanelOpen} onClose={() => setSkillsPanelOpen(false)} />
-        <TodosDrawer isOpen={todosPanelOpen} onClose={() => setTodosPanelOpen(false)} />
+        <TodosDrawer isOpen={todosPanelOpen} onClose={() => closeAllPanels()} />
       </div>
     </>
   );
@@ -193,22 +224,28 @@ function NonTerminalContent({
 
 export default function MainContent({ children }: MainContentProps) {
   const [todosPanelOpen, setTodosPanelOpen] = useState(false);
-  const [skillsPanelOpen, setSkillsPanelOpen] = useState(false);
-  // Listen for composer skills button
-  useEffect(() => {
-    const handler = () => setSkillsPanelOpen((v) => !v);
-    window.addEventListener('hermes:toggle-skills-panel', handler);
-    return () => window.removeEventListener('hermes:toggle-skills-panel', handler);
-  }, []);
+  const [sessionLoading, setSessionLoading] = useState(false);
+
+  const toggleTodos = () => { setTodosPanelOpen((v) => !v); };
+  const closeAllPanels = () => { setTodosPanelOpen(false); };
   useWorkspaceStore(); // subscribe for side effects
 
+  // Listen for session loading state from ChatInterface
+  useEffect(() => {
+    const handler = (e: Event) => {
+      setSessionLoading((e as CustomEvent).detail as boolean);
+    };
+    window.addEventListener('hermes:session-loading', handler);
+    return () => window.removeEventListener('hermes:session-loading', handler);
+  }, []);
+
   const terminalTabActive = useTerminalStore((s) => s.terminalTabActive);
+  // Close panels when switching to terminal
+  useEffect(() => { if (terminalTabActive) closeAllPanels(); }, [terminalTabActive]);
   const activeTerminalId = useTerminalStore((s) => s.activeTerminalId);
   const terminals = useTerminalStore((s) => s.terminals);
   const selectTerminal = useTerminalStore((s) => s.selectTerminal);
   const addTerminal = useTerminalStore((s) => s.addTerminal);
-
-  const vncTabActive = useVncStore((s) => s.vncTabActive);
 
   return (
     <>
@@ -230,10 +267,7 @@ export default function MainContent({ children }: MainContentProps) {
               onClick={() => selectTerminal(t.id)}
               title={t.name}
             >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <polyline points="4 17 10 11 4 5" />
-                <line x1="12" y1="19" x2="20" y2="19" />
-              </svg>
+              <Icon name="terminal_2" size={14} />
               <span>{t.name}</span>
             </button>
           ))}
@@ -242,10 +276,7 @@ export default function MainContent({ children }: MainContentProps) {
             onClick={addTerminal}
             title="New Terminal"
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="12" y1="5" x2="12" y2="19" />
-              <line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
+            <Icon name="add" size={14} />
           </button>
         </div>
 
@@ -267,29 +298,18 @@ export default function MainContent({ children }: MainContentProps) {
       ──────────────────────────────────────────────────────────────────────── */}
       <main
         className="main"
-        style={{ display: terminalTabActive || vncTabActive ? 'none' : undefined }}
+        style={{ display: terminalTabActive ? 'none' : undefined }}
       >
         <NonTerminalContent
           todosPanelOpen={todosPanelOpen}
-          skillsPanelOpen={skillsPanelOpen}
-          setTodosPanelOpen={setTodosPanelOpen}
-          setSkillsPanelOpen={setSkillsPanelOpen}
+          sessionLoading={sessionLoading}
+          toggleTodos={toggleTodos}
+          closeAllPanels={closeAllPanels}
         >
           {children}
         </NonTerminalContent>
       </main>
 
-      {/* ─────────────────────────────────────────────────────────────────────
-          VNC area: ALWAYS mounted so the WebSocket stays alive on tab switch.
-          Visibility is controlled purely with CSS display.
-      ──────────────────────────────────────────────────────────────────────── */}
-      <main
-        className="main vnc-main"
-        style={{ display: vncTabActive ? 'flex' : 'none' }}
-        aria-hidden={!vncTabActive}
-      >
-        <VncView />
-      </main>
     </>
   );
 }

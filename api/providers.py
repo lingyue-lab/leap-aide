@@ -13,11 +13,13 @@ from pathlib import Path
 from typing import Any
 
 from api.config import (
+    _PROVIDER_CARD_ALIASES,
     _PROVIDER_DISPLAY,
     _PROVIDER_MODELS,
     _get_config_path,
     _save_yaml_config_file,
     get_config,
+    get_provider_card_models,
     invalidate_models_cache,
     reload_config,
 )
@@ -33,24 +35,26 @@ _PROVIDER_ENV_VAR: dict[str, str] = {
     "openrouter": "OPENROUTER_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
     "openai": "OPENAI_API_KEY",
+    "copilot": "COPILOT_GITHUB_TOKEN",
+    "alibaba": "DASHSCOPE_API_KEY",
     "google": "GOOGLE_API_KEY",
     "gemini": "GEMINI_API_KEY",
+    "huggingface": "HF_TOKEN",
     "zai": "GLM_API_KEY",
     "kimi-coding": "KIMI_API_KEY",
+    "lmstudio": "LM_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
     "minimax": "MINIMAX_API_KEY",
     "mistralai": "MISTRAL_API_KEY",
-    "x-ai": "XAI_API_KEY",
+    "xai": "XAI_API_KEY",
     "opencode-zen": "OPENCODE_ZEN_API_KEY",
     "opencode-go": "OPENCODE_GO_API_KEY",
     "ollama": "OLLAMA_API_KEY",
     "ollama-cloud": "OLLAMA_API_KEY",
 }
-
 # Providers that use OAuth or token flows — their credentials are managed
 # through the Hermes CLI, not via API keys.  The WebUI cannot set these.
 _OAUTH_PROVIDERS = frozenset({
-    "copilot",
     "openai-codex",
     "nous",
 })
@@ -250,14 +254,18 @@ def get_providers() -> dict[str, Any]:
     """
     providers = []
 
-    # Collect all known provider IDs from multiple sources
-    known_ids = set(_PROVIDER_DISPLAY.keys()) | set(_PROVIDER_MODELS.keys())
+    # Collect all known provider IDs from multiple sources, folding
+    # OpenRouter-prefix cards (qwen, google, x-ai) into their canonical card.
+    known_ids = {
+        _PROVIDER_CARD_ALIASES.get(pid, pid)
+        for pid in (_PROVIDER_DISPLAY.keys() | _PROVIDER_MODELS.keys())
+    }
 
     # Also detect providers from config.yaml providers section
     cfg = get_config()
     providers_cfg = cfg.get("providers", {})
     if isinstance(providers_cfg, dict):
-        known_ids.update(providers_cfg.keys())
+        known_ids.update(_PROVIDER_CARD_ALIASES.get(pid, pid) for pid in providers_cfg.keys())
 
     # Add OAuth providers even if not in _PROVIDER_DISPLAY
     known_ids.update(_OAUTH_PROVIDERS)
@@ -310,7 +318,7 @@ def get_providers() -> dict[str, Any]:
             else:
                 key_source = "config_yaml"
 
-        models = _PROVIDER_MODELS.get(pid, [])
+        models = get_provider_card_models(pid)
         # Also include models from config.yaml providers section
         if isinstance(providers_cfg, dict):
             provider_cfg = providers_cfg.get(pid, {})

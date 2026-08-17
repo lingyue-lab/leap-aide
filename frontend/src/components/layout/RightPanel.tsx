@@ -4,6 +4,7 @@ import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 import FileTree from '@/components/workspace/FileTree';
 import FilePreview from '@/components/workspace/FilePreview';
 import BreadcrumbBar from '@/components/workspace/BreadcrumbBar';
+import { Icon } from '@/components/common/Icons';
 
 interface RightPanelProps {
   isOpen: boolean;
@@ -37,9 +38,7 @@ export default function RightPanel({ isOpen, onClose }: RightPanelProps) {
             onClick={onClose}
             title={t('workspace.hide_panel')}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <polyline points="15 18 9 12 15 6" />
-            </svg>
+            <Icon name="chevron_right" size={18} />
           </button>
           <button
             className="panel-icon-btn"
@@ -47,40 +46,28 @@ export default function RightPanel({ isOpen, onClose }: RightPanelProps) {
             title={t('workspace.parent_dir')}
             style={{ display: currentDir === '.' ? 'none' : 'flex' }}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <line x1="12" y1="19" x2="12" y2="5" />
-              <polyline points="5 12 12 5 19 12" />
-            </svg>
+            <Icon name="arrow_upward" size={18} />
           </button>
           <button
             className="panel-icon-btn"
             onClick={() => {/* New file */}}
             title={t('workspace.new_file')}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <line x1="12" y1="5" x2="12" y2="19" />
-              <line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
+            <Icon name="add" size={18} />
           </button>
           <button
             className="panel-icon-btn"
             onClick={() => {/* New folder */}}
             title={t('workspace.new_folder')}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-            </svg>
+            <Icon name="folder_open" size={18} />
           </button>
           <button
             className="panel-icon-btn"
             onClick={() => useWorkspaceStore.getState().loadDir('.')}
             title={t('workspace.refresh')}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <polyline points="23 4 23 10 17 10" />
-              <polyline points="1 20 1 14 7 14" />
-              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-            </svg>
+            <Icon name="refresh" size={18} />
           </button>
           <button
             className="panel-icon-btn close-preview"
@@ -88,10 +75,7 @@ export default function RightPanel({ isOpen, onClose }: RightPanelProps) {
             title={t('workspace.close_preview')}
             style={{ display: previewPath ? 'flex' : 'none' }}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
+            <Icon name="close" size={18} />
           </button>
           <button
             className="panel-icon-btn mobile-close-btn"

@@ -7,16 +7,22 @@ import { useChatStream } from '@/hooks/useChatStream';
 import { useModeSync } from '@/hooks/useModeSync';
 import { useSessionPolling } from '@/hooks/useSessionPolling';
 import * as StreamManager from '@/stores/streamManager';
+import { useIsBusy } from '@/utils/sessionBusy';
 import { chatService } from '@/services/api';
 import ChatMessages from './ChatMessages';
 import ChatComposer from './ChatComposer';
 import QueueStatusBar from './QueueStatusBar';
 import GoalStatusBar from './GoalStatusBar';
-import ApprovalCard from '@/components/dialogs/ApprovalCard';
-import ClarifyCard from '@/components/dialogs/ClarifyCard';
-import BackgroundTaskCard from '@/components/dialogs/BackgroundTaskCard';
-import InfoCard from '@/components/dialogs/InfoCard';
-import { useTranslation } from 'react-i18next';
+import ApprovalCard, { setApprovalCardCurrentSessionId } from '@/components/dialogs/ApprovalCard';
+import ClarifyCard, { setClarifyCardCurrentSessionId } from '@/components/dialogs/ClarifyCard';
+import BackgroundTaskCard, { setBgTaskCardCurrentSessionId } from '@/components/dialogs/BackgroundTaskCard';
+import InfoCard, { setInfoCardCurrentSessionId, onInfoCardVisibleChange } from '@/components/dialogs/InfoCard';
+import { onApprovalCardVisibleChange } from '@/components/dialogs/ApprovalCard';
+import { onClarifyCardVisibleChange } from '@/components/dialogs/ClarifyCard';
+import { onBackgroundTaskCardVisibleChange } from '@/components/dialogs/BackgroundTaskCard';
+import ThinkingIndicator from './ThinkingIndicator';
+import { EmptyState, CHAT_ICON } from '@/components/common/Placeholder';
+import { Icon } from '@/components/common/Icons';
 
 interface ChatInterfaceProps {
   sessionId?: string | null;
@@ -25,15 +31,29 @@ interface ChatInterfaceProps {
 export default function ChatInterface({ sessionId: propSessionId }: ChatInterfaceProps) {
   const { sessionId: routeSessionId } = useParams<{ sessionId: string }>();
   const sessionId = propSessionId || routeSessionId || null;
-  
+
+  // Track card visibility so ThinkingIndicator and composer hide when a card is shown
+  const [infoVisible, setInfoVisible] = useState(false);
+  const [bgVisible, setBgVisible] = useState(false);
+  const [approvalVisible, setApprovalVisible] = useState(false);
+  const [clarifyVisible, setClarifyVisible] = useState(false);
+  const cardVisible = infoVisible || bgVisible || approvalVisible || clarifyVisible;
+  useEffect(() => {
+    const unsubInfo = onInfoCardVisibleChange(setInfoVisible);
+    const unsubBg = onBackgroundTaskCardVisibleChange(setBgVisible);
+    const unsubApproval = onApprovalCardVisibleChange(setApprovalVisible);
+    const unsubClarify = onClarifyCardVisibleChange(setClarifyVisible);
+    return () => { unsubInfo(); unsubBg(); unsubApproval(); unsubClarify(); };
+  }, []);
+
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const prevSessionIdRef = useRef<string | null>(null);
-  const { currentSession, loadSession } = useSessionStore();
+  const { currentSession, loadSession, loading: sessionsLoading } = useSessionStore();
   const [sessionLoading, setSessionLoading] = useState(false);
   // Listen for clear-history operation from sidebar
   useEffect(() => {
-    const onClear = () => setSessionLoading(true);
-    const onClearDone = () => setSessionLoading(false);
+    const onClear = () => { setSessionLoading(true); window.dispatchEvent(new CustomEvent('hermes:session-loading', { detail: true })); };
+    const onClearDone = () => { setSessionLoading(false); window.dispatchEvent(new CustomEvent('hermes:session-loading', { detail: false })); };
     window.addEventListener('hermes:clear-history', onClear);
     window.addEventListener('hermes:clear-history-done', onClearDone);
     return () => {
@@ -41,7 +61,8 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
       window.removeEventListener('hermes:clear-history-done', onClearDone);
     };
   }, []);
-  const { messages, busy, activeStreamId, setMessages, setToolCalls } = useChatStore();
+  const { messages, activeStreamId, canceling, setMessages, setToolCalls } = useChatStore();
+  const busy = useIsBusy();
   const { startStream, cancelStream, streaming } = useChatStream();
   useModeSync(sessionId ?? null);
   useSessionPolling(sessionId ?? null);
@@ -88,10 +109,17 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
     if (prevId === sessionId) return;
 
     setSessionLoading(true);
+    window.dispatchEvent(new CustomEvent('hermes:session-loading', { detail: true }));
 
     // Tell the store which session is "current" so updateSessionCache knows
     // whether to update live state or just the cache.
     useChatStore.getState().setCurrentSessionId(sessionId);
+
+    // Notify card components of session change so they freeze/restore per-session state.
+    setInfoCardCurrentSessionId(sessionId ?? null);
+    setBgTaskCardCurrentSessionId(sessionId ?? null);
+    setApprovalCardCurrentSessionId(sessionId ?? null);
+    setClarifyCardCurrentSessionId(sessionId ?? null);
 
     // ── Switching AWAY from prevId ──────────────────────────────────────────
     if (prevId && prevId !== sessionId) {
@@ -101,6 +129,10 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
       // come back we'll see the latest tokens automatically.
       useChatStore.getState().saveToCache(prevId);
 
+      // If the previous session was in the middle of a cancel, reset the
+      // flag so the new session doesn't show the spinner overlay.
+      useChatStore.getState().setCanceling(false);
+
       // NOTE: we do NOT cancel the stream here. The backend stream for prevId
       // keeps running in the background. StreamManager continues to accumulate
       // tokens into the cache slot for prevId.
@@ -108,11 +140,18 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
 
     // ── Helper: refresh session data from backend and reconnect to any active stream ──
     const refreshFromBackend = async (sid: string) => {
+      // Guard against stale responses: if the user switched sessions while this
+      // loadSession was in flight, its late response must not overwrite the
+      // current session's messages / usage / stream reconnection.
+      if (useSessionStore.getState().currentSessionId !== sid) {
+        return;
+      }
       const session = useSessionStore.getState().currentSession;
-      if (!session) { setSessionLoading(false); return; }
+      if (!session) { setSessionLoading(false); window.dispatchEvent(new CustomEvent('hermes:session-loading', { detail: false })); return; }
       if (session.messages) setMessages(session.messages);
       if (session.tool_calls) setToolCalls(session.tool_calls);
       setSessionLoading(false);
+      window.dispatchEvent(new CustomEvent('hermes:session-loading', { detail: false }));
 
       // Restore context usage from persisted compressor data.
       if (session.context_length || session.last_prompt_tokens) {
@@ -130,12 +169,15 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
       // CLI script), re-attach to it so the browser sees tokens in real time.
       const activeStreamId = session.active_stream_id;
       const pendingMsg = session.pending_user_message;
+      const pendingOriginalMsg = session.pending_original_message ?? undefined;
+      const pendingUserMsgTs = session.pending_user_message_ts ?? undefined;
       if (activeStreamId && pendingMsg) {
         try {
           const status = await chatService.checkStreamStatus(activeStreamId);
           if (status.active) {
-            StreamManager.reconnectStream(sid, activeStreamId, pendingMsg, session.messages ?? []);
-            useChatStore.setState({ busy: true, activeStreamId });
+            StreamManager.reconnectStream(sid, activeStreamId, pendingMsg, session.messages ?? [], pendingOriginalMsg, pendingUserMsgTs);
+            // StreamManager.reconnectStream sets busy=true internally.
+            // useIsBusy() will pick it up via the subscriber.
           }
         } catch { /* network error — ignore, already showing persisted messages */ }
       }
@@ -162,10 +204,14 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
       useChatStore.setState({
         messages,
         toolCalls: bgState.toolCalls,
-        busy: bgState.busy,
+        // busy is NOT set here — useIsBusy() reads directly from
+        // StreamManager, so the paper plane / pulse dot always reflect
+        // the authoritative streaming state.
         activeStreamId: bgState.streaming ? bgState.streamId : null,
         ...(queuedMessages !== undefined ? { queuedMessages } : {}),
       });
+      setSessionLoading(false);
+      window.dispatchEvent(new CustomEvent('hermes:session-loading', { detail: false }));
       // Still load session metadata (model, workspace, etc.) in background.
       loadSession(sessionId);
       return;
@@ -175,6 +221,7 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
     const cached = useChatStore.getState().restoreFromCache(sessionId);
     if (cached) {
       setSessionLoading(false);
+      window.dispatchEvent(new CustomEvent('hermes:session-loading', { detail: false }));
       loadSession(sessionId).then(() => refreshFromBackend(sessionId));
       return;
     }
@@ -186,19 +233,34 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
 
   // ── Mode loading ────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId || sessionId.includes('/')) return;
     useModeStore.getState().loadMode(sessionId);
   }, [sessionId]);
 
-  // ── Auto-scroll ─────────────────────────────────────────────────────────────
+  // ── Auto-scroll (only when user is at the bottom) ────────────────────────
+  const isAtBottomRef = useRef(true);
+
   const scrollToBottom = useCallback(() => {
-    if (scrollContainerRef.current) {
-      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+    const el = scrollContainerRef.current;
+    if (el) {
+      requestAnimationFrame(() => {
+        el.scrollTop = el.scrollHeight;
+      });
+      isAtBottomRef.current = true;
     }
   }, []);
 
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    // Consider "at bottom" if within 40px of the true bottom
+    isAtBottomRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 40;
+  }, []);
+
   useEffect(() => {
-    scrollToBottom();
+    if (isAtBottomRef.current) {
+      scrollToBottom();
+    }
   }, [messages.length, scrollToBottom]);
 
   // ── Send / Cancel ────────────────────────────────────────────────────────────
@@ -215,106 +277,58 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
     }
   }, [activeStreamId, cancelStream]);
 
+  // Notify MainContent about initial session-list loading state
+  useEffect(() => {
+    if (!sessionId) {
+      window.dispatchEvent(new CustomEvent('hermes:session-loading', { detail: sessionsLoading }));
+    }
+  }, [sessionId, sessionsLoading]);
+
   if (!sessionId) {
-    return <EmptyState />;
+    if (sessionsLoading) {
+      // MainContent covers the whole area with session-loading-overlay;
+      // render nothing here to avoid duplicate spinners.
+      return null;
+    }
+    return <EmptyState>{CHAT_ICON}</EmptyState>;
   }
 
   return (
     <div className="chat-interface">
       {sessionLoading && (
         <div className="session-loading-overlay">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: 'spin 0.8s linear infinite' }}>
-            <circle cx="12" cy="12" r="10" strokeOpacity="0.25"/>
-            <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round"/>
-          </svg>
+          <Icon name="progress_activity" size={27} style={{ animation: 'spin 0.8s linear infinite' }} />
         </div>
       )}
       <ChatMessages
         ref={scrollContainerRef}
         messages={messages}
         streaming={streaming}
+        onScroll={handleScroll}
       />
 
-      {!currentSession?._readonly && (
+      {/* Suppress approval/clarify/background-task cards during cancel.
+          InfoCard is intentionally NOT suppressed — it's used for the
+          cancel spinner ("取消中..."). */}
+      {!canceling && <ApprovalCard />}
+      {!canceling && <ClarifyCard />}
+      {!canceling && <BackgroundTaskCard />}
+      <InfoCard />
+
+      {!sessionLoading && !currentSession?._readonly && (
         <>
           <QueueStatusBar sessionId={sessionId} />
           <GoalStatusBar sessionId={sessionId} />
+          {streaming && !cardVisible && <ThinkingIndicator />}
           <ChatComposer
             onSend={handleSend}
             onCancel={handleCancel}
-            busy={busy}
-            streaming={streaming}
+            cardVisible={cardVisible}
           />
         </>
       )}
-      
-      <ApprovalCard />
-      <ClarifyCard />
-      <BackgroundTaskCard />
-      <InfoCard />
+
     </div>
   );
 }
 
-function EmptyState() {
-  const { createSession } = useSessionStore();
-  const { t } = useTranslation('chat');
-
-  const handleSuggestion = async (_msg: string) => {
-    const session = await createSession();
-    if (session) {
-      // TODO: Navigate and auto-send _msg
-    }
-  };
-
-  return (
-    <div className="empty-state">
-      <div className="empty-logo">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="80" height="80" aria-label="Hermes caduceus">
-          <defs>
-            <linearGradient id="hermes-gold-empty" x1="0%" y1="0%" x2="0%" y2="100%">
-              <stop offset="0%" style={{ stopColor: '#F5C542', stopOpacity: 1 }} />
-              <stop offset="100%" style={{ stopColor: '#D4961C', stopOpacity: 1 }} />
-            </linearGradient>
-          </defs>
-          <rect x="30" y="10" width="4" height="46" rx="2" fill="url(#hermes-gold-empty)" />
-          <path d="M30 18 C24 14, 14 14, 10 18 C14 16, 22 16, 28 20" fill="#F5C542" opacity="0.9" />
-          <path d="M30 22 C26 19, 18 19, 14 22 C18 20, 24 20, 28 24" fill="#D4961C" opacity="0.8" />
-          <path d="M34 18 C40 14, 50 14, 54 18 C50 16, 42 16, 36 20" fill="#F5C542" opacity="0.9" />
-          <path d="M34 22 C38 19, 46 19, 50 22 C46 20, 40 20, 36 24" fill="#D4961C" opacity="0.8" />
-          <path d="M32 48 C22 44, 20 38, 26 34 C20 36, 18 42, 24 46 C18 40, 22 30, 30 28 C24 32, 22 38, 28 42" fill="none" stroke="#F5C542" strokeWidth="2.5" strokeLinecap="round" />
-          <path d="M32 48 C42 44, 44 38, 38 34 C44 36, 46 42, 40 46 C46 40, 42 30, 34 28 C40 32, 42 38, 36 42" fill="none" stroke="#D4961C" strokeWidth="2.5" strokeLinecap="round" />
-          <circle cx="32" cy="10" r="4" fill="#F5C542" />
-          <circle cx="32" cy="10" r="2" fill="#FFF8E1" opacity="0.7" />
-        </svg>
-      </div>
-      <h2>{t('empty.title')}</h2>
-      <p>{t('empty.subtitle')}</p>
-      <div className="suggestion-grid">
-        <button className="suggestion" data-msg={t('suggestions.files_msg')} onClick={() => handleSuggestion(t('suggestions.files_msg'))}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-          </svg>
-          <span>{t('suggestions.files')}</span>
-        </button>
-        <button className="suggestion" data-msg={t('suggestions.schedule_msg')} onClick={() => handleSuggestion(t('suggestions.schedule_msg'))}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
-            <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
-            <line x1="9" y1="12" x2="15" y2="12" />
-            <line x1="9" y1="16" x2="12" y2="16" />
-          </svg>
-          <span>{t('suggestions.schedule')}</span>
-        </button>
-        <button className="suggestion" data-msg={t('suggestions.plan_msg')} onClick={() => handleSuggestion(t('suggestions.plan_msg'))}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6" />
-            <line x1="8" y1="2" x2="8" y2="18" />
-            <line x1="16" y1="6" x2="16" y2="22" />
-          </svg>
-          <span>{t('suggestions.plan')}</span>
-        </button>
-      </div>
-    </div>
-  );
-}

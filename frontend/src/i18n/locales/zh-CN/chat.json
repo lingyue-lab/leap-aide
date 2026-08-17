@@ -1,8 +1,4 @@
 {
-  "empty": {
-    "title": "Hermes 能为您做什么？",
-    "subtitle": "开始对话或选择下方的示例"
-  },
   "suggestions": {
     "files": "分析项目文件",
     "files_msg": "列出所有 Python 文件并解释它们的用途",
@@ -11,13 +7,9 @@
     "plan": "创建执行计划",
     "plan_msg": "将以下任务分解为步骤"
   },
-  "thinking": "思考中...",
-  "connecting": "连接中...",
-  "initializing": "初始化Agent...",
-  "thinking_phase": "思考中...",
-  "running": "执行中...",
+  "working": "工作中...",
   "composer": {
-    "placeholder": "向 Hermes 发送消息...",
+    "placeholder": "向 Leap Aide 发送消息...",
     "attach": "附加文件",
     "send": "发送消息",
     "stop": "停止生成",
@@ -35,7 +27,8 @@
   "clarify": {
     "title": "问题",
     "submit": "继续",
-    "other": "其他..."
+    "other": "其他...",
+    "timeout": "澄清卡片已超时"
   },
   "messages": {
     "copy": "复制",

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { FileNode, DirEntry, Workspace } from '@/types';
+import { detectFileType } from '@/components/shared/FileView';
 
 interface WorkspaceState {
   currentDir: string;
@@ -24,6 +25,9 @@ interface WorkspaceState {
   setPreviewEditing: (editing: boolean) => void;
   setPreviewDirty: (dirty: boolean) => void;
   savePreview: () => Promise<void>;
+  deleteFile: (path: string) => Promise<void>;
+  createFileItem: (path: string, isDir: boolean) => Promise<void>;
+  renameFileItem: (src: string, dst: string) => Promise<void>;
   loadWorkspaces: () => Promise<void>;
   selectWorkspace: (path: string) => Promise<void>;
   addWorkspace: (path: string, displayName?: string) => Promise<void>;
@@ -100,21 +104,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
       const content = await response.text();
 
-      let previewType: WorkspaceState['previewType'] = 'text';
-      const ext = path.split('.').pop()?.toLowerCase() || '';
-      
-      if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) {
-        previewType = 'image';
-      } else if (['md', 'markdown', 'mdx'].includes(ext)) {
-        previewType = 'markdown';
-      }
+      const previewType = detectFileType(path, content) as WorkspaceState['previewType'];
 
       set({
         previewContent: content,
         previewType,
         previewLoading: false,
         previewDirty: false,
-        previewEditing: false,
       });
     } catch (err) {
       set({
@@ -145,6 +141,44 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       set({ previewDirty: false });
     } catch (err) {
       throw err;
+    }
+  },
+
+  deleteFile: async (path) => {
+    const response = await fetch('/api/workspace/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+      credentials: 'include',
+    });
+    if (!response.ok) throw new Error('Failed to delete file');
+    const { previewPath } = get();
+    if (previewPath === path) {
+      set({ previewPath: null, previewContent: null, previewType: null, previewEditing: false });
+    }
+  },
+
+  createFileItem: async (path, isDir) => {
+    const response = await fetch('/api/workspace/new', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, is_dir: isDir }),
+      credentials: 'include',
+    });
+    if (!response.ok) throw new Error('Failed to create');
+  },
+
+  renameFileItem: async (src, dst) => {
+    const response = await fetch('/api/workspace/move', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ src, dst }),
+      credentials: 'include',
+    });
+    if (!response.ok) throw new Error('Failed to rename');
+    const { previewPath } = get();
+    if (previewPath === src) {
+      set({ previewPath: dst });
     }
   },
 
@@ -203,7 +237,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         credentials: 'include',
       });
       if (!response.ok) throw new Error('Failed to add workspace');
-      // Reload full workspace list (includes readonly flags + derived workspaces)
+      // Reload full workspace list (includes external flags + derived workspaces)
       await get().loadWorkspaces();
     } catch (err) {
       throw err;

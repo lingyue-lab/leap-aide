@@ -8,7 +8,6 @@ interface SessionCache {
   activeStreamId: string | null;
   lastUsage: UsageInfo | null;
   queuedMessages: QueuedMessage[];
-  phase: string | null;
 }
 
 interface ChatState {
@@ -20,11 +19,12 @@ interface ChatState {
   lastUsage: UsageInfo | null;
   abortController: AbortController | null;
   queuedMessages: QueuedMessage[];
-  /** Current generating phase: 'connecting' | 'initializing' | 'thinking' | null */
-  phase: string | null;
+  /** True during cancel — freezes UI rendering of messages but keeps memory updates flowing. */
+  canceling: boolean;
   // Global reasoning display toggle (from config.yaml display.show_reasoning)
   showReasoning: boolean;
   setShowReasoning: (v: boolean) => void;
+  setCanceling: (v: boolean) => void;
   // Per-session state cache to preserve data across session switches
   _sessionCache: Map<string, SessionCache>;
   // Current session ID tracked by chat store (to know which cache slot to use)
@@ -78,7 +78,7 @@ export const useChatStore = create<ChatState>((set) => ({
   lastUsage: null,
   abortController: null,
   queuedMessages: [],
-  phase: null,
+  canceling: false,
   showReasoning: true,  // default: show (matches CLI default)
   _sessionCache: new Map<string, SessionCache>(),
   _currentSessionId: null,
@@ -233,7 +233,8 @@ export const useChatStore = create<ChatState>((set) => ({
   })),
 
   setShowReasoning: (v) => set({ showReasoning: v }),
-  setBusy: (busy) => set({ busy, ...(busy ? { phase: 'connecting' as const } : { phase: null }) }),
+  setCanceling: (v) => set({ canceling: v }),
+  setBusy: (busy) => set({ busy }),
 
   setActiveStreamId: (id) => set({ activeStreamId: id }),
 
@@ -283,7 +284,6 @@ export const useChatStore = create<ChatState>((set) => ({
     lastUsage: null,
     abortController: null,
     queuedMessages: [],
-    phase: null,
   }),
 
   // Save current chat state into per-session cache
@@ -295,7 +295,6 @@ export const useChatStore = create<ChatState>((set) => ({
       activeStreamId: state.activeStreamId,
       lastUsage: state.lastUsage,
       queuedMessages: state.queuedMessages,
-      phase: state.phase,
     };
     const newCache = new Map(state._sessionCache);
     newCache.set(sessionId, cache);
@@ -317,14 +316,16 @@ export const useChatStore = create<ChatState>((set) => ({
           queuedToRestore = [];
         }
       }
+      // NOTE: busy is NOT restored from cache.  Busy state is read from
+      // StreamManager (the single source of truth) via useIsBusy() /
+      // getIsSessionBusy().  Restoring a stale cached busy=true is one
+      // of the root causes of the stuck paper-plane bug.
       set({
         messages: cache.messages,
         toolCalls: cache.toolCalls,
-        busy: cache.busy,
         activeStreamId: cache.activeStreamId,
         lastUsage: cache.lastUsage,
         queuedMessages: queuedToRestore,
-        phase: cache.phase ?? null,
         _currentSessionId: sessionId,
       });
       return cache;
@@ -351,7 +352,6 @@ export const useChatStore = create<ChatState>((set) => ({
       activeStreamId: existing?.activeStreamId ?? null,
       lastUsage: existing?.lastUsage ?? null,
       queuedMessages: existing?.queuedMessages ?? [],
-      phase: existing?.phase ?? null,
       ...patch,
     };
     const newCache = new Map(state._sessionCache);
@@ -377,8 +377,15 @@ export const useChatStore = create<ChatState>((set) => ({
       if (updated.busy !== state.busy) liveUpdate.busy = updated.busy;
       if (updated.activeStreamId !== state.activeStreamId) liveUpdate.activeStreamId = updated.activeStreamId;
       if (updated.lastUsage !== state.lastUsage) liveUpdate.lastUsage = updated.lastUsage;
-      if (updated.phase !== state.phase) liveUpdate.phase = updated.phase;
       return liveUpdate;
+    }
+    // ── Busy-state reconciliation for non-current sessions ──────────────
+    // When a background session's stream ends (busy → false), the live
+    // store.busy may still be true if startStream set it optimistically
+    // before the user switched away.  Force-sync busy to false so the
+    // paper plane doesn't get stuck when the user returns.
+    if (updated.busy !== state.busy) {
+      return { _sessionCache: newCache, busy: updated.busy };
     }
     // Preserve ghost messages in background-session caches so queued/steered
     // markers survive session switches (StreamManager messages lack these flags).

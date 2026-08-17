@@ -85,7 +85,7 @@ def get_unified_commands() -> dict[str, list[dict[str, Any]]]:
 def _cmd_help(session, args: str) -> dict[str, Any]:
     """Return a formatted list of all available commands."""
     unified = get_unified_commands()
-    lines = ["## Available Commands\n"]
+    lines = ["Available Commands\n"]
 
     # Built-in commands grouped by category
     by_cat: dict[str, list[dict]] = {}
@@ -94,11 +94,11 @@ def _cmd_help(session, args: str) -> dict[str, Any]:
         by_cat.setdefault(cat, []).append(cmd)
 
     for cat in sorted(by_cat):
-        lines.append(f"### {cat}")
+        lines.append(f"{cat}")
         for cmd in sorted(by_cat[cat], key=lambda c: c["name"]):
             args_hint = cmd.get("args_hint", "")
             hint = f" {args_hint}" if args_hint else ""
-            lines.append(f"- `/{cmd['name']}{hint}` — {cmd.get('description', '')}")
+            lines.append(f"  /{cmd['name']}{hint} — {cmd.get('description', '')}")
         lines.append("")
 
     # Skill commands grouped by category
@@ -108,11 +108,11 @@ def _cmd_help(session, args: str) -> dict[str, Any]:
         skill_by_cat.setdefault(cat, []).append(sk)
 
     if skill_by_cat:
-        lines.append("### Skills")
+        lines.append("Skills")
         for cat in sorted(skill_by_cat):
-            lines.append(f"**{cat}**")
+            lines.append(f"{cat}")
             for sk in sorted(skill_by_cat[cat], key=lambda s: s["name"]):
-                lines.append(f"- `/{sk['name']}` — {sk.get('description', '')}")
+                lines.append(f"  /{sk['name']} — {sk.get('description', '')}")
             lines.append("")
 
     return {"content": "\n".join(lines), "session_update": {"_as_card": True}}
@@ -124,15 +124,15 @@ def _cmd_model(session, args: str) -> dict[str, Any]:
     model_name = args.strip()
     if not model_name:
         return {
-            "content": "Usage: `/model <model_id>`. Type `/help` for available commands.",
+            "content": "Usage: /model <model_id>. Type /help for available commands.",
             "session_update": {"_as_card": True},
         }
     try:
         model, normalized = _resolve_compatible_session_model(model_name)
         session.model = normalized or model
-        session.save()
+        session.sync_webui_metadata()
         return {
-            "content": f"Model switched to **{normalized or model}**.",
+            "content": f"Model switched to {normalized or model}.",
             "session_update": {"model": normalized or model, "_as_card": True},
         }
     except Exception as e:
@@ -145,7 +145,7 @@ def _cmd_model(session, args: str) -> dict[str, Any]:
 def _cmd_clear(session, args: str) -> dict[str, Any]:
     """Clear all messages in the current session."""
     session.messages = []
-    session.save()
+    session.sync_webui_metadata()
     return {"content": "Chat history cleared.", "session_update": {"cleared": True}}
 
 
@@ -167,7 +167,7 @@ def _cmd_new(session, args: str) -> dict[str, Any]:
             messages=[],
             created_at=__import__('time').time(),
         )
-        ns.save()
+        ns.sync_webui_metadata()
     except Exception:
         # Fallback: create via the sessions file
         import json, time as _time
@@ -203,7 +203,7 @@ def _cmd_branch(session, args: str) -> dict[str, Any]:
             messages=list(session.messages or []),
             created_at=__import__('time').time(),
         )
-        ns.save()
+        ns.sync_webui_metadata()
     except Exception:
         from api.routes import _sessions_file
         import json, time as _time
@@ -230,7 +230,7 @@ def _cmd_title(session, args: str) -> dict[str, Any]:
     if not title:
         return {"content": "Usage: `/title <new title>`.", "session_update": {}}
     session.title = title
-    session.save()
+    session.sync_webui_metadata()
     return {
         "content": f"Session renamed to **{title}**.",
         "session_update": {"title": title},
@@ -243,13 +243,13 @@ def _cmd_usage(session, args: str) -> dict[str, Any]:
     output_tokens = getattr(session, 'output_tokens', 0) or 0
     cost = getattr(session, 'estimated_cost', None)
     lines = [
-        "## Session Usage",
-        f"- Input tokens: **{input_tokens:,}**",
-        f"- Output tokens: **{output_tokens:,}**",
-        f"- Total tokens: **{input_tokens + output_tokens:,}**",
+        "Session Usage",
+        f"Input tokens: {input_tokens:,}",
+        f"Output tokens: {output_tokens:,}",
+        f"Total tokens: {input_tokens + output_tokens:,}",
     ]
     if cost is not None:
-        lines.append(f"- Estimated cost: **${cost:.4f}**")
+        lines.append(f"Estimated cost: ${cost:.4f}")
     return {"content": "\n".join(lines), "session_update": {"_as_card": True}}
 
 
@@ -271,8 +271,8 @@ def _cmd_version(session, args: str) -> dict[str, Any]:
         pass
 
     lines = [
-        f"Hermes Agent: **v{agent_ver}**",
-        f"WebUI: **v{webui_ver}**",
+        f"Hermes Agent: v{agent_ver}",
+        f"WebUI: v{webui_ver}",
     ]
     return {"content": "\n".join(lines), "session_update": {"_as_card": True}}
 
@@ -281,15 +281,26 @@ def _cmd_status(session, args: str) -> dict[str, Any]:
     """Show session status."""
     msg_count = len(getattr(session, 'messages', []) or [])
     ctx_len = getattr(session, 'context_length', None)
+    active_stream_id = getattr(session, 'active_stream_id', None)
+    pending_user_message = getattr(session, 'pending_user_message', None)
+    from api.models import _is_streaming_session, _active_stream_ids
+    is_streaming = _is_streaming_session(active_stream_id, _active_stream_ids())
     lines = [
-        "## Session Status",
-        f"- Session ID: `{session.session_id}`",
-        f"- Title: **{getattr(session, 'title', 'Untitled')}**",
-        f"- Model: `{getattr(session, 'model', 'unknown')}`",
-        f"- Messages: **{msg_count}**",
+        "Session Status",
+        f"Session ID: {session.session_id}",
+        f"Title: {getattr(session, 'title', 'Untitled')}",
+        f"Model: {getattr(session, 'model', 'unknown')}",
+        f"Messages: {msg_count}",
     ]
     if ctx_len:
-        lines.append(f"- Context length: **{ctx_len:,}** tokens")
+        lines.append(f"Context length: {ctx_len:,} tokens")
+    if active_stream_id:
+        status = "streaming" if is_streaming else "ended"
+        lines.append(f"Active stream: {active_stream_id} ({status})")
+    if pending_user_message:
+        lines.append(f"Pending message: {pending_user_message[:120]}")
+    if not active_stream_id and not pending_user_message:
+        lines.append("No active stream")
     return {"content": "\n".join(lines), "session_update": {"_as_card": True}}
 
 
@@ -362,7 +373,7 @@ def _cmd_agents(session, args: str) -> dict[str, Any]:
     with SESSION_MESSAGE_QUEUE_LOCK:
         q = SESSION_MESSAGE_QUEUE.get(session.session_id, [])
     if q:
-        lines.append(f"**Queued:** {len(q)} message(s)")
+        lines.append(f"Queued: {len(q)} message(s)")
 
     # ── Background tasks ──
     from api.background import get_background_tasks
@@ -370,12 +381,12 @@ def _cmd_agents(session, args: str) -> dict[str, Any]:
     running = [t for t in bg_tasks if t.get("status") == "running"]
     done = [t for t in bg_tasks if t.get("status") == "done"]
     if running:
-        lines.append("**Running Background Tasks:**")
+        lines.append("Running Background Tasks:")
         for t in running:
             lines.append(f"  • {str(t.get('prompt', ''))[:80]}")
         found = True
     if done:
-        lines.append("**Completed Background Tasks:**")
+        lines.append("Completed Background Tasks:")
         for t in done:
             lines.append(f"  • {str(t.get('prompt', ''))[:80]}")
         found = True
@@ -391,7 +402,7 @@ def _cmd_subgoal(session, args: str) -> dict[str, Any]:
     from hermes_cli.goals import GoalManager
     mgr = GoalManager(session.session_id)
     if not mgr.has_goal():
-        return {"content": "No active goal. Set one with `/goal <text>`.", "session_update": {"_as_card": True}}
+        return {"content": "No active goal. Set one with /goal <text>.", "session_update": {"_as_card": True}}
 
     arg = (args or "").strip()
     if not arg:
@@ -404,11 +415,11 @@ def _cmd_subgoal(session, args: str) -> dict[str, Any]:
 
     if verb == "remove":
         if not rest:
-            return {"content": "Usage: `/subgoal remove <n>` (1-based index).", "session_update": {"_as_card": True}}
+            return {"content": "Usage: /subgoal remove <n> (1-based index).", "session_update": {"_as_card": True}}
         try:
             idx = int(rest.split()[0])
         except ValueError:
-            return {"content": "`/subgoal remove`: `<n>` must be an integer.", "session_update": {"_as_card": True}}
+            return {"content": "/subgoal remove: n must be an integer.", "session_update": {"_as_card": True}}
         try:
             removed = mgr.remove_subgoal(idx)
             session._pending_subgoals = list(mgr._state.subgoals) if mgr._state else []
@@ -463,17 +474,17 @@ def _cmd_curator(session, args: str) -> dict[str, Any]:
         interval = f'{ih // 24}d' if ih >= 24 else f'{ih}h'
 
         lines = [
-            f'**Curator**: {status_line}',
-            f'- Runs: {runs}',
-            f'- Last run: {last_run}',
-            f'- Interval: every {interval}',
-            f'- Stale after: {curator.get_stale_after_days()}d unused',
-            f'- Archive after: {curator.get_archive_after_days()}d unused',
-            f'- Last summary: {summary}',
+            f'Curator: {status_line}',
+            f'Runs: {runs}',
+            f'Last run: {last_run}',
+            f'Interval: every {interval}',
+            f'Stale after: {curator.get_stale_after_days()}d unused',
+            f'Archive after: {curator.get_archive_after_days()}d unused',
+            f'Last summary: {summary}',
         ]
         report = state.get('last_report_path')
         if report:
-            lines.append(f'- Last report: `{report}`')
+            lines.append(f'Last report: {report}')
 
         # Skill usage breakdown
         rows = skill_usage.agent_created_report()
@@ -481,11 +492,11 @@ def _cmd_curator(session, args: str) -> dict[str, Any]:
             active = [r for r in rows if r.get('state') == 'active']
             stale = [r for r in rows if r.get('state') == 'stale']
             archived = [r for r in rows if r.get('state') == 'archived']
-            lines.append(f'\n**Skills**: {len(rows)} total ({len(active)} active, {len(stale)} stale, {len(archived)} archived)')
+            lines.append(f'\nSkills: {len(rows)} total ({len(active)} active, {len(stale)} stale, {len(archived)} archived)')
             if stale:
-                lines.append('- Stale: ' + ', '.join(f'`{r["name"]}`' for r in stale[:10]))
+                lines.append('Stale: ' + ', '.join(r['name'] for r in stale[:10]))
             if archived:
-                lines.append('- Archived: ' + ', '.join(f'`{r["name"]}`' for r in archived[:10]))
+                lines.append('Archived: ' + ', '.join(r['name'] for r in archived[:10]))
         else:
             lines.append('\nNo agent-created skills.')
 
@@ -493,8 +504,8 @@ def _cmd_curator(session, args: str) -> dict[str, Any]:
 
     if arg == 'run':
         if not curator.is_enabled():
-            return {'content': 'Curator is disabled. Enable with `curator.enabled: true` in config.', 'session_update': {'_as_card': True}}
-        lines.append('**Curator review**:\n')
+            return {'content': 'Curator is disabled. Enable with curator.enabled: true in config.', 'session_update': {'_as_card': True}}
+        lines.append('Curator review:\n')
         try:
             result = curator.run_curator_review(
                 on_summary=lambda msg: lines.append(msg),
@@ -511,30 +522,30 @@ def _cmd_curator(session, args: str) -> dict[str, Any]:
     if arg.startswith('pin '):
         name = arg[4:].strip()
         if not name:
-            return {'content': 'Usage: `/curator pin <skill_name>`.', 'session_update': {'_as_card': True}}
+            return {'content': 'Usage: /curator pin <skill_name>.', 'session_update': {'_as_card': True}}
         if not skill_usage.is_agent_created(name):
-            return {'content': f"`{name}` is bundled or hub-installed — only agent-created skills can be pinned.", 'session_update': {'_as_card': True}}
+            return {'content': f"{name} is bundled or hub-installed — only agent-created skills can be pinned.", 'session_update': {'_as_card': True}}
         skill_usage.set_pinned(name, True)
-        return {'content': f"Pinned `{name}` — will bypass auto-transitions.", 'session_update': {'_as_card': True}}
+        return {'content': f"Pinned {name} — will bypass auto-transitions.", 'session_update': {'_as_card': True}}
 
     if arg.startswith('unpin '):
         name = arg[5:].strip()
         if not name:
-            return {'content': 'Usage: `/curator unpin <skill_name>`.', 'session_update': {'_as_card': True}}
+            return {'content': 'Usage: /curator unpin <skill_name>.', 'session_update': {'_as_card': True}}
         skill_usage.set_pinned(name, False)
-        return {'content': f"Unpinned `{name}`.", 'session_update': {'_as_card': True}}
+        return {'content': f"Unpinned {name}.", 'session_update': {'_as_card': True}}
 
     if arg.startswith('archive '):
         name = arg[8:].strip()
         if not name:
-            return {'content': 'Usage: `/curator archive <skill_name>`.', 'session_update': {'_as_card': True}}
+            return {'content': 'Usage: /curator archive <skill_name>.', 'session_update': {'_as_card': True}}
         ok, msg = skill_usage.archive_skill(name)
         return {'content': msg, 'session_update': {'_as_card': True}}
 
     if arg.startswith('restore '):
         name = arg[8:].strip()
         if not name:
-            return {'content': 'Usage: `/curator restore <skill_name>`.', 'session_update': {'_as_card': True}}
+            return {'content': 'Usage: /curator restore <skill_name>.', 'session_update': {'_as_card': True}}
         ok, msg = skill_usage.restore_skill(name)
         return {'content': msg, 'session_update': {'_as_card': True}}
 
@@ -542,12 +553,12 @@ def _cmd_curator(session, args: str) -> dict[str, Any]:
         archived = skill_usage.list_archived_skill_names()
         if not archived:
             return {'content': 'No archived skills.', 'session_update': {'_as_card': True}}
-        lines = ['**Archived Skills**:']
+        lines = ['Archived Skills:']
         for s in archived:
-            lines.append(f'- `{s}`')
+            lines.append(f'  {s}')
         return {'content': '\n'.join(lines), 'session_update': {'_as_card': True}}
 
-    return {'content': 'Usage: `/curator [status|run|list-archived]`.', 'session_update': {'_as_card': True}}
+    return {'content': 'Usage: /curator [status|run|list-archived].', 'session_update': {'_as_card': True}}
 
 
 def _cmd_bundles(session, args: str) -> dict[str, Any]:
@@ -561,12 +572,12 @@ def _cmd_bundles(session, args: str) -> dict[str, Any]:
     if not bundles:
         return {"content": "No skill bundles installed.", "session_update": {"_as_card": True}}
 
-    lines = [f"**Skill Bundles** ({len(bundles)} installed):\n"]
+    lines = [f"Skill Bundles ({len(bundles)} installed):\n"]
     for info in bundles:
         slug = info.get('slug', '?')
         skill_count = len(info.get('skills', []))
         desc = info.get('description', f'Load {skill_count} skills')
-        lines.append(f"- `/{slug}` — {desc} ({skill_count} skills)")
+        lines.append(f"  /{slug} — {desc} ({skill_count} skills)")
     return {"content": "\n".join(lines), "session_update": {"_as_card": True}}
 
 
@@ -606,7 +617,7 @@ def _cmd_rollback(session, args: str) -> dict[str, Any]:
         )
 
     if not mgr.enabled:
-        return {"content": "Checkpoints are not enabled. Add `checkpoints: { enabled: true }` to `~/.hermes/config.yaml`.", "session_update": {"_as_card": True}}
+        return {"content": "Checkpoints are not enabled. Add checkpoints: { enabled: true } to ~/.hermes/config.yaml.", "session_update": {"_as_card": True}}
 
     parts = (args or '').strip().split()
     checkpoints = mgr.list_checkpoints(cwd)
@@ -614,7 +625,7 @@ def _cmd_rollback(session, args: str) -> dict[str, Any]:
     # ── /rollback (no args) → list ──
     if not parts:
         if not checkpoints:
-            return {"content": f"No checkpoints found for `{cwd}`.", "session_update": {"_as_card": True}}
+            return {"content": f"No checkpoints found for {cwd}.", "session_update": {"_as_card": True}}
         return {"content": format_checkpoint_list(checkpoints, cwd), "session_update": {"_as_card": True}}
 
     sub = parts[0].lower()
@@ -622,7 +633,7 @@ def _cmd_rollback(session, args: str) -> dict[str, Any]:
     # ── /rollback diff N ──
     if sub == 'diff':
         if len(parts) < 2:
-            return {"content": "Usage: `/rollback diff <N>`.", "session_update": {"_as_card": True}}
+            return {"content": "Usage: /rollback diff <N>.", "session_update": {"_as_card": True}}
         if not checkpoints:
             return {"content": "No checkpoints found.", "session_update": {"_as_card": True}}
         try:
@@ -632,7 +643,7 @@ def _cmd_rollback(session, args: str) -> dict[str, Any]:
             return {"content": f"Invalid checkpoint number. Use 1-{len(checkpoints)}.", "session_update": {"_as_card": True}}
         result = mgr.diff(cwd, target)
         if result.get('success'):
-            return {"content": f"**Diff against checkpoint {parts[1]}:**\n\n```diff\n{result.get('diff', '')}\n```", "session_update": {"_as_card": True}}
+            return {"content": f"Diff against checkpoint {parts[1]}:\n\n{result.get('diff', '')}", "session_update": {"_as_card": True}}
         return {"content": f"Diff failed: {result.get('error', 'unknown')}", "session_update": {"_as_card": True}}
 
     # ── /rollback N [file] → restore ──
@@ -649,7 +660,7 @@ def _cmd_rollback(session, args: str) -> dict[str, Any]:
     if result.get('success'):
         msg = f"Restored to checkpoint {result.get('restored_to', '?')}: {result.get('reason', '')}"
         if file_path:
-            msg = f"Restored `{file_path}` from checkpoint {result.get('restored_to', '?')}"
+            msg = f"Restored {file_path} from checkpoint {result.get('restored_to', '?')}"
         msg += "\n\nA pre-rollback snapshot was saved automatically."
         return {"content": msg, "session_update": {"_as_card": True}}
     return {"content": f"Restore failed: {result.get('error', 'unknown')}", "session_update": {"_as_card": True}}
@@ -849,7 +860,7 @@ def _cmd_reasoning(session, args: str) -> dict[str, Any]:
 
     if arg == "default":
         session.reasoning_effort = None
-        session.save()
+        session.sync_webui_metadata()
         _evict_session_agent(session.session_id)
         status = get_reasoning_status()
         global_effort = status.get("reasoning_effort") or "medium"
@@ -860,7 +871,7 @@ def _cmd_reasoning(session, args: str) -> dict[str, Any]:
 
     if arg in valid_levels:
         session.reasoning_effort = arg
-        session.save()
+        session.sync_webui_metadata()
         _evict_session_agent(session.session_id)
         return {
             "content": f"Reasoning effort set to **{arg}** (this session only).",
@@ -921,7 +932,7 @@ def _cmd_fast(session, args: str) -> dict[str, Any]:
     if arg in ("fast", "on"):
         from api.config import _evict_session_agent
         session.service_tier = "priority"
-        session.save()
+        session.sync_webui_metadata()
         _evict_session_agent(session.session_id)
         return {
             "content": f"**{feature_name}** set to **FAST** (session only).",
@@ -932,7 +943,7 @@ def _cmd_fast(session, args: str) -> dict[str, Any]:
     if arg in ("normal", "off"):
         from api.config import _evict_session_agent
         session.service_tier = None
-        session.save()
+        session.sync_webui_metadata()
         _evict_session_agent(session.session_id)
         return {
             "content": f"**{feature_name}** set to **NORMAL** (session only).",
@@ -987,7 +998,7 @@ def _cmd_personality(session, args: str) -> dict[str, Any]:
     # ── /personality none|default|neutral — clear ──
     if arg in {"none", "default", "neutral"}:
         session.personality = None
-        session.save()
+        session.sync_webui_metadata()
         return {
             "content": "Personality cleared — using base agent behavior.",
             "session_update": {"_as_card": True, "personality": None},
@@ -1006,7 +1017,7 @@ def _cmd_personality(session, args: str) -> dict[str, Any]:
         }
 
     session.personality = arg
-    session.save()
+    session.sync_webui_metadata()
     from api.streaming import _resolve_personality_prompt
     prompt = _resolve_personality_prompt(cfg, arg) or ""
     preview = prompt[:100] + ("..." if len(prompt) > 100 else "")

@@ -1,7 +1,71 @@
 import { useEffect, useRef } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { useTheme } from '@/contexts/ThemeContext';
+import { useSettingsStore } from '@/stores/useSettingsStore';
+import { FONT_ZOOM_MAP } from '@/constants';
 import '@xterm/xterm/css/xterm.css';
+
+// ── Font size mapping (same scale as the global --app-zoom) ──────────────────
+const BASE_TERM_FONT_SIZE = 15;
+const FONT_SIZE_PX: Record<string, number> = {
+  small: Math.round(BASE_TERM_FONT_SIZE * parseFloat(FONT_ZOOM_MAP.small)),
+  medium: Math.round(BASE_TERM_FONT_SIZE * parseFloat(FONT_ZOOM_MAP.medium)),
+  large: Math.round(BASE_TERM_FONT_SIZE * parseFloat(FONT_ZOOM_MAP.large)),
+};
+
+// ── Terminal color palettes ─────────────────────────────────────────────────
+// Derived from the M3 palette (seed #4176E6). background/foreground/red/blue/
+// magenta map to M3 surface/onSurface/error/primary/tertiary; green/yellow are
+// the deepseek-harness official semantic colors (success #22C55E / warn #F59E0B).
+const TERM_THEME_DARK = {
+  background:   '#121316', // surface
+  foreground:   '#E4E2E6', // onSurface
+  cursor:       '#B1C5FF', // primary
+  cursorAccent: '#002C71', // onPrimary
+  selectionBackground: 'rgba(177, 197, 255, 0.22)',
+  black:        '#121316',
+  red:          '#FFB4AB', // error
+  green:        '#22C55E', // success (green-500)
+  yellow:       '#F59E0B', // warn (amber-500)
+  blue:         '#B1C5FF', // primary
+  magenta:      '#E0BBDD', // tertiary
+  cyan:         '#9DD6E4', // cyan ext
+  white:        '#E4E2E6',
+  brightBlack:  '#5A5A63',
+  brightRed:    '#FFDAD6', // errorContainer
+  brightGreen:  '#4ED17E', // green-400
+  brightYellow: '#F7AD31', // amber-400
+  brightBlue:   '#DAE2FF', // onPrimaryContainer
+  brightMagenta:'#FED7FA', // tertiaryContainer
+  brightCyan:   '#C6ECF5',
+  brightWhite:  '#FFFFFF',
+};
+
+// M3 light theme derived from seed #4176E6.
+const TERM_THEME_LIGHT = {
+  background:   '#FBF8FD', // surface
+  foreground:   '#1B1B1F', // onSurface
+  cursor:       '#1758C7', // primary
+  cursorAccent: '#FFFFFF', // onPrimary
+  selectionBackground: 'rgba(23, 88, 199, 0.15)',
+  black:        '#1B1B1F',
+  red:          '#BA1A1A', // error
+  green:        '#22C55E', // success (green-500)
+  yellow:       '#F59E0B', // warn (amber-500)
+  blue:         '#1758C7', // primary
+  magenta:      '#735572', // tertiary
+  cyan:         '#006B78', // cyan ext
+  white:        '#1B1B1F',
+  brightBlack:  '#44464F',
+  brightRed:    '#C62828',
+  brightGreen:  '#4ED17E', // green-400
+  brightYellow: '#F7AD31', // amber-400
+  brightBlue:   '#4176E6', // seed
+  brightMagenta:'#9A4E86',
+  brightCyan:   '#00879A',
+  brightWhite:  '#E4E2E6',
+};
 
 interface TerminalViewProps {
   /** Unique ID for this terminal instance. Changing the id remounts the terminal. */
@@ -24,6 +88,26 @@ interface TerminalViewProps {
  */
 export default function TerminalView({ terminalId }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const { effectiveTheme } = useTheme();
+  const termRef = useRef<Terminal | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
+  const fontSize = useSettingsStore(s => s.settings?.font_size ?? 'medium');
+
+  // ── Update xterm theme when effective theme changes ───────────────────────
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.options.theme = effectiveTheme === 'light' ? TERM_THEME_LIGHT : TERM_THEME_DARK;
+  }, [effectiveTheme]);
+
+  // ── Update xterm font size when user changes the font_size setting ────────
+  useEffect(() => {
+    const term = termRef.current;
+    const fitAddon = fitAddonRef.current;
+    if (!term || !fitAddon) return;
+    term.options.fontSize = FONT_SIZE_PX[fontSize] ?? BASE_TERM_FONT_SIZE;
+    try { fitAddon.fit(); } catch { /* ignore */ }
+  }, [fontSize]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -37,39 +121,16 @@ export default function TerminalView({ terminalId }: TerminalViewProps) {
     const term = new Terminal({
       cursorBlink: true,
       cursorStyle: 'block',
-      fontSize: 13,
+      fontSize: FONT_SIZE_PX[fontSize] ?? BASE_TERM_FONT_SIZE,
       lineHeight: 1.2,
-      // iTerm2 uses "Monaco" → "Menlo" → system mono as fallback chain.
-      // "MesloLGS NF" / "Menlo" are the most iTerm2-like freely available fonts.
       fontFamily: '"MesloLGS NF", "Menlo", "Monaco", "Cascadia Code", "Fira Code", "DejaVu Sans Mono", monospace',
       letterSpacing: 0,
-      // iTerm2 default profile: Solarized Dark
-      theme: {
-        background:   '#000000',
-        foreground:   '#d8d8d8',
-        cursor:       '#e0e0e0',
-        cursorAccent: '#000000',
-        selectionBackground: 'rgba(255, 255, 255, 0.25)',
-        black:        '#073642',   // base02
-        red:          '#dc322f',
-        green:        '#859900',
-        yellow:       '#b58900',
-        blue:         '#268bd2',
-        magenta:      '#d33682',
-        cyan:         '#2aa198',
-        white:        '#eee8d5',   // base2
-        brightBlack:  '#444444',
-        brightRed:    '#cb4b16',
-        brightGreen:  '#586e75',   // base01
-        brightYellow: '#657b83',   // base00
-        brightBlue:   '#839496',   // base0
-        brightMagenta:'#6c71c4',
-        brightCyan:   '#93a1a1',   // base1
-        brightWhite:  '#fdf6e3',   // base3
-      },
+      theme: effectiveTheme === 'light' ? TERM_THEME_LIGHT : TERM_THEME_DARK,
     });
+    termRef.current = term;
 
     const fitAddon = new FitAddon();
+    fitAddonRef.current = fitAddon;
     term.loadAddon(fitAddon);
     term.open(container);
 

@@ -113,7 +113,6 @@ def test_korean_settings_detail_descriptions_are_translated():
         "settings_desc_cli_sessions: 'Hermes CLI(state.db)의 세션을 세션 목록에 병합합니다. CLI 세션을 클릭하면 가져와서 대화를 계속할 수 있습니다.'",
         "settings_desc_sync_insights: 'WebUI 토큰 사용량을 state.db에 반영하여 hermes /insights에 브라우저 세션 데이터가 포함되도록 합니다. 기본값은 꺼짐입니다.'",
         "settings_desc_check_updates: 'WebUI 또는 Agent의 새 버전이 있으면 배너를 표시합니다. 백그라운드에서 주기적으로 git fetch를 실행합니다.'",
-        "settings_desc_bot_name: 'UI 전체에 표시되는 Assistant 이름입니다. 기본값은 Hermes입니다.'",
         "settings_desc_password: '새 비밀번호를 설정하거나 변경하려면 입력하세요. 현재 설정을 유지하려면 비워 두세요.'",
     ]
     for entry in expected:

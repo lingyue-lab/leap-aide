@@ -4,8 +4,11 @@
     "loading": "加载中...",
     "error": "错误"
   },
+  "logout": "退出登录",
   "common": {
     "loading": "加载中...",
+    "add": "添加",
+    "adding": "添加中...",
     "save": "保存",
     "saving": "保存中...",
     "cancel": "取消",
@@ -29,9 +32,7 @@
     "todos": "待办",
     "todos_title": "任务管理",
     "terminal": "终端",
-    "terminal_title": "打开终端 Shell",
-    "vnc": "远程桌面",
-    "vnc_title": "远程桌面"
+    "terminal_title": "打开终端 Shell"
   },
   "sessions": {
     "new_conversation": "新对话",
@@ -53,6 +54,7 @@
     "delete": "删除",
     "pin": "固定",
     "unpin": "取消固定",
+    "unpin_to_delete": "请先取消固定再删除",
     "assign_workspace": "分配工作区",
     "workspace_assigned": "工作区已分配",
     "no_workspace": "未分配工作区",
@@ -66,7 +68,9 @@
     "clear_confirm": "清空此会话的所有消息？此操作不可撤销。",
     "clear_keep_desc": "需要保留最近多少条消息？填 0 表示全部删除。",
     "clear_keep_label": "保留条数（0 = 全部删除）",
-    "clear_streaming_warn": "会话正在对话中，无法清空历史记录。请等待回复完成后再操作。"
+    "clear_streaming_warn": "会话正在对话中，无法清空历史记录。请等待回复完成后再操作。",
+    "compress_min_count": "至少需要 50 条消息",
+    "clear_empty": "没有消息可清除"
   },
   "settings": {
     "preferences": "设置与偏好",
@@ -74,15 +78,19 @@
     "groups": {
       "appearance": "外观",
       "appearance_desc": "主题、语言、布局",
-      "model": "输入",
-      "model_desc": "发送键、机器人名称",
+      "input": "输入",
+      "input_desc": "发送键、忙碌输入行为",
+      "sessions": "会话",
+      "sessions_desc": "会话来源显示、轮询间隔",
+      "agent": "智能体行为",
+      "agent_desc": "推理力度、审批模式与超时",
       "notifications": "通知",
-      "notifications_desc": "声音、提醒、显示选项",
+      "notifications_desc": "声音、桌面提醒",
       "about": "关于",
-      "about_desc": "版本、更新、信息",
+      "about_desc": "版本与许可证",
       "config": "配置文件",
       "config_desc": "直接编辑 config.yaml",
-      "providers": "Providers",
+      "providers": "模型提供商",
       "providers_desc": "AI 提供商 API Key 管理",
       "history": "历史",
       "history_desc": "上下文压缩、自动清理"
@@ -104,42 +112,41 @@
       "busy_input_mode_hint": "当 Agent 正在运行时发送消息的行为策略",
       "session_poll_interval": "Session 轮询间隔",
       "session_poll_interval_hint": "检测外部新增消息的频率（秒，0=关闭）",
-      "bot_name": "机器人名称",
-      "bot_name_hint": "助手显示的名称",
+      "approval_timeout": "审批超时",
+      "approval_timeout_hint": "审批卡片自动拒绝的秒数。后端默认值: 60s，建议 ≤ 后端超时",
+      "clarify_timeout": "澄清超时",
+      "clarify_timeout_hint": "澄清卡片自动选第一项的秒数。后端默认值: 600s，建议 ≤ 后端超时",
       "default_reasoning_effort": "默认推理力度",
       "default_reasoning_effort_hint": "设置新会话的全局默认推理力度（config.yaml）",
       "sound_effects": "音效",
       "sound_effects_hint": "收到消息时播放声音",
       "desktop_notifications": "桌面通知",
       "desktop_notifications_hint": "显示系统级通知",
-      "show_token_usage": "显示令牌使用量",
-      "show_token_usage_hint": "显示令牌计数和预估成本",
       "show_cli_sessions": "显示 CLI 会话",
       "show_cli_sessions_hint": "在侧边栏中包含命令行会话",
-      "sync_insights": "同步洞察",
-      "sync_insights_hint": "启用跨会话洞察同步",
+      "show_messaging_sessions": "显示消息平台会话",
+      "show_messaging_sessions_hint": "在侧边栏中包含微信、Telegram、Discord 等消息平台会话",
+      "show_cron_sessions": "显示定时任务会话",
+      "show_cron_sessions_hint": "在侧边栏中包含定时任务（Cron）会话",
       "version": "版本",
-      "check_updates": "检查更新",
-      "check_updates_hint": "自动检查新版本",
-      "managed_via_settings": "通过设置管理",
+      "license": "许可证",
       "auto_compress_threshold": "自动压缩阈値",
       "auto_compress_threshold_hint": "当会话消息数超过此限制时自动压缩历史记录，使用 AI 对较旧的对话进行摘要，释放上下文窗口空间。",
       "auto_compress_msg_threshold": "自动压缩（消息数量）",
       "auto_compress_msg_threshold_hint": "路径 1 — 会话消息数达到该值时触发压缩，原地替换同一 session 中的消息。",
       "auto_compress_token_threshold": "自动压缩（Token 阈值）",
       "auto_compress_token_threshold_hint": "提示词 token 数达到模型上下文窗口的该百分比时触发压缩。与消息数量路径一样，在同一个 session 内原地压缩。",
+      "auto_compress_poor_ratio": "自动压缩质量阈值（剩余比例）",
+      "auto_compress_poor_ratio_hint": "压缩后剩余消息比例超过该值时记为「poor」压缩；连续 poor 达到次数上限则禁用自动压缩，直至清除历史或一次有效压缩重新激活。",
+      "auto_compress_disable_after": "自动压缩禁用阈值（连续 poor 次数）",
+      "auto_compress_disable_after_hint": "连续 poor 压缩达到该次数后，自动禁用本会话的自动压缩。",
       "max_compaction_snapshots": "压缩快照保留上限",
       "max_compaction_snapshots_hint": "每个会话最多保留的只读归档快照数量，超出上限时自动删除最旧的快照。"
     },
     "themes": {
-      "dark": "深色 (VSCode Dark Modern)",
-      "light": "浅色 (VSCode Light Modern)",
-      "system": "跟随系统",
-      "slate": "石板灰",
-      "solarized": "Solarized Dark",
-      "monokai": "Monokai",
-      "nord": "Nord",
-      "oled": "OLED 黑"
+      "dark": "深色",
+      "light": "浅色",
+      "system": "跟随系统"
     },
     "send_keys": {
       "enter": "Enter",
@@ -160,7 +167,6 @@
       "saving": "保存中…",
       "saved": "✓ 已保存"
     },
-    "about_text": "一个开源的 AI 编程助手 Web 界面。<br />使用 React + TypeScript + Python 构建。",
     "providers": {
       "hint": "为 AI 提供商配置 API Key。Key 存储在 ~/.hermes/.env。在 config.yaml 中配置的 Key 显示为只读。",
       "no_key": "未配置",
@@ -190,9 +196,11 @@
   "tasks": {
     "scheduled_jobs": "定时任务",
     "new_job": "新任务",
+    "edit_job": "编辑任务",
     "create_job": "创建任务",
     "confirm_delete": "确定删除此任务？",
     "empty": "暂无定时任务",
+    "placeholder_hint": "从侧边栏选择一个任务以查看其详情和运行历史。",
     "run_now": "立即运行",
     "pause": "暂停",
     "resume": "恢复"
@@ -205,6 +213,7 @@
     "confirm_delete": "确定删除此技能？",
     "empty": "暂无技能",
     "no_results": "无匹配技能",
+    "placeholder_hint": "从侧边栏选择一个技能以查看其详情和配置。",
     "edit": "编辑技能"
   },
   "memory": {
@@ -219,6 +228,7 @@
     "title": "工作区",
     "desc": "为你的会话添加并切换工作区。",
     "add": "添加",
+    "new_workspace": "新工作区",
     "empty": "暂无工作区",
     "path_placeholder": "工作区路径（如 /home/user/project）",
     "name_placeholder": "显示名称（可选）",
@@ -230,7 +240,13 @@
     "empty": "暂无待办任务",
     "placeholder": "输入任务描述...",
     "show_panel": "显示待办面板",
-    "hide_panel": "隐藏待办面板"
+    "hide_panel": "隐藏待办面板",
+    "readonly_no_todos": "只读会话 — 待办事项不可用"
+  },
+  "vnc": {
+    "observe": "观察",
+    "pin_to_observe": "请先固定会话",
+    "readonly_no_observe": "只读会话 — 观察功能不可用"
   },
   "context_usage": {
     "context": "上下文",
@@ -243,6 +259,45 @@
     "click_to_compress": "点击立即触发压缩",
     "click_disabled_streaming": "点击触发压缩 — 对话进行中不可用",
     "compressing": "压缩中…"
+  },
+  "empty": {
+    "hints": [
+      "让我帮你解释代码库中的代码。",
+      "使用 /review 来检查代码变更。",
+      "试着用自然语言描述你的需求。",
+      "创建一个新会话开始使用。",
+      "输入 /help 查看所有可用命令。",
+      "我可以读取、写入和编辑工作区的文件。",
+      "使用 Shift+Tab 切换审批模式。"
+    ],
+    "tasks_hints": [
+      "创建定时任务来自动化你的工作流。",
+      "任务会在指定时间间隔自动运行。",
+      "创建一个每日报告或定期维护任务。",
+      "从侧边栏选择任务查看运行历史和详情。",
+      "任务可以随时暂停和恢复。"
+    ],
+    "skills_hints": [
+      "技能通过自定义能力扩展代理的功能。",
+      "每个技能定义专用的工具和提示词。",
+      "创建技能来教代理新的工作流程。",
+      "选择技能查看其配置和内容。",
+      "技能可以从社区导入，也可以从零创建。"
+    ],
+    "memory_hints": [
+      "记忆存储代理了解到的关于你的偏好。",
+      "USER.md 存储跨项目的个人偏好。",
+      "MEMORY.md 存储项目特定的知识和约定。",
+      "代理读取记忆文件来个性化其响应。",
+      "编辑记忆文件来引导代理如何处理你的代码库。"
+    ],
+    "workspaces_hints": [
+      "添加工作区让代理可以访问你的项目文件。",
+      "工作区定义了代理可以读取和编辑的目录。",
+      "切换工作区来处理不同的项目。",
+      "每个会话可以分配到特定的工作区。",
+      "代理浏览工作区来理解代码库结构。"
+    ]
   },
   "chat": {
     "input_placeholder": "输入消息...",

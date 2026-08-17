@@ -45,7 +45,7 @@ export default function SlashCommandDropdown({
           <div
             style={{
               padding: '4px 14px 2px',
-              fontSize: 10,
+              fontSize: 11,
               fontWeight: 600,
               letterSpacing: '0.06em',
               textTransform: 'uppercase',
@@ -74,7 +74,7 @@ export default function SlashCommandDropdown({
                     : 'transparent',
                   border: 'none',
                   cursor: 'pointer',
-                  fontSize: 12,
+                  fontSize: 14,
                   color: isActive ? 'var(--blue)' : 'var(--text)',
                   textAlign: 'left' as const,
                 }}
@@ -84,7 +84,7 @@ export default function SlashCommandDropdown({
                     fontWeight: 600,
                     color: 'var(--blue)',
                     fontFamily: 'monospace',
-                    fontSize: 12,
+                    fontSize: 14,
                     whiteSpace: 'nowrap',
                     flexShrink: 0,
                   }}
@@ -97,7 +97,7 @@ export default function SlashCommandDropdown({
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
                     color: 'var(--muted)',
-                    fontSize: 11,
+                    fontSize: 13,
                   }}
                 >
                   {cmd.description}
@@ -108,7 +108,7 @@ export default function SlashCommandDropdown({
         </div>
       ))}
       {groups.length === 0 && (
-        <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--muted)' }}>
+        <div style={{ padding: '12px 16px', fontSize: 14, color: 'var(--muted)' }}>
           No matching commands
         </div>
       )}

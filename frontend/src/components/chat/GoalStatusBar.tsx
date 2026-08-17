@@ -66,7 +66,7 @@ export default function GoalStatusBar({ sessionId }: Props) {
         </span>
       </div>
       {subTexts.length > 0 && (
-        <div style={{ paddingLeft: 22, fontSize: 11, color: 'var(--muted)', lineHeight: 1.6 }}>
+        <div style={{ paddingLeft: 22, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
           {subTexts.map((t, i) => (
             <div key={i}>subgoal-{i + 1}: {t}</div>
           ))}

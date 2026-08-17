@@ -163,6 +163,7 @@ def read_importable_agent_session_rows(
         parent_expr = _optional_col('parent_session_id', session_cols)
         ended_expr = _optional_col('ended_at', session_cols)
         end_reason_expr = _optional_col('end_reason', session_cols)
+        last_seen_msg_count_expr = _optional_col('last_seen_msg_count__webui', session_cols)
 
         where_clauses = ["s.source IS NOT NULL", "s.source != 'webui'"]
         params: list[str] = []
@@ -176,6 +177,7 @@ def read_importable_agent_session_rows(
         cur.execute(
             f"""
             SELECT s.id, s.title, s.model, s.message_count,
+                   {last_seen_msg_count_expr},
                    s.started_at, s.source,
                    {parent_expr},
                    {ended_expr},

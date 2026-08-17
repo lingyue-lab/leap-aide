@@ -1,6 +1,9 @@
-import React, { useState, useMemo, useRef, useEffect, memo } from 'react';
+import React, { useMemo, useRef, useEffect, memo } from 'react';
 import type { Message, ContentBlock, ToolCall } from '@/types';
 import { renderMarkdown } from '@/utils/markdown';
+import CollapseCard from './CollapseCard';
+import { ReasoningIcon, Icon } from '@/components/common/Icons';
+import { formatTimestamp } from '@/utils/time';
 
 interface MessageRowProps {
   message: Message;
@@ -34,6 +37,7 @@ const TOOL_PRIMARY_ARG: Record<string, string> = {
   browser_screenshot: 'url',
   search_files: 'pattern',
   search_content: 'pattern',
+  session_search: 'query',
 };
 
 /** Which tools always render output as pre/code instead of JSON tree. */
@@ -165,7 +169,6 @@ export function isContextCompactionMessage(message: Message): boolean {
 
 // Context compaction reference card - collapsed by default
 export const ContextCompactionMessageRow = memo(function ContextCompactionMessageRow({ message }: { message: Message }) {
-  const [expanded, setExpanded] = useState(false);
   const c = message.content || '';
   const text = typeof c === 'string'
     ? c
@@ -173,20 +176,23 @@ export const ContextCompactionMessageRow = memo(function ContextCompactionMessag
       ? (c as ContentBlock[]).filter(b => b.type === 'text').map(b => b.text || '').join('')
       : '';
   const previewLines = text.split(/\n+/).filter(Boolean).slice(0, 2).join(' ');
+  const isUser = message.role === 'user';
 
   return (
-    <div className="msg-row context-compaction-message">
-      <div className="context-compaction-header" onClick={() => setExpanded(!expanded)}>
-        <span className="context-compaction-icon">★</span>
-        <span className="context-compaction-title">Context Compaction</span>
-        <span className="context-compaction-preview">Reference Only · {previewLines}</span>
-        <span className="reasoning-toggle">{expanded ? '▼' : '▶'}</span>
-      </div>
-      {expanded && (
-        <div className="msg-body context-compaction-body">
-          <pre className="context-compaction-pre">{text}</pre>
-        </div>
-      )}
+    <div className={`msg-row context-compaction-message${isUser ? ' context-compaction-user' : ''}`}>
+      <CollapseCard
+        tone="context"
+        title="context compaction"
+        icon={
+          <Icon name="star" size={14} />
+        }
+        snippet={`reference only · ${previewLines}`}
+      >
+        <div
+          className="msg-body context-compaction-body"
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }}
+        />
+      </CollapseCard>
     </div>
   );
 });
@@ -195,62 +201,20 @@ MessageRow.displayName = 'MessageRow';
 
 export default MessageRow;
 
-// Reasoning message row - renders as an independent msg-row, collapsed by default
-export const ReasoningMessageRow = memo(function ReasoningMessageRow({ thinkingText }: { thinkingText: string }) {
-  const [expanded, setExpanded] = useState(false);
-  return (
-    <div className="msg-row reasoning-message">
-      <div className="reasoning-header" onClick={() => setExpanded(!expanded)}>
-        <div className="msg-role reasoning">
-          <div className="role-icon reasoning">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z" />
-              <path d="M10 21h4" />
-              <path d="M9 17h6" />
-            </svg>
-          </div>
-          <span>Reasoning</span>
-        </div>
-        <span className="reasoning-toggle">{expanded ? '▼' : '▶'}</span>
-      </div>
-      {expanded && (
-        <div className="msg-body msg-reasoning-body">
-          {thinkingText.split('<|reasoning_sep|>').map((block, idx) => (
-            <div key={idx} className="reasoning-block">
-              <div dangerouslySetInnerHTML={{ __html: renderMarkdown(block.trim()) }} />
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-});
-
 // Inline reasoning block - rendered within a MessageRow's msg-body, collapsed by default
 // No separate msg-row or separator; reasoning is part of the same message.
 export const ReasoningBlock = memo(function ReasoningBlock({ thinkingText }: { thinkingText: string }) {
-  const [expanded, setExpanded] = useState(false);
   return (
-    <div className="reasoning-inline">
-      <div className="reasoning-header-inline" onClick={() => setExpanded(!expanded)}>
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z" />
-          <path d="M10 21h4" />
-          <path d="M9 17h6" />
-        </svg>
-        <span>Reasoning</span>
-        <span className="reasoning-toggle">{expanded ? '▼' : '▶'}</span>
-      </div>
-      {expanded && (
-        <div className="msg-reasoning-body">
-          {thinkingText.split('<|reasoning_sep|>').map((block, idx) => (
-            <div key={idx} className="reasoning-block">
-              <div dangerouslySetInnerHTML={{ __html: renderMarkdown(block.trim()) }} />
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+    <CollapseCard
+      tone="reasoning"
+      title="reasoning"
+      icon={<ReasoningIcon />}
+      className="reasoning-inline"
+    >
+      {thinkingText.split('<|reasoning_sep|>').map((block, idx) => (
+        <div key={idx} className="reasoning-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(block.trim()) }} />
+      ))}
+    </CollapseCard>
   );
 });
 export function extractThinkingText(message: Message): string {
@@ -258,8 +222,8 @@ export function extractThinkingText(message: Message): string {
   // For user messages with a skill invocation, show the original input
   // instead of the expanded skill content (FR-008).
   let content: string | ContentBlock[] =
-    (message.role === 'user' && message.original_content)
-      ? message.original_content
+    (message.role === 'user' && message.original_content__webui)
+      ? message.original_content__webui
       : (message.content || '');
 
   // 1. Extract thinking/reasoning blocks from structured content (Claude extended thinking, o3)
@@ -356,50 +320,44 @@ function _renderOutputValue(value: unknown): React.ReactNode {
   if (typeof value === 'string') {
     const lines = value.split('\n').length;
     const body = <pre className="tool-result-pre">{value}</pre>;
-    if (lines <= 30) return <div className="tool-output-block">{body}</div>;
+    if (lines <= 30) return body;
     return (
-      <div className="tool-output-block">
-        <details className="tool-output-details" open>
-          <summary className="tool-output-summary">{lines} lines</summary>
-          {body}
-        </details>
-      </div>
+      <details className="tool-output-details" open>
+        <summary className="tool-output-summary">{lines} lines</summary>
+        {body}
+      </details>
     );
   }
   // Array of strings → list
   if (Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === 'string')) {
     return (
-      <div className="tool-output-block">
-        <ul className="tool-output-list">
-          {(value as string[]).map((item, i) => (
-            <li key={i} className="tool-output-list-item">{item}</li>
-          ))}
-        </ul>
-      </div>
+      <ul className="tool-output-list">
+        {(value as string[]).map((item, i) => (
+          <li key={i} className="tool-output-list-item">{item}</li>
+        ))}
+      </ul>
     );
   }
   // Empty array / empty object
   if ((Array.isArray(value) && value.length === 0) ||
       (typeof value === 'object' && !Array.isArray(value) && Object.keys(value as object).length === 0)) {
-    return <div className="tool-output-block"><span className="tool-output-waiting">(empty)</span></div>;
+    return <span className="tool-output-waiting">(empty)</span>;
   }
   // Scalar 0 / false
   if (typeof value === 'number' || typeof value === 'boolean') {
-    return <div className="tool-output-block"><span className="tool-output-scalar">{String(value)}</span></div>;
+    return <span className="tool-output-scalar">{String(value)}</span>;
   }
   // Small scalar-only object → inline KV
   if (typeof value === 'object' && !Array.isArray(value)) {
     const entries = Object.entries(value as Record<string, unknown>);
     if (entries.every(([, v]) => typeof v !== 'object' || v === null) && entries.length <= 5) {
       return (
-        <div className="tool-output-block">
-          <div className="tool-output-kv">
-            {entries.map(([k, v]) => (
-              <span key={k} className="tool-output-kv-item">
-                <em>{k}</em> {String(v ?? '—')}
-              </span>
-            ))}
-          </div>
+        <div className="tool-output-kv">
+          {entries.map(([k, v]) => (
+            <span key={k} className="tool-output-kv-item">
+              <em>{k}</em> {String(v ?? '—')}
+            </span>
+          ))}
         </div>
       );
     }
@@ -407,17 +365,13 @@ function _renderOutputValue(value: unknown): React.ReactNode {
   // Other → compact JSON tree
   const jsonText = JSON.stringify(value, null, 2);
   const lines = jsonText.split('\n').length;
-  return (
-    <div className="tool-output-block">
-      {lines > 15 ? (
-        <details className="tool-output-details">
-          <summary className="tool-output-summary">JSON · {lines} lines</summary>
-          <div className="json-tree">{formatJsonValue(value)}</div>
-        </details>
-      ) : (
-        <div className="json-tree">{formatJsonValue(value)}</div>
-      )}
-    </div>
+  return lines > 15 ? (
+    <details className="tool-output-details">
+      <summary className="tool-output-summary">JSON · {lines} lines</summary>
+      <div className="json-tree">{formatJsonValue(value)}</div>
+    </details>
+  ) : (
+    <div className="json-tree">{formatJsonValue(value)}</div>
   );
 }
 
@@ -425,106 +379,154 @@ function _renderOutputValue(value: unknown): React.ReactNode {
 
 function ToolOutputBlock({ toolName, content }: { toolName: string; content: string }) {
   if (!content) {
-    return <div className="tool-output-block"><span className="tool-output-waiting">Waiting for update...</span></div>;
+    return (
+      <>
+        <div className="tool-body-divider" />
+        <div className="tool-output-block">
+          <span className="tool-output-label">OUT</span>
+          <span className="tool-output-content">(receiving...)</span>
+        </div>
+      </>
+    );
   }
 
-  // Step 1: strip XML wrapper
   const cleaned = _stripXmlWrapper(content);
 
   // Bash tools: raw output directly
   if (toolName in TOOL_CODE_ARG) {
-    return _renderOutputValue(cleaned || content);
+    return (
+      <>
+        <div className="tool-body-divider" />
+        <div className="tool-output-block">
+          <span className="tool-output-label">OUT</span>
+          <div className="tool-output-content">{_renderOutputValue(cleaned || content)}</div>
+        </div>
+      </>
+    );
   }
 
   if (!cleaned) {
-    return <div className="tool-output-block"><span className="tool-output-waiting">(empty)</span></div>;
+    return (
+      <>
+        <div className="tool-body-divider" />
+        <div className="tool-output-block">
+          <span className="tool-output-label">OUT</span>
+          <span className="tool-output-content"><span className="tool-output-waiting">(empty)</span></span>
+        </div>
+      </>
+    );
   }
 
-  // Step 2: try JSON → pick best field
+  // Try JSON → pick best field
   try {
     const parsed = JSON.parse(cleaned);
     const unwrapped = _unwrapJsonWrapper(parsed);
 
-    if (typeof unwrapped === 'string') return _renderOutputValue(unwrapped);
+    if (typeof unwrapped === 'string') {
+      return (
+        <>
+          <div className="tool-body-divider" />
+          <div className="tool-output-block">
+            <span className="tool-output-label">OUT</span>
+            <div className="tool-output-content">{_renderOutputValue(unwrapped)}</div>
+          </div>
+        </>
+      );
+    }
     if (unwrapped == null || (typeof unwrapped === 'object' && Object.keys(unwrapped as object).length === 0)) {
-      return <div className="tool-output-block"><span className="tool-output-waiting">(empty)</span></div>;
+      return (
+        <>
+          <div className="tool-body-divider" />
+          <div className="tool-output-block">
+            <span className="tool-output-label">OUT</span>
+            <span className="tool-output-content"><span className="tool-output-waiting">(empty)</span></span>
+          </div>
+        </>
+      );
     }
 
     if (typeof unwrapped === 'object' && !Array.isArray(unwrapped)) {
       const picked = _pickOutputField(unwrapped as Record<string, unknown>);
       if (picked) {
-        return _renderOutputValue(picked.value);
+        return (
+          <>
+            <div className="tool-body-divider" />
+            <div className="tool-output-block">
+              <span className="tool-output-label">OUT</span>
+              <div className="tool-output-content">{_renderOutputValue(picked.value)}</div>
+            </div>
+          </>
+        );
       }
     }
 
-    return _renderOutputValue(unwrapped);
+    return (
+      <>
+        <div className="tool-body-divider" />
+        <div className="tool-output-block">
+          <span className="tool-output-label">OUT</span>
+          <div className="tool-output-content">{_renderOutputValue(unwrapped)}</div>
+        </div>
+      </>
+    );
   } catch {
-    return _renderOutputValue(cleaned);
+    return (
+      <>
+        <div className="tool-body-divider" />
+        <div className="tool-output-block">
+          <span className="tool-output-label">OUT</span>
+          <div className="tool-output-content">{_renderOutputValue(cleaned)}</div>
+        </div>
+      </>
+    );
   }
 }
 
 // ── Tool Command Block ──────────────────────────────────────────────────────────
-// Same philosophy as output: show the meaningful value, not raw JSON.
-//   Shell tools → $ command_string
-//   Other tools → primary_arg_name: value
-//   Full args JSON folded behind "All args" toggle.
-
-function _renderArgValue(key: string, value: unknown): React.ReactNode {
-  const s = typeof value === 'string' ? value : JSON.stringify(value);
-  // Short value → inline
-  if (s.length <= 120 && !s.includes('\n')) {
-    return <span className="tool-cmd-arg-inline"><em>{key}</em>: {s}</span>;
-  }
-  // Long / multi-line → pre block
-  return (
-    <div className="tool-cmd-arg-block">
-      <span className="tool-cmd-arg-key">{key}:</span>
-      <pre className="tool-cmd-code">{s}</pre>
-    </div>
-  );
-}
+// Unified IN + value display (Claude Code style).
+//   Shell tools → IN  $ command
+//   Other tools → IN  <primary value>
+// No key:value — just the meaningful content.
 
 function ToolCommandBlock({ toolName, args }: { toolName: string; args?: Record<string, unknown> | null }) {
   const isShell = toolName in TOOL_CODE_ARG;
   const primaryKey = TOOL_PRIMARY_ARG[toolName];
   const primaryVal = primaryKey && args?.[primaryKey] != null ? args[primaryKey] : null;
 
-  // Shell tools: show $ prompt + code block
-  if (isShell && primaryVal) {
-    return (
-      <div className="tool-cmd-block">
-        <div className="tool-cmd-prompt">$</div>
-        <pre className="tool-cmd-code">{String(primaryVal)}</pre>
-      </div>
-    );
-  }
-
   if (!args || Object.keys(args).length === 0) {
     return (
-      <div className="tool-cmd-block">
-        <pre className="tool-cmd-code">(no arguments)</pre>
+      <div className="tool-args-block">
+        <span className="tool-args-label">IN</span>
+        <span className="tool-args-content">(no arguments)</span>
       </div>
     );
   }
 
-  // Pick primary arg, fallback to first entry
+  // Extract primary value — show just the value, no key:value
   const entries = Object.entries(args);
-  const [showKey, showVal] = primaryVal != null
-    ? [primaryKey!, primaryVal]
-    : [entries[0][0], entries[0][1]];
+  const showVal = primaryVal != null ? primaryVal : entries[0][1];
+  const valStr = typeof showVal === 'string' ? showVal : JSON.stringify(showVal);
 
   return (
-    <div className="tool-cmd-block">
-      {_renderArgValue(showKey, showVal)}
+    <div className="tool-args-block">
+      <span className="tool-args-label">IN</span>
+      <div className="tool-args-content">
+        {isShell && <span className="tool-args-dollar">$</span>}
+        {valStr}
+      </div>
     </div>
   );
 }
 
 // ── Tool Message Row ────────────────────────────────────────────────────────────
 
-function ToolMessageRow({ message, messages, toolCallMap }: { message: Message; messages: Message[]; toolCallMap: Map<string, ToolCall> }) {
-  const [expanded, setExpanded] = useState(false);
+function MessageTimestamp({ message }: { message: Message }) {
+  const text = formatTimestamp(message.timestamp__webui ?? message.timestamp);
+  if (!text) return null;
+  return <div className="msg-timestamp">{text}</div>;
+}
 
+function ToolMessageRow({ message, messages, toolCallMap }: { message: Message; messages: Message[]; toolCallMap: Map<string, ToolCall> }) {
   const content = typeof message.content === 'string'
     ? message.content
     : '';
@@ -600,22 +602,28 @@ function ToolMessageRow({ message, messages, toolCallMap }: { message: Message; 
     }
   }
 
-  if (!commandArgs && message.tool_calls) {
-    for (const tc of message.tool_calls) {
-      if (tc.id === toolCallId || tc.call_id === toolCallId) {
-        if (tc.function?.arguments) {
-          if (typeof tc.function.arguments === 'string') {
-            try {
-              commandArgs = JSON.parse(tc.function.arguments);
-            } catch {
-              commandArgs = { arguments: tc.function.arguments };
+  if (!commandArgs) {
+    for (const msg of messages) {
+      if (msg.role !== 'assistant') continue;
+      const toolCalls = msg.tool_calls;
+      if (!toolCalls) continue;
+      for (const tc of toolCalls) {
+        if (tc.id === toolCallId || tc.call_id === toolCallId) {
+          if (tc.function?.arguments) {
+            if (typeof tc.function.arguments === 'string') {
+              try {
+                commandArgs = JSON.parse(tc.function.arguments);
+              } catch {
+                commandArgs = { arguments: tc.function.arguments };
+              }
+            } else {
+              commandArgs = tc.function.arguments;
             }
-          } else {
-            commandArgs = tc.function.arguments;
+            break;
           }
-          break;
         }
       }
+      if (commandArgs) break;
     }
   }
 
@@ -624,71 +632,87 @@ function ToolMessageRow({ message, messages, toolCallMap }: { message: Message; 
 
   // Determine state
   const isRunning = message._live === true;
-  const isError = toolCall?.is_error === true;
+  const isError = toolCall?.is_error;
   const duration = toolCall?.duration;
   const cmdSnippet = getCmdSnippet(toolName, commandArgs);
 
-  // Build class list — no per-tool running state: ThinkIndicator already shows it
-  const classes = [
-    'msg-row',
-    'tool-message',
-    hasOOB ? 'tool-message--steered' : '',
-    isError ? 'tool-message--error' : '',
-  ].filter(Boolean).join(' ');
+  const tone = isError ? 'error' : hasOOB ? 'steered' : 'tool';
+
+  // ── Clarify: render Q&A using unified IN/OUT format ──────────────────
+  if (toolName === 'clarify') {
+    let question = '';
+    let userResponse = '';
+    if (typeof content === 'string') {
+      try {
+        const parsed = JSON.parse(content);
+        question = parsed.question || '';
+        userResponse = parsed.user_response || '';
+      } catch {
+        // Not JSON — show content as-is
+      }
+    }
+    if (!question && commandArgs?.question) {
+      question = String(commandArgs.question);
+    }
+
+    return (
+      <div className="msg-row tool-message">
+        <CollapseCard
+          tone={tone}
+          title="clarify"
+          icon={
+            <span className={`tool-status ${isRunning ? 'running' : isError === true ? 'error' : isError === false ? 'done' : ''}`}>
+              <ReasoningIcon />
+            </span>
+          }
+          extra={!isRunning && duration != null && duration > 0 ? (
+            <span className="tool-duration">· {formatDuration(duration * 1000)}</span>
+          ) : undefined}
+          snippet={question ? truncate(question, 60) : undefined}
+        >
+          <div className="tool-args-block">
+            <span className="tool-args-label">IN</span>
+            <div className="tool-args-content">{question || '(no question)'}</div>
+          </div>
+          <div className="tool-body-divider" />
+          <div className="tool-output-block">
+            <span className="tool-output-label">OUT</span>
+            <div className="tool-output-content">
+              {userResponse || content || '(no response)'}
+            </div>
+          </div>
+        </CollapseCard>
+        <MessageTimestamp message={message} />
+      </div>
+    );
+  }
 
   return (
-    <div className={classes}>
-      <div
-        className="tool-message-header"
-        onClick={() => setExpanded(!expanded)}
-      >
-        {/* Status indicator: ✓ complete, ✗ error; nothing while running (ThinkIndicator handles it) */}
-        {!isRunning && (
-          <span className={`tool-status ${isError ? 'error' : 'done'}`}>
-            {isError ? '✗' : '✓'}
+    <div className="msg-row tool-message">
+      <CollapseCard
+        tone={tone}
+        title={toolName}
+        icon={
+          <span className={`tool-status ${isRunning ? 'running' : isError === true ? 'error' : isError === false ? 'done' : ''}`}>
+            <Icon name="circle" size={14} />
           </span>
-        )}
-
-        {/* Tool name */}
-        <span className="tool-name">{toolName}</span>
-
-        {/* Duration */}
-        {!isRunning && duration != null && duration > 0 && (
-          <span className="tool-duration">· {formatDuration(duration * 1000)}</span>
-        )}
-
-        {/* Command snippet */}
-        {cmdSnippet && (
-          <span className="tool-snippet">{truncate(cmdSnippet, 60)}</span>
-        )}
-
-        {hasOOB && (
-          <span className="tool-steer-badge" title="This tool output contains a steered user message">↪ Steer</span>
-        )}
-
-        {/* Flex spacer */}
-        <span style={{ flex: 1 }} />
-
-        {/* Toggle */}
-        <span className="tool-card-toggle">{expanded ? '▼' : '▶'}</span>
-      </div>
-
-      {expanded && (
-        <div className="tool-message-body">
-          <ToolCommandBlock toolName={toolName} args={commandArgs} />
-          <ToolOutputBlock toolName={toolName} content={content} />
-        </div>
-      )}
-
-      {(() => {
-        const ts = message._ts ?? message.timestamp;
-        if (!ts) return null;
-        const d = new Date(ts * 1000);
-        const hh = String(d.getHours()).padStart(2, '0');
-        const mm = String(d.getMinutes()).padStart(2, '0');
-        const ss = String(d.getSeconds()).padStart(2, '0');
-        return <div className="msg-timestamp">{hh}:{mm}:{ss}</div>;
-      })()}
+        }
+        extra={
+          <>
+            {!isRunning && duration != null && duration > 0 && (
+              <span className="tool-duration">· {formatDuration(duration * 1000)}</span>
+            )}
+            {hasOOB && (
+              <span className="tool-steer-badge" title="This tool output contains a steered user message">↪ Steer</span>
+            )}
+          </>
+        }
+        snippet={cmdSnippet ? truncate(cmdSnippet, 60) : undefined}
+      >
+        <ToolCommandBlock toolName={toolName} args={commandArgs} />
+        <ToolOutputBlock toolName={toolName} content={content} />
+      </CollapseCard>
+      <MessageTimestamp message={message} />
     </div>
   );
 }
@@ -707,6 +731,10 @@ function fallbackCopy(text: string) {
 }
 
 function MessageRowComponent({ message, messages = [], toolCalls = [], isStreaming, streaming, thinkingText }: MessageRowProps) {
+  // Refs must be declared before any useEffect that references them,
+  // otherwise esbuild's minifier may reorder const declarations and trigger TDZ.
+  const msgBodyRef = useRef<HTMLDivElement>(null);
+
   // Build tool_call_id -> ToolCall mapping from session tool_calls
   const toolCallMap = useMemo(() => {
     const map = new Map<string, ToolCall>();
@@ -722,7 +750,7 @@ function MessageRowComponent({ message, messages = [], toolCalls = [], isStreami
   const { strippedContent } = useMemo(() => {
     let thinkingText = '';
     // Sprint 15: Handle null content
-    let content: string | ContentBlock[] = (message.original_content as string) || message.content || '';
+    let content: string | ContentBlock[] = (message.original_content__webui as string) || message.content || '';
 
     // 1. Extract thinking/reasoning blocks from structured content (Claude extended thinking, o3)
     if (Array.isArray(content)) {
@@ -760,7 +788,7 @@ function MessageRowComponent({ message, messages = [], toolCalls = [], isStreami
     }
 
     return { thinkingText, strippedContent: content };
-  }, [message.content, message.reasoning]);
+  }, [message.content, message.reasoning, message.original_content__webui]);
 
   // Throttle markdown rendering during streaming to avoid performance issues
   // Cache rendered HTML and only re-render at most every 150ms during streaming
@@ -800,10 +828,15 @@ function MessageRowComponent({ message, messages = [], toolCalls = [], isStreami
         return null;
       }
       if (!message.content.trim()) {
-        return <span className="msg-placeholder">...</span>;
+        // Don't show "..." when reasoning is present — the message
+        // already has visible thinking content.
+        if (!message.reasoning) {
+          return <span className="msg-placeholder">...</span>;
+        }
+        return null;
       }
       return (
-        <span dangerouslySetInnerHTML={{ __html: getRenderedMarkdown(strippedContent as string) }} />
+        <div dangerouslySetInnerHTML={{ __html: getRenderedMarkdown(strippedContent as string) }} />
       );
     }
     
@@ -828,9 +861,9 @@ function MessageRowComponent({ message, messages = [], toolCalls = [], isStreami
       combinedText = combinedText.replace(/<\|channel>thought\n[\s\S]*?<channel\|>\s*/g, '').trimStart();
       if (combinedText.trim()) {
         elements.push(
-          <span 
-            key={`text-${lastKey++}`} 
-            dangerouslySetInnerHTML={{ __html: getRenderedMarkdown(combinedText) }} 
+          <div
+            key={`text-${lastKey++}`}
+            dangerouslySetInnerHTML={{ __html: getRenderedMarkdown(combinedText) }}
           />
         );
       }
@@ -858,8 +891,6 @@ function MessageRowComponent({ message, messages = [], toolCalls = [], isStreami
     return elements.length > 0 ? <>{elements}</> : null;
   }, [message.content, message.role, isStreaming, toolCallMap, strippedContent]);
 
-  const msgBodyRef = useRef<HTMLDivElement>(null);
-
   // Track content hash for effect dependency (avoid object reference issues)
   const contentHash = useMemo(() => {
     if (typeof message.content === 'string') {
@@ -885,11 +916,13 @@ function MessageRowComponent({ message, messages = [], toolCalls = [], isStreami
       const btn = document.createElement('button');
       btn.className = 'code-copy-btn';
       btn.title = 'Copy';
-      btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+      const iconSpan = (name: string) =>
+        `<span class="material-symbols-rounded" style="font-size:18px;font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24;line-height:1;display:inline-flex;align-items:center;justify-content:center;user-select:none">${name}</span>`;
+      btn.innerHTML = iconSpan('content_copy');
       btn.addEventListener('click', () => {
         const text = code.textContent || '';
-        const copyIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
-        const checkIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+        const copyIcon = iconSpan('content_copy');
+        const checkIcon = iconSpan('check');
         const onSuccess = () => {
           btn.innerHTML = checkIcon;
           btn.classList.add('copied');
@@ -927,21 +960,20 @@ function MessageRowComponent({ message, messages = [], toolCalls = [], isStreami
 
   const isUser = message.role === 'user';
 
-  const timestampNode = (() => {
-    const ts = message._ts ?? message.timestamp;
-    if (!ts) return null;
-    const d = new Date(ts * 1000);
-    const hh = String(d.getHours()).padStart(2, '0');
-    const mm = String(d.getMinutes()).padStart(2, '0');
-    const ss = String(d.getSeconds()).padStart(2, '0');
-    return <div className={`msg-timestamp${isUser ? ' msg-timestamp--user' : ''}`}>{hh}:{mm}:{ss}</div>;
-  })();
+  // Suppress assistant rows that carry only tool_use blocks without any
+  // text or reasoning — they show as blank bubbles between tool messages.
+  if (
+    !isUser
+    && !thinkingText
+    && (content == null || (Array.isArray(content) && (content as React.ReactNode[]).length === 0))
+  ) {
+    return null;
+  }
 
   return (
     <>
       <div
         className={`msg-row${isUser ? ' user-message' : ''}${isQueued ? ' msg-row--queued' : ''}`}
-        data-raw-text={typeof message.content === 'string' ? message.content : ''}
       >
         <div className="msg-body" ref={msgBodyRef}>
           {thinkingText && (
@@ -972,20 +1004,15 @@ function MessageRowComponent({ message, messages = [], toolCalls = [], isStreami
             <div className="msg-files">
               {message.attachments.map((file, idx) => (
                 <div key={idx} className="msg-file-badge">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-                  </svg>
+                  <Icon name="attach_file" size={18} />
                   <span>{file}</span>
                 </div>
               ))}
             </div>
           )}
         </div>
-        {/* Assistant timestamp stays inside the row */}
-        {!isUser && timestampNode}
+        <MessageTimestamp message={message} />
       </div>
-      {/* User timestamp sits outside the card */}
-      {isUser && timestampNode}
     </>
   );
 }

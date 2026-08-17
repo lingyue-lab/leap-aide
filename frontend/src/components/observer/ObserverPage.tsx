@@ -25,7 +25,7 @@ class VncClient {
 
   private async _poll() {
     try {
-      const resp = await fetch(`/api/observer/${encodeURIComponent(this.sessionId)}/vnc`);
+      const resp = await fetch(`/observations/${encodeURIComponent(this.sessionId)}/vnc`);
       if (!resp.ok) return;
       const buf = await resp.arrayBuffer();
       const raw = new Uint8Array(buf);
@@ -128,8 +128,8 @@ export default function ObserverPage() {
           {(status === 'loading' || status === 'connecting') && (
             <div style={{ width: 40, height: 40, border: '3px solid #30363d', borderTopColor: '#58a6ff', borderRadius: '50%', animation: 'spin 0.8s linear infinite', marginBottom: 16 }} />
           )}
-          <p style={{ fontSize: 14, color: '#8b949e', marginBottom: 12 }}>{statusText}</p>
-          {showRetry && <button onClick={doConnect} style={{ padding: '8px 20px', background: '#238636', color: '#fff', border: '1px solid #2ea043', borderRadius: 6, cursor: 'pointer', fontSize: 14 }}>Retry</button>}
+          <p style={{ fontSize: 16, color: '#8b949e', marginBottom: 12 }}>{statusText}</p>
+          {showRetry && <button onClick={doConnect} style={{ padding: '8px 20px', background: '#238636', color: '#fff', border: '1px solid #2ea043', borderRadius: 6, cursor: 'pointer', fontSize: 16 }}>Retry</button>}
         </div>
       )}
       <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: conn ? 'block' : 'none' }} />

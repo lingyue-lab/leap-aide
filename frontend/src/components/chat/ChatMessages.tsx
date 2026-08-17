@@ -3,13 +3,14 @@ import type { Message, ToolCall } from '@/types';
 import MessageRow, { extractThinkingText, isContextCompactionMessage, ContextCompactionMessageRow } from './MessageRow';
 import { useChatStore } from '@/stores/useChatStore';
 import { useSessionStore } from '@/stores/useSessionStore';
-import ThinkingIndicator from './ThinkingIndicator';
 import ConversationMinimap from './ConversationMinimap';
+import CustomScrollbar from '@/components/common/CustomScrollbar';
 
 interface ChatMessagesProps {
   messages: Message[];
   streaming?: boolean;
   onFileOpen?: (path: string) => void;
+  onScroll?: (e: React.UIEvent<HTMLDivElement>) => void;
 }
 
 // Stable selector: only re-render when toolCalls array reference changes
@@ -17,12 +18,24 @@ interface ChatMessagesProps {
 const selectToolCalls = (s: { toolCalls: ToolCall[] }) => s.toolCalls;
 
 const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
-  ({ messages, streaming, onFileOpen }, ref) => {
+  ({ messages, streaming, onFileOpen, onScroll }, ref) => {
     const innerRef = useRef<HTMLDivElement>(null);
     const scrollRef = ref || innerRef;
     const toolCalls = useChatStore(selectToolCalls);
     const showReasoning = useChatStore((s) => s.showReasoning);
-    const phase = useChatStore((s) => s.phase);
+    const canceling = useChatStore((s) => s.canceling);
+
+    // Freeze messages/toolCalls snapshots when canceling so the UI doesn't render
+    // partial SSE tokens that arrive during the cancel window.  Memory state
+    // continues to update underneath; the next loadSession() refresh overwrites it.
+    const frozenMessages = useRef(messages);
+    const frozenToolCalls = useRef(toolCalls);
+    if (!canceling) {
+      frozenMessages.current = messages;
+      frozenToolCalls.current = toolCalls;
+    }
+    const displayMessages = canceling ? frozenMessages.current : messages;
+    const displayToolCalls = canceling ? frozenToolCalls.current : toolCalls;
 
     // Auto-scroll logic
     const _scrollPinned = useRef(true);
@@ -49,7 +62,11 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
       if (!_scrollPinned.current) return;
       const el = scrollRef as React.RefObject<HTMLDivElement>;
       if (el.current) {
-        el.current.scrollTop = el.current.scrollHeight;
+        requestAnimationFrame(() => {
+          if (el.current) {
+            el.current.scrollTop = el.current.scrollHeight;
+          }
+        });
       }
     }, [messages.length, scrollRef]);
 
@@ -103,7 +120,7 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
     // chronological order, so no timestamp-based sorting is needed.
     // Sorting by timestamp is brittle — messages without timestamps (e.g.
     // added via CLI scripts) get pushed to epoch 0 and become invisible.
-    const sortedMessages = messages;
+    const sortedMessages = displayMessages;
 
     // Helper: get local date string "M月D日" from a unix timestamp (seconds)
     const getLocalDateLabel = (ts: number): string => {
@@ -118,11 +135,12 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
     };
 
     return (
-      <div
-        ref={scrollRef}
+      <CustomScrollbar
+        ref={scrollRef as React.Ref<HTMLDivElement>}
         className="messages-container"
         onWheel={(e) => e.stopPropagation()}
         onTouchMove={(e) => e.stopPropagation()}
+        onScroll={onScroll}
       >
         <div className="messages-inner">
           {messages.length === 0 && !streaming && (
@@ -139,38 +157,63 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
               
               for (let i = 0; i < sortedMessages.length; i++) {
                 if (renderedIndices.has(i)) continue;
-                
-                const message = sortedMessages[i];
-                const msgTs = message._ts ?? message.timestamp ?? 0;
 
-                // Insert date separator when the day changes
-                if (msgTs) {
+                const message = sortedMessages[i];
+                const msgTs = (message as any).timestamp__webui ?? message.timestamp ?? 0;
+
+                // Emit the date separator lazily, only when a message row is
+                // actually rendered below. Emitting eagerly (before the empty-
+                // assistant skip) leaves orphaned separators that stack up as
+                // consecutive `msg-date-sep` rows.
+                const dateSeparator = (): React.ReactNode | null => {
+                  if (!msgTs) return null;
                   const dateKey = getLocalDateKey(msgTs);
-                  if (dateKey !== lastDateKey) {
-                    lastDateKey = dateKey;
-                    result.push(
-                      <div key={`date-sep-${dateKey}`} className="msg-date-sep">
-                        <span>{getLocalDateLabel(msgTs)}</span>
-                      </div>
-                    );
-                  }
-                }
-                
+                  if (dateKey === lastDateKey) return null;
+                  lastDateKey = dateKey;
+                  // Key by message index, NOT by date: messages are not sorted
+                  // chronologically (e.g. a context-compaction row can sit on a
+                  // later date than surrounding messages), so the same dateKey
+                  // can legitimately recur. A duplicate `date-sep-${dateKey}`
+                  // key makes React's reconciliation leave stale separator DOM
+                  // nodes that pile up across session switches.
+                  return (
+                    <div key={`date-sep-${i}`} className="msg-date-sep">
+                      <span>{getLocalDateLabel(msgTs)}</span>
+                    </div>
+                  );
+                };
+                const pushRow = (node: React.ReactNode) => {
+                  const sep = dateSeparator();
+                  if (sep) result.push(sep);
+                  result.push(node);
+                };
+
                 // For assistant messages, collect following tool messages
                 if (message.role === 'assistant') {
                   renderedIndices.add(i);
 
                   // Check for context compaction message - render as collapsed card
                   if (isContextCompactionMessage(message)) {
-                    result.push(
-                      <ContextCompactionMessageRow
-                        key={`compaction-${i}`}
-                        message={message}
-                      />
+                    pushRow(
+                      <div key={`msg-wrap-${i}`} data-msg-idx={i} data-msg-id={message.id}>
+                        <ContextCompactionMessageRow
+                          key={`compaction-${i}`}
+                          message={message}
+                        />
+                      </div>
                     );
                     continue;
                   }
-                  
+
+                  // Skip empty assistant messages (created by message_start before
+                  // any token arrives). They have no content and no tool calls.
+                  const hasContent = typeof message.content === 'string'
+                    ? message.content.length > 0
+                    : Array.isArray(message.content) && message.content.length > 0;
+                  if (!hasContent && !message.tool_calls && !message.reasoning) {
+                    continue;
+                  }
+
                   // Collect tool_call_ids from this assistant message
                   const toolCallIds = new Set<string>();
                   
@@ -192,16 +235,36 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
                   
                   // Render reasoning row if applicable — pass thinkingText to MessageRow
                   // so reasoning is displayed inline within the same message (no separate separator)
-                  const thinkingText = showReasoning ? extractThinkingText(message) : undefined;
+                  let thinkingText = showReasoning ? extractThinkingText(message) : undefined;
+
+                  // ── Display-layer reasoning dedup ──────────────────────────
+                  // The SDK may echo identical reasoning onto multiple assistant
+                  // messages within a turn (DeepSeek provider echo).  When an
+                  // assistant message has reasoning but no visible content text,
+                  // and the next assistant carries the same reasoning, suppress
+                  // the reasoning on this message — it will be shown on the next
+                  // one.  This is display-only (matches hermes-agent CLI behaviour).
+                  if (thinkingText && !hasContent) {
+                    for (let j = i + 1; j < sortedMessages.length; j++) {
+                      const nextMsg = sortedMessages[j];
+                      if (nextMsg.role === 'assistant') {
+                        const nextThinking = extractThinkingText(nextMsg);
+                        if (nextThinking === thinkingText) {
+                          thinkingText = undefined;  // dedup: show on next msg instead
+                        }
+                        break;
+                      }
+                    }
+                  }
 
                   // Render assistant message
-                  result.push(
+                  pushRow(
                     <div key={`msg-wrap-${i}`} data-msg-idx={i} data-msg-id={message.id}>
                       <MessageRow
                         key={`msg-${i}`}
                         message={message}
                         messages={sortedMessages}
-                        toolCalls={toolCalls}
+                        toolCalls={displayToolCalls}
                         streaming={streaming}
                         isStreaming={streaming && i === sortedMessages.length - 1}
                         onFileOpen={onFileOpen}
@@ -226,7 +289,7 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
                             key={`msg-${j}`}
                             message={nextMsg}
                             messages={sortedMessages}
-                            toolCalls={toolCalls}
+                            toolCalls={displayToolCalls}
                         streaming={streaming}
                             isStreaming={false}
                             onFileOpen={onFileOpen}
@@ -240,13 +303,13 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
                 } else if (message.role === 'tool') {
                   // Orphaned tool message (without preceding assistant)
                   renderedIndices.add(i);
-                  result.push(
+                  pushRow(
                     <div key={`msg-wrap-${i}`} data-msg-idx={i} data-msg-id={message.id}>
                       <MessageRow
                         key={`msg-${i}`}
                         message={message}
                         messages={sortedMessages}
-                        toolCalls={toolCalls}
+                        toolCalls={displayToolCalls}
                         streaming={streaming}
                         isStreaming={false}
                         onFileOpen={onFileOpen}
@@ -254,38 +317,47 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
                     </div>
                   );
                 } else {
-                  // Non-tool message (user)
+                  // Non-tool, non-assistant message (user/system)
                   renderedIndices.add(i);
-                  const isUser = message.role === 'user';
-                  result.push(
-                    <div
-                      key={`msg-wrap-${i}`}
-                      data-msg-idx={i}
-                      data-msg-id={message.id}
-                      {...(isUser ? { 'data-user-msg-idx': i } : {})}
-                    >
-                      <MessageRow
-                        key={`msg-${i}`}
-                        message={message}
-                        messages={sortedMessages}
-                        toolCalls={toolCalls}
-                        streaming={streaming}
-                        isStreaming={false}
-                        onFileOpen={onFileOpen}
-                      />
-                    </div>
-                  );
+
+                  // Context compaction messages should use the collapsed card regardless of role
+                  if (isContextCompactionMessage(message)) {
+                    pushRow(
+                      <div key={`msg-wrap-${i}`} data-msg-idx={i} data-msg-id={message.id}>
+                        <ContextCompactionMessageRow
+                          key={`compaction-${i}`}
+                          message={message}
+                        />
+                      </div>
+                    );
+                  } else {
+                    const isUser = message.role === 'user';
+                    pushRow(
+                      <div
+                        key={`msg-wrap-${i}`}
+                        data-msg-idx={i}
+                        data-msg-id={message.id}
+                        {...(isUser ? { 'data-user-msg-idx': i } : {})}
+                      >
+                        <MessageRow
+                          key={`msg-${i}`}
+                          message={message}
+                          messages={sortedMessages}
+                          toolCalls={displayToolCalls}
+                          streaming={streaming}
+                          isStreaming={false}
+                          onFileOpen={onFileOpen}
+                        />
+                      </div>
+                    );
+                  }
                 }
               }
               
               return result;
-            }, [sortedMessages, streaming, toolCalls, onFileOpen])}
+            }, [sortedMessages, streaming, displayToolCalls, onFileOpen])}
           </div>
 
-          {/* Phase indicator — shown after sending, before first assistant token, and between tool calls */}
-          {streaming && phase && (
-            <ThinkingIndicator phase={phase} />
-          )}
         </div>
 
         {/* Conversation minimap — right-edge navigation rail */}
@@ -293,7 +365,8 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
           messages={sortedMessages}
           containerRef={scrollRef as React.RefObject<HTMLDivElement>}
         />
-      </div>
+
+      </CustomScrollbar>
     );
   }));
 

@@ -1,124 +1,271 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import CustomScrollbar from '@/components/common/CustomScrollbar';
+import { Icon } from '@/components/common/Icons';
 
-const AUTO_DISMISS_MS = 15000;
+interface InfoCardAction {
+  label: string;
+  primary?: boolean;
+  onClick: () => Promise<void> | void;
+}
 
 interface InfoCardOptions {
-  sticky?: boolean;
   loading?: boolean;
+  noDismiss?: boolean;
   onDismiss?: () => void;
+  /** Custom action buttons. Each button manages its own loading state. */
+  actions?: InfoCardAction[];
 }
 
-let _show: ((content: string, options?: InfoCardOptions) => void) | null = null;
-let _dismiss: (() => void) | null = null;
+interface CardActionState {
+  label: string;
+  primary: boolean;
+  loading: boolean;
+  handler: () => Promise<void> | void;
+}
 
-/** Show an informational card. Safe to call before the component mounts.
+interface CardState {
+  content: string;
+  loading: boolean;
+  noDismiss: boolean;
+  onDismiss: (() => void) | null;
+  actions: CardActionState[];
+}
+
+// Per-session Map for card state storage
+const _cards = new Map<string, CardState>();
+
+// Current session ID — set by ChatInterface on session change
+let _currentSessionId: string | null = null;
+
+// Visible-change callbacks — registered by ChatComposer, ChatMessages, etc.
+const _onVisibleChangeCallbacks = new Set<(visible: boolean) => void>();
+
+function _notifyVisible(visible: boolean) {
+  _onVisibleChangeCallbacks.forEach(cb => cb(visible));
+}
+
+// Internal setters — set by the component on mount
+let _renderCard: ((state: CardState | null) => void) | null = null;
+let _renderVisible: ((v: boolean) => void) | null = null;
+
+/** Show an informational card for a specific session.
+ *  If sessionId ≠ current session, stores but does not display.
  *  Options:
- *    sticky  — keep visible until user dismisses (no auto-dismiss)
- *    loading — show a spinner instead of content
- *    onDismiss — called when user clicks close */
-export function showInfoCard(content: string, options?: InfoCardOptions) {
-  if (_show) _show(content, options);
+ *    loading   — show a spinner instead of content
+ *    noDismiss — hide the X close button (used for non-interruptible actions)
+ *    onDismiss — called when user clicks close
+ *    actions   — custom action buttons; each manages its own loading state */
+export function showInfoCard(sessionId: string, content: string, options?: InfoCardOptions) {
+  const state: CardState = {
+    content,
+    loading: options?.loading ?? false,
+    noDismiss: options?.noDismiss ?? false,
+    onDismiss: options?.onDismiss ?? null,
+    actions: (options?.actions || []).map(a => ({
+      label: a.label,
+      primary: a.primary ?? false,
+      loading: false,
+      handler: a.onClick,
+    })),
+  };
+  _cards.set(sessionId, state);
+
+  if (sessionId === _currentSessionId) {
+    _renderCard?.(state);
+    _renderVisible?.(true);
+    _notifyVisible(true);
+  }
 }
 
-/** Dismiss the currently visible info card. Safe to call before mount. */
-export function dismissInfoCard() {
-  if (_dismiss) _dismiss();
+/** Update loading state for a specific action button on an existing card. */
+export function setInfoCardActionLoading(
+  sessionId: string,
+  actionIndex: number,
+  loading: boolean,
+) {
+  const state = _cards.get(sessionId);
+  if (!state || actionIndex < 0 || actionIndex >= state.actions.length) return;
+  state.actions[actionIndex].loading = loading;
+  if (sessionId === _currentSessionId) {
+    _renderCard?.({ ...state });
+  }
 }
 
-/** Renders a markdown-ish content string as simple HTML-safe text with basic formatting. */
+/** Dismiss the info card for a specific session. */
+export function dismissInfoCard(sessionId: string) {
+  _cards.delete(sessionId);
+  if (sessionId === _currentSessionId) {
+    // Check if there's a lower-priority card pending for this session
+    _renderCard?.(null);
+    _renderVisible?.(false);
+    _notifyVisible(false);
+  }
+}
+
+/** Register a callback that fires when card visibility changes.
+ *  Returns an unsubscribe function. Multiple listeners are supported. */
+export function onInfoCardVisibleChange(fn: (visible: boolean) => void): () => void {
+  _onVisibleChangeCallbacks.add(fn);
+  return () => { _onVisibleChangeCallbacks.delete(fn); };
+}
+
+/** Notify InfoCard of a session change.
+ *  Called by ChatInterface when currentSessionId changes. */
+export function setInfoCardCurrentSessionId(sessionId: string | null) {
+  _currentSessionId = sessionId;
+  if (sessionId) {
+    const pending = _cards.get(sessionId);
+    if (pending) {
+      _renderCard?.(pending);
+      _renderVisible?.(true);
+      _notifyVisible(true);
+    } else {
+      _renderVisible?.(false);
+      _notifyVisible(false);
+    }
+  } else {
+    _renderVisible?.(false);
+    _notifyVisible(false);
+  }
+}
+
+/** Renders content as plain text: escape HTML, line breaks, auto-link URLs. */
 function renderContent(text: string): string {
   return text
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/^### (.*$)/gm, '<h3>$1</h3>')
-    .replace(/^## (.*$)/gm, '<h2>$1</h2>')
-    .replace(/^# (.*$)/gm, '<h1>$1</h1>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/^- (.+)$/gm, '<li>$1</li>')
-    .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
-    .replace(/\n/g, '<br/>')
-    .replace(/(https?:\/\/[^\s<>]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+    .replace(/(https?:\/\/[^\s<>]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>')
+    .replace(/\n/g, '<br/>');
 }
 
 export default function InfoCard() {
   const [visible, setVisible] = useState(false);
-  const [content, setContent] = useState('');
-  const [loading, setLoading] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const onDismissRef = useRef<(() => void) | null>(null);
+  const [cardState, setCardState] = useState<CardState | null>(null);
 
   useEffect(() => {
-    _show = (text: string, options?: InfoCardOptions) => {
-      setContent(text);
-      setLoading(options?.loading ?? false);
-      setVisible(true);
-      onDismissRef.current = options?.onDismiss ?? null;
-      if (timerRef.current) clearTimeout(timerRef.current);
-      if (!options?.sticky && !options?.loading) {
-        timerRef.current = setTimeout(() => {
-          setVisible(false);
-          setContent('');
-          setLoading(false);
-        }, AUTO_DISMISS_MS);
-      }
+    _renderCard = (state: CardState | null) => {
+      setCardState(state);
     };
-    _dismiss = () => {
-      setVisible(false);
-      setContent('');
-      setLoading(false);
-      if (timerRef.current) clearTimeout(timerRef.current);
+    _renderVisible = (v: boolean) => {
+      setVisible(v);
     };
     return () => {
-      _show = null;
-      _dismiss = null;
-      if (timerRef.current) clearTimeout(timerRef.current);
+      _renderCard = null;
+      _renderVisible = null;
     };
   }, []);
 
   const handleDismiss = () => {
+    if (!_currentSessionId) return;
+    const state = _cards.get(_currentSessionId);
+    _cards.delete(_currentSessionId);
     setVisible(false);
-    setContent('');
-    setLoading(false);
-    if (timerRef.current) clearTimeout(timerRef.current);
-    if (onDismissRef.current) {
-      onDismissRef.current();
-      onDismissRef.current = null;
+    setCardState(null);
+    _notifyVisible(false);
+    if (state?.onDismiss) {
+      state.onDismiss();
     }
   };
 
-  if (!visible || !content) return null;
+  const handleAction = async (actionIndex: number) => {
+    if (!_currentSessionId) return;
+    const state = _cards.get(_currentSessionId);
+    if (!state || actionIndex < 0 || actionIndex >= state.actions.length) return;
+    const action = state.actions[actionIndex];
+
+    // Set loading for this specific action button
+    action.loading = true;
+    setCardState({ ...state });
+
+    try {
+      const result = action.handler();
+      if (result instanceof Promise) {
+        await result;
+      }
+    } finally {
+      // The action handler is expected to dismiss the card when appropriate.
+      // If the card is still visible after the handler completes, dismiss it.
+      const stillPending = _cards.get(_currentSessionId!);
+      if (stillPending === state) {
+        action.loading = false;
+        // Don't auto-dismiss — leave it to the action handler.
+        // If the handler didn't dismiss, update the loading state only.
+        setCardState({ ...state });
+      }
+    }
+  };
+
+  const scrollWrapRef = useRef<HTMLDivElement>(null);
+  const [scrollH, setScrollH] = useState<number | undefined>(undefined);
+
+  // Reset height when card is dismissed so re-open starts fresh
+  useEffect(() => {
+    if (!visible) setScrollH(undefined);
+  }, [visible]);
+
+  useLayoutEffect(() => {
+    if (!visible || !cardState) return;
+    // Measure after a microtask to let the DOM settle with height: auto
+    requestAnimationFrame(() => {
+      if (!scrollWrapRef.current) return;
+      const maxH = window.innerHeight * 0.5;
+      const naturalH = scrollWrapRef.current.scrollHeight;
+      setScrollH(Math.min(naturalH, maxH));
+    });
+  }, [visible, cardState?.content]);
+
+  if (!visible || !cardState) return null;
+  const showClose = !cardState.noDismiss && cardState.actions.length === 0;
+  const hasActions = cardState.actions.length > 0;
+  const anyActionLoading = cardState.actions.some(a => a.loading);
 
   return (
     <div className={`bg-task-card ${visible ? 'visible' : ''}`}>
       <div className="bg-task-inner">
-        <div className="bg-task-header" style={{ color: 'var(--muted)' }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-            <circle cx="12" cy="12" r="10" />
-            <line x1="12" y1="16" x2="12" y2="12" />
-            <line x1="12" y1="8" x2="12.01" y2="8" />
-          </svg>
-          <span>Info</span>
-          <button className="bg-task-close" onClick={handleDismiss} aria-label="Dismiss" title="Dismiss">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
+        <div className="bg-task-content">
+          {cardState.loading ? (
+            <div className="bg-task-desc" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <Icon name="progress_activity" size={21} style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }} />
+              <span>{cardState.content}</span>
+            </div>
+          ) : (
+            <>
+              <div ref={scrollWrapRef} style={{ flex: 1, minWidth: 0, height: scrollH ?? 'auto', overflow: 'hidden' }}>
+                <CustomScrollbar style={{ height: '100%' }}>
+                  <div
+                    className="bg-task-desc"
+                    style={{ maxWidth: 'none' }}
+                    dangerouslySetInnerHTML={{ __html: renderContent(cardState.content) }}
+                  />
+                  {hasActions && (
+                    <div className="bg-task-btns" style={{ marginTop: 10 }}>
+                      {cardState.actions.map((action, idx) => (
+                        <button
+                          key={idx}
+                          className={`bg-task-btn${action.primary ? ' bg-task-btn--primary' : ''}`}
+                          onClick={() => handleAction(idx)}
+                          disabled={anyActionLoading}
+                        >
+                          {action.loading ? '...' : action.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </CustomScrollbar>
+              </div>
+              {!hasActions && (
+                <div className="bg-task-sider">
+                  {showClose ? (
+                    <button className="bg-task-close" onClick={handleDismiss} aria-label="Dismiss">Close</button>
+                  ) : (
+                    <button className="bg-task-btn bg-task-btn--primary" onClick={handleDismiss} style={{ marginTop: 0 }}>
+                      OK
+                    </button>
+                  )}
+                </div>
+              )}
+            </>
+          )}
         </div>
-        {loading ? (
-          <div className="bg-task-desc" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}>
-              <circle cx="12" cy="12" r="10" strokeOpacity="0.25" />
-              <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" />
-            </svg>
-            <span>{content}</span>
-          </div>
-        ) : (
-          <div
-            className="bg-task-desc"
-            dangerouslySetInnerHTML={{ __html: renderContent(content) }}
-          />
-        )}
       </div>
     </div>
   );

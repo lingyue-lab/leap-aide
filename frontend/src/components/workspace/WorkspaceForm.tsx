@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
+import FormPage, { FormActions } from '@/components/common/FormPage';
+import { FormField, TextField } from '@/components/common/FormField';
+import { Icon } from '@/components/common/Icons';
 
 interface WorkspaceFormProps {
   onSuccess: () => void;
@@ -7,6 +11,7 @@ interface WorkspaceFormProps {
 }
 
 export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProps) {
+  const { t } = useTranslation('common');
   const { addWorkspace } = useWorkspaceStore();
 
   const [addPath, setAddPath] = useState('');
@@ -126,38 +131,27 @@ export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProp
   };
 
   return (
-    <div className="flex flex-col overflow-hidden" style={{ flex: 1 }}>
-      {/* Top bar */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--border)] bg-[var(--header-bg)]">
-        <div className="text-sm font-semibold">New Workspace</div>
-        <div className="flex items-center gap-2 flex-shrink-0">
-          {error && (
-            <span className="text-xs text-[var(--accent)] self-center max-w-[280px] truncate">{error}</span>
-          )}
-          <button
-            className="cron-btn run text-xs px-3 py-1"
-            onClick={handleSubmit}
-            disabled={!addPath.trim() || submitting}
-          >
-            {submitting ? 'Adding…' : 'Add'}
-          </button>
-          <button className="cron-btn text-xs px-3 py-1" onClick={onCancel} disabled={submitting}>
-            Cancel
-          </button>
-        </div>
-      </div>
-
-      {/* Body */}
-      <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-5 max-w-2xl mx-auto w-full">
+    <FormPage
+      title={t('workspaces.new_workspace')}
+      error={error}
+      actions={
+        <FormActions
+          onSubmit={handleSubmit}
+          onCancel={onCancel}
+          busy={submitting}
+          submitDisabled={!addPath.trim()}
+        />
+      }
+    >
 
         {/* Path field */}
-        <div>
-          <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-            Workspace Path
-            <span className="text-[10px] font-normal ml-1">(absolute path to a directory)</span>
-          </label>
+        <FormField
+          label="Workspace Path"
+          hint="(absolute path to a directory)"
+          helper="Start typing to see directory suggestions. Use ↑↓ to navigate, Tab or Enter to select."
+        >
           <div className="relative">
-            <input
+            <TextField
               ref={pathInputRef}
               type="text"
               placeholder="/home/user/my-project"
@@ -165,7 +159,6 @@ export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProp
               onChange={(e) => handlePathChange(e.target.value)}
               onKeyDown={handlePathKeyDown}
               onFocus={() => addPath.trim() && suggestions.length > 0 && setSuggestionsOpen(true)}
-              className="w-full px-3 py-2 text-sm bg-[rgba(255,255,255,0.05)] border border-[var(--border2)] rounded-lg outline-none focus:border-[var(--accent)] transition-colors"
             />
             {suggestionsOpen && suggestions.length > 0 && (
               <div
@@ -183,44 +176,32 @@ export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProp
                     }`}
                     onMouseDown={(e) => { e.preventDefault(); handleSelectSuggestion(s); }}
                   >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0 opacity-60">
-                      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-                    </svg>
+                    <Icon name="folder_open" size={14} className="flex-shrink-0 opacity-60" />
                     {s}
                   </button>
                 ))}
               </div>
             )}
           </div>
-          <p className="text-[11px] text-[var(--muted)] mt-1.5">
-            Start typing to see directory suggestions. Use ↑↓ to navigate, Tab or Enter to select.
-          </p>
-        </div>
+        </FormField>
 
         {/* Display name field */}
-        <div>
-          <label className="block text-xs font-medium text-[var(--muted)] mb-1">
-            Display Name
-            <span className="text-[10px] font-normal ml-1">(optional — defaults to folder name)</span>
-          </label>
-          <input
+        <FormField label="Display Name" hint="(optional — defaults to folder name)">
+          <TextField
             type="text"
             placeholder={addPath ? addPath.split('/').filter(Boolean).pop() || '' : 'e.g. My Project'}
             value={addName}
             onChange={(e) => setAddName(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
-            className="w-full px-3 py-2 text-sm bg-[rgba(255,255,255,0.05)] border border-[var(--border2)] rounded-lg outline-none focus:border-[var(--accent)] transition-colors"
           />
-        </div>
+        </FormField>
 
         {/* Preview */}
         {addPath.trim() && (
           <div className="rounded-lg border border-[var(--border2)] bg-[var(--hover-bg)] p-4">
             <div className="text-xs font-medium text-[var(--muted)] mb-3 uppercase tracking-wider">Preview</div>
             <div className="flex items-center gap-3">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-[var(--accent)] flex-shrink-0">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-              </svg>
+              <Icon name="folder_open" size={23} className="text-[var(--accent)] flex-shrink-0" />
               <div className="min-w-0">
                 <div className="text-sm font-medium truncate">
                   {addName.trim() || addPath.trim().split('/').filter(Boolean).pop() || addPath.trim()}
@@ -230,7 +211,6 @@ export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProp
             </div>
           </div>
         )}
-      </div>
-    </div>
+    </FormPage>
   );
 }

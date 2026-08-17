@@ -2,25 +2,31 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<script>
+(function(){var t=localStorage.getItem('hermes-theme')||'dark',r='dark';if(t==='light')r='light';else if(t==='system')r=window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',r);})();
+</script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Hermes Observer — __SESSION_ID__</title>
+<link rel="icon" href="/static/logo/logo.svg" type="image/svg+xml">
+<title>Leap Aide Observation - __SESSION_ID__</title>
 <style>
+:root{--obs-bg:#0d1117;--obs-text:#c9d1d9;--obs-overlay-bg:rgba(13,17,23,.92);--obs-spinner-border:#30363d;--obs-spinner-top:#58a6ff;--obs-sub-text:#8b949e;--obs-btn-bg:#238636;--obs-btn-border:#2ea043;--obs-btn-hover:#2ea043;--obs-btn-text:#fff}
+:root[data-theme="light"]{--obs-bg:#ffffff;--obs-text:#1f2328;--obs-overlay-bg:rgba(255,255,255,.92);--obs-spinner-border:#d0d7de;--obs-spinner-top:#0969da;--obs-sub-text:#656d76;--obs-btn-bg:#1f883d;--obs-btn-border:#1f883d;--obs-btn-hover:#2c974b;--obs-btn-text:#fff}
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
-body{background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;overflow:hidden;height:100vh;width:100vw}
+body{background:var(--obs-bg);color:var(--obs-text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;overflow:hidden;height:100vh;width:100vw}
 #c{width:100vw;height:100vh;display:block}
 
 /* ── Overlay ───────────────────────────────────────────────── */
-#overlay{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:10;background:rgba(13,17,23,.92);transition:opacity .35s;backdrop-filter:blur(4px)}
+#overlay{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:10;background:var(--obs-overlay-bg);transition:opacity .35s;backdrop-filter:blur(4px)}
 #overlay.hidden{opacity:0;pointer-events:none}
 #overlay-icon{font-size:48px;margin-bottom:12px;display:none}
 #overlay-icon.show{display:block}
-.spinner{width:40px;height:40px;border:3px solid #30363d;border-top-color:#58a6ff;border-radius:50%;animation:spin .8s linear infinite;margin-bottom:16px}
+.spinner{width:40px;height:40px;border:3px solid var(--obs-spinner-border);border-top-color:var(--obs-spinner-top);border-radius:50%;animation:spin .8s linear infinite;margin-bottom:16px}
 @keyframes spin{to{transform:rotate(360deg)}}
-#status{font-size:15px;color:#c9d1d9;margin-bottom:8px;text-align:center;max-width:320px;line-height:1.4}
-#sub-status{font-size:12px;color:#8b949e;margin-bottom:16px;display:none}
+#status{font-size:15px;color:var(--obs-text);margin-bottom:8px;text-align:center;max-width:320px;line-height:1.4}
+#sub-status{font-size:12px;color:var(--obs-sub-text);margin-bottom:16px;display:none}
 #sub-status.show{display:block}
-#retry{display:none;padding:10px 28px;background:#238636;color:#fff;border:1px solid #2ea043;border-radius:6px;cursor:pointer;font-size:14px;font-weight:500;transition:background .15s}
-#retry:hover{background:#2ea043}
+#retry{display:none;padding:10px 28px;background:var(--obs-btn-bg);color:var(--obs-btn-text);border:1px solid var(--obs-btn-border);border-radius:6px;cursor:pointer;font-size:14px;font-weight:500;transition:background .15s}
+#retry:hover{background:var(--obs-btn-hover)}
 #retry.show{display:inline-block}
 </style>
 </head>
@@ -138,6 +144,9 @@ doConnect();
 
 window.addEventListener('beforeunload', () => {
   if (rfb) { try { rfb.disconnect(); } catch (_) {} }
+});
+window.addEventListener('storage', (e) => {
+  if (e.key === 'hermes-theme') { location.reload(); }
 });
 </script>
 </body>

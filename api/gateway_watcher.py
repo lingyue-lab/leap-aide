@@ -72,18 +72,24 @@ def _get_agent_sessions_from_db() -> list:
             else:
                 from api.models import _resolve_gateway_workspace
                 _workspace = _resolve_gateway_workspace()
+            _msg_count = row['message_count'] or row['actual_message_count'] or 0
+            # Read-time clamp: last_seen_msg_count must never exceed message_count.
+            _last_seen = row.get('last_seen_msg_count__webui')
+            _clamped_last_seen = min(_last_seen or 0, _msg_count) if _last_seen is not None else None
             sessions.append({
                 'session_id': row['id'],
                 'title': row['title'] or row.get('first_user_message') or 'Agent Session',
                 'workspace': _workspace,
                 'model': row['model'] or None,
-                'message_count': row['message_count'] or row['actual_message_count'] or 0,
+                'message_count': _msg_count,
+                'last_seen_msg_count': _clamped_last_seen,
                 'created_at': row['started_at'],
                 'updated_at': row['last_activity'] or row['started_at'],
                 'source': _source,
                 'source_tag': _source,
                 'user_id': _user_id,
                 'is_cli_session': True,
+                'active_stream_id': row.get('active_stream_id'),
             })
         return sessions
     except Exception:

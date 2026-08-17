@@ -6,7 +6,7 @@ import SkillsPanel from '@/components/sidebar/SkillsPanel';
 import MemoryPanel from '@/components/sidebar/MemoryPanel';
 import WorkspacesPanel from '@/components/sidebar/WorkspacesPanel';
 import TerminalPanel from '@/components/sidebar/TerminalPanel';
-import VncPanel from '@/components/vnc/VncPanel';
+
 import SettingsPanel from '@/components/sidebar/SettingsPanel';
 import type { NavPanel } from '@/types';
 
@@ -67,7 +67,7 @@ export default function Sidebar({ width = 300, onResizeStart }: SidebarProps) {
             </div>
 
             <div className={`panel-view ${activePanel === 'skills' ? 'active' : ''}`} id="panelSkills">
-              <SkillsPanel />
+              <SkillsPanel isActive={activePanel === 'skills'} />
             </div>
 
             <div className={`panel-view ${activePanel === 'memory' ? 'active' : ''}`} id="panelMemory">
@@ -80,10 +80,6 @@ export default function Sidebar({ width = 300, onResizeStart }: SidebarProps) {
 
             <div className={`panel-view ${activePanel === 'terminal' ? 'active' : ''}`} id="panelTerminal">
               <TerminalPanel />
-            </div>
-
-            <div className={`panel-view ${activePanel === 'vnc' ? 'active' : ''}`} id="panelVnc">
-              <VncPanel />
             </div>
 
             <div className={`panel-view ${activePanel === 'settings' ? 'active' : ''}`} id="panelSettings">

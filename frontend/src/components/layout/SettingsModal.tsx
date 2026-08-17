@@ -8,14 +8,9 @@ interface SettingsModalProps {
 }
 
 const THEMES: { value: Theme; label: string }[] = [
-  { value: 'dark',      label: 'Dark (VSCode Dark Modern)' },
-  { value: 'light',     label: 'Light (VSCode Light Modern)' },
+  { value: 'dark',      label: 'Dark' },
+  { value: 'light',     label: 'Light' },
   { value: 'system',    label: 'System' },
-  { value: 'slate',     label: 'Slate' },
-  { value: 'solarized', label: 'Solarized Dark' },
-  { value: 'monokai',   label: 'Monokai' },
-  { value: 'nord',      label: 'Nord' },
-  { value: 'oled',      label: 'OLED Black' },
 ];
 
 const LANGUAGES = [
@@ -92,10 +87,10 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
         {/* Header */}
         <div className="settings-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 18 }}>⚙️</span>
+            <span style={{ fontSize: 21 }}>⚙️</span>
             <div>
-              <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text)' }}>Settings &amp; Preferences</div>
-              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>Configure Hermes WebUI</div>
+              <div style={{ fontWeight: 700, fontSize: 17, color: 'var(--text)' }}>Settings &amp; Preferences</div>
+              <div style={{ fontSize: 14, color: 'var(--muted)', marginTop: 2 }}>Configure Hermes WebUI</div>
             </div>
           </div>
           <button
@@ -107,7 +102,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
               color: 'var(--muted)',
               padding: '4px 8px',
               borderRadius: 6,
-              fontSize: 18,
+              fontSize: 21,
               lineHeight: 1,
             }}
             title="Close"
@@ -121,7 +116,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
         <div className="settings-body">
           {/* Appearance */}
           <div style={{ marginBottom: 20 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--muted)', marginBottom: 10 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--muted)', marginBottom: 10 }}>
               Appearance
             </div>
 
@@ -159,7 +154,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
           {/* Model & Input */}
           <div style={{ marginBottom: 20 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--muted)', marginBottom: 10 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--muted)', marginBottom: 10 }}>
               Model &amp; Input
             </div>
 
@@ -186,21 +181,11 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
               </select>
             </div>
 
-            <div className="settings-field">
-              <label htmlFor="s-botname">Bot Name</label>
-              <input
-                id="s-botname"
-                type="text"
-                value={form.bot_name ?? ''}
-                onChange={e => set('bot_name', e.target.value)}
-                placeholder="Hermes"
-              />
-            </div>
           </div>
 
           {/* Notifications & Display */}
           <div style={{ marginBottom: 20 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--muted)', marginBottom: 10 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--muted)', marginBottom: 10 }}>
               Notifications &amp; Display
             </div>
 
@@ -211,7 +196,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                 checked={form.sound_enabled ?? true}
                 onChange={e => set('sound_enabled', e.target.checked)}
               />
-              <label htmlFor="s-sound" style={{ marginBottom: 0, textTransform: 'none', fontSize: 13, fontWeight: 500, color: 'var(--text)' }}>
+              <label htmlFor="s-sound" style={{ marginBottom: 0, textTransform: 'none', fontSize: 15, fontWeight: 500, color: 'var(--text)' }}>
                 Sound effects
               </label>
             </div>
@@ -223,7 +208,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                 checked={form.notifications_enabled ?? false}
                 onChange={e => set('notifications_enabled', e.target.checked)}
               />
-              <label htmlFor="s-notif" style={{ marginBottom: 0, textTransform: 'none', fontSize: 13, fontWeight: 500, color: 'var(--text)' }}>
+              <label htmlFor="s-notif" style={{ marginBottom: 0, textTransform: 'none', fontSize: 15, fontWeight: 500, color: 'var(--text)' }}>
                 Desktop notifications
               </label>
             </div>
@@ -231,23 +216,11 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
             <div className="settings-field" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <input
                 type="checkbox"
-                id="s-tokens"
-                checked={form.show_token_usage ?? true}
-                onChange={e => set('show_token_usage', e.target.checked)}
-              />
-              <label htmlFor="s-tokens" style={{ marginBottom: 0, textTransform: 'none', fontSize: 13, fontWeight: 500, color: 'var(--text)' }}>
-                Show token usage
-              </label>
-            </div>
-
-            <div className="settings-field" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <input
-                type="checkbox"
                 id="s-cli"
-                checked={form.show_cli_sessions ?? false}
+                checked={form.show_cli_sessions ?? true}
                 onChange={e => set('show_cli_sessions', e.target.checked)}
               />
-              <label htmlFor="s-cli" style={{ marginBottom: 0, textTransform: 'none', fontSize: 13, fontWeight: 500, color: 'var(--text)' }}>
+              <label htmlFor="s-cli" style={{ marginBottom: 0, textTransform: 'none', fontSize: 15, fontWeight: 500, color: 'var(--text)' }}>
                 Show CLI sessions in sidebar
               </label>
             </div>
@@ -255,11 +228,35 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
             <div className="settings-field" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <input
                 type="checkbox"
-                id="s-updates"
-                checked={form.check_updates ?? true}
-                onChange={e => set('check_updates', e.target.checked)}
+                id="s-messaging"
+                checked={form.show_messaging_sessions ?? true}
+                onChange={e => set('show_messaging_sessions', e.target.checked)}
               />
-              <label htmlFor="s-updates" style={{ marginBottom: 0, textTransform: 'none', fontSize: 13, fontWeight: 500, color: 'var(--text)' }}>
+              <label htmlFor="s-messaging" style={{ marginBottom: 0, textTransform: 'none', fontSize: 15, fontWeight: 500, color: 'var(--text)' }}>
+                Show messaging sessions in sidebar
+              </label>
+            </div>
+
+            <div className="settings-field" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <input
+                type="checkbox"
+                id="s-cron"
+                checked={form.show_cron_sessions ?? false}
+                onChange={e => set('show_cron_sessions', e.target.checked)}
+              />
+              <label htmlFor="s-cron" style={{ marginBottom: 0, textTransform: 'none', fontSize: 15, fontWeight: 500, color: 'var(--text)' }}>
+                Show scheduled task sessions in sidebar
+              </label>
+            </div>
+
+            <div className="settings-field" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <input
+                type="checkbox"
+                id="s-updates"
+                checked={form.check_for_updates ?? true}
+                onChange={e => set('check_for_updates', e.target.checked)}
+              />
+              <label htmlFor="s-updates" style={{ marginBottom: 0, textTransform: 'none', fontSize: 15, fontWeight: 500, color: 'var(--text)' }}>
                 Check for updates
               </label>
             </div>
@@ -267,7 +264,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
           {/* Error */}
           {error && (
-            <div style={{ marginBottom: 12, padding: '8px 12px', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 8, color: '#f87171', fontSize: 13 }}>
+            <div style={{ marginBottom: 12, padding: '8px 12px', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 8, color: '#f87171', fontSize: 15 }}>
               {error}
             </div>
           )}
@@ -283,7 +280,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                 background: 'none',
                 color: 'var(--muted)',
                 cursor: 'pointer',
-                fontSize: 13,
+                fontSize: 15,
               }}
             >
               Cancel
@@ -298,7 +295,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                 background: saved ? 'rgba(34, 197, 94, 0.8)' : 'var(--blue)',
                 color: '#fff',
                 cursor: saving ? 'not-allowed' : 'pointer',
-                fontSize: 13,
+                fontSize: 15,
                 fontWeight: 600,
                 opacity: saving ? 0.7 : 1,
                 transition: 'background 0.2s',

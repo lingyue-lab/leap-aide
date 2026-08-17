@@ -60,6 +60,7 @@ from api.config import (
     _resolve_cli_toolsets,
     _INDEX_HTML_PATH,
     get_available_models,
+    load_settings,
     IMAGE_EXTS,
     MD_EXTS,
     MIME_MAP,
@@ -378,7 +379,7 @@ def _normalize_session_model_in_place(session) -> str:
     # a disk write — no need to rebuild the index for a fill-in-blank operation.
     if changed and effective_model and original_model and original_model != effective_model:
         session.model = effective_model
-        session.save(touch_updated_at=False)
+        session.sync_webui_metadata(touch_updated_at=False)
     return effective_model
 
 
@@ -407,6 +408,7 @@ from api.models import (
     import_cli_session,
     get_cli_sessions,
     get_cli_session_messages,
+    MESSAGING_SOURCE_TAGS,
 )
 
 
@@ -429,7 +431,7 @@ from api.workspace import (
     _workspace_blocked_roots,
 )
 from api.upload import handle_upload, handle_transcribe
-from api.streaming import _sse, _run_agent_streaming, cancel_stream
+from api.streaming import _sse, _run_agent_streaming, cancel_stream, _CANCEL_EVENTS
 from api.providers import get_providers, set_provider_key, remove_provider_key
 from api.onboarding import (
     apply_onboarding_setup,
@@ -526,153 +528,32 @@ except ImportError:
     resolve_clarify = lambda *a, **k: 0
 
 
-# ── Login page locale strings ─────────────────────────────────────────────────
-# Add entries here to support more languages on the login page.
-# The key must match the 'language' setting value (from static/i18n.js LOCALES).
-_LOGIN_LOCALE = {
-    "en": {
-        "lang": "en",
-        "title": "Sign in",
-        "subtitle": "Enter your password to continue",
-        "placeholder": "Password",
-        "btn": "Sign in",
-        "invalid_pw": "Invalid password",
-        "conn_failed": "Connection failed",
-    },
-    "es": {
-        "lang": "es-ES",
-        "title": "Iniciar sesi\u00f3n",
-        "subtitle": "Introduce tu contrase\u00f1a para continuar",
-        "placeholder": "Contrase\u00f1a",
-        "btn": "Entrar",
-        "invalid_pw": "Contrase\u00f1a inv\u00e1lida",
-        "conn_failed": "Error de conexi\u00f3n",
-    },
-    "de": {
-        "lang": "de-DE",
-        "title": "Anmelden",
-        "subtitle": "Geben Sie Ihr Passwort ein, um fortzufahren",
-        "placeholder": "Passwort",
-        "btn": "Anmelden",
-        "invalid_pw": "Ung\u00fcltiges Passwort",
-        "conn_failed": "Verbindung fehlgeschlagen",
-    },
-    "ru": {
-        "lang": "ru-RU",
-        "title": "\u0412\u043e\u0439\u0442\u0438",
-        "subtitle": "\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043f\u0430\u0440\u043e\u043b\u044c, \u0447\u0442\u043e\u0431\u044b \u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u044c",
-        "placeholder": "\u041f\u0430\u0440\u043e\u043b\u044c",
-        "btn": "\u0412\u043e\u0439\u0442\u0438",
-        "invalid_pw": "\u041d\u0435\u0432\u0435\u0440\u043d\u044b\u0439 \u043f\u0430\u0440\u043e\u043b\u044c",
-        "conn_failed": "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c\u0441\u044f",
-    },
-    "zh": {
-        "lang": "zh-CN",
-        "title": "\u767b\u5f55",
-        "subtitle": "\u8f93\u5165\u5bc6\u7801\u7ee7\u7eed\u4f7f\u7528",
-        "placeholder": "\u5bc6\u7801",
-        "btn": "\u767b\u5f55",
-        "invalid_pw": "\u5bc6\u7801\u9519\u8bef",
-        "conn_failed": "\u8fde\u63a5\u5931\u8d25",
-    },
-    "zh-Hant": {
-        "lang": "zh-TW",
-        "title": "\u767b\u5f55",
-        "subtitle": "\u8f38\u5165\u5bc6\u78bc\u7e7c\u7e8c\u4f7f\u7528",
-        "placeholder": "\u5bc6\u78bc",
-        "btn": "\u767b\u5f55",
-        "invalid_pw": "\u5bc6\u78bc\u932f\u8aa4",
-        "conn_failed": "\u9023\u63a5\u5931\u6557",
-    },
-}
-
-
-def _resolve_login_locale_key(raw_lang: str | None) -> str:
-    """Resolve settings.language to a known _LOGIN_LOCALE key."""
-    if not raw_lang:
-        return "en"
-    lang = str(raw_lang).strip()
-    if not lang:
-        return "en"
-    if lang in _LOGIN_LOCALE:
-        return lang
-
-    normalized = lang.replace("_", "-")
-    lower = normalized.lower()
-
-    # Case-insensitive direct key match first.
-    for key in _LOGIN_LOCALE:
-        if key.lower() == lower:
-            return key
-
-    # Common Chinese aliases.
-    if lower == "zh" or lower.startswith("zh-cn") or lower.startswith("zh-sg") or lower.startswith("zh-hans"):
-        return "zh"
-    if lower.startswith("zh-tw") or lower.startswith("zh-hk") or lower.startswith("zh-mo") or lower.startswith("zh-hant"):
-        return "zh-Hant" if "zh-Hant" in _LOGIN_LOCALE else "zh"
-
-    # Fallback to base language subtag (e.g. en-US -> en).
-    base = lower.split("-", 1)[0]
-    for key in _LOGIN_LOCALE:
-        if key.lower() == base:
-            return key
-    return "en"
-
-# ── Login page (self-contained, no external deps) ────────────────────────────
-_LOGIN_PAGE_HTML = """<!doctype html>
-<html lang="{{LANG}}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{{BOT_NAME}} — {{LOGIN_TITLE}}</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:#1a1a2e;color:#e8e8f0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
-  height:100vh;display:flex;align-items:center;justify-content:center}
-.card{background:#16213e;border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:36px 32px;
-  width:320px;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.3)}
-.logo{width:48px;height:48px;border-radius:12px;background:linear-gradient(145deg,#e8a030,#e94560);
-  display:flex;align-items:center;justify-content:center;font-weight:800;font-size:20px;color:#fff;
-  margin:0 auto 12px;box-shadow:0 2px 12px rgba(233,69,96,.3)}
-h1{font-size:18px;font-weight:600;margin-bottom:4px}
-.sub{font-size:12px;color:#8888aa;margin-bottom:24px}
-input{width:100%;padding:10px 14px;border-radius:10px;border:1px solid rgba(255,255,255,.1);
-  background:rgba(255,255,255,.04);color:#e8e8f0;font-size:14px;outline:none;margin-bottom:14px;
-  transition:border-color .15s}
-input:focus{border-color:rgba(124,185,255,.5);box-shadow:0 0 0 3px rgba(124,185,255,.1)}
-button{width:100%;padding:10px;border-radius:10px;border:none;background:rgba(124,185,255,.15);
-  border:1px solid rgba(124,185,255,.3);color:#7cb9ff;font-size:14px;font-weight:600;cursor:pointer;
-  transition:all .15s}
-button:hover{background:rgba(124,185,255,.25)}
-.err{color:#e94560;font-size:12px;margin-top:10px;display:none}
-</style></head><body>
-<div class="card">
-  <div class="logo">{{BOT_NAME_INITIAL}}</div>
-  <h1>{{BOT_NAME}}</h1>
-  <p class="sub">{{LOGIN_SUBTITLE}}</p>
-  <form id="login-form" data-invalid-pw="{{LOGIN_INVALID_PW}}" data-conn-failed="{{LOGIN_CONN_FAILED}}">
-    <input type="password" id="pw" placeholder="{{LOGIN_PLACEHOLDER}}" autofocus>
-    <button type="submit">{{LOGIN_BTN}}</button>
-  </form>
-  <div class="err" id="err"></div>
-</div>
-<script src="/static/login.js"></script>
-</body></html>"""
-
 # ── GET routes ────────────────────────────────────────────────────────────────
 
 
 def handle_get(handler, parsed) -> bool:
     """Handle all GET routes. Returns True if handled, False for 404."""
 
-    if parsed.path in ("/", "/index.html"):
-        return t(
-            handler,
-            _INDEX_HTML_PATH.read_text(encoding="utf-8"),
-            content_type="text/html; charset=utf-8",
+    if parsed.path in ("/", "/index.html", "/login"):
+        html = _INDEX_HTML_PATH.read_text(encoding="utf-8")
+        # Inject font_size and theme from server settings so the inline script
+        # can use them before React mounts, avoiding a flash of wrong size/theme
+        # on first load or after clearing browser data.
+        try:
+            settings = load_settings()
+            font_size = settings.get("font_size", "medium")
+            theme = settings.get("theme", "dark")
+        except Exception:
+            font_size = "medium"
+            theme = "dark"
+        injected = (
+            '<script>window.__HERMES_INJECTED__={font_size:"' + font_size
+            + '",theme:"' + theme + '"};</script>\n</head>'
         )
-
-    if parsed.path == "/login":
+        html = html.replace("</head>", injected)
         return t(
             handler,
-            _INDEX_HTML_PATH.read_text(encoding="utf-8"),
+            html,
             content_type="text/html; charset=utf-8",
         )
 
@@ -881,6 +762,8 @@ def handle_get(handler, parsed) -> bool:
                 "tool_calls": getattr(s, "tool_calls", []) if load_messages else [],
                 "active_stream_id": getattr(s, "active_stream_id", None),
                 "pending_user_message": getattr(s, "pending_user_message", None),
+                "pending_original_message": getattr(s, "_pending_original_message", None),
+                "pending_user_message_ts": getattr(s, "_pending_user_message_ts", None),
                 "pending_attachments": getattr(s, "pending_attachments", []) if load_messages else [],
                 "pending_started_at": getattr(s, "pending_started_at", None),
             }
@@ -1021,15 +904,14 @@ def handle_get(handler, parsed) -> bool:
     if parsed.path == "/api/sessions":
         webui_sessions = all_sessions()
         settings = load_settings()
-        if settings.get("show_cli_sessions"):
-            cli = get_cli_sessions()
-            webui_ids = {s["session_id"] for s in webui_sessions}
-            from api.models import _hide_from_default_sidebar as _cron_hide
-            deduped_cli = [s for s in cli
-                           if s["session_id"] not in webui_ids
-                           and not _cron_hide(s)]
-        else:
-            deduped_cli = []
+        cli = get_cli_sessions(
+            show_cli=settings.get("show_cli_sessions", True),
+            show_messaging=settings.get("show_messaging_sessions", True),
+            show_cron=settings.get("show_cron_sessions", False),
+        )
+        webui_ids = {s["session_id"] for s in webui_sessions}
+        deduped_cli = [s for s in cli
+                       if s["session_id"] not in webui_ids]
         merged = webui_sessions + deduped_cli
         merged.sort(
             key=lambda s: s.get("last_message_at") or s.get("updated_at", 0) or 0,
@@ -1058,16 +940,16 @@ def handle_get(handler, parsed) -> bool:
         user_workspaces = load_workspaces()
         user_paths = {w['path'] for w in user_workspaces}
 
-        # The default workspace (from config.yaml terminal.cwd) is readonly
+        # The default workspace (from config.yaml terminal.cwd) is external
         try:
             _default_ws = profile_default_workspace()
         except Exception:
             _default_ws = ''
         for w in user_workspaces:
             if w['path'] == _default_ws:
-                w['readonly'] = True
+                w['external'] = True
 
-        # Derive readonly workspaces from gateway/CLI sessions that have real cwd
+        # Derive external workspaces from gateway/CLI sessions that have real cwd
         derived: list[dict] = []
         try:
             for s in get_cli_sessions():
@@ -1081,7 +963,7 @@ def handle_get(handler, parsed) -> bool:
                 derived.append({
                     'path': ws_path,
                     'name': name,
-                    'readonly': True,
+                    'external': True,
                 })
         except Exception:
             pass  # state.db unavailable — degrade gracefully
@@ -1257,9 +1139,6 @@ def handle_get(handler, parsed) -> bool:
     if parsed.path == "/api/crons/output":
         return _handle_cron_output(handler, parsed)
 
-    if parsed.path == "/api/crons/recent":
-        return _handle_cron_recent(handler, parsed)
-
     # ── Skills API (GET) ──
     if parsed.path == "/api/skills":
         from tools.skills_tool import skills_list as _skills_list, SKILLS_DIR
@@ -1394,8 +1273,8 @@ def handle_get(handler, parsed) -> bool:
 
     # ── Session Observer routes ──────────────────────────────────────────
     import re as _re_obs
-    _obs_info = _re_obs.match(r'^/api/observer/([a-zA-Z0-9_-]+)/info$', parsed.path)
-    _obs_root = _re_obs.match(r'^/api/observer/([a-zA-Z0-9_-]+)$', parsed.path)
+    _obs_info = _re_obs.match(r'^/observations/([a-zA-Z0-9_-]+)/info$', parsed.path)
+    _obs_root = _re_obs.match(r'^/observations/([a-zA-Z0-9_-]+)$', parsed.path)
 
     if _obs_info:
         from api.observer import handle_observer_info
@@ -1539,7 +1418,7 @@ def handle_post(handler, parsed) -> bool:
             return bad(handler, "Session not found", 404)
         with _get_session_agent_lock(body["session_id"]):
             s.title = str(body["title"]).strip()[:80] or "Untitled"
-            s.save()
+            s.sync_webui_metadata()
         return j(handler, {"session": s.compact()})
 
     if parsed.path == "/api/personality/set":
@@ -1575,7 +1454,7 @@ def handle_post(handler, parsed) -> bool:
             prompt = _resolve_personality_prompt(_cfg2, name) or ""
         with _get_session_agent_lock(sid):
             s.personality = name if name else None
-            s.save()
+            s.sync_webui_metadata()
         return j(handler, {"ok": True, "personality": s.personality, "prompt": prompt})
 
     if parsed.path == "/api/session/update":
@@ -1594,6 +1473,18 @@ def handle_post(handler, parsed) -> bool:
         with _get_session_agent_lock(body["session_id"]):
             s.workspace = new_ws
             s.model = body.get("model", s.model)
+            # ── Persist model to state.db via SDK API ──
+            # update_session_model unconditionally writes the model column
+            # (no COALESCE) so the sidebar reflects the user's latest choice
+            # even after a server restart.
+            try:
+                from api.models import _get_session_db
+                db = _get_session_db()
+                if db is not None:
+                    db.update_session_model(s.session_id, s.model)
+            except Exception:
+                logger.warning("Failed to persist model for session %s",
+                               s.session_id, exc_info=True)
             # Per-session reasoning effort (None = use global default)
             if "reasoning_effort" in body:
                 raw = str(body["reasoning_effort"] or "").strip().lower()
@@ -1603,7 +1494,7 @@ def handle_post(handler, parsed) -> bool:
                     return bad(handler, f"Invalid reasoning_effort: {body['reasoning_effort']}")
                 else:
                     s.reasoning_effort = raw
-            s.save()
+            s.sync_webui_metadata()
         return j(handler, {"session": s.compact() | {"messages": s.messages}})
 
     if parsed.path == "/api/session/seen":
@@ -1611,13 +1502,20 @@ def handle_post(handler, parsed) -> bool:
             require(body, "session_id", "msg_count")
         except ValueError as e:
             return bad(handler, str(e))
+        sid = body["session_id"]
+        msg_count = int(body["msg_count"])
         try:
-            s = get_session(body["session_id"])
+            s = get_session(sid)
         except KeyError:
-            return bad(handler, "Session not found", 404)
-        with _get_session_agent_lock(body["session_id"]):
-            s.last_seen_msg_count = int(body["msg_count"])
-            s.save(touch_updated_at=False)
+            s = None
+        if s is not None:
+            with _get_session_agent_lock(sid):
+                s.last_seen_msg_count = msg_count
+                s.sync_webui_metadata(touch_updated_at=False)
+        else:
+            # Session not in WebUI store — could be a gateway/CLI session.
+            # Write last_seen_msg_count directly to the agent's state.db.
+            _write_gateway_last_seen(sid, msg_count)
         return j(handler, {"ok": True})
 
     if parsed.path == "/api/session/delete":
@@ -1687,8 +1585,21 @@ def handle_post(handler, parsed) -> bool:
             return bad(handler, "Session not found", 404)
         keep = int(body["keep_count"])
         with _get_session_agent_lock(body["session_id"]):
-            s.messages = s.messages[:keep]
-            s.save()
+            _old_messages = s.messages
+            s.messages = _old_messages[:keep]
+            # ── Soft-delete truncated messages in state.db ──
+            if keep < len(_old_messages):
+                _target = _old_messages[keep]
+                _target_id = _target.get('id') if isinstance(_target, dict) else None
+                if _target_id is not None:
+                    try:
+                        from api.models import _get_session_db
+                        db = _get_session_db()
+                        if db is not None:
+                            db.rewind_to_message(body["session_id"], _target_id)
+                    except Exception:
+                        logger.debug("rewind_to_message failed for %s", body["session_id"])
+            s.sync_webui_metadata()
         return j(
             handler, {"ok": True, "session": s.compact() | {"messages": s.messages}}
         )
@@ -1712,9 +1623,17 @@ def handle_post(handler, parsed) -> bool:
             else:
                 s.messages = []
             s.tool_calls = []
-            # Do NOT reset input_tokens/output_tokens — they serve as a signal that this
-            # session once had real activity, used by the sidebar filter to avoid hiding
-            # cleared sessions that have title="Untitled" and 0 messages.
+            # ── Reset context-window state for the cleared session ──
+            # last_prompt_tokens: reset to 0 — no active prompt exists after clear.
+            # It will be repopulated on the next turn by the context compressor.
+            s.last_prompt_tokens = 0
+            # input_tokens / output_tokens / estimated_cost are intentionally NOT
+            # reset — they are cumulative API usage across the session's lifetime.
+            # Clearing message history does not undo the tokens that were already
+            # consumed and billed.
+            # Reset _metadata_message_count so compact() falls back to the
+            # authoritative len(self.messages) instead of a stale DB value.
+            s._metadata_message_count = None
             # Reset last_seen_msg_count to match the new message count so the unread
             # badge (+N) computes correctly. Without this, a session that had 351
             # messages (last_seen=351) then gets cleared to 0 would compute
@@ -1727,10 +1646,21 @@ def handle_post(handler, parsed) -> bool:
             s.pending_attachments = []
             s.active_stream_id = None
             s.pending_started_at = None
+            # ── Persist message truncation to state.db ──
+            # /clear truncates from the head (keeps last N), which
+            # rewind_to_message (tail-truncate) cannot express.
+            # Use replace_messages for correctness.
             try:
-                s.save()
+                from api.models import _get_session_db
+                _db = _get_session_db()
+                if _db is not None:
+                    _db.replace_messages(sid, s.messages)
             except Exception:
-                logger.debug("Failed to save session after clear: %s", sid)
+                logger.warning("replace_messages failed for clear: %s", sid, exc_info=True)
+            try:
+                s.sync_webui_metadata()
+            except Exception:
+                logger.warning("sync_webui_metadata failed for clear: %s", sid, exc_info=True)
         # Evict cached agent so next turn starts fresh
         from api.config import _evict_session_agent
         _evict_session_agent(sid)
@@ -1784,7 +1714,7 @@ def handle_post(handler, parsed) -> bool:
         try:
             s = get_session(sid)
             s.mode = mode
-            s.save()
+            s.sync_webui_metadata()
             # If switching to yolo, resolve pending approvals
             if mode == "yolo":
                 enable_session_yolo(sid)
@@ -1827,7 +1757,7 @@ def handle_post(handler, parsed) -> bool:
             try:
                 s = get_session(sid)
                 s.mode = "yolo"
-                s.save()
+                s.sync_webui_metadata()
             except Exception:
                 pass
             try:
@@ -1842,7 +1772,7 @@ def handle_post(handler, parsed) -> bool:
             try:
                 s = get_session(sid)
                 s.mode = "manual"
-                s.save()
+                s.sync_webui_metadata()
             except Exception:
                 pass
         return j(handler, {"ok": True, "yolo_enabled": enabled})
@@ -1882,12 +1812,18 @@ def handle_post(handler, parsed) -> bool:
     if parsed.path == "/api/crons/resume":
         return _handle_cron_resume(handler, body)
 
-    if parsed.path == "/api/crons/seen":
-        return _handle_cron_seen(handler, body)
-
     # ── File ops (POST) ──
     if parsed.path == "/api/workspace/file":
         return _handle_workspace_file_write(handler, body)
+
+    if parsed.path == "/api/workspace/delete":
+        return _handle_workspace_file_delete(handler, body)
+
+    if parsed.path == "/api/workspace/new":
+        return _handle_workspace_new(handler, body)
+
+    if parsed.path == "/api/workspace/move":
+        return _handle_workspace_move(handler, body)
 
     if parsed.path == "/api/file/delete":
         return _handle_file_delete(handler, body)
@@ -1941,6 +1877,15 @@ def handle_post(handler, parsed) -> bool:
 
     if parsed.path == "/api/skills/content":
         return _handle_skill_file_save(handler, body)
+
+    if parsed.path == "/api/skills/file/delete":
+        return _handle_skill_file_delete(handler, body)
+
+    if parsed.path == "/api/skills/file/create":
+        return _handle_skill_file_create(handler, body)
+
+    if parsed.path == "/api/skills/file/rename":
+        return _handle_skill_file_rename(handler, body)
 
     # ── Memory (POST) ──
     if parsed.path == "/api/memory/write":
@@ -2030,9 +1975,6 @@ def handle_post(handler, parsed) -> bool:
             set_auth_cookie,
             verify_session,
         )
-
-        if "bot_name" in body:
-            body["bot_name"] = (str(body["bot_name"]) or "").strip() or "Hermes"
 
         auth_enabled_before = is_auth_enabled()
         current_cookie = parse_cookie(handler)
@@ -2145,7 +2087,7 @@ def handle_post(handler, parsed) -> bool:
             return bad(handler, "Session not found", 404)
         with _get_session_agent_lock(body["session_id"]):
             s.pinned = bool(body.get("pinned", True))
-            s.save()
+            s.sync_webui_metadata()
 
         # Pin → start SessionDisplay; Unpin → stop SessionDisplay
         try:
@@ -2169,20 +2111,46 @@ def handle_post(handler, parsed) -> bool:
     # ── Session assign workspace (POST) ──
     if parsed.path == "/api/session/workspace":
         try:
-            require(body, "session_id", "workspace")
+            require(body, "session_id")
         except ValueError as e:
             return bad(handler, str(e))
         try:
             s = get_session(body["session_id"])
         except KeyError:
             return bad(handler, "Session not found", 404)
+        raw_ws = body.get("workspace", "")
         try:
-            new_ws = str(resolve_trusted_workspace(body["workspace"]))
+            new_ws = str(resolve_trusted_workspace(raw_ws)) if raw_ws else ""
         except ValueError as e:
             return bad(handler, str(e))
         with _get_session_agent_lock(body["session_id"]):
             s.workspace = new_ws
-            s.save()
+            s.sync_webui_metadata()
+            # ── Persist cwd to state.db ──────────────────────────────
+            # cwd is NOT a __webui column — it's managed by the hermes-agent
+            # SDK (written on session creation, and by TUI gateway for CLI
+            # sessions).  WebUI normally only writes __webui columns.
+            #
+            # However, for webui sessions the SDK never touches cwd after the
+            # initial INSERT, so there is no write conflict.  Adding a
+            # cwd__webui column would create reconciliation ambiguity (which
+            # wins when both are set?).  Using the single source-of-truth cwd
+            # column is simpler and correct.
+            try:
+                from api.models import _get_session_db
+                db = _get_session_db()
+                if db is not None:
+                    db._conn.execute(
+                        "UPDATE sessions SET cwd = ? WHERE id = ?",
+                        (new_ws or None, body["session_id"]),
+                    )
+                    db._conn.commit()
+            except Exception:
+                logger.warning(
+                    "Failed to persist cwd for session %s",
+                    body["session_id"],
+                    exc_info=True,
+                )
         set_last_workspace(new_ws)
         return j(handler, {"ok": True, "session": s.compact()})
 
@@ -2205,7 +2173,7 @@ def handle_post(handler, parsed) -> bool:
             return bad(handler, "Session not found", 404)
         with _get_session_agent_lock(body["session_id"]):
             s.skills = skills
-            s.save()
+            s.sync_webui_metadata()
         # Clear agent cache so next message rebuilds with new skill list
         from api.config import SESSION_AGENT_CACHE, SESSION_AGENT_CACHE_LOCK
         with SESSION_AGENT_CACHE_LOCK:
@@ -2224,7 +2192,7 @@ def handle_post(handler, parsed) -> bool:
             return bad(handler, "Session not found", 404)
         with _get_session_agent_lock(body["session_id"]):
             s.archived = bool(body.get("archived", True))
-            s.save()
+            s.sync_webui_metadata()
         return j(handler, {"ok": True, "session": s.compact()})
 
     # ── Session move to project (POST) ──
@@ -2239,7 +2207,7 @@ def handle_post(handler, parsed) -> bool:
             return bad(handler, "Session not found", 404)
         with _get_session_agent_lock(body["session_id"]):
             s.project_id = body.get("project_id") or None
-            s.save()
+            s.sync_webui_metadata()
         return j(handler, {"ok": True, "session": s.compact()})
 
     # ── Project CRUD (POST) ──
@@ -2311,7 +2279,7 @@ def handle_post(handler, parsed) -> bool:
                         try:
                             s = get_session(entry["session_id"])
                             s.project_id = None
-                            s.save()
+                            s.sync_webui_metadata()
                         except Exception:
                             logger.debug("Failed to update session %s", entry.get("session_id"))
             except Exception:
@@ -2539,11 +2507,20 @@ def _handle_sessions_search(handler, parsed):
             if not sanitized:
                 return j(handler, {"sessions": [], "query": q, "count": 0})
 
-            # Search across all sessions (no source filter — user expects
-            # to find matches in gateway/CLI sessions as well)
+            # Build the allowed-source list from the three sidebar toggles so
+            # search results match exactly what the sidebar shows.
+            _settings = load_settings()
+            source_filter = ['webui']
+            if _settings.get("show_cli_sessions", True):
+                source_filter.append('cli')
+            if _settings.get("show_cron_sessions", False):
+                source_filter.append('cron')
+            if _settings.get("show_messaging_sessions", True):
+                source_filter.extend(sorted(MESSAGING_SOURCE_TAGS))
             matches = db.search_messages(
                 query=sanitized,
-                source_filter=None,
+                source_filter=source_filter,
+                exclude_sources=None,
                 limit=200,
             )
 
@@ -2582,15 +2559,26 @@ def _handle_sessions_search(handler, parsed):
                     if s:
                         item = dict(s)
                     else:
+                        # Non-webui session (gateway/CLI/cron) — absent from
+                        # all_sessions(), so fetch its metadata from state.db.
+                        # search_messages() only returns session_started/model/
+                        # source; title/cwd/message_count live on the row.
+                        row = None
+                        try:
+                            row = db.get_session(sid)
+                        except Exception:
+                            row = None
+                        row = row or {}
+                        started_at = row.get('started_at') or match.get('session_started') or 0
                         item = {
                             'session_id': sid,
-                            'title': match.get('title', 'Untitled'),
-                            'workspace': match.get('cwd'),
-                            'model': match.get('model'),
-                            'message_count': match.get('message_count', 0),
-                            'created_at': match.get('started_at', 0),
-                            'updated_at': match.get('last_message_at', 0),
-                            'pinned': bool(match.get('pinned', False)),
+                            'title': row.get('title') or 'Untitled',
+                            'workspace': row.get('cwd') or '',
+                            'model': row.get('model') or match.get('model'),
+                            'message_count': row.get('message_count') or match.get('message_count', 0),
+                            'created_at': started_at,
+                            'updated_at': row.get('last_message_at') or started_at,
+                            'pinned': bool(row.get('pinned__webui')),
                         }
                     if isinstance(item.get("title"), str):
                         item["title"] = _redact_text(item["title"])
@@ -2738,9 +2726,35 @@ def _handle_sse_stream_replay(handler, parsed):
     try:
         # Phase 1: replay history snapshot
         history = q.replay()
+
+        # Two-pass filter: skip clarify/approval events that were already resolved.
+        # Pass 1 — collect IDs of resolved events
+        resolved_clarify_ids: set = set()
+        resolved_approval_ids: set = set()
+        for event, data in history:
+            if event == "clarify_resolved":
+                cid = data.get("clarify_id") if isinstance(data, dict) else None
+                if cid:
+                    resolved_clarify_ids.add(cid)
+            elif event == "approval_resolved":
+                aid = data.get("approval_id") if isinstance(data, dict) else None
+                if aid:
+                    resolved_approval_ids.add(aid)
+
         _sse(handler, 'replay_start', {'count': len(history)})
         already_done = False
         for event, data in history:
+            # Pass 2 — skip resolved events and the markers themselves
+            if event in ("clarify_resolved", "approval_resolved"):
+                continue
+            if event == "clarify":
+                cid = data.get("clarify_id") if isinstance(data, dict) else None
+                if cid and cid in resolved_clarify_ids:
+                    continue
+            if event == "approval":
+                aid = data.get("approval_id") if isinstance(data, dict) else None
+                if aid and aid in resolved_approval_ids:
+                    continue
             _sse(handler, event, data)
             if event in ('done', 'stream_end', 'error', 'cancel', 'apperror'):
                 already_done = True
@@ -2770,8 +2784,41 @@ def _handle_sse_stream_replay(handler, parsed):
     return True
 
 
+def _write_gateway_last_seen(sid: str, msg_count: int) -> None:
+    """Write last_seen_msg_count to the agent's state.db for a gateway/CLI session.
+
+    Gateway sessions live in the agent's state.db, not the WebUI session store.
+    This is the only way to persist read-position metadata for those sessions.
+    """
+    import os as _os
+    from pathlib import Path as _Path
+    import sqlite3 as _sqlite3
+
+    try:
+        from api.profiles import get_active_hermes_home
+        hermes_home = _Path(get_active_hermes_home()).expanduser().resolve()
+    except Exception:
+        hermes_home = _Path(_os.getenv("HERMES_HOME", str(_Path.home() / ".hermes"))).expanduser().resolve()
+    db_path = hermes_home / "state.db"
+    if not db_path.exists():
+        return
+    try:
+        conn = _sqlite3.connect(str(db_path))
+        # Only write if the column exists (older hermes-agent may not have it)
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+        if "last_seen_msg_count__webui" in cols:
+            conn.execute(
+                "UPDATE sessions SET last_seen_msg_count__webui = ? WHERE id = ?",
+                (msg_count, sid),
+            )
+            conn.commit()
+        conn.close()
+    except Exception:
+        pass  # best-effort — don't fail the HTTP response
+
+
 def _gateway_sse_probe_payload(settings, watcher):
-    enabled = bool(settings.get('show_cli_sessions'))
+    enabled = bool(settings.get('show_cli_sessions')) or bool(settings.get('show_messaging_sessions'))
     # Use the public is_alive() accessor where available (current GatewayWatcher);
     # fall back to the private _thread check for any older in-memory instance
     # that might still be hanging around mid-upgrade, and for test doubles that
@@ -2801,7 +2848,7 @@ def _gateway_sse_probe_payload(settings, watcher):
 def _handle_gateway_sse_stream(handler, parsed):
     """SSE endpoint for real-time gateway session updates.
     Streams change events from the gateway watcher background thread.
-    Only active when show_cli_sessions (show_agent_sessions) setting is enabled.
+    Active when either show_cli_sessions or show_messaging_sessions is enabled.
     """
     settings = load_settings()
 
@@ -3226,8 +3273,8 @@ def _handle_live_models(handler, parsed):
 
         # Static fallback — only reached when live fetch also failed.
         if not ids:
-            from api.config import _PROVIDER_MODELS as _pm
-            ids = [m["id"] for m in _pm.get(provider, [])]
+            from api.config import get_provider_card_models as _gcm
+            ids = [m["id"] for m in _gcm(provider)]
         if not ids:
             return j(handler, {"provider": provider, "models": [], "count": 0})
 
@@ -3289,55 +3336,6 @@ def _handle_cron_output(handler, parsed):
             except Exception:
                 logger.debug("Failed to read cron output file %s", f)
     return j(handler, {"job_id": job_id, "outputs": outputs})
-
-
-def _handle_cron_recent(handler, parsed):
-    """Return cron jobs that have completed since each job's per-job
-    ``last_seen_cron_ts_map`` timestamp.  Each completion includes a
-    ``has_new`` flag indicating it is newer than that specific job's
-    last-seen timestamp."""
-    import datetime
-
-    qs = parse_qs(parsed.query)
-    # Global since param is still supported for backward compat, but
-    # per-job timestamps from settings take precedence.
-    global_since = float(qs.get("since", ["0"])[0])
-    settings = load_settings()
-    ts_map = settings.get("last_seen_cron_ts_map", {})
-
-    try:
-        from cron.jobs import list_jobs
-
-        jobs = list_jobs(include_disabled=True)
-        completions = []
-        for job in jobs:
-            last_run = job.get("last_run_at")
-            if not last_run:
-                continue
-            if isinstance(last_run, str):
-                try:
-                    ts = datetime.datetime.fromisoformat(
-                        last_run.replace("Z", "+00:00")
-                    ).timestamp()
-                except (ValueError, TypeError):
-                    continue
-            else:
-                ts = float(last_run)
-            # Use per-job last_seen if available, else fall back to global since
-            job_since = ts_map.get(job.get("id", ""), global_since)
-            if ts > job_since:
-                completions.append(
-                    {
-                        "job_id": job.get("id", ""),
-                        "name": job.get("name", "Unknown"),
-                        "status": job.get("last_status", "unknown"),
-                        "completed_at": ts,
-                        "has_new": True,
-                    }
-                )
-        return j(handler, {"completions": completions, "since": global_since})
-    except ImportError:
-        return j(handler, {"completions": [], "since": global_since})
 
 
 def _handle_memory_read(handler):
@@ -3432,17 +3430,41 @@ def _handle_session_cleanup(handler, body):
     try:
         with sqlite3.connect(str(db_path)) as conn:
             cur = conn.cursor()
-            cur.execute(
-                "SELECT id FROM sessions WHERE source = ? AND ended_at IS NOT NULL AND ended_at < ?",
-                (source, cutoff),
-            )
+
+            if source == "all":
+                cur.execute(
+                    "SELECT id FROM sessions WHERE ended_at IS NOT NULL AND ended_at < ?",
+                    (cutoff,),
+                )
+            elif source == "cron":
+                cur.execute(
+                    "SELECT id FROM sessions WHERE source = 'cron' AND ended_at IS NOT NULL AND ended_at < ?",
+                    (cutoff,),
+                )
+            else:
+                cur.execute(
+                    "SELECT id FROM sessions WHERE source = ? AND ended_at IS NOT NULL AND ended_at < ?",
+                    (source, cutoff),
+                )
+
             to_delete = [row[0] for row in cur.fetchall()]
             for sid in to_delete:
                 cur.execute("DELETE FROM messages WHERE session_id = ?", (sid,))
-            cur.execute(
-                "DELETE FROM sessions WHERE source = ? AND ended_at IS NOT NULL AND ended_at < ?",
-                (source, cutoff),
-            )
+            if source == "all":
+                cur.execute(
+                    "DELETE FROM sessions WHERE ended_at IS NOT NULL AND ended_at < ?",
+                    (cutoff,),
+                )
+            elif source == "cron":
+                cur.execute(
+                    "DELETE FROM sessions WHERE source = 'cron' AND ended_at IS NOT NULL AND ended_at < ?",
+                    (cutoff,),
+                )
+            else:
+                cur.execute(
+                    "DELETE FROM sessions WHERE source = ? AND ended_at IS NOT NULL AND ended_at < ?",
+                    (source, cutoff),
+                )
             conn.commit()
             deleted_count = len(to_delete)
     except Exception as e:
@@ -3482,10 +3504,10 @@ def _handle_btw(handler, body):
     # Copy conversation history for context (agent reads from messages)
     ephemeral.messages = list(s.messages or [])
     ephemeral.title = f"btw: {question[:60]}"
-    ephemeral.save()
+    ephemeral.sync_webui_metadata()
     stream_id = uuid.uuid4().hex
     ephemeral.active_stream_id = stream_id
-    ephemeral.save()
+    ephemeral.sync_webui_metadata()
     q = ReplayableStream()
     with STREAMS_LOCK:
         STREAMS[stream_id] = q
@@ -3517,10 +3539,11 @@ def _start_background_task(parent_session, prompt, keep_session=True):
     )
     bg.title = f"bg: {prompt[:60]}"
     bg.pending_user_message = prompt
-    bg.save()
+    bg._pending_user_message_ts = time.time()
+    bg.sync_webui_metadata()
     stream_id = uuid.uuid4().hex
     bg.active_stream_id = stream_id
-    bg.save()
+    bg.sync_webui_metadata()
     q = ReplayableStream()
     with STREAMS_LOCK:
         STREAMS[stream_id] = q
@@ -3643,6 +3666,16 @@ def _resolve_busy_handling(s, mode, body):
     """
     current_stream_id = getattr(s, "active_stream_id", None)
     if current_stream_id:
+        # Check if a cancel is in progress for this session.  If so,
+        # spin-wait for it to complete instead of returning a 409.
+        _cancel_done = _CANCEL_EVENTS.get(s.session_id)
+        if _cancel_done is not None:
+            if _cancel_done.wait(timeout=3.0):
+                # Cancel completed — reload session to pick up cleaned state
+                s = get_session(s.session_id)
+                return ("proceed", None)
+            # Timeout — fall through to normal busy handling below
+
         with STREAMS_LOCK:
             current_active = current_stream_id in STREAMS
         if not current_active:
@@ -3808,27 +3841,9 @@ def _handle_chat_start(handler, body):
             resp["steer_fallback"] = _steer_fb
             s._last_steer_fallback = None
         return j(handler, resp)
-    # "proceed" or "interrupted": continue to create stream normally
-    # The current_stream_id / stale handling is now inside _resolve_busy_handling
-    # Auto-compress: if the session history is very long and the user has
-    # configured an auto_compress_threshold, run a synchronous compression
-    # pass before starting the new stream.  We do this inline (blocking the
-    # /api/chat/start request) rather than in a background thread so the
-    # agent always receives a fresh, compressed history.  Failure is silently
-    # swallowed — compression is best-effort and must never block the chat.
-    try:
-        threshold_str = str(load_settings().get("auto_compress_threshold", "0")).strip()
-        threshold = int(threshold_str) if threshold_str.isdigit() else 0
-        if threshold > 0 and len(s.messages) >= threshold and not getattr(s, "active_stream_id", None):
-            # Respect auto-compress disable flag (set after 3 consecutive poor compressions)
-            if not getattr(s, 'auto_compress_disabled', False):
-                _auto_compress_session(s)
-                # Re-read session so the agent thread picks up the compressed messages.
-                s = get_session(s.session_id)
-    except Exception as _auto_compress_err:
-        logger.debug("Auto-compress skipped for session %s: %s", s.session_id, _auto_compress_err)
-        print(f"[auto-compress] FAILED for {s.session_id}: {_auto_compress_err}", flush=True)
-        import traceback; traceback.print_exc()
+    # Auto-compress is now handled in _run_agent_streaming (pre-flight,
+    # after SSE connection is established) so the frontend receives a
+    # `compressing` event and can show a toast instead of a silent pause.
 
     stream_id = uuid.uuid4().hex
     with _get_session_agent_lock(s.session_id):
@@ -3836,9 +3851,10 @@ def _handle_chat_start(handler, body):
         s.model = model
         s.active_stream_id = stream_id
         s.pending_user_message = msg
+        s._pending_user_message_ts = time.time()
         s.pending_attachments = attachments
         s.pending_started_at = time.time()
-        s.save()
+        s.sync_webui_metadata()
     q = ReplayableStream()
     with STREAMS_LOCK:
         STREAMS[stream_id] = q
@@ -3963,14 +3979,6 @@ def _handle_chat_sync(handler, body):
             _previous_messages,
             result.get("messages") or s.messages,
         )
-        # Stamp timestamps on any new messages that don't have one yet
-        # (same logic as the streaming endpoint). The sync endpoint is
-        # called by CLI scripts (e.g. cmd_util.sh --sync) and must keep
-        # timestamps consistent so the frontend displays messages correctly.
-        _prev_msg_ids = {id(m) for m in _previous_messages}
-        for _m in s.messages:
-            if id(_m) not in _prev_msg_ids and isinstance(_m, dict) and not _m.get('timestamp') and not _m.get('_ts'):
-                _m['timestamp'] = int(time.time())
         # Only auto-generate title when still default; preserves user renames
         # Auto-title: matches bare "Untitled" and uniqueness-suffixed
         # variants like "Untitled #3" (from state.db's UNIQUE title index)
@@ -3978,23 +3986,7 @@ def _handle_chat_sync(handler, body):
             s.title.startswith("Untitled #") and s.title[9:].isdigit()
         ):
             s.title = title_from(s.messages, s.title)
-        s.save()
-    # Sync to state.db for /insights (opt-in setting)
-    try:
-        if load_settings().get("sync_to_insights"):
-            from api.state_sync import sync_session_usage
-
-            sync_session_usage(
-                session_id=s.session_id,
-                input_tokens=s.input_tokens or 0,
-                output_tokens=s.output_tokens or 0,
-                estimated_cost=s.estimated_cost,
-                model=s.model,
-                title=s.title,
-                message_count=len(s.messages),
-            )
-    except Exception:
-        logger.debug("Failed to update session cost tracking")
+        s.sync_webui_metadata()
     return j(
         handler,
         {
@@ -4102,31 +4094,6 @@ def _handle_cron_resume(handler, body):
     return bad(handler, "Job not found", 404)
 
 
-def _handle_cron_seen(handler, body):
-    """Mark a specific cron job (or all jobs) as seen by the user.
-    Accepts an optional ``job_id`` — when provided, only that job's
-    ``last_seen_cron_ts_map`` entry is updated; when omitted, all known
-    jobs are stamped, which is useful when the user first opens the
-    Tasks tab."""
-    job_id = body.get("job_id", "")
-    settings = load_settings()
-    now = time.time()
-    ts_map = settings.setdefault("last_seen_cron_ts_map", {})
-    if job_id:
-        ts_map[job_id] = now
-    else:
-        # Stamp all known jobs — user opened the Tasks tab
-        try:
-            from cron.jobs import list_jobs
-            for job in list_jobs(include_disabled=True):
-                ts_map[job.get("id", "")] = now
-        except Exception:
-            # If list_jobs fails, just save what we have
-            pass
-    save_settings(settings)
-    return j(handler, {"ok": True, "last_seen_cron_ts_map": ts_map})
-
-
 def _handle_file_delete(handler, body):
     try:
         require(body, "session_id", "path")
@@ -4219,15 +4186,15 @@ def _handle_file_rename(handler, body):
         return bad(handler, _sanitize_error(e))
 
 
-def _is_derived_readonly_workspace(ws_path: str) -> bool:
-    """Return True if the workspace path is readonly (default workspace or gateway/CLI derived)."""
-    # Default workspace from config.yaml is always readonly
+def _is_external_workspace(ws_path: str) -> bool:
+    """Return True if the workspace path is external (default workspace or gateway/CLI derived)."""
+    # Default workspace from config.yaml is always external
     try:
         if ws_path == profile_default_workspace():
             return True
     except Exception:
         pass
-    # Gateway/CLI derived workspaces are readonly
+    # Gateway/CLI derived workspaces are external
     try:
         for s in get_cli_sessions():
             if s.get('workspace', '') == ws_path:
@@ -4295,9 +4262,9 @@ def _handle_workspace_remove(handler, body):
     path_str = body.get("path", "").strip()
     if not path_str:
         return bad(handler, "path is required")
-    # Block removal of readonly (gateway/CLI derived) workspaces
-    if _is_derived_readonly_workspace(path_str):
-        return bad(handler, "Cannot remove a read-only workspace derived from gateway/CLI sessions", 403)
+    # Block removal of external (gateway/CLI derived) workspaces
+    if _is_external_workspace(path_str):
+        return bad(handler, "Cannot remove an external workspace derived from gateway/CLI sessions", 403)
     wss = load_workspaces()
     wss = [w for w in wss if w["path"] != path_str]
     save_workspaces(wss)
@@ -4309,9 +4276,9 @@ def _handle_workspace_rename(handler, body):
     name = body.get("name", "").strip()
     if not path_str or not name:
         return bad(handler, "path and name are required")
-    # Block rename of readonly (gateway/CLI derived) workspaces
-    if _is_derived_readonly_workspace(path_str):
-        return bad(handler, "Cannot rename a read-only workspace derived from gateway/CLI sessions", 403)
+    # Block rename of external (gateway/CLI derived) workspaces
+    if _is_external_workspace(path_str):
+        return bad(handler, "Cannot rename an external workspace derived from gateway/CLI sessions", 403)
     wss = load_workspaces()
     for w in wss:
         if w["path"] == path_str:
@@ -4399,6 +4366,78 @@ def _handle_workspace_file_write(handler, body):
         return bad(handler, _sanitize_error(exc), 500)
 
 
+def _handle_workspace_file_delete(handler, body):
+    """POST /api/workspace/delete {path}
+    Delete a file or directory by absolute path.
+    """
+    import shutil
+
+    path_str = (body.get("path") or "").strip()
+    if not path_str:
+        return bad(handler, "path is required")
+    target = Path(path_str).expanduser().resolve()
+    if _is_blocked_system_path(target):
+        return bad(handler, "Path not allowed", 403)
+    if not target.exists():
+        return bad(handler, "Not found", 404)
+    try:
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+        return j(handler, {"ok": True, "path": path_str})
+    except OSError as exc:
+        return bad(handler, _sanitize_error(exc), 500)
+
+
+def _handle_workspace_new(handler, body):
+    """POST /api/workspace/new {path, is_dir}
+    Create a new file or directory at the given absolute path.
+    """
+    path_str = (body.get("path") or "").strip()
+    if not path_str:
+        return bad(handler, "path is required")
+    is_dir = body.get("is_dir", False)
+    target = Path(path_str).expanduser().resolve()
+    if _is_blocked_system_path(target):
+        return bad(handler, "Path not allowed", 403)
+    if target.exists():
+        return bad(handler, "Already exists", 409)
+    try:
+        if is_dir:
+            target.mkdir(parents=True)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("", encoding="utf-8")
+        return j(handler, {"ok": True, "path": path_str, "is_dir": is_dir})
+    except OSError as exc:
+        return bad(handler, _sanitize_error(exc), 500)
+
+
+def _handle_workspace_move(handler, body):
+    """POST /api/workspace/move {src, dst}
+    Rename/move a file or directory.
+    """
+    src_str = (body.get("src") or "").strip()
+    dst_str = (body.get("dst") or "").strip()
+    if not src_str or not dst_str:
+        return bad(handler, "src and dst are required")
+    if src_str == dst_str:
+        return bad(handler, "src and dst are the same")
+    src = Path(src_str).expanduser().resolve()
+    dst = Path(dst_str).expanduser().resolve()
+    if _is_blocked_system_path(src) or _is_blocked_system_path(dst):
+        return bad(handler, "Path not allowed", 403)
+    if not src.exists():
+        return bad(handler, "Source not found", 404)
+    if dst.exists():
+        return bad(handler, "Target already exists", 409)
+    try:
+        src.rename(dst)
+        return j(handler, {"ok": True, "old_path": src_str, "new_path": dst_str})
+    except OSError as exc:
+        return bad(handler, _sanitize_error(exc), 500)
+
 
 def _handle_approval_respond(handler, body):
     sid = body.get("session_id", "")
@@ -4467,9 +4506,20 @@ def _handle_approval_respond(handler, body):
             approved = list(get_session_approved(sid))
             if approved:
                 s.session_approved = approved
-                s.save(touch_updated_at=False)
+                s.sync_webui_metadata(touch_updated_at=False)
         except (KeyError, Exception):
             pass
+    # Write approval_resolved marker to the active stream so replay can skip it
+    try:
+        s = get_session(sid)
+        stream_id = getattr(s, "active_stream_id", None)
+        if stream_id and approval_id:
+            with STREAMS_LOCK:
+                stream = STREAMS.get(stream_id)
+            if stream is not None:
+                stream.put("approval_resolved", {"approval_id": approval_id})
+    except Exception:
+        pass  # best-effort; don't fail the response if stream lookup fails
     return j(handler, {"ok": True, "choice": choice})
 
 
@@ -4506,7 +4556,7 @@ def _handle_approval_revoke(handler, body):
         try:
             s = get_session(sid)
             s.session_approved = list(get_session_approved(sid))
-            s.save(touch_updated_at=False)
+            s.sync_webui_metadata(touch_updated_at=False)
         except (KeyError, Exception):
             pass
     return j(handler, {"ok": removed, "revoked": pattern_key})
@@ -4524,7 +4574,19 @@ def _handle_clarify_respond(handler, body):
     response = str(response or "").strip()
     if not response:
         return bad(handler, "response is required")
+    clarify_id = body.get("clarify_id", "")
     resolve_clarify(sid, response, resolve_all=False)
+    # Write clarify_resolved marker to the active stream so replay can skip it
+    try:
+        s = get_session(sid)
+        stream_id = getattr(s, "active_stream_id", None)
+        if stream_id:
+            with STREAMS_LOCK:
+                stream = STREAMS.get(stream_id)
+            if stream is not None:
+                stream.put("clarify_resolved", {"clarify_id": clarify_id})
+    except Exception:
+        pass  # best-effort; don't fail the response if stream lookup fails
     return j(handler, {"ok": True, "response": response})
 
 
@@ -4597,6 +4659,9 @@ def _archive_session_before_compress(s):
         dst = archive_dir / f'{archived_id}.json'
         dst.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
 
+        # Mark session as having archived snapshots (fast sidebar lookup)
+        s.archived = True
+
         # Prune oldest snapshots if count exceeds max_compaction_snapshots
         try:
             from api.config import load_settings
@@ -4615,13 +4680,102 @@ def _archive_session_before_compress(s):
             except OSError:
                 pass
 
+        # If pruning removed all snapshots, clear the flag
+        remaining = list(archive_dir.glob('compaction_*.json'))
+        if not remaining:
+            s.archived = False
+
         return str(dst)
     except Exception:
         logger.debug("Failed to archive session %s before compression", s.session_id, exc_info=True)
         return None
 
 
+def _persist_compressed_messages(s) -> None:
+    """将压缩后的 s.messages 持久化到 state.db。
+
+    带简单重试（3 次，200ms/400ms/800ms 退避），写库失败时记录 warning。
+    所有四条压缩路径统一调用此函数：
+      - _archive_session_before_compress (manual)
+      - _auto_compress_session (chat-start auto)
+      - streaming.py agent 内压缩 (SSE)
+      - streaming.py token 阈值压缩 (SSE)
+    """
+    import time as _time
+    from api.models import _get_session_db
+    _db = _get_session_db()
+    if _db is None:
+        return
+    for attempt in range(3):
+        try:
+            _db.replace_messages(s.session_id, s.messages)
+            return
+        except Exception:
+            if attempt < 2:
+                _time.sleep(0.2 * (2 ** attempt))
+    logger.warning(
+        "replace_messages exhausted retries for compress session=%s",
+        s.session_id, exc_info=True,
+    )
+
+
+def _reanchor_last_seen_after_compress(s) -> None:
+    """Re-anchor last_seen_msg_count after compression replaces the message list.
+
+    Compression swaps ``s.messages`` for a shorter summary, so the user's
+    "last seen" watermark no longer maps to a valid index.  Clamp it to the
+    new message count (= "seen all current messages") so the sidebar unread
+    badge (``message_count - last_seen_msg_count``) stays correct for any
+    post-compression turns instead of going stale and suppressing the badge.
+
+    Also reset the cached metadata message count so ``compact()`` re-derives
+    ``message_count`` from ``len(self.messages)``.
+
+    Must be called only AFTER ``s.messages`` has been reassigned to the
+    compressed list.
+    """
+    s._metadata_message_count = None
+    s.last_seen_msg_count = min(s.last_seen_msg_count or 0, len(s.messages))
+
+
 # _discover_archived_sessions moved to api/models.py to avoid circular import
+
+
+def _record_auto_compress_quality(s, before: int, after: int) -> None:
+    """Update auto-compress quality tracking (in-memory; caller syncs to DB).
+
+    "poor" = the compressed list still retains more than poor_ratio of the
+    original message count (i.e. reduction is insufficient).  After
+    ``disable_after`` consecutive poor attempts, auto-compress is disabled for
+    the session until the user clears history or a later effective /compress.
+    Both thresholds read from settings so they are user-configurable.
+    """
+    from api.config import load_settings as _ls
+
+    _st = _ls()
+    try:
+        _poor_ratio = float(str(_st.get("auto_compress_poor_ratio", "0.5") or "0.5"))
+    except (TypeError, ValueError):
+        _poor_ratio = 0.5
+    try:
+        _max_poor = int(str(_st.get("auto_compress_disable_after", "3") or "3"))
+    except (TypeError, ValueError):
+        _max_poor = 3
+
+    _ratio = after / max(before, 1)
+    _poor = _ratio > _poor_ratio
+    _fail_count = getattr(s, 'auto_compress_fail_count', 0)
+    if _poor:
+        _fail_count += 1
+        s.auto_compress_fail_count = _fail_count
+        if _fail_count >= _max_poor:
+            s.auto_compress_disabled = True
+            print(f"[auto-compress] DISABLED for {s.session_id}: "
+                  f"{before} → {after} msgs (ratio={_ratio:.1%}) "
+                  f"after {_fail_count} poor attempts", flush=True)
+    else:
+        s.auto_compress_fail_count = 0
+        s.auto_compress_disabled = False
 
 
 def _auto_compress_session(s) -> None:
@@ -4668,30 +4822,26 @@ def _auto_compress_session(s) -> None:
         s.tool_calls = []
         s.last_compression_time = time.time()
 
+        # ── Update context-window fields from compressor ──
+        new_tokens = _estimate_messages_tokens_rough(compressed)
+        s.last_prompt_tokens = new_tokens
+        _cc = getattr(agent, 'context_compressor', None)
+        if _cc:
+            s.context_length = getattr(_cc, 'context_length', 0) or 0
+            s.threshold_tokens = getattr(_cc, 'threshold_tokens', 0) or 0
+        # ── Keep in-memory metadata consistent ──
+        _reanchor_last_seen_after_compress(s)
+
         # ── Compression quality tracking ──────────────────────────────
-        # If compression reduces messages by <50%, count it as a poor
-        # attempt.  After 3 consecutive poor attempts, disable auto-
-        # compress for this session until the user clears history.
         _before = len(messages)
         _after = len(compressed)
-        _ratio = _after / max(_before, 1)
-        _poor = _ratio > 0.5  # less than 50% reduction
-        _fail_count = getattr(s, 'auto_compress_fail_count', 0)
-        if _poor:
-            _fail_count += 1
-            s.auto_compress_fail_count = _fail_count
-            if _fail_count >= 3:
-                s.auto_compress_disabled = True
-                print(f"[auto-compress] DISABLED for {s.session_id}: "
-                      f"{_before} → {_after} msgs (ratio={_ratio:.1%}) after {_fail_count} poor attempts",
-                      flush=True)
-        else:
-            s.auto_compress_fail_count = 0
-            s.auto_compress_disabled = False
+        _record_auto_compress_quality(s, _before, _after)
 
         print(f"[auto-compress] saving session {s.session_id}: "
               f"{_before} → {_after} messages", flush=True)
-        s.save()
+        # ── Persist compressed message list to state.db ──
+        _persist_compressed_messages(s)
+        s.sync_webui_metadata()
         print(f"[auto-compress] save OK for {s.session_id}", flush=True)
 
 
@@ -4904,20 +5054,31 @@ def _handle_session_compress(handler, body):
             s.pending_user_message = None
             s.pending_attachments = []
             s.pending_started_at = None
+            # ── Update context-window fields from compressor ──
+            # new_tokens was estimated from the compressed messages above —
+            # use it so ContextUsageIndicator reflects the post-compress state.
+            s.last_prompt_tokens = new_tokens
+            _cc = getattr(agent, 'context_compressor', None)
+            if _cc:
+                s.context_length = getattr(_cc, 'context_length', 0) or 0
+                s.threshold_tokens = getattr(_cc, 'threshold_tokens', 0) or 0
+            # ── Keep in-memory metadata consistent with the new message list ──
+            _reanchor_last_seen_after_compress(s)
+            # ── Track compression lineage BEFORE sync_webui_metadata so the
+            #     __webui columns are persisted to state.db ──
+            _prev_count = getattr(s, 'compression_segment_count', 0) or 0
+            s.compression_segment_count = _prev_count + 1
+            s.parent_session_id = sid
+            if not getattr(s, 'lineage_root_id', None):
+                s.lineage_root_id = sid
+            s.lineage_tip_id = sid
+            # ── Compression anchor (for scroll-to-first-visible) ──
             visible_after = _visible_messages_for_anchor(compressed)
             s.compression_anchor_visible_idx = max(0, len(visible_after) - 1) if visible_after else None
             s.compression_anchor_message_key = _anchor_message_key(visible_after[-1]) if visible_after else None
-            s.save()
-
-        # Track compression lineage
-        _prev_count = getattr(s, 'compression_segment_count', 0) or 0
-        s.compression_segment_count = _prev_count + 1
-        s.parent_session_id = sid
-        # Root/tip lineage: first compression sets root = original session;
-        # subsequent compressions inherit the existing root.
-        if not getattr(s, 'lineage_root_id', None):
-            s.lineage_root_id = sid
-        s.lineage_tip_id = sid
+            # ── Persist to state.db ──
+            _persist_compressed_messages(s)
+            s.sync_webui_metadata()
 
         session_payload = redact_session_data(
             s.compact() | {
@@ -4925,6 +5086,8 @@ def _handle_session_compress(handler, body):
                 "tool_calls": s.tool_calls,
                 "active_stream_id": s.active_stream_id,
                 "pending_user_message": s.pending_user_message,
+                "pending_original_message": getattr(s, "_pending_original_message", None),
+                "pending_user_message_ts": getattr(s, "_pending_user_message_ts", None),
                 "pending_attachments": s.pending_attachments,
                 "pending_started_at": s.pending_started_at,
                 "compression_anchor_visible_idx": getattr(s, "compression_anchor_visible_idx", None),
@@ -4988,12 +5151,27 @@ def _handle_skill_delete(handler, body):
     from tools.skills_tool import SKILLS_DIR
     import shutil
 
-    matches = list(SKILLS_DIR.rglob(f"{body['name']}/SKILL.md"))
+    deleted_name = body["name"]
+    matches = list(SKILLS_DIR.rglob(f"{deleted_name}/SKILL.md"))
     if not matches:
         return bad(handler, "Skill not found", 404)
     skill_dir = matches[0].parent
     shutil.rmtree(str(skill_dir))
-    return j(handler, {"ok": True, "name": body["name"]})
+
+    # 清理所有引用了此 skill 的 session
+    try:
+        from api.models import all_sessions
+        from api.config import SESSION_AGENT_CACHE, SESSION_AGENT_CACHE_LOCK
+        for s in all_sessions():
+            if s.skills and deleted_name in s.skills:
+                s.skills = [sk for sk in s.skills if sk != deleted_name]
+                s.sync_webui_metadata(touch_updated_at=False)
+                with SESSION_AGENT_CACHE_LOCK:
+                    SESSION_AGENT_CACHE.pop(s.session_id, None)
+    except Exception:
+        pass  # 清理失败不应阻止删除操作本身
+
+    return j(handler, {"ok": True, "name": deleted_name})
 
 
 def _handle_skill_file_save(handler, body):
@@ -5028,6 +5206,142 @@ def _handle_skill_file_save(handler, body):
         return bad(handler, "File not found", 404)
     target.write_text(body["content"], encoding="utf-8")
     return j(handler, {"ok": True, "path": file_rel})
+
+
+def _handle_skill_file_delete(handler, body):
+    """POST /api/skills/file/delete {name, file}
+    Delete a file or directory from a skill directory.
+    """
+    import shutil
+
+    try:
+        require(body, "name", "file")
+    except ValueError as e:
+        return bad(handler, str(e))
+    from tools.skills_tool import SKILLS_DIR
+    import re as _re_sfd
+
+    name = body["name"].strip()
+    file_rel = body["file"].strip()
+    if not name or _re_sfd.search(r"[*?\[\]]", name):
+        return bad(handler, "Invalid skill name", 400)
+    if ".." in file_rel or file_rel.startswith("/"):
+        return bad(handler, "Invalid file path", 400)
+    if file_rel in ("SKILL.md", "skill.md"):
+        return bad(handler, "Cannot delete SKILL.md directly", 400)
+
+    skill_dir = None
+    for p in SKILLS_DIR.rglob(name):
+        if p.is_dir():
+            skill_dir = p
+            break
+    if not skill_dir:
+        return bad(handler, "Skill not found", 404)
+    target = (skill_dir / file_rel).resolve()
+    try:
+        target.relative_to(skill_dir.resolve())
+    except ValueError:
+        return bad(handler, "Invalid file path", 400)
+    if not target.exists():
+        return bad(handler, "File not found", 404)
+    if target.is_dir():
+        shutil.rmtree(target)
+    else:
+        target.unlink()
+    return j(handler, {"ok": True, "path": file_rel})
+
+
+def _handle_skill_file_create(handler, body):
+    """POST /api/skills/file/create {name, file, content?, is_dir?}
+    Create a new file or directory within a skill directory.
+    """
+    try:
+        require(body, "name", "file")
+    except ValueError as e:
+        return bad(handler, str(e))
+    from tools.skills_tool import SKILLS_DIR
+    import re as _re_sfc
+
+    name = body["name"].strip()
+    file_rel = body["file"].strip()
+    is_dir = body.get("is_dir", False)
+    content = body.get("content", "")
+
+    if not name or _re_sfc.search(r"[*?\[\]]", name):
+        return bad(handler, "Invalid skill name", 400)
+    if ".." in file_rel or file_rel.startswith("/"):
+        return bad(handler, "Invalid file path", 400)
+
+    skill_dir = None
+    for p in SKILLS_DIR.rglob(name):
+        if p.is_dir():
+            skill_dir = p
+            break
+    if not skill_dir:
+        return bad(handler, "Skill not found", 404)
+
+    target = (skill_dir / file_rel).resolve()
+    try:
+        target.relative_to(skill_dir.resolve())
+    except ValueError:
+        return bad(handler, "Invalid file path", 400)
+    if target.exists():
+        return bad(handler, "File already exists", 409)
+
+    if is_dir:
+        target.mkdir(parents=True)
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    return j(handler, {"ok": True, "path": file_rel, "is_dir": is_dir})
+
+
+def _handle_skill_file_rename(handler, body):
+    """POST /api/skills/file/rename {name, old_file, new_file}
+    Rename a file or directory within a skill directory.
+    """
+    try:
+        require(body, "name", "old_file", "new_file")
+    except ValueError as e:
+        return bad(handler, str(e))
+    from tools.skills_tool import SKILLS_DIR
+    import re as _re_sfr
+
+    name = body["name"].strip()
+    old_rel = body["old_file"].strip()
+    new_rel = body["new_file"].strip()
+
+    if not name or _re_sfr.search(r"[*?\[\]]", name):
+        return bad(handler, "Invalid skill name", 400)
+    if ".." in old_rel or old_rel.startswith("/"):
+        return bad(handler, "Invalid old path", 400)
+    if ".." in new_rel or new_rel.startswith("/"):
+        return bad(handler, "Invalid new path", 400)
+    if old_rel == new_rel:
+        return bad(handler, "Old and new paths are the same", 400)
+
+    skill_dir = None
+    for p in SKILLS_DIR.rglob(name):
+        if p.is_dir():
+            skill_dir = p
+            break
+    if not skill_dir:
+        return bad(handler, "Skill not found", 404)
+
+    src = (skill_dir / old_rel).resolve()
+    dst = (skill_dir / new_rel).resolve()
+    try:
+        src.relative_to(skill_dir.resolve())
+        dst.relative_to(skill_dir.resolve())
+    except ValueError:
+        return bad(handler, "Invalid file path", 400)
+    if not src.exists():
+        return bad(handler, "Source not found", 404)
+    if dst.exists():
+        return bad(handler, "Target already exists", 409)
+
+    src.rename(dst)
+    return j(handler, {"ok": True, "old_path": old_rel, "new_path": new_rel})
 
 
 def _handle_skill_import(handler):
@@ -5158,7 +5472,7 @@ def _handle_session_import_cli(handler, body):
             # on hybrid sessions (user sent messages via WebUI while CLI continued).
             if existing.messages == fresh_msgs[:len(existing.messages)]:
                 existing.messages = fresh_msgs
-                existing.save(touch_updated_at=False)
+                existing.sync_webui_metadata(touch_updated_at=False)
         return j(
             handler,
             {
@@ -5204,7 +5518,7 @@ def _handle_session_import_cli(handler, body):
     )
     s.is_cli_session = True
     s._cli_origin = sid
-    s.save(touch_updated_at=False)
+    s.sync_webui_metadata(touch_updated_at=False)
     return j(
         handler,
         {
@@ -5241,5 +5555,12 @@ def _handle_session_import(handler, body):
         SESSIONS.move_to_end(s.session_id)
         while len(SESSIONS) > SESSIONS_MAX:
             SESSIONS.popitem(last=False)
-    s.save()
+    # ── Persist imported messages to state.db ──
+    try:
+        _db = _get_session_db()
+        if _db is not None:
+            _db.replace_messages(s.session_id, s.messages)
+    except Exception:
+        logger.debug("replace_messages failed for import: %s", s.session_id)
+    s.sync_webui_metadata()
     return j(handler, {"ok": True, "session": s.compact() | {"messages": s.messages}})

@@ -35,6 +35,13 @@ from api.metering import meter
 _ENV_LOCK = threading.Lock()
 _REASONING_SEP_MARK = "<|reasoning_sep|>"
 
+# Maps session_id → threading.Event, set when cancel_stream completes.
+# _resolve_busy_handling in routes.py spin-waits on this event so a new
+# /api/chat/start arriving mid-cancel waits for the cancel to finish
+# instead of getting a 409 "session busy" error.
+_CANCEL_EVENTS: dict = {}
+
+
 # Sentinel CDP URL written to os.environ when a SessionDisplay-managed Chrome
 # is available.  agent-browser-wrapper.sh detects this value and resolves the
 # real CDP URL from ~/.hermes/webui/sessions_display/<sid>.json.  Using a
@@ -69,8 +76,6 @@ from api.workspace import set_last_workspace
 
 # Fields that are safe to send to LLM provider APIs.
 # Everything else (attachments, timestamp, _ts, etc.) is display-only
-# metadata added by the webui and must be stripped before the API call.
-_API_SAFE_MSG_KEYS = {'role', 'content', 'tool_calls', 'tool_call_id', 'name', 'refusal', 'reasoning'}
 
 
 def _strip_thinking_markup(text: str) -> str:
@@ -717,17 +722,24 @@ def _is_generic_fallback_title(title: str) -> bool:
     return str(title or '').strip().lower() in {'conversation topic'}
 
 
-def _run_background_title_update(session_id: str, user_text: str, assistant_text: str, placeholder_title: str, put_event, agent=None):
-    """Generate and publish a better title after `done`, then end the stream."""
+def _run_title_update(session_id: str, user_text: str, assistant_text: str, placeholder_title: str, put_event, agent=None):
+    """Generate and publish a better title synchronously.
+
+    Called before ``done`` so the frontend sees the final title when it
+    reloads the session list on the done event.
+    """
+    print(f'[title-sync-backend] title update START: session={session_id[:8]} placeholder={placeholder_title!r}', flush=True)
     try:
         try:
             s = get_session(session_id)
         except KeyError:
+            print(f'[title-sync-backend] title SKIP: session={session_id[:8]} reason=missing_session', flush=True)
             _put_title_status(put_event, session_id, 'skipped', 'missing_session')
             return
         # Allow self-heal when a previously generated title leaked thinking text.
         _invalid_existing = _looks_invalid_generated_title(s.title)
         if getattr(s, 'llm_title_generated', False) and not _invalid_existing:
+            print(f'[title-sync-backend] title SKIP: session={session_id[:8]} reason=already_generated llm_title={getattr(s, "llm_title_generated", False)!r}', flush=True)
             _put_title_status(put_event, session_id, 'skipped', 'already_generated', str(s.title or ''))
             return
         current = str(s.title or '').strip()
@@ -784,7 +796,7 @@ def _run_background_title_update(session_id: str, user_text: str, assistant_text
                     s.title = next_title
                     s.llm_title_generated = True
                     # Keep chronological ordering stable in the sidebar.
-                    s.save(touch_updated_at=False)
+                    s.sync_webui_metadata(touch_updated_at=False)
                     effective_title = s.title
                     wrote_title = True
 
@@ -794,16 +806,17 @@ def _run_background_title_update(session_id: str, user_text: str, assistant_text
             else:
                 _put_title_status(put_event, session_id, source, llm_status, effective_title, raw_preview)
             put_event('title', {'session_id': session_id, 'title': effective_title})
+            print(f'[title-sync-backend] title event SENT: session={session_id[:8]} title={effective_title!r}', flush=True)
         else:
             _put_title_status(put_event, session_id, 'skipped', source or 'unchanged', effective_title, raw_preview)
-    finally:
-        put_event('stream_end', {'session_id': session_id})
+    except Exception:
+        logger.warning("title update failed for %s", session_id, exc_info=True)
 
 
 def _run_background_title_refresh(session_id: str, user_text: str, assistant_text: str, current_title: str, put_event, agent=None):
     """Refresh an existing LLM-generated title using the latest exchange text.
 
-    Unlike _run_background_title_update, this does NOT guard on
+    Unlike _run_title_update, this does NOT guard on
     llm_title_generated — it assumes the title was already LLM-generated
     and the session has progressed enough to warrant a refresh.
     It does NOT emit stream_end (the caller already did).
@@ -847,7 +860,7 @@ def _run_background_title_refresh(session_id: str, user_text: str, assistant_tex
                     return
                 s.title = next_title
                 s.llm_title_generated = True
-                s.save(touch_updated_at=False)
+                s.sync_webui_metadata(touch_updated_at=False)
                 effective_title = s.title
         _put_title_status(put_event, session_id, 'refreshed', llm_status, effective_title, raw_preview)
         put_event('title', {'session_id': session_id, 'title': effective_title})
@@ -880,17 +893,14 @@ def _maybe_schedule_title_refresh(session, put_event, agent):
 
 
 def _sanitize_messages_for_api(messages):
-    """Return a deep copy of messages with only API-safe fields.
+    """Return a copy of messages safe for LLM API consumption.
 
-    The webui stores extra metadata on messages (attachments, timestamp, _ts)
-    for display purposes. Some providers (e.g. Z.AI/GLM) reject unknown fields
-    instead of ignoring them, causing HTTP 400 errors on subsequent messages.
+    Keeps all message fields (including webui metadata like oc_webui and
+    timestamp — these are harmless to providers). Only removes:
 
-    Also strips orphaned tool-role messages whose tool_call_id cannot be linked
-    to a preceding assistant message with tool_calls. Strictly-conformant providers
-    (Mercury-2/Inception, newer OpenAI models) reject histories containing dangling
-    tool results with a 400 error: "Message has tool role, but there was no previous
-    assistant message with a tool call."
+    - Error messages (_error=True)
+    - Orphaned tool results (tool_call_id not matching any assistant tool_calls)
+    - Consecutive user messages (merged to maintain role alternation)
     """
     # First pass: collect all tool_call_ids declared by assistant messages.
     # Handles both OpenAI ('id') and Anthropic ('call_id') field names.
@@ -919,7 +929,10 @@ def _sanitize_messages_for_api(messages):
             if not tid or tid not in valid_tool_call_ids:
                 # Orphaned tool result — skip to avoid 400 from strict providers.
                 continue
-        sanitized = {k: v for k, v in msg.items() if k in _API_SAFE_MSG_KEYS}
+        # Shallow copy — keep webui fields (oc_webui, timestamp, etc.)
+        # that were unnecessarily stripped by the old _API_SAFE_MSG_KEYS
+        # whitelist.  Only harmful fields (_error) are skipped above.
+        sanitized = dict(msg)
         # Strip empty tool_calls — some providers (DeepSeek) reject []
         if isinstance(sanitized.get('tool_calls'), list) and not sanitized['tool_calls']:
             del sanitized['tool_calls']
@@ -948,41 +961,34 @@ def _sanitize_messages_for_api(messages):
                 prev_c = [{'type': 'text', 'text': str(prev_c)}]
             if not isinstance(cur_c, list):
                 cur_c = [{'type': 'text', 'text': str(cur_c)}]
+            # [dedup-diagnostic] Log consecutive user message merging
+            _prev_snip = str(prev.get('content', ''))[:80]
+            _cur_snip = str(msg.get('content', ''))[:80]
+            logger.debug(
+                "[dedup-diagnostic] _sanitize_messages_for_api MERGE consecutive users | "
+                "merged_pos=%d | prev_snip=%r | cur_snip=%r",
+                len(merged) - 1, _prev_snip, _cur_snip,
+            )
+            print(
+                f'[dedup] SANITIZE_MERGE pos={len(merged) - 1} '
+                f'prev={_prev_snip!r} cur={_cur_snip!r}',
+                flush=True,
+            )
             prev['content'] = prev_c + cur_c
         else:
             merged.append(msg)
+
+    # [dedup-diagnostic] Log final roles after sanitization
+    _before_roles = [m.get('role', '?') for m in messages if isinstance(m, dict)]
+    _after_roles = [m.get('role', '?') for m in merged]
+    _has_merge = len(merged) < len(clean)
+    if _has_merge or len(messages) > 6:
+        logger.debug(
+            "[dedup-diagnostic] _sanitize_messages_for_api done | "
+            "before=%d after=%d | before_roles=%s | after_roles=%s | merged=%s",
+            len(messages), len(merged), _before_roles, _after_roles, _has_merge,
+        )
     return merged
-
-
-def _api_safe_message_positions(messages):
-    """Return [(original_index, sanitized_message)] for API-safe messages."""
-    valid_tool_call_ids: set = set()
-    for msg in messages:
-        if not isinstance(msg, dict):
-            continue
-        if msg.get('role') == 'assistant':
-            for tc in msg.get('tool_calls') or []:
-                if isinstance(tc, dict):
-                    tid = tc.get('id') or tc.get('call_id') or ''
-                    if tid:
-                        valid_tool_call_ids.add(tid)
-
-    out = []
-    for idx, msg in enumerate(messages):
-        if not isinstance(msg, dict):
-            continue
-        role = msg.get('role')
-        if role == 'tool':
-            tid = msg.get('tool_call_id') or ''
-            if not tid or tid not in valid_tool_call_ids:
-                continue
-        sanitized = {k: v for k, v in msg.items() if k in _API_SAFE_MSG_KEYS}
-        # Strip empty tool_calls — some providers (DeepSeek) reject []
-        if isinstance(sanitized.get('tool_calls'), list) and not sanitized['tool_calls']:
-            del sanitized['tool_calls']
-        if sanitized.get('role'):
-            out.append((idx, sanitized))
-    return out
 
 
 def _distribute_inline_reasoning(messages):
@@ -1022,68 +1028,6 @@ def _distribute_inline_reasoning(messages):
         _m['reasoning'] = '\n<|reasoning_sep|>\n'.join(
             p for p in _parts if p
         )
-        # Content is intentionally left intact — <think> tags remain so
-        # they participate in API context for subsequent turns.
-
-
-def _restore_reasoning_metadata(previous_messages, updated_messages):
-    """Carry forward display-only metadata lost during API-safe history sanitization.
-
-    The provider-facing history strips WebUI-only fields like `reasoning`. When the
-    agent returns its new full message history, prior assistant messages come back
-    without that metadata unless we merge it back in by API-history position.
-
-    This also preserves existing timestamps for unchanged historical messages.
-    Without that, older turns that come back from the agent without `_ts` /
-    `timestamp` can be re-stamped with the current time on every new assistant
-    response, making prior messages appear to "move" in time.
-    """
-    if not previous_messages or not updated_messages:
-        return updated_messages
-    updated_messages = list(updated_messages)
-    prev_safe = _api_safe_message_positions(previous_messages)
-
-    def _safe_projection(msg):
-        if not isinstance(msg, dict):
-            return None
-        proj = {k: v for k, v in msg.items() if k in _API_SAFE_MSG_KEYS and msg.get('role')}
-        if isinstance(proj.get('tool_calls'), list) and not proj['tool_calls']:
-            del proj['tool_calls']
-        return proj
-
-    def _reasoning_only_assistant(msg):
-        if not isinstance(msg, dict) or msg.get('role') != 'assistant' or not msg.get('reasoning'):
-            return False
-        if msg.get('tool_calls'):
-            return False
-        return not _message_text(msg.get('content'))
-
-    safe_pos = 0
-    while safe_pos < len(prev_safe):
-        prev_idx, _ = prev_safe[safe_pos]
-        prev_msg = previous_messages[prev_idx]
-        cur_msg = updated_messages[safe_pos] if safe_pos < len(updated_messages) else None
-
-        if isinstance(prev_msg, dict) and isinstance(cur_msg, dict) and _safe_projection(prev_msg) == _safe_projection(cur_msg):
-            if prev_msg.get('role') == 'assistant' and prev_msg.get('reasoning') and not cur_msg.get('reasoning'):
-                cur_msg['reasoning'] = prev_msg['reasoning']
-            if prev_msg.get('timestamp') and not cur_msg.get('timestamp'):
-                cur_msg['timestamp'] = prev_msg['timestamp']
-            elif prev_msg.get('_ts') and not cur_msg.get('_ts') and not cur_msg.get('timestamp'):
-                cur_msg['_ts'] = prev_msg['_ts']
-            # Preserve original_content across sanitization (goal/skill commands)
-            if prev_msg.get('original_content') and not cur_msg.get('original_content'):
-                cur_msg['original_content'] = prev_msg['original_content']
-            safe_pos += 1
-            continue
-
-        if _reasoning_only_assistant(prev_msg):
-            updated_messages.insert(safe_pos, copy.deepcopy(prev_msg))
-            safe_pos += 1
-            continue
-
-        safe_pos += 1
-    return updated_messages
 
 
 def _tool_result_snippet(raw) -> str:
@@ -1274,6 +1218,126 @@ def _resolve_personality_prompt(config_dict, personality_name):
     return str(pval)
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Message post-processing helpers (extracted from _run_agent_streaming)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _strip_xml_tool_calls_from_messages(messages):
+    """Strip <hermes-tool-call> blocks from all assistant messages in-place."""
+    for _m in messages:
+        if isinstance(_m, dict) and _m.get('role') == 'assistant':
+            _raw_content = _m.get('content')
+            if isinstance(_raw_content, str):
+                _cleaned = _strip_xml_tool_calls(_raw_content)
+                if _cleaned != _raw_content:
+                    _m['content'] = _cleaned
+            elif isinstance(_raw_content, list):
+                for _part in _raw_content:
+                    if isinstance(_part, dict) and isinstance(_part.get('text'), str):
+                        _part['text'] = _strip_xml_tool_calls(_part['text'])
+
+
+def _stamp_timestamps_forward_backward(messages, start_idx, all_message_ts):
+    """Stamp ``timestamp__webui`` using collected timestamps + backward-fill.
+
+    *start_idx* limits stamping to ``messages[start_idx:]``.
+    Messages that already have a truthy ``timestamp__webui`` are skipped
+    (idempotent guard for re-application).
+    """
+    _ts_iter = iter(all_message_ts) if all_message_ts else iter([])
+    _current_ts = None
+    _new_range = range(start_idx, len(messages))
+    # Forward pass: consume timestamps for user / assistant / tool messages
+    for _i in _new_range:
+        _m = messages[_i]
+        if not isinstance(_m, dict):
+            continue
+        if _m.get('timestamp__webui'):
+            continue  # already stamped
+        if _m.get('role') in ('user', 'assistant', 'tool'):
+            try:
+                _current_ts = next(_ts_iter)
+            except StopIteration:
+                _current_ts = None
+        if _current_ts is not None:
+            _m['timestamp__webui'] = _current_ts
+    # Backward-fill: any message still missing a timestamp inherits from
+    # the nearest preceding message that has one.
+    for _i in _new_range:
+        _m = messages[_i]
+        if not isinstance(_m, dict):
+            continue
+        if _m.get('timestamp__webui'):
+            continue
+        for _j in range(_i - 1, start_idx - 1, -1):
+            _prev = messages[_j]
+            if not isinstance(_prev, dict):
+                continue
+            _prev_ts = _prev.get('timestamp__webui')
+            if _prev_ts and _prev_ts > 0:
+                _m['timestamp__webui'] = _prev_ts
+                break
+
+
+def _tag_attachments(messages, msg_text, attachments):
+    """Tag the matching user message with attachment filenames."""
+    if not attachments or not msg_text:
+        return
+    for m in reversed(messages):
+        if m.get('role') == 'user':
+            content = str(m.get('content', ''))
+            base_text = (
+                msg_text.split('\n\n[Attached files:')[0].strip()
+                if '\n\n[Attached files:' in msg_text
+                else msg_text
+            )
+            if base_text[:60] in content or content[:60] in msg_text:
+                m['attachments'] = attachments
+                break
+
+
+def _postprocess_messages(messages, *, start_idx=0,
+                          msg_text=None, attachments=None,
+                          all_message_ts=None, reasoning_text=None):
+    """Apply all webui post-processing to a message list.
+
+    *start_idx* restricts timestamp stamping to ``messages[start_idx:]``.
+    XML stripping and reasoning distribution always operate globally.
+    """
+    # 1. Strip XML tool-call blocks (global — DB content is always raw)
+    _strip_xml_tool_calls_from_messages(messages)
+
+    # 2. Stamp timestamps (only messages[start_idx:])
+    if all_message_ts is not None:
+        _stamp_timestamps_forward_backward(messages, start_idx, all_message_ts)
+
+    # 3. Distribute inline reasoning (global)
+    _distribute_inline_reasoning(messages)
+
+    # 4. Fallback reasoning text
+    # Only attach the accumulated trace when NO assistant message already
+    # carries per-message reasoning.  DeepSeek V4 etc. stream reasoning on each
+    # tool-calling assistant via reasoning_content, which is copied to
+    # `reasoning` before this runs — so `reasoning_text` (the whole-turn trace)
+    # would otherwise duplicate that reasoning onto the last assistant message
+    # (e.g. the final answer, which has no reasoning of its own).
+    if reasoning_text and messages:
+        _any_reasoning = any(
+            isinstance(_rm, dict) and _rm.get('role') == 'assistant' and _rm.get('reasoning')
+            for _rm in messages
+        )
+        if not _any_reasoning:
+            for _rm in reversed(messages):
+                if isinstance(_rm, dict) and _rm.get('role') == 'assistant':
+                    _rm['reasoning'] = reasoning_text
+                    break
+
+    # 5. Tag attachments
+    if attachments and msg_text:
+        _tag_attachments(messages, msg_text, attachments)
+
+
 def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, attachments=None, *, ephemeral=False):
     """Run agent in background thread, writing SSE events to STREAMS[stream_id].
 
@@ -1352,10 +1416,6 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
 
         _agent_lock = _get_session_agent_lock(session_id)
         # TD1: set thread-local env context so concurrent sessions don't clobber globals
-        # Check for pre-flight cancel (user cancelled before agent even started)
-        if cancel_event.is_set():
-            put('cancel', {'message': 'Cancelled before start'})
-            return
 
         # Resolve profile home for this agent run — use the session's own profile
         # (stamped at new_session() time from the client's S.activeProfile) so that
@@ -1470,6 +1530,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 'choices_offered': choices_list,
                 'session_id': sid,
                 'kind': 'clarify',
+                'clarify_id': uuid.uuid4().hex,
                 'requested_at': time.time(),
             }
             try:
@@ -1509,6 +1570,42 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             _reasoning_text = ''  # accumulates reasoning/thinking trace for persistence
             _live_tool_calls = []  # tool progress fallback when final messages omit tool IDs
             _message_started = False  # tracks whether current assistant message row has been started
+            _all_message_ts = []  # [user_msg_ts?, msg_start_ts1, msg_start_ts2, ...]
+
+            # ── Turn-boundary tracking for multi-tool sub-turn detection ──────
+            # When the model produces multiple tool_use blocks in a single
+            # assistant response, the SDK calls tool_progress_callback for each
+            # tool sequentially.  We must emit only ONE message_start per
+            # assistant turn so the frontend doesn't create spurious extra
+            # assistant rows (which then mismatch on reload).
+            #
+            # Strategy:
+            #   stream_delta_callback(None) fires once per assistant turn
+            #   (after model output, before tool execution) for ALL turns
+            #   with tool calls — including tool-only turns where content
+            #   is empty.  on_token(None) handles this and increments
+            #   _turn_id.  This is more reliable than _thinking (which
+            #   only fires when assistant_message.content is non-empty).
+            #
+            #   on_token (real tokens) uses _on_token_turn_id != _turn_id
+            #   to detect "first token of a new turn".
+            #
+            #   tool.started uses _tool_batch_id to ensure only the first
+            #   tool in a batch emits message_start.
+            _turn_id = 0              # incremented by on_token(None)
+            _on_token_turn_id = -1    # _turn_id when on_token last emitted
+            _text_emitted_this_turn = False
+            _tool_batch_id = -1       # _turn_id of last tool.started batch
+
+            # ── Seed with user message timestamp (if available) ────────────
+            # _pending_user_message_ts is set by _handle_chat_start and
+            # surfaces the time when the user submitted the message.
+            _user_ts = getattr(s, '_pending_user_message_ts', None)
+            if _user_ts:
+                _all_message_ts.append(_user_ts)
+                # Keep _pending_user_message_ts on the session — reconnect
+                # during streaming needs it via /api/session.  It will be
+                # overwritten by the next _handle_chat_start call.
 
             # Throttle: emit metering events at most every 100 ms so the TPS label
             # feels live during fast token streams without flooding the SSE channel.
@@ -1528,39 +1625,95 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 put('metering', stats)
 
             def on_token(text):
-                nonlocal _token_sent, _message_started
-                if text is None:
-                    return  # end-of-stream sentinel
-                # Emit 'message_start' at the beginning of each assistant message
-                # This tells the frontend to create a new message row.
-                # Boundaries: first token of stream, and first token after tool_complete.
-                if not _message_started:
-                    _message_started = True
-                    put('message_start', {})
-                _token_sent = True
-                # Accumulate partial text so cancel_stream() can persist it (#893)
-                if stream_id in STREAM_PARTIAL_TEXT:
-                    STREAM_PARTIAL_TEXT[stream_id] += str(text)
-                put('token', {'text': text})
-                # Update global throughput meter
-                meter().record_token(stream_id, len(STREAM_PARTIAL_TEXT[stream_id]))
-                _emit_metering()
+                try:
+                    nonlocal _token_sent, _message_started, _all_message_ts
+                    nonlocal _text_emitted_this_turn, _on_token_turn_id
+                    if text is None:
+                        # ── End-of-stream sentinel ────────────────────
+                        # The SDK calls stream_delta_callback(None) once
+                        # per assistant turn, AFTER the model response
+                        # and BEFORE tool execution, for ALL turns with
+                        # tool calls — including tool-only turns where
+                        # no real tokens were emitted.  This is the most
+                        # reliable turn-boundary signal.
+                        nonlocal _turn_id, _tool_batch_id
+                        _turn_id += 1
+                        if not _text_emitted_this_turn:
+                            # Tool-only turn: no token/reasoning was
+                            # emitted → reset so the first tool.started
+                            # emits message_start.
+                            _message_started = False
+                            print(f'[stream-debug] on_token(None) tool-only turn | turn_id={_turn_id} | '
+                                  f'session={session_id} | action=reset_message_started',
+                                  flush=True)
+                        _text_emitted_this_turn = False  # reset for tool batch
+                        return
+                    # First token of a new turn: _on_token_turn_id
+                    # hasn't caught up with _turn_id yet.
+                    if _on_token_turn_id != _turn_id:
+                        _on_token_turn_id = _turn_id
+                        _message_started = False
+                    if not _message_started:
+                        _message_started = True
+                        _text_emitted_this_turn = True
+                        _ts = time.time()
+                        _all_message_ts.append(_ts)
+                        print(f'[stream-debug] on_token emit message_start | turn_id={_turn_id} | '
+                              f'ts={_ts:.3f} | ts_count={len(_all_message_ts)} | '
+                              f'session={session_id}',
+                              flush=True)
+                        put('message_start', {'ts': _ts})
+                    _token_sent = True
+                    # Accumulate partial text so cancel_stream() can persist it (#893)
+                    if stream_id in STREAM_PARTIAL_TEXT:
+                        STREAM_PARTIAL_TEXT[stream_id] += str(text)
+                    put('token', {'text': text})
+                    # Update global throughput meter
+                    meter().record_token(stream_id, len(STREAM_PARTIAL_TEXT[stream_id]))
+                    _emit_metering()
+                except Exception:
+                    logger.warning(
+                        "on_token callback failed for session=%s",
+                        session_id, exc_info=True,
+                    )
 
             # For streaming chat, invoked when reasoning token is arrived.
             def on_reasoning(text):
-                if text is None:
-                    return
-                # reasoning=none: SDK final response omits reasoning_content,
-                # but DeepSeek still emits reasoning_content delta chunks that
-                # mirror the assistant text.  Suppress them so no spurious
-                # reasoning is pushed via SSE or persisted to the session.
-                if _reasoning_config and _reasoning_config.get("enabled") is False:
-                    return
-                _append_reasoning_text(text)
-                put('reasoning', {'text': str(text)})
-                # Track reasoning tokens in the meter so TPS reflects all AI output
-                meter().record_reasoning(stream_id, len(_reasoning_text))
-                _emit_metering()
+                try:
+                    nonlocal _message_started, _all_message_ts
+                    nonlocal _text_emitted_this_turn, _on_token_turn_id
+                    if text is None:
+                        return
+                    # reasoning=none: SDK final response omits reasoning_content,
+                    # but DeepSeek still emits reasoning_content delta chunks that
+                    # mirror the assistant text.  Suppress them so no spurious
+                    # reasoning is pushed via SSE or persisted to the session.
+                    if _reasoning_config and _reasoning_config.get("enabled") is False:
+                        return
+                    # First reasoning token of a new turn — same logic as on_token.
+                    if _on_token_turn_id != _turn_id:
+                        _on_token_turn_id = _turn_id
+                        _message_started = False
+                    if not _message_started:
+                        _message_started = True
+                        _text_emitted_this_turn = True
+                        _ts = time.time()
+                        _all_message_ts.append(_ts)
+                        print(f'[stream-debug] on_reasoning emit message_start | turn_id={_turn_id} | '
+                              f'ts={_ts:.3f} | ts_count={len(_all_message_ts)} | '
+                              f'session={session_id}',
+                              flush=True)
+                        put('message_start', {'ts': _ts})
+                    _append_reasoning_text(text)
+                    put('reasoning', {'text': str(text)})
+                    # Track reasoning tokens in the meter so TPS reflects all AI output
+                    meter().record_reasoning(stream_id, len(_reasoning_text))
+                    _emit_metering()
+                except Exception:
+                    logger.warning(
+                        "on_reasoning callback failed for session=%s",
+                        session_id, exc_info=True,
+                    )
 
             # Pre-initialise the activity counter here so on_tool (which
             # closes over it) never captures an unbound name even if this
@@ -1568,7 +1721,8 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             _checkpoint_activity = [0]
 
             def on_tool(*cb_args, **cb_kwargs):
-                nonlocal _message_started
+                nonlocal _message_started, _all_message_ts
+                nonlocal _turn_id, _text_emitted_this_turn, _tool_batch_id
                 event_type = None
                 name = None
                 preview = None
@@ -1589,6 +1743,14 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 # The content of on_tool/on_token/on_reasoning maybe same.
                 if event_type in ('reasoning.available', '_thinking'):
                     reason_text = preview if event_type == 'reasoning.available' else name
+                    # _thinking fires for text-producing turns (content
+                    # non-empty).  Turn-boundary tracking is now handled
+                    # by on_token(None) which fires unconditionally for
+                    # ALL turns with tool calls.
+                    print(f'[stream-debug] _thinking | turn_id={_turn_id} | '
+                          f'session={session_id} | '
+                          f'reason_text={reason_text[:60] if reason_text else "(none)"}',
+                          flush=True)
                     if reason_text and not (_reasoning_config and _reasoning_config.get("enabled") is False):
                         # Insert separator at cross-source boundary (streaming → post-hoc summary)
                         if _reasoning_text:
@@ -1606,20 +1768,55 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         args_snap[k] = s2[:120] + ('...' if len(s2) > 120 else '')
 
                 if event_type in (None, 'tool.started'):
+                    # ── Unified message_start: every sub-turn (text or tool)
+                    #     emits message_start before the first event so the
+                    #     frontend always has an assistant row to anchor to.
+                    #
+                    #     Turn-boundary (including tool-only detection) is
+                    #     handled by on_token(None).  Here we only need
+                    #     same-batch dedup via _tool_batch_id.
+                    #
+                    #     Each tool message now carries its own independent
+                    #     timestamp (ts field in the tool SSE event) so that
+                    #     tool messages get distinct timestamp__webui values
+                    #     instead of inheriting the assistant's timestamp.
+                    if _tool_batch_id != _turn_id:
+                        _tool_batch_id = _turn_id
+                        print(f'[stream-debug] tool.started new-batch | turn_id={_turn_id} | '
+                              f'session={session_id} | tool={name} | '
+                              f'msg_started={_message_started}',
+                              flush=True)
+                    if not _message_started:
+                        _message_started = True
+                        _ts = time.time()
+                        _all_message_ts.append(_ts)
+                        print(f'[stream-debug] tool.started emit message_start | turn_id={_turn_id} | '
+                              f'ts={_ts:.3f} | ts_count={len(_all_message_ts)} | '
+                              f'session={session_id} | tool={name}',
+                              flush=True)
+                        put('message_start', {'ts': _ts})
                     # Generate a unique tid for this tool call
-                    import time
                     tid = f"tool-{name}-{int(time.time() * 1000)}-{len(_live_tool_calls)}"
                     _live_tool_calls.append({
                         'name': name,
                         'tid': tid,  # Store tid for later matching in tool.completed
                         'args': args if isinstance(args, dict) else {},
                     })
+                    # ── Tool message's own timestamp ──────────────────
+                    # Collect a per-message timestamp so each tool message
+                    # gets a distinct timestamp__webui instead of sharing
+                    # the assistant's.  Appended AFTER any message_start ts
+                    # so _all_message_ts order matches s.messages order
+                    # (assistant msg before tool msg).
+                    _tool_ts = time.time()
+                    _all_message_ts.append(_tool_ts)
                     put('tool', {
                         'event_type': event_type or 'tool.started',
                         'name': name,
                         'tid': tid,  # Include tid in the event for frontend
                         'preview': preview,
                         'args': args_snap,
+                        'ts': _tool_ts,  # tool message's own timestamp for frontend
                     })
                     # ── CLI tool visualization (non-blocking, try/except) ──
                     try:
@@ -1641,56 +1838,63 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                     return
 
                 if event_type == 'tool.completed':
-                    tid_for_event = ''  # Initialize tid
-                    _todos_for_event = None  # Full todos list for write_todo tool
-                    for live_tc in reversed(_live_tool_calls):
-                        if live_tc.get('done'):
-                            continue
-                        if not name or live_tc.get('name') == name:
-                            live_tc['done'] = True
-                            live_tc['duration'] = cb_kwargs.get('duration')
-                            live_tc['is_error'] = bool(cb_kwargs.get('is_error', False))
-                            # Extract tid to include in the event for frontend tracking
-                            tid_for_event = live_tc.get('tid', '')
-                            # For todo (write_todo): extract full (untruncated) todos list from args
-                            if name in ('write_todo', 'todo'):
-                                _tc_args = live_tc.get('args', {})
-                                if isinstance(_tc_args, dict) and isinstance(_tc_args.get('todos'), list):
-                                    _todos_for_event = _tc_args['todos']
-                            break
-                    # Signal the checkpoint thread that new work has completed (Issue #765).
-                    # Each completed tool call is a meaningful unit of progress worth persisting.
-                    _checkpoint_activity[0] += 1
-                    _tool_complete_payload = {
-                        'event_type': event_type,
-                        'name': name,
-                        'tid': tid_for_event,  # Include tid for frontend to match tool message
-                        'output': preview,  # Tool result output from preview parameter
-                        'preview': preview,
-                        'args': args_snap,
-                        'duration': cb_kwargs.get('duration'),
-                        'is_error': bool(cb_kwargs.get('is_error', False)),
-                    }
-                    if _todos_for_event is not None:
-                        _tool_complete_payload['todos'] = _todos_for_event
-                    put('tool_complete', _tool_complete_payload)
-                    # ── CLI tool visualization (non-blocking, try/except) ──
                     try:
-                        from api.cli_viewer import on_tool_completed
-                        on_tool_completed(
-                            session_id, name, tid_for_event, preview,
-                            cb_kwargs.get('duration'), bool(cb_kwargs.get('is_error', False)),
-                        )
+                        tid_for_event = ''  # Initialize tid
+                        _todos_for_event = None  # Full todos list for write_todo tool
+                        for live_tc in reversed(_live_tool_calls):
+                            if live_tc.get('done'):
+                                continue
+                            if not name or live_tc.get('name') == name:
+                                live_tc['done'] = True
+                                live_tc['duration'] = cb_kwargs.get('duration')
+                                live_tc['is_error'] = bool(cb_kwargs.get('is_error', False))
+                                # Extract tid to include in the event for frontend tracking
+                                tid_for_event = live_tc.get('tid', '')
+                                # For todo (write_todo): extract full (untruncated) todos list from args
+                                if name in ('write_todo', 'todo'):
+                                    _tc_args = live_tc.get('args', {})
+                                    if isinstance(_tc_args, dict) and isinstance(_tc_args.get('todos'), list):
+                                        _todos_for_event = _tc_args['todos']
+                                break
+                        # Signal the checkpoint thread that new work has completed (Issue #765).
+                        # Each completed tool call is a meaningful unit of progress worth persisting.
+                        _checkpoint_activity[0] += 1
+                        _tool_complete_payload = {
+                            'event_type': event_type,
+                            'name': name,
+                            'tid': tid_for_event,  # Include tid for frontend to match tool message
+                            'output': preview,  # Tool result output from preview parameter
+                            'preview': preview,
+                            'args': args_snap,
+                            'duration': cb_kwargs.get('duration'),
+                            'is_error': bool(cb_kwargs.get('is_error', False)),
+                        }
+                        if _todos_for_event is not None:
+                            _tool_complete_payload['todos'] = _todos_for_event
+                        put('tool_complete', _tool_complete_payload)
+                        # ── CLI tool visualization (non-blocking, try/except) ──
+                        try:
+                            from api.cli_viewer import on_tool_completed
+                            on_tool_completed(
+                                session_id, name, tid_for_event, preview,
+                                cb_kwargs.get('duration'), bool(cb_kwargs.get('is_error', False)),
+                            )
+                        except Exception:
+                            pass
+                        # message_started is no longer reset here — the turn-boundary
+                        # tracking (_turn_id counter) handles multi-tool sub-turn
+                        # detection without creating spurious assistant rows.
                     except Exception:
-                        pass
-                    # Reset message_started so the next token creates a new message row
-                    _message_started = False
+                        logger.warning(
+                            "on_tool tool_completed callback failed for session=%s name=%s",
+                            session_id, name, exc_info=True,
+                        )
                     return
 
             _AIAgent = _get_ai_agent()
             if _AIAgent is None:
                 raise ImportError("AIAgent not available -- check that hermes-agent is on sys.path")
-
+        
             # Initialize SessionDB so session_search works in WebUI sessions
             _session_db = None
             try:
@@ -1835,6 +2039,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             # injectionFrequency: "first-turn" actually suppresses after turn 1.
             if ephemeral:
                 agent = _AIAgent(**_agent_kwargs)
+                agent.compression_enabled = False  # WebUI manages compression
                 logger.debug('[webui] Created ephemeral agent for session %s', session_id)
             else:
                 import hashlib as _hashlib
@@ -1887,8 +2092,10 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         agent._interrupted = False
                     if hasattr(agent, '_interrupt_message'):
                         agent._interrupt_message = None
+                    agent.compression_enabled = False  # WebUI manages compression
                 else:
                     agent = _AIAgent(**_agent_kwargs)
+                    agent.compression_enabled = False  # WebUI manages compression
                     with SESSION_AGENT_CACHE_LOCK:
                         SESSION_AGENT_CACHE[session_id] = (agent, _agent_sig)
                     logger.debug('[webui] Created new agent for session %s', session_id)
@@ -1896,15 +2103,16 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             # Store agent instance for cancel/interrupt propagation
             with STREAMS_LOCK:
                 AGENT_INSTANCES[stream_id] = agent
-                # Check if cancel was requested during agent initialization
+                # If cancel was requested during agent init, interrupt now
+                # so _interrupt_requested is set.  The agent proceeds to
+                # run_conversation where the main loop detects the flag and
+                # breaks — this guarantees s.messages is updated with the
+                # user message before the agent thread exits.
                 if stream_id in CANCEL_FLAGS and CANCEL_FLAGS[stream_id].is_set():
-                    # Cancel arrived during agent creation - interrupt immediately
                     try:
                         agent.interrupt("Cancelled before start")
                     except Exception:
-                        logger.debug("Failed to interrupt agent before start")
-                    put('cancel', {'message': 'Cancelled by user'})
-                    return
+                        pass
 
             # Prepend workspace context so the agent always knows which directory
             # to use for file operations, regardless of session age or AGENTS.md defaults.
@@ -2001,7 +2209,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             #   - s.pending_started_at / s.active_stream_id (turn bookkeeping)
             # On a server restart the UI will see a session with a pending message and no
             # response — better than a silent loss of the entire conversation turn.
-            # The final s.save() at task completion handles the full session update + index.
+            # The final s.sync_webui_metadata() at task completion handles the full session update + index.
             # (_checkpoint_stop is pre-initialised at the top of the outer try.)
             # (_checkpoint_activity is already initialised before on_tool().)
 
@@ -2012,7 +2220,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         cur = _checkpoint_activity[0]
                         if cur > last_saved_activity:
                             with _agent_lock:
-                                s.save(skip_index=True)
+                                s.sync_webui_metadata(skip_index=True)
                             last_saved_activity = cur
                     except Exception as e:
                         logger.debug("Periodic checkpoint save failed: %s", e)
@@ -2021,7 +2229,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             # Persist the user message BEFORE streaming starts so it's durable even if
             # the server crashes before the first checkpoint fires (every 15s).
             with _agent_lock:
-                s.save(touch_updated_at=True, skip_index=False)
+                s.sync_webui_metadata(touch_updated_at=True, skip_index=False)
 
             _ckpt_thread = threading.Thread(
                 target=_periodic_checkpoint, daemon=True,
@@ -2047,20 +2255,172 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
 
             put('phase', {'stage': 'thinking'})
 
+            # [dedup-diagnostic] Log conversation_history being sent to agent
+            _sanitized_history = _sanitize_messages_for_api(s.messages)
+            _hist_roles = [m.get('role', '?') for m in _sanitized_history]
+            _hist_user_count = sum(1 for m in _sanitized_history if m.get('role') == 'user')
+            _hist_user_snips = [
+                str(m.get('content', ''))[:80] for m in _sanitized_history
+                if m.get('role') == 'user'
+            ]
+            logger.debug(
+                "[dedup-diagnostic] run_conversation INPUT | session=%s | "
+                "s.messages_count=%d | sanitized_count=%d | roles=%s | "
+                "user_count=%d | user_snips=%s | new_user_msg=%r",
+                session_id, len(s.messages or []), len(_sanitized_history),
+                _hist_roles, _hist_user_count, _hist_user_snips,
+                msg_text[:80],
+            )
+            print(
+                f'[dedup] TURN_INPUT session={session_id} '
+                f's.msgs={len(s.messages or [])} sanitized={len(_sanitized_history)} '
+                f'user_count={_hist_user_count} '
+                f'user_snips={_hist_user_snips} '
+                f'new_msg={msg_text[:80]!r}',
+                flush=True,
+            )
+
+            # ── Pre-flight compression ──────────────────────────────────────────
+            # Check both message-count and token thresholds before the agent
+            # runs.  SDK built-in compression is disabled (compression_enabled
+            # = False) so all compression is managed here.  When compression
+            # fires we send compressing/compressed SSE events so the frontend
+            # can show a transient InfoCard instead of a silent pause.
+            from api.config import load_settings as _ls_preflight
+            from api.routes import (
+                _estimate_messages_tokens_rough,
+                _archive_session_before_compress,
+                _persist_compressed_messages,
+                _reanchor_last_seen_after_compress,
+                _record_auto_compress_quality,
+            )
+            _settings_preflight = _ls_preflight()
+            _msg_threshold = int(str(_settings_preflight.get("auto_compress_threshold", "0") or "0"))
+            _token_threshold_pct = float(str(_settings_preflight.get("auto_compress_token_threshold", "0") or "0"))
+            _need_compress = False
+            _est_tokens = 0
+
+            if _msg_threshold > 0 and len(s.messages) >= _msg_threshold:
+                _need_compress = True
+            elif _token_threshold_pct > 0:
+                _ctx_len = getattr(agent.context_compressor, 'context_length', 0) or 0
+                _est_tokens = _estimate_messages_tokens_rough(_sanitized_history)
+                if _ctx_len > 0 and _est_tokens >= int(_ctx_len * _token_threshold_pct):
+                    _need_compress = True
+
+            if _need_compress and not getattr(s, 'auto_compress_disabled', False):
+                _reason_parts = []
+                if _msg_threshold > 0 and len(s.messages) >= _msg_threshold:
+                    _reason_parts.append(f'{len(s.messages)} messages ≥ {_msg_threshold}')
+                elif _token_threshold_pct > 0:
+                    _reason_parts.append(f'tokens ≥ {int(_token_threshold_pct * 100)}% of context')
+                _reason = ', '.join(_reason_parts) if _reason_parts else 'threshold reached'
+                try:
+                    put('compressing', {
+                        'message': '正在压缩上下文...',
+                        'reason': _reason,
+                        'msg_count': len(s.messages),
+                        'msg_threshold': _msg_threshold,
+                        'token_threshold_pct': _token_threshold_pct,
+                    })
+                except Exception:
+                    pass
+
+                if not _est_tokens:
+                    _est_tokens = _estimate_messages_tokens_rough(_sanitized_history)
+                _msg_before = len(_sanitized_history)
+                try:
+                    _compressed = agent.context_compressor.compress(
+                        _sanitized_history, current_tokens=_est_tokens,
+                    )
+                except Exception:
+                    _compressed = None
+                # "compressed" event semantics = "the compression attempt has
+                # finished", NOT "compression actually shrank the history".
+                # compress() returns the *same* list unchanged when there is
+                # nothing to compress (too few messages, no compressable window,
+                # or summary failure with abort_on_summary_failure), and can even
+                # return an equal-length list when only one turn is summarised.
+                # We must still emit `compressed` so the frontend always
+                # dismisses the "compressing" spinner InfoCard.
+                _effective = (
+                    bool(_compressed)
+                    and _compressed is not _sanitized_history
+                    and len(_compressed) < _msg_before
+                )
+                if _effective:
+                    try:
+                        _archive_session_before_compress(s)
+                    except Exception:
+                        pass
+                    s.messages = _compressed
+                    _sanitized_history = _compressed
+                    _distribute_inline_reasoning(s.messages)
+                    s.tool_calls = []
+                    s.last_compression_time = time.time()
+                    # Re-anchor the seen watermark to the compressed count so
+                    # the unread badge stays correct for this turn's new messages.
+                    _reanchor_last_seen_after_compress(s)
+                    # Persist now (before run_conversation) so loadSession
+                    # returns the compressed list even after server restart.
+                    # The current user message is persisted by the SDK
+                    # (run_conversation's persist_user_message), not here —
+                    # writing it here would double-persist it.
+                    _persist_compressed_messages(s)
+
+                _msg_after = len(_compressed) if _compressed else _msg_before
+                _approx_tokens_after = (
+                    sum(
+                        len(str(m.get('content', ''))) for m in _compressed
+                        if isinstance(m, dict)
+                    ) // 4 if _compressed else _est_tokens
+                )
+                try:
+                    put('compressed', {
+                        'message': 'Context auto-compressed to continue the conversation',
+                        'effective': _effective,
+                        'saved_messages': _msg_before - _msg_after if _effective else 0,
+                        'approx_tokens_before': _est_tokens,
+                        'approx_tokens_after': _approx_tokens_after,
+                    })
+                except Exception:
+                    pass
+                print(
+                    f'[preflight-compress] session={session_id} '
+                    f'messages {_msg_before}→{_msg_after} '
+                    f'effective={_effective} '
+                    f'tokens_approx {_est_tokens}→{_approx_tokens_after}',
+                    flush=True,
+                )
+
+                # ── Quality tracking ───────────────────────────────────
+                # Feed the compression outcome into the auto-compress quality
+                # gate so repeated ineffective compressions eventually disable
+                # auto-compress (same logic as _auto_compress_session).  When
+                # _compressed is None (compress raised), _msg_after == _msg_before
+                # → ratio 1.0 → counted as one poor attempt.
+                _record_auto_compress_quality(s, _msg_before, _msg_after)
+                try:
+                    s.sync_webui_metadata()
+                except Exception:
+                    pass
+
             result = agent.run_conversation(
                 user_message=workspace_ctx + msg_text,
                 system_message=workspace_system_msg,
-                conversation_history=_sanitize_messages_for_api(s.messages),
+                conversation_history=_sanitized_history,
                 task_id=session_id,
                 persist_user_message=msg_text,
             )
             # ── Skill command: attach original_content to user message for clean display ──
             _pending_original = getattr(s, '_pending_original_message', None)
             if _pending_original:
-                s._pending_original_message = None
-                for _m in result.get('messages') or []:
+                # Only clear on normal completion; cancel_stream needs it.
+                if not cancel_event.is_set():
+                    s._pending_original_message = None
+                for _m in reversed(result.get('messages') or []):
                     if isinstance(_m, dict) and _m.get('role') == 'user':
-                        _m['original_content'] = _pending_original
+                        _m['original_content__webui'] = _pending_original
                         break
             # ── Diagnostic: always print run_conversation result summary ──
             _diag_msgs = result.get('messages') or [] if isinstance(result, dict) else []
@@ -2100,34 +2460,53 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 _ckpt_thread.join(timeout=15)
             with _agent_lock:
                 # The agent returns per-message reasoning_content (API-native).
-                # Copy it to reasoning (WebUI display field) BEFORE
-                # _restore_reasoning_metadata — which sanitizes through
-                # _API_SAFE_MSG_KEYS and would drop reasoning_content otherwise.
+                # Copy it to reasoning (WebUI display field).
                 _agent_msgs = result.get('messages') or s.messages
                 for _m in _agent_msgs:
                     if isinstance(_m, dict) and _m.get('role') == 'assistant':
                         _rc = _m.get('reasoning_content')
                         if isinstance(_rc, str) and _rc.strip() and not _m.get('reasoning'):
                             _m['reasoning'] = _rc.strip()
-                s.messages = _restore_reasoning_metadata(
-                    _previous_messages,
-                    _agent_msgs,
+
+                # [dedup-diagnostic] Log s.messages assignment
+                _prev_msg_count = len(s.messages or [])
+                _result_roles = [m.get('role', '?') for m in (_agent_msgs or [])]
+                _result_user_count = sum(1 for m in (_agent_msgs or []) if m.get('role') == 'user')
+                logger.debug(
+                    "[dedup-diagnostic] s.messages = result['messages'] | session=%s | "
+                    "cancelled=%s | prev_msg_count=%d | result_count=%d result_roles=%s | "
+                    "result_user_count=%d",
+                    session_id, cancel_event.is_set(),
+                    _prev_msg_count, len(_agent_msgs or []), _result_roles,
+                    _result_user_count,
                 )
-                # Strip XML tool-call blocks from assistant message content.
-                # DeepSeek and some other providers emit <function_calls>...</function_calls>
-                # in the raw response text; this must be removed before the content is
-                # saved to the session and displayed in the chat bubble. (#702)
-                for _m in s.messages:
-                    if isinstance(_m, dict) and _m.get('role') == 'assistant':
-                        _raw_content = _m.get('content')
-                        if isinstance(_raw_content, str):
-                            _cleaned = _strip_xml_tool_calls(_raw_content)
-                            if _cleaned != _raw_content:
-                                _m['content'] = _cleaned
-                        elif isinstance(_raw_content, list):
-                            for _part in _raw_content:
-                                if isinstance(_part, dict) and isinstance(_part.get('text'), str):
-                                    _part['text'] = _strip_xml_tool_calls(_part['text'])
+                print(
+                    f'[dedup] s.messages=result session={session_id} '
+                    f'cancelled={cancel_event.is_set()} '
+                    f'prev_msgs={_prev_msg_count} '
+                    f'result_msgs={len(_agent_msgs or [])} result_roles={_result_roles}',
+                    flush=True,
+                )
+
+                # When cancelled, cancel_stream handles the final s.messages
+                # state (DB reload + post-processing).  Preserve whatever
+                # cancel_stream set up instead of overwriting.
+                if not cancel_event.is_set():
+                    s.messages = _agent_msgs
+
+                # Save collected timestamps so cancel_stream can use them
+                # (they would otherwise be lost when this function returns).
+                s._all_message_ts = _all_message_ts
+
+                # ── Step 1: post-process agent result ────────────────────
+                _postprocess_messages(
+                    s.messages,
+                    start_idx=_prev_msg_count,
+                    msg_text=msg_text,
+                    attachments=attachments,
+                    all_message_ts=_all_message_ts,
+                    reasoning_text=_reasoning_text,
+                )
 
                 # ── Detect silent agent failure (no assistant reply produced) ──
                 # When the agent catches an auth/network error internally it may return
@@ -2153,8 +2532,12 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                     m.get('role') == 'assistant' and str(m.get('content') or '').strip()
                     for m in _result_messages
                 )
-                # _token_sent tracks whether on_token() was called (any streamed text)
-                if not _assistant_added and not _token_sent:
+                # _token_sent tracks whether on_token() was called (any streamed text).
+                # Skip the no-response error when the stream was cancelled — the agent
+                # may have been interrupted before producing any output, which is expected.
+                if cancel_event.is_set():
+                    put('cancel', {'message': 'Cancelled by user'})
+                elif not _assistant_added and not _token_sent:
                     # Extract error from multiple possible locations in the result dict.
                     # hermes-agent stores errors in 'error', 'failed', or 'final_response'.
                     _result_error = ''
@@ -2249,16 +2632,6 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                     s.pending_user_message = None
                     s.pending_attachments = []
                     s.pending_started_at = None
-                    s.messages.append({
-                        'role': 'assistant',
-                        'content': f'**{_err_label}:** {_err_str or _err_label}\n\n*{_err_hint}*',
-                        'timestamp': int(time.time()),
-                        '_error': True,
-                    })
-                    try:
-                        s.save()
-                    except Exception:
-                        pass
                     return  # apperror already closes the stream on the client side
 
                 # ── Handle context compression side effects ──
@@ -2272,74 +2645,6 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 # same Lock the streaming thread is already holding.  We then pop
                 # the old-id entry to prevent a leak.  This is safe because we
                 # already hold _agent_lock (the Lock object itself), so the
-                # reference stays alive even after the dict entry is removed.
-                # Concurrent readers that already looked up the old ID will still
-                # see the same Lock object until they release it.
-                _agent_sid = getattr(agent, 'session_id', None)
-                _compressed = False
-                if _agent_sid and _agent_sid != session_id:
-                    old_sid = session_id
-                    new_sid = _agent_sid
-                    # Rename the session file
-                    old_path = SESSION_DIR / f'{old_sid}.json'
-                    new_path = SESSION_DIR / f'{new_sid}.json'
-                    s.session_id = new_sid
-                    with LOCK:
-                        if old_sid in SESSIONS:
-                            SESSIONS[new_sid] = SESSIONS.pop(old_sid)
-                    # Migrate the per-session lock: alias new_sid to the held
-                    # _agent_lock reference directly (not via old_sid lookup),
-                    # then remove the old_sid entry to prevent a leak.
-                    with SESSION_AGENT_LOCKS_LOCK:
-                        SESSION_AGENT_LOCKS[new_sid] = _agent_lock
-                        SESSION_AGENT_LOCKS.pop(old_sid, None)
-                    # Migrate cached agent to the new session ID so the turn
-                    # count survives context compression.
-                    from api.config import SESSION_AGENT_CACHE, SESSION_AGENT_CACHE_LOCK
-                    with SESSION_AGENT_CACHE_LOCK:
-                        _cached_entry = SESSION_AGENT_CACHE.pop(old_sid, None)
-                        if _cached_entry:
-                            SESSION_AGENT_CACHE[new_sid] = _cached_entry
-                    if old_path.exists() and not new_path.exists():
-                        try:
-                            old_path.rename(new_path)
-                        except OSError:
-                            logger.debug("Failed to rename session file during compression")
-                    _compressed = True
-                # Also detect compression via the result dict or compressor state
-                if not _compressed:
-                    _compressor = getattr(agent, 'context_compressor', None)
-                    if _compressor and getattr(_compressor, 'compression_count', 0) > 0:
-                        _compressed = True
-                # Notify the frontend that compression happened
-                if _compressed:
-                    # Calculate message counts before/after compression
-                    _msg_before = len(_previous_messages)
-                    _msg_after = len(s.messages)
-                    # Rough token estimation (chars / 4 heuristic)
-                    _approx_tokens_before = sum(
-                        len(str(m.get('content', ''))) for m in _previous_messages
-                        if isinstance(m, dict)
-                    ) // 4
-                    _approx_tokens_after = sum(
-                        len(str(m.get('content', ''))) for m in s.messages
-                        if isinstance(m, dict)
-                    ) // 4
-                    s.last_compression_time = time.time()
-                    put('compressed', {
-                        'message': 'Context auto-compressed to continue the conversation',
-                        'saved_messages': max(0, _msg_before - _msg_after),
-                        'approx_tokens_before': _approx_tokens_before,
-                        'approx_tokens_after': _approx_tokens_after,
-                    })
-
-                # Stamp 'timestamp' on any new messages that don't have one yet.
-                # Only process messages added in this turn (not in _previous_messages)
-                # to avoid overwriting different-time messages with a single shared timestamp.
-                _prev_msg_ids = {id(m) for m in _previous_messages}
-                for _m in s.messages:
-                    if id(_m) not in _prev_msg_ids and isinstance(_m, dict) and not _m.get('timestamp') and not _m.get('_ts'):
-                        _m['timestamp'] = int(time.time())
                 # Only auto-generate title when still default; preserves user renames
                 if s.title == 'Untitled' or s.title == 'New Chat' or not s.title:
                     s.title = title_from(s.messages, s.title)
@@ -2380,124 +2685,31 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 s.pending_user_message = None
                 s.pending_attachments = []
                 s.pending_started_at = None
-                # Tag the matching user message with attachment filenames for display on reload
-                # Only tag a user message whose content relates to this turn's text
-                # (msg_text is the full message including the [Attached files: ...] suffix)
-                if attachments:
-                    for m in reversed(s.messages):
-                        if m.get('role') == 'user':
-                            content = str(m.get('content', ''))
-                            # Match if content is part of the sent message or vice-versa
-                            base_text = msg_text.split('\n\n[Attached files:')[0].strip() if '\n\n[Attached files:' in msg_text else msg_text
-                            if base_text[:60] in content or content[:60] in msg_text:
-                                m['attachments'] = attachments
-                                break
-                # Persist reasoning trace per-message so each assistant message
-                # carries only the thinking that led to it, not the whole turn.
-                # DeepSeek / QwQ / MiniMax embed thinking as <think> tags inside
-                # the content text; extract them and move them into the dedicated
-                # 'reasoning' field for structured display and persistence.
-                _distribute_inline_reasoning(s.messages)
-                # Fallback: any reasoning accumulated via on_reasoning callbacks
-                # that was NOT embedded as <think> tags (e.g. reasoning=high mode
-                # where delta.reasoning_content is already per-message) still ends
-                # up here, but only if not already distributed above.
-                if _reasoning_text and s.messages:
-                    for _rm in reversed(s.messages):
-                        if isinstance(_rm, dict) and _rm.get('role') == 'assistant':
-                            if not _rm.get('reasoning'):
-                                _rm['reasoning'] = _reasoning_text
-                            break
-                # ── WebUI-side token-threshold auto-compress (path 3) ──
-                # The agent's built-in compression is disabled when
-                # auto_compress_token_threshold > 0 (see settings sync in
-                # routes.py).  WebUI checks last_prompt_tokens / context_length
-                # after each turn and compresses when the ratio exceeds the
-                # configured threshold.  This keeps the session_id stable and
-                # archives pre-compression state to {sid}_archived/ — consistent
-                # with path 1 (message-count auto-compress) behaviour.
-                from api.config import load_settings as _load_settings_ctx
-                _settings = _load_settings_ctx()
-                _token_thresh_str = str(_settings.get('auto_compress_token_threshold', '0') or '0').strip()
-                try:
-                    _token_thresh_pct = float(_token_thresh_str)
-                except (ValueError, TypeError):
-                    _token_thresh_pct = 0.0
-                if _token_thresh_pct > 0:
-                    _cc2 = getattr(agent, 'context_compressor', None)
-                    if _cc2:
-                        _ctx_len = getattr(_cc2, 'context_length', 0) or 0
-                        _last_prompt = getattr(_cc2, 'last_prompt_tokens', 0) or 0
-                        _threshold_tokens = int(_ctx_len * _token_thresh_pct)
-                        if _ctx_len > 0 and _last_prompt >= _threshold_tokens > 0:
-                            _pre_messages = _sanitize_messages_for_api(s.messages)
-                            if len(_pre_messages) >= 4:
-                                logger.debug(
-                                    '[webui] token-threshold compress triggered session=%s '
-                                    'prompt_tokens=%d context_length=%d threshold=%.0f%%',
-                                    session_id, _last_prompt, _ctx_len, _token_thresh_pct * 100,
-                                )
-                                try:
-                                    _compressed = _cc2.compress(
-                                        _pre_messages, current_tokens=_last_prompt,
-                                    )
-                                except Exception as _cerr:
-                                    logger.debug(
-                                        'Token-threshold compress failed for '
-                                        'session %s: %s', session_id, _cerr,
-                                    )
-                                    _compressed = None
-                                if _compressed and len(_compressed) < len(_pre_messages):
-                                    try:
-                                        from api.routes import _archive_session_before_compress
-                                        _archive_session_before_compress(s)
-                                    except Exception:
-                                        logger.debug(
-                                            'Archive before token-threshold '
-                                            'compress failed for session %s',
-                                            session_id, exc_info=True,
-                                        )
-                                    _msg_before = len(_pre_messages)
-                                    _msg_after = len(_compressed)
-                                    _approx_tokens_after = sum(
-                                        len(str(m.get('content', '')))
-                                        for m in _compressed
-                                        if isinstance(m, dict)
-                                    ) // 4
-                                    s.messages = _compressed
-                                    _distribute_inline_reasoning(s.messages)
-                                    s.tool_calls = []
-                                    s.last_compression_time = time.time()
-                                    tool_calls = []  # also update local for done event
-                                    put('compressed', {
-                                        'message': 'Context auto-compressed to continue the conversation',
-                                        'saved_messages': max(0, _msg_before - _msg_after),
-                                        'approx_tokens_before': _last_prompt,
-                                        'approx_tokens_after': _approx_tokens_after,
-                                    })
-                                    logger.debug(
-                                        '[webui] token-threshold compress done session=%s '
-                                        'messages %d→%d tokens_approx %d→%d',
-                                        session_id, _msg_before, _msg_after,
-                                        _last_prompt, _approx_tokens_after,
-                                    )
-                s.save()
-            # Sync to state.db for /insights (opt-in setting)
-            try:
-                from api.config import load_settings as _load_settings
-                if _load_settings().get('sync_to_insights'):
-                    from api.state_sync import sync_session_usage
-                    sync_session_usage(
-                        session_id=s.session_id,
-                        input_tokens=s.input_tokens or 0,
-                        output_tokens=s.output_tokens or 0,
-                        estimated_cost=s.estimated_cost,
-                        model=model,
-                        title=s.title,
-                        message_count=len(s.messages),
-                    )
-            except Exception:
-                logger.debug("Failed to sync session to insights")
+
+                # ── Step 2: sync __webui columns to DB ──────────────────
+                s.sync_webui_metadata()
+
+                # ── Step 3: reload from DB to guarantee cache == DB ─────
+                # On cancel, cancel_stream handles this instead.
+                if not cancel_event.is_set():
+                    from api.models import Session as _SessionCls
+                    _fresh = _SessionCls.load(session_id)
+                    if _fresh and _fresh.messages:
+                        s.messages = _fresh.messages
+
+                # ── Step 4: re-apply post-processing on reloaded messages ──
+                # DB stores raw SDK content; XML strip, reasoning dist,
+                # and attachments must be re-applied.  Timestamp stamping
+                # is skipped because __webui columns were backfilled in
+                # step 2 and reloaded from DB.
+                _postprocess_messages(
+                    s.messages,
+                    start_idx=0,
+                    msg_text=msg_text,
+                    attachments=attachments,
+                    all_message_ts=None,       # DB already has timestamps
+                    reasoning_text=_reasoning_text,
+                )
             usage = {'input_tokens': input_tokens, 'output_tokens': output_tokens, 'estimated_cost': estimated_cost}
             # Include context window data from the agent's compressor for the UI indicator
             _cc = getattr(agent, 'context_compressor', None)
@@ -2505,7 +2717,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 usage['context_length'] = getattr(_cc, 'context_length', 0) or 0
                 usage['threshold_tokens'] = getattr(_cc, 'threshold_tokens', 0) or 0
                 usage['last_prompt_tokens'] = getattr(_cc, 'last_prompt_tokens', 0) or 0
-            # (reasoning trace already attached + saved above, before s.save())
+            # (reasoning trace already attached + saved above, before s.sync_webui_metadata())
             # Leftover-steer delivery: if a /steer was queued (via
             # api/chat/steer) but the agent finished its turn before
             # reaching a tool-result boundary that would consume it,
@@ -2524,26 +2736,43 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             except Exception:
                 logger.debug("Failed to drain pending steer for session %s", session_id)
             raw_session = s.compact() | {'messages': s.messages, 'tool_calls': tool_calls}
+
+            # ── Diagnostic: log turn-boundary tracking summary ────────────────
+            _final_roles = [m.get('role') for m in s.messages if isinstance(m, dict)]
+            print(f'[stream-debug] SUMMARY | session={session_id} | '
+                  f'total_turns={_turn_id} | message_start_emitted={len(_all_message_ts)} | '
+                  f'final_message_count={len(s.messages)} | '
+                  f'msg_roles={_final_roles}',
+                  flush=True)
+            # Print per-message timestamps for cross-reference with frontend console.table
+            for _i, _m in enumerate(s.messages):
+                if isinstance(_m, dict):
+                    _ts = _m.get('timestamp__webui')
+                    _role = _m.get('role', '?')
+                    _tool = _m.get('name', '')
+                    _content = str(_m.get('content', ''))[:50]
+                    print(f'[stream-debug]   msg[{_i}] role={_role} '
+                          f'tool={_tool} ts__webui={_ts} '
+                          f'content={_content}',
+                          flush=True)
+
+            if _should_bg_title and _u0 and _a0:
+                print(f'[title-sync-backend] running title update: session={s.session_id[:8]} title={s.title!r}', flush=True)
+                _run_title_update(s.session_id, _u0, _a0, str(s.title or '').strip(), put, agent)
+            else:
+                print(f'[title-sync-backend] title NOT run: should={_should_bg_title} u0={bool(_u0)} a0={bool(_a0)} session={session_id[:8]}', flush=True)
+            # done is emitted AFTER title generation so the frontend sees the
+            # final title when it reloads sessions on the done event.
             put('done', {'session': redact_session_data(raw_session), 'usage': usage})
+            put('stream_end', {'session_id': session_id})
             # Emit metering stats for the header TPS label
             meter_stats = meter().get_stats()
             meter_stats['session_id'] = session_id
             put('metering', meter_stats)
-            if _should_bg_title and _u0 and _a0:
-                threading.Thread(
-                    target=_run_background_title_update,
-                    args=(s.session_id, _u0, _a0, str(s.title or '').strip(), put, agent),
-                    daemon=True,
-                ).start()
-            else:
-                # Use the original session_id parameter (never reassigned), not s.session_id
-                # which may be rotated during context compression. The client captured
-                # activeSid = original session_id so they must match for stream_end to close.
-                put('stream_end', {'session_id': session_id})
-                # Adaptive title refresh: re-generate title from latest exchange
-                # every N exchanges (when enabled in settings). Runs after stream_end
-                # so it doesn't block the stream.
-                _maybe_schedule_title_refresh(s, put, agent)
+            # Adaptive title refresh: re-generate title from latest exchange
+            # every N exchanges (when enabled in settings). Runs asynchronously
+            # so it doesn't block the stream.
+            _maybe_schedule_title_refresh(s, put, agent)
         finally:
             # Stop the live metering ticker
             _metering_stop.set()
@@ -2645,7 +2874,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                                             "model": s.model,
                                             "workspace": s.workspace,
                                             "attachments": [],
-                                            "original_content": _goal_text,
+                                            "original_content__webui": _goal_text,
                                         })
                                 logger.debug("Goal continuation enqueued for session %s (verdict=%s)",
                                              session_id, decision.get("verdict"))
@@ -2754,23 +2983,10 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 if getattr(s, 'active_stream_id', None) != stream_id:
                     _owned = False
                 if _owned:
-                    # Persist the error so it survives page reload.
-                    # _error=True ensures _sanitize_messages_for_api excludes it from subsequent
-                    # API calls so the LLM never sees its own error as prior context on the next turn.
                     s.active_stream_id = None
                     s.pending_user_message = None
                     s.pending_attachments = []
                     s.pending_started_at = None
-                    s.messages.append({
-                        'role': 'assistant',
-                        'content': f'**{_exc_label}:** {err_str}' + (f'\n\n*{_exc_hint}*' if _exc_hint else ''),
-                        'timestamp': int(time.time()),
-                        '_error': True,
-                    })
-                    try:
-                        s.save()
-                    except Exception:
-                        pass
         _apperror_payload: dict = {'message': err_str, 'type': _exc_type}
         if _exc_hint:
             _apperror_payload['hint'] = _exc_hint
@@ -2847,7 +3063,7 @@ def _dequeue_next(session_id: str) -> None:
         if _oc:
             s._pending_original_message = _oc
         s.pending_started_at = time.time()
-        s.save()
+        s.sync_webui_metadata()
     thr = threading.Thread(
         target=_run_agent_streaming,
         args=(
@@ -2920,175 +3136,231 @@ def _handle_chat_steer(handler, body: dict) -> bool:
 def cancel_stream(stream_id: str) -> bool:
     """Signal an in-flight stream to cancel. Returns True if the stream existed.
 
-    Eagerly releases the session lock (pops STREAMS/CANCEL_FLAGS/AGENT_INSTANCES
-    and clears session.active_stream_id) so new /api/chat/start requests succeed
-    immediately after cancel, even if the agent thread is still blocked.
+    Waits for the agent thread to fully exit before performing session cleanup,
+    so ``s.messages`` is guaranteed to be in its final state with no race
+    between cancel_stream and the agent thread's _restore_reasoning_metadata.
 
-    The worker thread's finally block uses .pop(key, None), so the double-pop is
-    a safe no-op. Session cleanup runs outside STREAMS_LOCK to preserve lock
-    ordering (streaming thread does LOCK → STREAMS_LOCK; inverting would deadlock).
+    Step order:
+      1. Set cancel flag
+      2. Wait for agent to appear in AGENT_INSTANCES (timeout 5 s)
+      3. Call agent.interrupt()
+      4. Wait for agent thread to exit (AGENT_INSTANCES removed by finally)
+      5. Pop stream state + session cleanup + "Interrupted." separator
     """
     from api import config as _live_config
 
     # Use module-level aliases (imported from api.config at startup).
-    # In production these are always the same objects as api.config.STREAMS etc.
-    # The fallback below handles a hypothetical future case where api.config's
-    # state dicts are replaced at runtime (e.g. a future profile-reload path).
-    # No production code currently does this; the fallback is defensive only.
     streams = STREAMS
     cancel_flags = CANCEL_FLAGS
     agent_instances = AGENT_INSTANCES
-    partial_texts = STREAM_PARTIAL_TEXT
     streams_lock = STREAMS_LOCK
     if stream_id not in streams and getattr(_live_config, 'STREAMS', streams) is not streams:
         streams = _live_config.STREAMS
         cancel_flags = _live_config.CANCEL_FLAGS
         agent_instances = _live_config.AGENT_INSTANCES
-        partial_texts = _live_config.STREAM_PARTIAL_TEXT
         streams_lock = _live_config.STREAMS_LOCK
 
+    # ── Step 1: set cancel flag ──────────────────────────────────────────
     with streams_lock:
         if stream_id not in streams:
             return False
-
-        # Set WebUI layer cancel flag
         flag = cancel_flags.get(stream_id)
         if flag:
             flag.set()
-
-        # Interrupt the AIAgent instance to stop tool execution
         agent = agent_instances.get(stream_id)
-        if agent:
-            try:
-                agent.interrupt("Cancelled by user")
-            except Exception as e:
-                # Log but don't block the cancel flow
-                import logging
-                logging.getLogger(__name__).debug(
-                    f"Failed to interrupt agent for stream {stream_id}: {e}"
-                )
-        else:
-            # Agent not yet stored - cancel_event flag will be checked by agent thread
-            import logging
-            logging.getLogger(__name__).debug(
-                f"Cancel requested for stream {stream_id} before agent ready - "
-                f"cancel_event flag set, will be checked on agent startup"
-            )
 
-        # Clear any pending clarify prompt so the blocked tool call can unwind.
+    # ── Step 2: wait for agent to be initialised ─────────────────────────
+    # The agent thread registers itself in AGENT_INSTANCES partway through
+    # _run_agent_streaming.  If cancel arrives before that point the agent
+    # object is None and we must poll until it appears.  Release the lock
+    # during the wait so the agent thread can acquire it for registration.
+    if agent is None:
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            time.sleep(0.05)
+            with streams_lock:
+                agent = agent_instances.get(stream_id)
+            if agent is not None:
+                break
+
+    # ── Step 3: interrupt ────────────────────────────────────────────────
+    if agent:
+        try:
+            agent.interrupt("Cancelled by user")
+        except Exception:
+            logger.debug("Failed to interrupt agent for stream %s", stream_id)
+
+        # Clear any pending clarify prompt so blocked tool calls can unwind.
         try:
             from api.clarify import clear_pending as _clear_clarify_pending
-
-            if agent and getattr(agent, "session_id", None):
+            if getattr(agent, "session_id", None):
                 _clear_clarify_pending(agent.session_id)
         except Exception:
-            logger.debug("Failed to clear clarify prompt during cancel")
+            pass
 
-        # Put a cancel sentinel into the stream so the SSE handler wakes up and
-        # the event is recorded in the replay history for any reconnecting client.
+        _cancel_session_id = getattr(agent, 'session_id', None)
+    else:
+        _cancel_session_id = None
+
+    # Signal that a cancel is in progress for this session.  New
+    # /api/chat/start requests arriving mid-cancel will spin-wait on this
+    # event instead of getting a 409.
+    if _cancel_session_id:
+        _cancel_done = threading.Event()
+        _CANCEL_EVENTS[_cancel_session_id] = _cancel_done
+
+    # ── Step 4: wait for agent thread to exit ────────────────────────────
+    # The agent's finally block removes stream_id from AGENT_INSTANCES.
+    # Once that happens s.messages is final (updated inside _agent_lock
+    # before the finally runs) and it is safe to read / modify it.
+    if agent:
+        deadline = time.time() + 10.0
+        while time.time() < deadline:
+            with streams_lock:
+                if stream_id not in agent_instances:
+                    break
+            time.sleep(0.1)
+
+    # ── Step 5: stream cleanup + session cleanup ─────────────────────────
+    # Put a cancel event into the stream queue for the SSE client.
+    with streams_lock:
         q = streams.get(stream_id)
         if q:
             try:
                 q.put('cancel', {'message': 'Cancelled by user'})
             except Exception:
-                logger.debug("Failed to put cancel event to queue")
-
-        # ── Eager session lock release (fixes #653) ──────────────────────────
-        # Pop stream state now so the 409 guard in routes.py sees the session
-        # as idle and allows new /api/chat/start immediately after cancel,
-        # even if the agent thread is still blocked in a C-level syscall.
-        # The worker thread's finally block uses .pop(key, None) too, so a
-        # double-pop here is safe (no-op).
+                pass
         streams.pop(stream_id, None)
         cancel_flags.pop(stream_id, None)
         agent_instances.pop(stream_id, None)
-        # STREAM_PARTIAL_TEXT is intentionally NOT popped here — the agent thread may
-        # still be appending tokens. We capture the snapshot two lines below; the
-        # streaming finally block handles the cleanup when the thread exits.
 
-        # Capture partial text and session_id while holding STREAMS_LOCK (avoids a
-        # race where the agent thread deallocates the agent object or clears the
-        # partial text after we release).
-        # Session cleanup (get_session + save) must happen OUTSIDE the lock —
-        # get_session() acquires LOCK, and the streaming thread does LOCK first
-        # then STREAMS_LOCK, so inverting the order here would cause deadlock.
-        _cancel_session_id = getattr(agent, 'session_id', None) if agent else None
-        _cancel_partial_text = partial_texts.get(stream_id, '')
-        # Fallback: check the live config's partial text map if we used an alias
-        # and the text wasn't found in the alias (defensive, matches streams fallback above).
-        if not _cancel_partial_text:
-            live_partials = getattr(_live_config, 'STREAM_PARTIAL_TEXT', partial_texts)
-            if live_partials is not partial_texts:
-                _cancel_partial_text = live_partials.get(stream_id, '')
-
-    # Session cleanup outside STREAMS_LOCK to preserve lock ordering.
-    # Acquire the per-session _agent_lock too, mirroring every other session
-    # writer (streaming success/error paths, periodic checkpoint, POST endpoints)
-    # so the cancel-path mutation races neither the checkpoint thread nor
-    # concurrent undo/retry calls.
     if _cancel_session_id:
-        with _get_session_agent_lock(_cancel_session_id):
-            # Evict the cached agent so the next stream for this session
-            # (e.g. interrupt mode) creates a fresh instance.  Without this,
-            # the new stream reuses the same agent object while the old
-            # run_conversation() is still unwinding, producing silent failures
-            # ("No response received").
-            try:
-                from api.config import SESSION_AGENT_CACHE, SESSION_AGENT_CACHE_LOCK
-                with SESSION_AGENT_CACHE_LOCK:
-                    SESSION_AGENT_CACHE.pop(_cancel_session_id, None)
-            except Exception:
-                pass
-            try:
-                _cs = get_session(_cancel_session_id)
-                _cs.active_stream_id = None
-                _cs.pending_user_message = None
-                _cs.pending_attachments = []
-                _cs.pending_started_at = None
-                # Persist any partial assistant text that was streamed before cancel (#893).
-                # Preserving partial content means the user sees what the agent had
-                # produced rather than losing it entirely.  The marker is _partial=True
-                # (for session/UI identification only) — NOT _error=True — so the partial
-                # content IS kept in the history sent to the agent on the next user
-                # message, letting the model continue from where it was cut off.
-                # See the inner comment on the append call below for the rationale.
-                partial_text = _cancel_partial_text.strip() if _cancel_partial_text else ''
-                if partial_text:
-                    import re as _re
-                    # Strip thinking/reasoning markup from partial content before saving.
-                    # First pass: remove complete <thinking>...</thinking> blocks.
-                    _stripped = _re.sub(r'<think(?:ing)?\b[^>]*>.*?</think(?:ing)?>',
-                                        '', partial_text,
-                                        flags=_re.DOTALL | _re.IGNORECASE).strip()
-                    # Second pass: strip trailing UNCLOSED think/thinking block (the common
-                    # cancel case — user stops mid-reasoning before the close tag appears).
-                    _stripped = _re.sub(r'<think(?:ing)?\b[^>]*>.*',
-                                        '', _stripped,
-                                        flags=_re.DOTALL | _re.IGNORECASE).strip()
-                    if _stripped:
-                        # Mark _partial=True for session/UI identification only.
-                        # Deliberately NOT _error=True — the partial content is real model
-                        # output and should be visible in conversation history so the model
-                        # can continue from it on the next turn (#893).
-                        _cs.messages.append({
-                            'role': 'assistant',
-                            'content': _stripped,
-                            '_partial': True,
-                            'timestamp': int(time.time()),
-                        })
-                # Cancel marker — flagged _error=True so it is stripped from conversation
-                # history on the next turn (prevents model from seeing "Task cancelled."
-                # as a prior assistant reply).
-                _cs.messages.append({
-                    'role': 'assistant',
-                    'content': '*Task cancelled.*',
-                    '_error': True,
-                    'timestamp': int(time.time()),
-                })
-                _cs.save()
-            except Exception:
-                logger.debug("Failed to clear session state on cancel for %s", _cancel_session_id)
+        try:
+            with _get_session_agent_lock(_cancel_session_id):
+                # Evict cached agent so the next stream creates a fresh instance.
+                try:
+                    from api.config import SESSION_AGENT_CACHE, SESSION_AGENT_CACHE_LOCK
+                    with SESSION_AGENT_CACHE_LOCK:
+                        SESSION_AGENT_CACHE.pop(_cancel_session_id, None)
+                except Exception:
+                    pass
+                try:
+                    _cs = get_session(_cancel_session_id)
+                    _pre_roles = [m.get('role', '?') for m in (_cs.messages or [])]
+                    _pre_user_texts = [
+                        str(m.get('content', ''))[:60] for m in (_cs.messages or [])
+                        if m.get('role') == 'user'
+                    ]
+                    logger.debug(
+                        "[dedup-diagnostic] cancel_stream session cleanup | "
+                        "session=%s | msgs=%d | roles=%s",
+                        _cancel_session_id, len(_cs.messages or []), _pre_roles,
+                    )
+                    print(
+                        f'[dedup] CANCEL_CLEANUP session={_cancel_session_id} '
+                        f'msgs={len(_cs.messages or [])} roles={_pre_roles} '
+                        f'user_texts={_pre_user_texts}',
+                        flush=True,
+                    )
 
-    # After cancel, check for queued messages
+                    _prev_count = len(_cs.messages or [])
+
+                    # ── Reload messages from state.db ──────────────────
+                    # The SDK has already flushed the partial turn to DB.
+                    # Reload to get the complete picture (old messages +
+                    # partial user/assistant/tool messages) instead of
+                    # appending [User interrupted] which loses the partial
+                    # result and violates the "webui never writes message
+                    # rows" principle.
+                    try:
+                        from api.models import _get_session_db
+                        _db = _get_session_db()
+                        if _db is not None:
+                            _db_messages = _db.get_messages(_cs.session_id)
+                            _cs.messages = _db_messages
+                    except Exception:
+                        pass
+
+                    # ── Insert cancel separator unconditionally ────────────
+                    # Always append [User interrupted] on cancel so the DB
+                    # carries a durable record that a turn was interrupted.
+                    # This also ensures role alternation — without it a
+                    # dangling user message would produce consecutive users
+                    # on the next turn, causing the SDK to merge them and
+                    # break _persist_user_message_idx tracking.
+                    _now = time.time()
+                    _sep = {
+                        'role': 'assistant',
+                        'content': '[User interrupted]',
+                        'timestamp': int(_now),
+                        'timestamp__webui': _now,
+                    }
+                    _cs.messages.append(_sep)
+                    # NOTE: sole exception to the webui-no-message-writes rule.
+                    _db.append_message(
+                        session_id=_cs.session_id,
+                        role='assistant',
+                        content='[User interrupted]',
+                    )
+
+                    # ── Restore original_content__webui ─────────────────
+                    # The streaming thread attached this to _agent_msgs but
+                    # the cancel guard skipped s.messages = _agent_msgs.
+                    # Apply it to the reloaded user message here so
+                    # sync_webui_metadata backfills it to state.db.
+                    _pending_original = getattr(_cs, '_pending_original_message', None)
+                    if _pending_original:
+                        for _m in reversed(_cs.messages):
+                            if isinstance(_m, dict) and _m.get('role') == 'user':
+                                _m['original_content__webui'] = _pending_original
+                                _cs._pending_original_message = None
+                                break
+
+                    # ── Post-process reloaded messages ─────────────────
+                    # XML strip and reasoning distribution run globally
+                    # (DB stores raw content).  Timestamp stamping uses
+                    # the real-time timestamps collected during streaming
+                    # (saved to s._all_message_ts above).
+                    _postprocess_messages(
+                        _cs.messages,
+                        start_idx=_prev_count,
+                        all_message_ts=getattr(_cs, '_all_message_ts', None),
+                    )
+
+                    _cs.active_stream_id = None
+                    _cs.pending_user_message = None
+                    _cs.pending_attachments = []
+                    _cs.pending_started_at = None
+
+                    _cs.sync_webui_metadata()
+
+                    _post_roles = [m.get('role', '?') for m in _cs.messages]
+                    _post_user_texts = [
+                        str(m.get('content', ''))[:60] for m in _cs.messages
+                        if m.get('role') == 'user'
+                    ]
+                    logger.debug(
+                        "[dedup-diagnostic] cancel_stream AFTER | session=%s | "
+                        "msgs=%d | roles=%s | user_texts=%s",
+                        _cancel_session_id, len(_cs.messages),
+                        _post_roles, _post_user_texts,
+                    )
+                    print(
+                        f'[dedup] CANCEL_AFTER session={_cancel_session_id} '
+                        f'msgs={len(_cs.messages)} roles={_post_roles} '
+                        f'user_texts={_post_user_texts}',
+                        flush=True,
+                    )
+                except Exception:
+                    logger.debug(
+                        "Failed to clear session state on cancel for %s",
+                        _cancel_session_id,
+                    )
+        finally:
+            if _cancel_session_id:
+                _done = _CANCEL_EVENTS.pop(_cancel_session_id, None)
+                if _done:
+                    _done.set()
+
     _dequeue_next(_cancel_session_id)
     return True

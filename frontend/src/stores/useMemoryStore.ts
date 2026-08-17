@@ -6,7 +6,7 @@ export type MemoryFile = 'memory' | 'project';
 
 interface MemoryState {
   memoryTabActive: boolean;
-  selectedFile: MemoryFile;
+  selectedFile: MemoryFile | null;
   memoryData: MemoryData | null;
   loading: boolean;
   error: string | null;
@@ -19,7 +19,7 @@ interface MemoryState {
 
 export const useMemoryStore = create<MemoryState>((set, get) => ({
   memoryTabActive: false,
-  selectedFile: 'memory',
+  selectedFile: null,
   memoryData: null,
   loading: false,
   error: null,

@@ -71,7 +71,7 @@ _SUPPORTED_PROVIDER_SETUPS = {
     },
     "lmstudio": {
         "label": "LM Studio",
-        "env_var": "LMSTUDIO_API_KEY",
+        "env_var": "LM_API_KEY",
         "default_model": "gpt-4o-mini",
         "default_base_url": "http://localhost:1234/v1",
         "requires_base_url": True,
@@ -271,7 +271,7 @@ def _provider_api_key_present(
     # var names and can check os.environ for a valid key.
     # Exclude known OAuth/token-flow providers — those are handled separately by
     # _provider_oauth_authenticated() and should not be short-circuited here.
-    _known_oauth = {"openai-codex", "copilot", "copilot-acp", "qwen-oauth", "nous"}
+    _known_oauth = {"openai-codex", "copilot-acp", "qwen-oauth", "nous"}
     if provider not in _SUPPORTED_PROVIDER_SETUPS and provider not in _known_oauth:
         try:
             from hermes_cli.auth import get_auth_status as _gas
@@ -318,7 +318,7 @@ def _provider_oauth_authenticated(provider: str, hermes_home: "Path") -> bool:
     if not provider:
         return False
 
-    _known_oauth_providers = {"openai-codex", "copilot", "copilot-acp", "qwen-oauth", "nous"}
+    _known_oauth_providers = {"openai-codex", "copilot-acp", "qwen-oauth", "nous"}
     if provider not in _known_oauth_providers:
         return False
 
@@ -553,7 +553,6 @@ def get_onboarding_status() -> dict:
             "default_workspace": settings.get("default_workspace")
             or str(DEFAULT_WORKSPACE),
             "password_enabled": is_auth_enabled(),
-            "bot_name": settings.get("bot_name") or "Hermes",
         },
         "system": {
             "hermes_found": bool(_HERMES_FOUND),

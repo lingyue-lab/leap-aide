@@ -194,7 +194,7 @@ def test_onboarding_complete_persists_flag():
 def test_onboarding_complete_preserves_other_settings():
     """Completing onboarding must not overwrite other user settings."""
     # Use send_key (a safe enum setting) to verify settings preservation
-    # without contaminating bot_name or theme checks in other test files.
+    # without contaminating theme checks in other test files.
     # Use GET /api/settings (not onboarding status) to check preservation
     # since the onboarding status only returns a subset of settings fields.
     try:

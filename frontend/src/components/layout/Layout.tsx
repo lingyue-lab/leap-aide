@@ -77,9 +77,8 @@ export default function Layout({ children }: LayoutProps) {
 
   return (
     <div className="layout">
-      {/* Transparent full-screen overlay rendered while dragging the resize handle.
-          This sits above the VNC canvas (and any other iframe/canvas content) so
-          those elements cannot intercept mousemove / mouseup events during a drag. */}
+      {/* Transparent full-screen overlay rendered while dragging the resize handle
+          so iframe/canvas content cannot intercept mousemove/mouseup events. */}
       {isDragging && (
         <div
           style={{

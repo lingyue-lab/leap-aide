@@ -34,6 +34,7 @@ full-UI.png
 node_modules/
 frontend/dist/
 frontend/.tsbuildinfo
+static/
 *.log
 
 # Version file written by Docker/CI build — generated, never committed
