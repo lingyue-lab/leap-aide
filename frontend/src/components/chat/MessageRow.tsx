@@ -835,6 +835,10 @@ function MessageRowComponent({ message, messages = [], toolCalls = [], isStreami
         }
         return null;
       }
+      // User messages are shown verbatim (raw text), not markdown-rendered.
+      if (message.role === 'user') {
+        return <div className="msg-body-raw">{strippedContent as string}</div>;
+      }
       return (
         <div dangerouslySetInnerHTML={{ __html: getRenderedMarkdown(strippedContent as string) }} />
       );
@@ -860,11 +864,16 @@ function MessageRowComponent({ message, messages = [], toolCalls = [], isStreami
       combinedText = combinedText.replace(/ Phili[\s\S]*?<\/think>\s*/g, '').trimStart();
       combinedText = combinedText.replace(/<\|channel>thought\n[\s\S]*?<channel\|>\s*/g, '').trimStart();
       if (combinedText.trim()) {
+        // User messages are shown verbatim (raw text), not markdown-rendered.
         elements.push(
-          <div
-            key={`text-${lastKey++}`}
-            dangerouslySetInnerHTML={{ __html: getRenderedMarkdown(combinedText) }}
-          />
+          message.role === 'user' ? (
+            <div key={`text-${lastKey++}`} className="msg-body-raw">{combinedText}</div>
+          ) : (
+            <div
+              key={`text-${lastKey++}`}
+              dangerouslySetInnerHTML={{ __html: getRenderedMarkdown(combinedText) }}
+            />
+          )
         );
       }
     }

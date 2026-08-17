@@ -824,12 +824,37 @@
     margin-bottom: 0;
   }
 
+  /* User message raw text — verbatim, no markdown */
+  .msg-body-raw {
+    white-space: pre-wrap;
+  }
+
   .msg-body ul, .msg-body ol {
     margin: 6px 0 10px 20px;
   }
 
   .msg-body li {
     margin-bottom: 3px;
+  }
+
+  /* Markdown 列表 — 恢复被 Tailwind Preflight 清掉的 list-style */
+  .msg-body ul, .reasoning-content ul, .skill-detail .prose ul,
+  .task-detail ul, .file-view-code ul {
+    list-style: disc;
+  }
+
+  .msg-body ol, .reasoning-content ol, .skill-detail .prose ol,
+  .task-detail ol, .file-view-code ol {
+    list-style: decimal;
+  }
+
+  .msg-body ul, .msg-body ol,
+  .reasoning-content ul, .reasoning-content ol,
+  .skill-detail .prose ul, .skill-detail .prose ol,
+  .task-detail ul, .task-detail ol,
+  .file-view-code ul, .file-view-code ol {
+    list-style-position: outside;
+    padding-left: 1.25em;   /* 给 marker 留位（Preflight 清零 padding） */
   }
 
   .msg-body h1, .msg-body h2, .msg-body h3 {
@@ -4005,7 +4030,7 @@
 .sidebar-items-group-header {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   padding: 8px 12px;
   margin-top: 2px;
   font-size: 16px;
@@ -4027,11 +4052,15 @@
 
 .sidebar-items-group-caret {
   flex-shrink: 0;
-  transition: transform 0.18s ease;
+  transition: transform 0.18s ease, color 0.12s;
   width: 14px;
   height: 14px;
   margin-left: -2px; /* optically align the caret glyph with the sidebar-header title */
-  opacity: 0.5;
+  color: var(--muted); /* M3 on-surface-variant，替代 50% 透明度，视觉更清晰 */
+}
+
+.sidebar-items-group-header:hover .sidebar-items-group-caret {
+  color: var(--text); /* 悬停时强化为 on-surface，作为可点击的可供性提示 */
 }
 
 .sidebar-items-group-header.collapsed .sidebar-items-group-caret {

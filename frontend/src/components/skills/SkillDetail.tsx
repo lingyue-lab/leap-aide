@@ -22,7 +22,8 @@ export default function SkillDetail() {
   const [editError, setEditError] = useState('');
 
   // ── Files 抽屉 & 当前选中的非-SKILL.md 文件 ──
-  const [showFiles, setShowFiles] = useState(false);
+  const showFiles = useSkillStore((s) => s.showFiles);
+  const setShowFiles = useSkillStore((s) => s.setShowFiles);
   // null 或 'SKILL.md' → 显示 SKILL.md 视图；其他路径 → 显示对应文件
   const [activeFile, setActiveFile] = useState<string | null>(null);
 

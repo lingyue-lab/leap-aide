@@ -224,17 +224,11 @@ export function useChatStream() {
     const onTitle = (e: Event) => {
       const { sessionId, title } = (e as CustomEvent).detail;
       const currentId = useSessionStore.getState().currentSessionId;
-      console.log('[title-sync] onTitle fired', { sessionId, title, currentId, match: currentId === sessionId });
       if (currentId === sessionId) {
         updateCurrentSession({ title });
-        console.log('[title-sync] updateCurrentSession done');
       }
       // Update the session list entry regardless
-      const beforeSessions = useSessionStore.getState().sessions.map(s => ({ id: s.session_id.slice(0,8), title: s.title }));
-      console.log('[title-sync] sessions before updateSessionListTitle:', beforeSessions);
       useSessionStore.getState().updateSessionListTitle?.(sessionId, title);
-      const afterSessions = useSessionStore.getState().sessions.map(s => ({ id: s.session_id.slice(0,8), title: s.title }));
-      console.log('[title-sync] sessions after updateSessionListTitle:', afterSessions);
     };
     window.addEventListener('bg-stream-title', onTitle);
 
@@ -672,27 +666,6 @@ export function useChatStream() {
     const session = useSessionStore.getState().currentSession;
     if (session?.messages) {
       useChatStore.getState().setMessages(session.messages);
-
-      // Print timestamp table for cancelled session messages
-      console.log('[SSE-ts] cancel-reload | session=%s | total_messages=%d',
-        sessionId, session.messages.length);
-      console.table(
-        session.messages.map((m, i) => {
-          const ts = (m as any).timestamp__webui ?? (m as any).timestamp;
-          return {
-            idx: i,
-            role: m.role,
-            tool_name: (m as any).tool_name ?? '',
-            ts__webui: ts != null ? new Date(ts * 1000).toISOString() : 'none',
-            ts_raw: ts,
-            content_preview: typeof m.content === 'string'
-              ? m.content.slice(0, 60)
-              : Array.isArray(m.content)
-                ? `[blocks:${m.content.length}]`
-                : String(m.content).slice(0, 60),
-          };
-        })
-      );
     }
     if (session?.tool_calls) {
       useChatStore.getState().setToolCalls(session.tool_calls);

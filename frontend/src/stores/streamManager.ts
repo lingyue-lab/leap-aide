@@ -306,7 +306,6 @@ function _attachEventListeners(es: EventSource, sessionId: string, streamId: str
   });
 
   es.addEventListener('compressed', (_e: MessageEvent) => {
-    console.log('[compressed] SSE event received — sessionId=', sessionId);
     // Dismiss the compressing InfoCard
     _dismissCompressing(sessionId);
     // Trigger a session reload so the frontend picks up the compressed
@@ -318,7 +317,6 @@ function _attachEventListeners(es: EventSource, sessionId: string, streamId: str
   es.addEventListener('title', (e: MessageEvent) => {
     // Title updates are dispatched as a custom event so SessionStore can handle it
     const data = JSON.parse(e.data);
-    console.log('[title-sync] streamManager title SSE received', { dataSessionId: data.session_id?.slice(0,8), localSessionId: sessionId.slice(0,8), title: data.title });
     window.dispatchEvent(new CustomEvent('bg-stream-title', { detail: { sessionId, title: data.title } }));
   });
 

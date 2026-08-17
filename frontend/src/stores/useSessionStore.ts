@@ -59,11 +59,9 @@ export const useSessionStore = create<SessionState>((set) => ({
       // stays in sync between sidebar (sessions[]) and topbar (currentSession).
       const activeId = useSessionStore.getState().currentSessionId;
       const activeSession = useSessionStore.getState().currentSession;
-      console.log('[title-sync] loadSessions sync check', { activeId: activeId?.slice(0,8), activeTitle: activeSession?.title, dbTitle: sessions.find(s => s.session_id === activeId)?.title });
       if (activeId && activeSession?.title) {
         for (const s of sessions) {
           if (s.session_id === activeId) {
-            console.log('[title-sync] loadSessions syncing sidebar title from currentSession:', activeSession.title);
             s.title = activeSession.title;
             break;
           }
@@ -223,9 +221,6 @@ export const useSessionStore = create<SessionState>((set) => ({
   },
 
   updateCurrentSession: (updates) => {
-    if (updates.title) {
-      console.log('[title-sync] updateCurrentSession called with title:', updates.title, new Error().stack?.split('\n')[2]?.trim());
-    }
     set((state) => ({
       currentSession: state.currentSession
         ? { ...state.currentSession, ...updates }
@@ -234,18 +229,11 @@ export const useSessionStore = create<SessionState>((set) => ({
   },
 
   updateSessionListTitle: (sessionId: string, title: string) => {
-    set((state) => {
-      const found = state.sessions.find(s => s.session_id === sessionId);
-      console.log('[title-sync] updateSessionListTitle', { sessionId, title, found: !!found, sessionCount: state.sessions.length });
-      if (!found) {
-        console.log('[title-sync] session NOT in list! Available ids:', state.sessions.map(s => s.session_id.slice(0,8)));
-      }
-      return {
-        sessions: state.sessions.map((s) =>
-          s.session_id === sessionId ? { ...s, title } : s
-        ),
-      };
-    });
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.session_id === sessionId ? { ...s, title } : s
+      ),
+    }));
   },
 
   updateSessionLastSeen: (sessionId: string, count: number) => {

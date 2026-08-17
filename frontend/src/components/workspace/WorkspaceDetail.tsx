@@ -100,8 +100,9 @@ export default function WorkspaceDetail() {
     deleteFile,
     createFileItem,
     renameFileItem,
+    showFileTree,
+    setShowFileTree,
   } = useWorkspaceStore();
-  const [showFileTree, setShowFileTree] = useState(false);
 
   const workspaceLoader = async (path: string) => {
     const res = await fetch(
@@ -139,7 +140,7 @@ export default function WorkspaceDetail() {
     <div className="flex h-full overflow-hidden">
       <WorkspaceFileMain
         showFileTree={showFileTree}
-        onToggleFileTree={() => setShowFileTree((v) => !v)}
+        onToggleFileTree={() => setShowFileTree(!showFileTree)}
       />
       <FileTreePanel
         visible={showFileTree}

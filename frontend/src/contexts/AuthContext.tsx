@@ -41,8 +41,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = useCallback(async (password: string): Promise<boolean> => {
     try {
-      console.log('[Auth] Login attempt with password:', password);
-
       const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -50,9 +48,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         credentials: 'include',
       });
 
-      const responseText = await response.text();
-      console.log('[Auth] Login response status:', response.status);
-      console.log('[Auth] Login response body:', responseText);
       const ok = response.ok;
       setIsAuthenticated(ok);
       return ok;

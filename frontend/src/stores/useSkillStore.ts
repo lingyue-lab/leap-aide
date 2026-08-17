@@ -10,6 +10,7 @@ interface SkillState {
   skillsTabActive: boolean;
   isEditing: boolean;
   showNewSkillForm: boolean;
+  showFiles: boolean;
 
   loadSkills: () => Promise<void>;
   selectSkill: (skill: Skill) => Promise<void>;
@@ -19,6 +20,7 @@ interface SkillState {
   setIsEditing: (editing: boolean) => void;
   cancelEditing: () => void;
   setShowNewSkillForm: (v: boolean) => void;
+  setShowFiles: (show: boolean) => void;
 }
 
 export const useSkillStore = create<SkillState>((set) => ({
@@ -30,6 +32,7 @@ export const useSkillStore = create<SkillState>((set) => ({
   skillsTabActive: false,
   isEditing: false,
   showNewSkillForm: false,
+  showFiles: false,
 
   loadSkills: async () => {
     set({ loadingSkills: true });
@@ -87,5 +90,9 @@ export const useSkillStore = create<SkillState>((set) => ({
 
   setShowNewSkillForm: (v) => {
     set({ showNewSkillForm: v });
+  },
+
+  setShowFiles: (show) => {
+    set({ showFiles: show });
   },
 }));

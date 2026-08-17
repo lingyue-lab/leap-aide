@@ -17,7 +17,8 @@ interface WorkspaceState {
   lastWorkspace: string | null;
   currentWorkspace: string | null;
   workspacesTabActive: boolean;
-  
+  showFileTree: boolean;
+
   // Actions
   loadDir: (path: string) => Promise<void>;
   setPreview: (path: string | null) => Promise<void>;
@@ -34,6 +35,7 @@ interface WorkspaceState {
   removeWorkspace: (path: string) => Promise<void>;
   renameWorkspace: (path: string, newName: string) => Promise<void>;
   setWorkspacesTabActive: (active: boolean) => void;
+  setShowFileTree: (show: boolean) => void;
   showNewWorkspaceForm: boolean;
   setShowNewWorkspaceForm: (show: boolean) => void;
 }
@@ -53,6 +55,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   lastWorkspace: null,
   currentWorkspace: null,
   workspacesTabActive: false,
+  showFileTree: false,
   showNewWorkspaceForm: false,
 
   loadDir: async (path) => {
@@ -275,5 +278,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   setWorkspacesTabActive: (active) => set({ workspacesTabActive: active }),
+  setShowFileTree: (show) => set({ showFileTree: show }),
   setShowNewWorkspaceForm: (show) => set({ showNewWorkspaceForm: show }),
 }));

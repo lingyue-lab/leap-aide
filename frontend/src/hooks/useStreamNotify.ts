@@ -60,9 +60,7 @@ export function useStreamNotify() {
 
       // Refresh sessions list so message_count is updated.
       // This drives the unread badge: message_count > last_seen_msg_count
-      console.log('[title-sync] onDone: loadSessions starting');
       await useSessionStore.getState().loadSessions().catch(() => {/* ignore */});
-      console.log('[title-sync] onDone: loadSessions completed');
 
       // After loadSessions, re-sync the active session's title to the sidebar.
       // loadSessions fetches from state.db which may still have the provisional
@@ -71,9 +69,7 @@ export function useStreamNotify() {
       // already updated currentSession.title by this point — push it back into
       // the sidebar list so both displays agree.
       const active = useSessionStore.getState().currentSession;
-      console.log('[title-sync] onDone: re-sync check', { sid: active?.session_id?.slice(0,8), title: active?.title });
       if (active?.session_id && active?.title) {
-        console.log('[title-sync] onDone: calling updateSessionListTitle', active.session_id.slice(0,8), active.title);
         useSessionStore.getState().updateSessionListTitle?.(active.session_id, active.title);
       }
 
@@ -109,7 +105,6 @@ export function useStreamNotify() {
     // stays in sync with every title update.
     const onTitle = (e: Event) => {
       const { sessionId, title } = (e as CustomEvent).detail;
-      console.log('[title-sync] useStreamNotify.onTitle', { sessionId: sessionId?.slice(0,8), title });
       useSessionStore.getState().updateSessionListTitle?.(sessionId, title);
     };
     window.addEventListener('bg-stream-title', onTitle);

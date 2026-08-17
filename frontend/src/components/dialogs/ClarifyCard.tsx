@@ -162,7 +162,6 @@ export default function ClarifyCard() {
   // render so the timer never resets due to external settings changes.
   useEffect(() => {
     if (!visible || !clarify) {
-      console.log('[clarify-auto-dismiss] skip — visible=', visible, 'clarify=', !!clarify);
       return;
     }
     dismissedRef.current = false;
@@ -171,16 +170,9 @@ export default function ClarifyCard() {
     const stored = _clarifications.get(sid);
     const elapsed = stored ? Date.now() - stored.receivedAt : 0;
     const remaining = Math.max(0, timeoutMsRef.current - elapsed);
-    console.log('[clarify-auto-dismiss] setup — sid=', sid,
-      'timeoutMs=', timeoutMsRef.current,
-      'elapsed=', elapsed,
-      'remaining=', remaining,
-      'stored=', !!stored);
 
     const dismiss = () => {
-      console.log('[clarify-auto-dismiss] FIRING — sid=', sid);
       if (dismissedRef.current) {
-        console.log('[clarify-auto-dismiss] already dismissed, skip');
         return;
       }
       dismissedRef.current = true;
@@ -193,15 +185,12 @@ export default function ClarifyCard() {
     };
 
     if (remaining <= 0) {
-      console.log('[clarify-auto-dismiss] already timed out, dismissing now');
       dismiss();
       return;
     }
 
-    console.log('[clarify-auto-dismiss] setting timer for', remaining, 'ms');
     const timer = setTimeout(dismiss, remaining);
     return () => {
-      console.log('[clarify-auto-dismiss] timer cleared');
       clearTimeout(timer);
     };
   }, [visible, clarify]);
