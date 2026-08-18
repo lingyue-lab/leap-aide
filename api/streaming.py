@@ -1643,9 +1643,6 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                             # emitted → reset so the first tool.started
                             # emits message_start.
                             _message_started = False
-                            print(f'[stream-debug] on_token(None) tool-only turn | turn_id={_turn_id} | '
-                                  f'session={session_id} | action=reset_message_started',
-                                  flush=True)
                         _text_emitted_this_turn = False  # reset for tool batch
                         return
                     # First token of a new turn: _on_token_turn_id
@@ -1658,10 +1655,6 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         _text_emitted_this_turn = True
                         _ts = time.time()
                         _all_message_ts.append(_ts)
-                        print(f'[stream-debug] on_token emit message_start | turn_id={_turn_id} | '
-                              f'ts={_ts:.3f} | ts_count={len(_all_message_ts)} | '
-                              f'session={session_id}',
-                              flush=True)
                         put('message_start', {'ts': _ts})
                     _token_sent = True
                     # Accumulate partial text so cancel_stream() can persist it (#893)
@@ -1699,10 +1692,6 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         _text_emitted_this_turn = True
                         _ts = time.time()
                         _all_message_ts.append(_ts)
-                        print(f'[stream-debug] on_reasoning emit message_start | turn_id={_turn_id} | '
-                              f'ts={_ts:.3f} | ts_count={len(_all_message_ts)} | '
-                              f'session={session_id}',
-                              flush=True)
                         put('message_start', {'ts': _ts})
                     _append_reasoning_text(text)
                     put('reasoning', {'text': str(text)})
@@ -1747,10 +1736,6 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                     # non-empty).  Turn-boundary tracking is now handled
                     # by on_token(None) which fires unconditionally for
                     # ALL turns with tool calls.
-                    print(f'[stream-debug] _thinking | turn_id={_turn_id} | '
-                          f'session={session_id} | '
-                          f'reason_text={reason_text[:60] if reason_text else "(none)"}',
-                          flush=True)
                     if reason_text and not (_reasoning_config and _reasoning_config.get("enabled") is False):
                         # Insert separator at cross-source boundary (streaming → post-hoc summary)
                         if _reasoning_text:
@@ -1782,18 +1767,10 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                     #     instead of inheriting the assistant's timestamp.
                     if _tool_batch_id != _turn_id:
                         _tool_batch_id = _turn_id
-                        print(f'[stream-debug] tool.started new-batch | turn_id={_turn_id} | '
-                              f'session={session_id} | tool={name} | '
-                              f'msg_started={_message_started}',
-                              flush=True)
                     if not _message_started:
                         _message_started = True
                         _ts = time.time()
                         _all_message_ts.append(_ts)
-                        print(f'[stream-debug] tool.started emit message_start | turn_id={_turn_id} | '
-                              f'ts={_ts:.3f} | ts_count={len(_all_message_ts)} | '
-                              f'session={session_id} | tool={name}',
-                              flush=True)
                         put('message_start', {'ts': _ts})
                     # Generate a unique tid for this tool call
                     tid = f"tool-{name}-{int(time.time() * 1000)}-{len(_live_tool_calls)}"
@@ -2736,25 +2713,6 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             except Exception:
                 logger.debug("Failed to drain pending steer for session %s", session_id)
             raw_session = s.compact() | {'messages': s.messages, 'tool_calls': tool_calls}
-
-            # ── Diagnostic: log turn-boundary tracking summary ────────────────
-            _final_roles = [m.get('role') for m in s.messages if isinstance(m, dict)]
-            print(f'[stream-debug] SUMMARY | session={session_id} | '
-                  f'total_turns={_turn_id} | message_start_emitted={len(_all_message_ts)} | '
-                  f'final_message_count={len(s.messages)} | '
-                  f'msg_roles={_final_roles}',
-                  flush=True)
-            # Print per-message timestamps for cross-reference with frontend console.table
-            for _i, _m in enumerate(s.messages):
-                if isinstance(_m, dict):
-                    _ts = _m.get('timestamp__webui')
-                    _role = _m.get('role', '?')
-                    _tool = _m.get('name', '')
-                    _content = str(_m.get('content', ''))[:50]
-                    print(f'[stream-debug]   msg[{_i}] role={_role} '
-                          f'tool={_tool} ts__webui={_ts} '
-                          f'content={_content}',
-                          flush=True)
 
             if _should_bg_title and _u0 and _a0:
                 print(f'[title-sync-backend] running title update: session={s.session_id[:8]} title={s.title!r}', flush=True)

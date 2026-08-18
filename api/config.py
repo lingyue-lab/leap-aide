@@ -358,13 +358,12 @@ DEFAULT_MODEL = os.getenv("HERMES_WEBUI_DEFAULT_MODEL", "")  # Empty = use provi
 # ── Startup diagnostics ───────────────────────────────────────────────────────
 def print_startup_config() -> None:
     """Print detected configuration at startup so the user can verify what was found."""
-    ok = "\033[32m[ok]\033[0m"
-    warn = "\033[33m[!!]\033[0m"
-    err = "\033[31m[XX]\033[0m"
+    ok = "[ok]"
+    err = "[fail]"
 
     lines = [
         "",
-        "  Hermes Web UI -- startup config",
+        "  startup config",
         "  --------------------------------",
         f"  repo root   : {REPO_ROOT}",
         f"  agent dir   : {_AGENT_DIR if _AGENT_DIR else 'NOT FOUND'}  {ok if _AGENT_DIR else err}",
@@ -373,13 +372,13 @@ def print_startup_config() -> None:
         f"  workspace   : {DEFAULT_WORKSPACE}",
         f"  host:port   : {HOST}:{PORT}",
         f"  config file : {_get_config_path()}  {'(found)' if _get_config_path().exists() else '(not found, using defaults)'}",
-        "",
+        "  --------------------------------"
     ]
-    print("\n".join(lines), flush=True)
+    logger.info('\n'.join(lines))
 
     if not _HERMES_FOUND:
-        print(
-            f"{err}  Could not find the Hermes agent directory.\n"
+        logger.error(
+            "%s  Could not find the Hermes agent directory.\n"
             "      The server will start but agent features will not work.\n"
             "\n"
             "      To fix, set one of:\n"
@@ -387,8 +386,8 @@ def print_startup_config() -> None:
             "        export HERMES_HOME=/path/to/.hermes\n"
             "\n"
             "      Or clone hermes-agent as a sibling of this repo:\n"
-            "        git clone <hermes-agent-repo> ../hermes-agent\n",
-            flush=True,
+            "        git clone <hermes-agent-repo> ../hermes-agent",
+            err
         )
 
 

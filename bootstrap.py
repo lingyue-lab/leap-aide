@@ -172,7 +172,9 @@ def install_hermes_agent() -> None:
     )
 
 
-def wait_for_health(url: str, timeout: float = 25.0) -> bool:
+def wait_for_health(url: str, timeout: float = 40.0, log_file: str = '') -> bool:
+    """Wait for server to become healthy. Logs diagnostics on failure."""
+    t0 = time.monotonic()
     deadline = time.time() + timeout
     # Validate URL scheme to prevent file:// and other dangerous schemes
     if not url.startswith(("http://", "https://")):
@@ -184,18 +186,42 @@ def wait_for_health(url: str, timeout: float = 25.0) -> bool:
         _ctx = ssl.create_default_context()
         _ctx.check_hostname = False
         _ctx.verify_mode = ssl.CERT_NONE
+    last_error = ''
+    attempt = 0
     while time.time() < deadline:
+        attempt += 1
         try:
             with urllib.request.urlopen(url, timeout=2, context=_ctx) as response:  # nosec B310
                 body = response.read()
                 try:
                     import json as _json
                     if _json.loads(body).get("status") == "ok":
+                        elapsed = round(time.monotonic() - t0, 1)
+                        print(f'[bootstrap] Health check OK ({elapsed}s, {attempt} attempts)', flush=True)
                         return True
                 except (ValueError, KeyError):
-                    pass
+                    last_error = f'Invalid response: {body[:200]}'
+        except urllib.error.URLError as e:
+            last_error = f'URLError: {e.reason}'
+        except ConnectionRefusedError:
+            last_error = 'Connection refused (port not yet listening)'
+        except Exception as e:
+            last_error = f'{type(e).__name__}: {e}'
+        time.sleep(0.4)
+
+    # Diagnostic output
+    elapsed = round(time.monotonic() - t0, 1)
+    print(f'[bootstrap] Health check failed after {attempt} attempts over {elapsed}s', flush=True)
+    print(f'[bootstrap] Last error: {last_error}', flush=True)
+    # Try to read server.py log tail
+    if log_file:
+        try:
+            log_path = Path(log_file)
+            if log_path.exists():
+                tail = log_path.read_text()[-500:]
+                print(f'[bootstrap] Server log tail:\n{tail}', flush=True)
         except Exception:
-            time.sleep(0.4)
+            pass
     return False
 
 
@@ -250,16 +276,29 @@ def main() -> int:
     if agent_dir:
         env["HERMES_WEBUI_AGENT_DIR"] = str(agent_dir)
 
-    info(f"Starting Hermes Web UI on http://{args.host}:{args.port}")
+    info(f"Starting leap-aide on http://{args.host}:{args.port}")
     with log_path.open("ab") as log_file:
         proc = subprocess.Popen(
             [python_exe, str(REPO_ROOT / "server.py")],
-            cwd=str(agent_dir or REPO_ROOT),
+            cwd=str(REPO_ROOT),
             env=env,
             stdout=log_file,
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
+
+    # Write PID file for clean shutdown signaling
+    import atexit
+    pid_file = state_dir / f"server-{args.port}.pid"
+    pid_file.write_text(str(proc.pid))
+
+    def _cleanup_pid():
+        try:
+            pid_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    atexit.register(_cleanup_pid)
 
     health_url = f"http://{args.host}:{args.port}/health"
     if args.host == "0.0.0.0":
@@ -270,9 +309,9 @@ def main() -> int:
     _tls_on   = bool(_tls_cert and _tls_key)
     if _tls_on:
         health_url = health_url.replace("http://", "https://")
-    if not wait_for_health(health_url):
+    if not wait_for_health(health_url, log_file=str(log_path)):
         raise RuntimeError(
-            f"Web UI did not become healthy at {health_url}. "
+            f"Server did not become healthy at {health_url}. "
             f"Check the log at {log_path}. Server PID: {proc.pid}"
         )
 

@@ -287,7 +287,7 @@ def _upsert_webui_col(db, rowid, sid, col_name, value):
     except Exception:
         return  # column may not exist yet
     if existing and existing[0] is not None:
-        print(
+        logger.debug(
             f"[webui:backfill:skip] {col_name} already set "
             f"sid={sid} rowid={rowid} existing={existing[0]!r} new={value!r}"
         )

@@ -338,8 +338,24 @@ fi
 
 ensure_hindsight_client_docker_dependency
 
-echo ""; echo "== Running hermes-webui"
-cd /app; python server.py || error_exit "hermes-webui failed or exited with an error"
+echo ""; echo "== Running leap-aide"
+
+# Graceful shutdown: forward SIGTERM/SIGINT to the Python server process
+_python_pid=""
+_graceful_shutdown() {
+  echo "[docker] Received SIGTERM, forwarding to server.py (PID $_python_pid)..."
+  if [ -n "$_python_pid" ] && kill -0 "$_python_pid" 2>/dev/null; then
+    kill -TERM "$_python_pid"
+    wait "$_python_pid" 2>/dev/null || true
+  fi
+  exit 0
+}
+trap _graceful_shutdown SIGTERM SIGINT
+
+cd /app
+python server.py &
+_python_pid=$!
+wait "$_python_pid" || error_exit "leap-aide failed or exited with an error"
 
 # we should never be here because the server should be running indefinitely, but if we are, we exit safely
 ok_exit "Clean exit"
