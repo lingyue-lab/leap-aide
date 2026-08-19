@@ -70,20 +70,6 @@ _port_in_use() {
   grep -qi ":${PORT_HEX}[[:space:]]\\+00000000:0000[[:space:]]\\+0A" /proc/net/tcp 2>/dev/null
 }
 
-# ── Command: build ──
-cmd_build() {
-  _stage "fronted_build"
-  (cd "${PROJECT_ROOT}/frontend" && npm run build)
-  _ok
-}
-
-# ── Command: install ──
-cmd_install() {
-  _stage "install"
-  bash "${PROJECT_ROOT}/scripts/install-wrappers.sh" --force
-  _ok
-}
-
 # ── Command: stop ──
 cmd_stop() {
   _stage "server_stop"
@@ -221,8 +207,8 @@ if [[ $# -eq 0 ]]; then
   echo "  stop      Gracefully stop all services"
   echo "  restart   Restart (stop + start)"
   echo "  status    Show running status"
-  echo "  build     Build frontend only"
-  echo "  install   Install wrappers and dependencies"
+  echo ""
+  echo "For build operations, use: ./scripts/build.sh"
   exit 1
 fi
 
@@ -232,8 +218,12 @@ for arg in "$@"; do
     stop)     cmd_stop ;;
     restart)  cmd_restart ;;
     status)   cmd_status ;;
-    build)    cmd_build ;;
-    install)  cmd_install ;;
+    build|install)
+      echo "[ctl] WARNING: '$arg' command is deprecated."
+      echo "[ctl] Use './scripts/build.sh' for build operations."
+      echo "[ctl] Use './install.sh' for installation."
+      exit 1
+      ;;
     *)        die "Unknown command: $arg" ;;
   esac
 done

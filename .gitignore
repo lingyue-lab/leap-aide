@@ -12,10 +12,6 @@ __pycache__/
 # Archive directory (pre-git backups, kept on disk but not tracked)
 archive/
 
-# Local environment and secrets (but keep the example template)
-.env
-.env.*
-!.env.example
 .claude/
 CLAUDE.md
 AGENTS.md
