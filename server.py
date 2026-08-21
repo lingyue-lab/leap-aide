@@ -264,8 +264,25 @@ def main() -> None:
     else:
         _done()
 
-    # ── Stage 8: Start session displays ──
-    _stage(8, 'Starting session displays')
+    # ── Stage 8: Validate state.db schema ──────────────────────────────
+    # Check __webui column types before any code that swallows exceptions.
+    # If types are wrong, the database is from an incompatible version.
+    _stage(8, 'Validating state.db schema')
+    try:
+        from api.webui_schema import check_webui_column_types, IncompatibleSchemaError
+        from api.models import _get_session_db
+        db = _get_session_db()
+        if db is not None:
+            check_webui_column_types(db)
+        _done()
+    except IncompatibleSchemaError as e:
+        _fail(str(e))
+        sys.exit(1)
+    except Exception as e:
+        _done(f'skipped ({e})')
+
+    # ── Stage 9: Start session displays ──
+    _stage(9, 'Starting session displays')
     try:
         from api.session_display import ensure_pinned_displays, sync_gateway_session_cwd
         sync_gateway_session_cwd()

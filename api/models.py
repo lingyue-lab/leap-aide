@@ -226,12 +226,16 @@ def _get_session_db():
                 # read_only path skipped FTS probe — but we're read-write,
                 # so _init_schema already ran and _fts_enabled should be set.
                 pass
-            # Rename WebUI-added columns to use __webui suffix (idempotent).
-            from api.webui_schema import migrate_webui_columns, ensure_pinned_archived_webui_columns, ensure_original_content_webui_column, ensure_timestamp_webui_column
-            migrate_webui_columns(_session_db)
-            ensure_pinned_archived_webui_columns(_session_db)
+            # Ensure __webui columns exist and have correct types.
+            # check_webui_column_types() raises IncompatibleSchemaError on
+            # type mismatch — propagate it so the process exits.
+            from api.webui_schema import check_webui_column_types, ensure_webui_columns, ensure_original_content_webui_column, ensure_timestamp_webui_column, IncompatibleSchemaError
+            check_webui_column_types(_session_db)
+            ensure_webui_columns(_session_db)
             ensure_original_content_webui_column(_session_db)
             ensure_timestamp_webui_column(_session_db)
+        except IncompatibleSchemaError:
+            raise
         except Exception:
             logger.warning("Failed to open state.db — falling back to JSON storage",
                            exc_info=True)
@@ -414,11 +418,12 @@ class Session:
         sid = self.session_id
 
         # ── Ensure session row exists + update webui metadata ──────────
+        # Use SDK's create_session() to insert the row with all required
+        # fields (started_at is NOT NULL).  The old INSERT OR IGNORE
+        # omitted started_at, silently failing and leaving the row absent.
+        db.create_session(sid, 'webui')
+
         def _do_write(conn):
-            conn.execute(
-                "INSERT OR IGNORE INTO sessions (id, source) VALUES (?, 'webui')",
-                (sid,),
-            )
             # Ensure llm_title_generated__webui column exists (added post-migration)
             try:
                 conn.execute(
@@ -732,7 +737,7 @@ class Session:
             if self._metadata_message_count is not None
             else len(self.messages)
         )
-        _clamped_last_seen = min(self.last_seen_msg_count or 0, _msg_count)
+        _clamped_last_seen = min(int(self.last_seen_msg_count or 0), _msg_count)
         return {
             'session_id': self.session_id,
             'title': self.title,
@@ -829,7 +834,7 @@ def _fix_stale_last_seen_msg_count(s):
     current messages") and persist the fix to disk.
     """
     actual_msg_count = len(s.messages)
-    last_seen = s.last_seen_msg_count or 0
+    last_seen = int(s.last_seen_msg_count or 0)
     if last_seen > actual_msg_count:
         logger.info(
             "[fix-stale-last_seen] session=%s title='%s' "
@@ -899,6 +904,33 @@ def new_session(workspace=None, model=None, profile=None):
     except Exception:
         logger.warning("Failed to persist new session %s to state.db",
                        s.session_id, exc_info=True)
+
+    # ── Persist cwd to state.db ──────────────────────────────────────
+    # Background:
+    #   The cwd column in state.db stores the session's workspace path,
+    #   used by the sidebar for grouping and display.  For CLI/gateway
+    #   sessions, cwd is written by the SDK's update_session_cwd() when
+    #   the terminal directory changes (tui_gateway/server.py).
+    #
+    # Problem:
+    #   WebUI sessions never go through the gateway.  sync_webui_metadata()
+    #   only writes __webui columns and never touches cwd.  As a result,
+    #   cwd stays NULL for all WebUI sessions, causing the sidebar to
+    #   display "未分配工作区" (unassigned workspace).
+    #
+    # Fix:
+    #   Call the SDK's SessionDB.update_session_cwd() after
+    #   sync_webui_metadata() to persist the workspace to the cwd column.
+    #   This is the SDK's high-level API — not a direct DB write.
+    if s.workspace:
+        try:
+            db = _get_session_db()
+            if db is not None:
+                db.update_session_cwd(s.session_id, s.workspace)
+        except Exception:
+            logger.debug("Failed to persist cwd for new session %s",
+                         s.session_id, exc_info=True)
+
     return s
 
 def _hide_from_default_sidebar(session: dict) -> bool:
