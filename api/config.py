@@ -1006,6 +1006,50 @@ def get_first_available_model() -> str:
     return get_effective_default_model()
 
 
+def normalize_model_prefix(model_id: str) -> str:
+    """Ensure bare model names carry an ``@provider:`` prefix when applicable.
+
+    Models from non-default provider groups are presented in the dropdown as
+    ``@provider:model`` (see ``_prefix_models_if_needed``).  Sessions created
+    before this convention — or imported from CLI/gateway — may store the bare
+    name (e.g. ``deepseek-v4-pro``), which causes the frontend model selector
+    to show no selection.  This helper normalizes the stored value so it
+    matches the dropdown format.
+
+    Rules:
+      - Already has ``@provider:`` → return as-is.
+      - Contains ``/`` (OpenRouter-style) → return as-is.
+      - Bare name → look up in catalog; if found under a non-default provider
+        group, return ``@provider:model``.  Otherwise return as-is.
+    """
+    model = (model_id or "").strip()
+    if not model:
+        return model
+    # Already prefixed or namespaced — nothing to do.
+    if model.startswith("@") or "/" in model:
+        return model
+
+    try:
+        catalog = get_available_models()
+    except Exception:
+        return model
+
+    active_provider = (catalog.get("active_provider") or "").lower()
+    for group in catalog.get("groups") or []:
+        gid = (group.get("provider_id") or "").lower()
+        for m in group.get("models") or []:
+            mid = m.get("id", "")
+            # Match either the bare name or a stored @gid:bare form.
+            if mid == model or (mid.startswith("@") and ":" in mid
+                                and mid.split(":", 1)[1] == model):
+                # If this provider is the active one, bare name is fine.
+                if gid == active_provider:
+                    return model
+                # Non-default provider — add prefix.
+                return f"@{gid}:{model}"
+    return model
+
+
 # ── Reasoning config (CLI parity for /reasoning) ─────────────────────────────
 # Mirrors hermes_constants.parse_reasoning_effort so WebUI can validate without
 # importing from the agent tree (which may not be installed).  Any drift here

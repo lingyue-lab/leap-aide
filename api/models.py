@@ -1286,11 +1286,12 @@ def import_cli_session(
     """Create a new WebUI session populated with CLI messages.
     Returns the Session object.
     """
+    from api.config import normalize_model_prefix
     s = Session(
         session_id=session_id,
         title=title,
         workspace=get_last_workspace(),
-        model=model,
+        model=normalize_model_prefix(model),
         messages=messages,
         profile=profile,
         created_at=created_at,
