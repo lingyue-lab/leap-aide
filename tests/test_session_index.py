@@ -65,7 +65,7 @@ def _read_index(index_file):
     return json.loads(index_file.read_text(encoding="utf-8"))
 
 
-def test_compact_exposes_last_message_at_from_message_timestamp():
+def test_compact_exposes_last_activity_at_from_updated_at():
     s = Session(
         session_id="sess_time",
         title="Time",
@@ -80,10 +80,10 @@ def test_compact_exposes_last_message_at_from_message_timestamp():
     compact = s.compact()
 
     assert compact["updated_at"] == 300.0
-    assert compact["last_message_at"] == 200.0
+    assert compact["last_activity_at"] == 300.0
 
 
-def test_all_sessions_backfills_last_message_at_for_legacy_index_rows():
+def test_all_sessions_backfills_last_activity_at_for_legacy_index_rows():
     index_file = models.SESSION_INDEX_FILE
     s = Session(
         session_id="sess_legacy_index",
@@ -112,7 +112,7 @@ def test_all_sessions_backfills_last_message_at_for_legacy_index_rows():
     rows = models.all_sessions()
 
     assert rows[0]["session_id"] == s.session_id
-    assert rows[0]["last_message_at"] == 100.0
+    assert rows[0]["last_activity_at"] == 300.0
 
     # Backfill must also be persisted to the index so subsequent /api/sessions
     # polls don't re-read every legacy session file.  Without this, a 5-second
@@ -120,7 +120,7 @@ def test_all_sessions_backfills_last_message_at_for_legacy_index_rows():
     # session is independently saved.
     persisted = _read_index(index_file)
     assert persisted[0]["session_id"] == s.session_id
-    assert persisted[0].get("last_message_at") == 100.0
+    assert persisted[0].get("last_activity_at") == 300.0
 
 
 # ── 6. test_incremental_patch_correctness ─────────────────────────────────

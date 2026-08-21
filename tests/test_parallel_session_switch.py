@@ -235,7 +235,7 @@ class TestMessagePaginationBackend:
             "message_count": n_msgs,
             "created_at": 1000000,
             "updated_at": 2000000,
-            "last_message_at": 2000000,
+            "last_activity_at": 2000000,
             "pinned": False,
             "archived": False,
             "project_id": None,

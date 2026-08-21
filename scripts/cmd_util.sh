@@ -241,7 +241,7 @@ list_sessions() {
     fi
     echo "$resp" | jq -r '
       .sessions[:20][] |
-      "\(.session_id)  \(.title // "(untitled)")  [\(.model // "?" | tostring)]  \(.last_message_at // .updated_at // 0 | todate)"
+      "\(.session_id)  \(.title // "(untitled)")  [\(.model // "?" | tostring)]  \(.last_activity_at // .updated_at // 0 | todate)"
     '
 }
 

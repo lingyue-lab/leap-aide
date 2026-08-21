@@ -93,30 +93,8 @@ def _is_streaming_session(active_stream_id, active_stream_ids):
 
 def _session_sort_timestamp(session):
     if isinstance(session, dict):
-        return session.get('last_message_at') or session.get('updated_at') or 0
-    return _last_message_timestamp(getattr(session, 'messages', None)) or getattr(session, 'updated_at', 0) or 0
-
-
-def _message_timestamp(message):
-    if not isinstance(message, dict):
-        return None
-    raw = message.get('timestamp')
-    try:
-        return float(raw) if raw is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _last_message_timestamp(messages):
-    if not isinstance(messages, list):
-        return None
-    for message in reversed(messages):
-        if isinstance(message, dict) and message.get('role') == 'tool':
-            continue
-        ts = _message_timestamp(message)
-        if ts:
-            return ts
-    return None
+        return session.get('last_activity_at') or session.get('updated_at') or 0
+    return getattr(session, 'updated_at', 0) or 0
 
 
 def _find_top_level_json_key(text, key):
@@ -414,10 +392,10 @@ class Session:
         """Sync webui-specific metadata to state.db.
 
         Only updates webui-owned columns (``__webui`` suffix,
-        ``original_content__webui``, ``last_message_at``).  Non-webui
-        fields (content, role, tool_calls, tokens, model, cwd,
-        message_count, etc.) are managed by the hermes-agent SDK and
-        are never touched here.
+        ``original_content__webui``).  Non-webui fields (content, role,
+        tool_calls, tokens, model, cwd, message_count,
+        ``last_activity_at``, etc.) are managed by the hermes-agent SDK
+        and are never touched here.
 
         Messages are NOT written by this method — normal turns are
         persisted by the SDK's ``append_message`` inside
@@ -464,7 +442,6 @@ class Session:
                    last_seen_msg_count__webui = ?,
                    last_compression_time__webui = ?,
                    session_approved__webui = ?,
-                   last_message_at = ?,
                    lineage_root_id__webui = ?,
                    lineage_tip_id__webui = ?,
                    compression_segment_count__webui = ?,
@@ -491,7 +468,6 @@ class Session:
                     self.last_compression_time or None,
                     json.dumps(getattr(self, 'session_approved', None))
                         if getattr(self, 'session_approved', None) else None,
-                    self.updated_at,
                     getattr(self, 'lineage_root_id', None),
                     getattr(self, 'lineage_tip_id', None),
                     getattr(self, 'compression_segment_count', 0) or 0,
@@ -571,7 +547,7 @@ class Session:
         'id': 'session_id',
         'cwd': 'workspace',
         'started_at': 'created_at',
-        'last_message_at': 'updated_at',
+        'last_activity_at': 'updated_at',
         'estimated_cost_usd': 'estimated_cost',
     }
 
@@ -765,7 +741,7 @@ class Session:
             'message_count': _msg_count,
             'created_at': self.created_at,
             'updated_at': self.updated_at,
-            'last_message_at': _last_message_timestamp(self.messages) or self.updated_at,
+            'last_activity_at': self.updated_at,
             'pinned': self.pinned,
             'archived': self.archived,
             'project_id': self.project_id,
@@ -1011,8 +987,8 @@ def _all_sessions_from_db(db, active_stream_ids):
             'model': row.get('model', ''),
             'message_count': row.get('message_count', 0),
             'created_at': row.get('started_at', 0),
-            'updated_at': row.get('last_message_at') or row.get('started_at', 0),
-            'last_message_at': row.get('last_message_at') or row.get('started_at', 0),
+            'updated_at': row.get('last_activity_at') or row.get('started_at', 0),
+            'last_activity_at': row.get('last_activity_at') or row.get('started_at', 0),
             'pinned': bool(row.get('pinned__webui', False)),
             'archived': bool(row.get('archived__webui', False)),
             'project_id': row.get('project_id'),
@@ -1084,7 +1060,7 @@ def _all_sessions_from_index(active_stream_ids):
     ]
     backfilled = []
     for i, s in enumerate(index):
-        if 'last_message_at' not in s:
+        if 'last_activity_at' not in s:
             full = Session.load(s.get('session_id'))
             if full:
                 index[i] = full.compact()
@@ -1093,7 +1069,7 @@ def _all_sessions_from_index(active_stream_ids):
         try:
             _write_session_index(updates=backfilled)
         except Exception:
-            logger.debug("Failed to persist last_message_at backfill")
+            logger.debug("Failed to persist last_activity_at backfill")
     for s in index:
         s['is_streaming'] = _is_streaming_session(
             s.get('active_stream_id'),

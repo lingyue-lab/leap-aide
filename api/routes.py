@@ -815,7 +815,7 @@ def handle_get(handler, parsed) -> bool:
                     "message_count": len(msgs),
                     "created_at": (cli_meta or {}).get("created_at", 0),
                     "updated_at": (cli_meta or {}).get("updated_at", 0),
-                    "last_message_at": (cli_meta or {}).get("last_message_at")
+                    "last_activity_at": (cli_meta or {}).get("last_activity_at")
                     or (cli_meta or {}).get("updated_at", 0),
                     "pinned": False,
                     "archived": False,
@@ -914,7 +914,7 @@ def handle_get(handler, parsed) -> bool:
                        if s["session_id"] not in webui_ids]
         merged = webui_sessions + deduped_cli
         merged.sort(
-            key=lambda s: s.get("last_message_at") or s.get("updated_at", 0) or 0,
+            key=lambda s: s.get("last_activity_at") or s.get("updated_at", 0) or 0,
             reverse=True,
         )
         safe_merged = []
@@ -2586,7 +2586,7 @@ def _handle_sessions_search(handler, parsed):
                             'model': row.get('model') or match.get('model'),
                             'message_count': row.get('message_count') or match.get('message_count', 0),
                             'created_at': started_at,
-                            'updated_at': row.get('last_message_at') or started_at,
+                            'updated_at': row.get('last_activity_at') or started_at,
                             'pinned': bool(row.get('pinned__webui')),
                         }
                     if isinstance(item.get("title"), str):
