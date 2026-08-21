@@ -50,6 +50,7 @@ SESSION_INDEX_FILE = SESSION_DIR / "_index.json"
 SETTINGS_FILE = STATE_DIR / "settings.json"
 LAST_WORKSPACE_FILE = STATE_DIR / "last_workspace.txt"
 PROJECTS_FILE = STATE_DIR / "projects.json"
+BUILTIN_DEFAULT_WORKSPACE = STATE_DIR / "workspaces" / "default"
 
 logger = logging.getLogger(__name__)
 
@@ -1562,6 +1563,25 @@ def get_available_models() -> dict:
                 if _pid_key in _PROVIDER_MODELS or _pid_key in cfg.get("providers", {}):
                     detected_providers.add(_pid_key)
 
+        # Post-filter: only keep providers that actually have a configured API key
+        # or are OAuth-based.  This removes false positives from hermes_cli's
+        # get_auth_status() which may report providers as authenticated even when
+        # no key is configured.
+        try:
+            from api.providers import _provider_has_key, _provider_is_oauth
+
+            _filtered = set()
+            for _pid in detected_providers:
+                if _pid == active_provider:
+                    _filtered.add(_pid)
+                elif _provider_is_oauth(_pid):
+                    _filtered.add(_pid)
+                elif _provider_has_key(_pid):
+                    _filtered.add(_pid)
+            detected_providers = _filtered
+        except ImportError:
+            logger.debug("Could not import providers module for key filtering")
+
         # 4. Fetch models from custom endpoint if base_url is configured
         auto_detected_models = []
         if cfg_base_url:
@@ -1620,6 +1640,10 @@ def get_available_models() -> dict:
                             break
                 if api_key:
                     headers["Authorization"] = f"Bearer {api_key}"
+                elif provider not in ("ollama", "lmstudio", "local"):
+                    # Public endpoint without API key — skip model fetch
+                    # to avoid listing models that would fail at runtime.
+                    raise ValueError(f"No API key configured for {base_url}")
 
                 import socket
 
@@ -1813,15 +1837,32 @@ def get_available_models() -> dict:
                         )
         else:
             if default_model:
-                label = _get_label_for_model(default_model, groups)
-                groups.append(
-                    {"provider": "Default", "provider_id": "default", "models": [{"id": default_model, "label": label}]}
-                )
+                # Only show default model if its provider has a configured key
+                _dm_provider = default_model.split("/")[0] if "/" in default_model else active_provider
+                _dm_has_key = False
+                try:
+                    from api.providers import _provider_has_key as _phk
+                    _dm_has_key = _phk(_dm_provider) if _dm_provider else False
+                except ImportError:
+                    _dm_has_key = True  # conservative: show if can't check
+                if _dm_has_key:
+                    label = _get_label_for_model(default_model, groups)
+                    groups.append(
+                        {"provider": "Default", "provider_id": "default", "models": [{"id": default_model, "label": label}]}
+                    )
 
         if default_model:
+            # Only inject default model if its provider has a configured key
+            _dm_prov2 = default_model.split("/")[0] if "/" in default_model else active_provider
+            _dm_ok2 = False
+            try:
+                from api.providers import _provider_has_key as _phk2
+                _dm_ok2 = _phk2(_dm_prov2) if _dm_prov2 else False
+            except ImportError:
+                _dm_ok2 = True
             _norm = lambda mid: (mid.split("/", 1)[-1] if "/" in mid else mid).replace("-", ".")
             all_ids_norm = {_norm(m["id"]) for g in groups for m in g.get("models", [])}
-            if _norm(default_model) not in all_ids_norm:
+            if _norm(default_model) not in all_ids_norm and _dm_ok2:
                 label = _get_label_for_model(default_model, groups)
                 target_display = (
                     _PROVIDER_DISPLAY.get(active_provider, active_provider or "").lower()

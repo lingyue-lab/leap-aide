@@ -145,7 +145,7 @@ export default function WorkspacesPanel() {
                 </>
               )}
             </div>
-            {!workspace.external && renamingPath !== workspace.path && (
+            {!workspace.external && !workspace.builtin && renamingPath !== workspace.path && (
               <div className="sidebar-item-actions">
                 <button
                   className="sidebar-item-actions-trigger"

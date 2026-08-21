@@ -153,6 +153,7 @@ export interface Workspace {
   path: string;
   display_name?: string;
   external?: boolean;
+  builtin?: boolean;
 }
 
 export interface DirEntry {

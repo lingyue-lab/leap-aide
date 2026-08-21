@@ -28,6 +28,7 @@ full-UI.png
 
 # Frontend build artifacts
 node_modules/
+frontend/node_modules/
 frontend/dist/
 frontend/.tsbuildinfo
 static/
@@ -49,3 +50,6 @@ docs/*
 # Used by Claude during deep reviews; never shared in the repo.
 .local-review/
 graphify-out/
+
+.venv
+.lingyue-lab

@@ -949,6 +949,15 @@ def handle_get(handler, parsed) -> bool:
             if w['path'] == _default_ws:
                 w['external'] = True
 
+        # Mark the built-in default workspace
+        try:
+            from api.config import BUILTIN_DEFAULT_WORKSPACE
+            for w in user_workspaces:
+                if Path(w['path']).resolve() == BUILTIN_DEFAULT_WORKSPACE.resolve():
+                    w['builtin'] = True
+        except Exception:
+            pass
+
         # Derive external workspaces from gateway/CLI sessions that have real cwd
         derived: list[dict] = []
         try:
@@ -4204,6 +4213,15 @@ def _is_external_workspace(ws_path: str) -> bool:
     return False
 
 
+def _is_builtin_default_workspace(ws_path: str) -> bool:
+    """Return True if the workspace path is the built-in default workspace."""
+    try:
+        from api.config import BUILTIN_DEFAULT_WORKSPACE
+        return Path(ws_path).resolve() == BUILTIN_DEFAULT_WORKSPACE.resolve()
+    except Exception:
+        return False
+
+
 def _handle_create_dir(handler, body):
     try:
         require(body, "session_id", "path")
@@ -4253,7 +4271,10 @@ def _handle_workspace_add(handler, body):
     wss = load_workspaces()
     if any(w["path"] == str(p) for w in wss):
         return bad(handler, "Workspace already in list")
-    wss.append({"path": str(p), "name": name or p.name})
+    final_name = name or p.name
+    if any(w["name"] == final_name for w in wss):
+        return bad(handler, f'Workspace name "{final_name}" already exists')
+    wss.append({"path": str(p), "name": final_name})
     save_workspaces(wss)
     return j(handler, {"ok": True, "workspaces": wss})
 
@@ -4262,6 +4283,9 @@ def _handle_workspace_remove(handler, body):
     path_str = body.get("path", "").strip()
     if not path_str:
         return bad(handler, "path is required")
+    # Block removal of built-in default workspace
+    if _is_builtin_default_workspace(path_str):
+        return bad(handler, "Cannot remove the default workspace", 403)
     # Block removal of external (gateway/CLI derived) workspaces
     if _is_external_workspace(path_str):
         return bad(handler, "Cannot remove an external workspace derived from gateway/CLI sessions", 403)
@@ -4276,10 +4300,16 @@ def _handle_workspace_rename(handler, body):
     name = body.get("name", "").strip()
     if not path_str or not name:
         return bad(handler, "path and name are required")
+    # Block rename of built-in default workspace
+    if _is_builtin_default_workspace(path_str):
+        return bad(handler, "Cannot rename the default workspace", 403)
     # Block rename of external (gateway/CLI derived) workspaces
     if _is_external_workspace(path_str):
         return bad(handler, "Cannot rename an external workspace derived from gateway/CLI sessions", 403)
     wss = load_workspaces()
+    # Check name uniqueness (exclude the workspace being renamed)
+    if any(w["name"] == name and w["path"] != path_str for w in wss):
+        return bad(handler, f'Workspace name "{name}" already exists')
     for w in wss:
         if w["path"] == path_str:
             w["name"] = name

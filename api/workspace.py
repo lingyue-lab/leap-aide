@@ -20,6 +20,7 @@ from api.config import (
     WORKSPACES_FILE as _GLOBAL_WS_FILE,
     LAST_WORKSPACE_FILE as _GLOBAL_LW_FILE,
     DEFAULT_WORKSPACE as _BOOT_DEFAULT_WORKSPACE,
+    BUILTIN_DEFAULT_WORKSPACE as _BUILTIN_DEFAULT_WS,
     MAX_FILE_BYTES, IMAGE_EXTS, MD_EXTS
 )
 
@@ -123,8 +124,8 @@ def _clean_workspace_list(workspaces: list) -> list:
                 continue  # under profiles/ but not our own — cross-profile leak, skip
         except ValueError:
             pass  # not under profiles/ at all — keep it
-        # Rename confusing 'default' label to 'Home'
-        if name.lower() == 'default':
+        # Rename confusing 'default' label to 'Home' (but keep the builtin workspace as 'Default')
+        if name.lower() == 'default' and str(p) != _BUILTIN_DEFAULT_WORKSPACE_PATH:
             name = 'Home'
         result.append({'path': str(p), 'name': name})
     return result
@@ -152,6 +153,35 @@ def _migrate_global_workspaces() -> list:
         return []
 
 
+_BUILTIN_DEFAULT_WORKSPACE_PATH = str(_BUILTIN_DEFAULT_WS.resolve()) if _BUILTIN_DEFAULT_WS else ''
+
+
+def _ensure_builtin_default(workspaces: list) -> list:
+    """Ensure the built-in default workspace is present and the directory exists."""
+    if not _BUILTIN_DEFAULT_WORKSPACE_PATH:
+        return workspaces
+    try:
+        Path(_BUILTIN_DEFAULT_WORKSPACE_PATH).mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return workspaces
+    for w in workspaces:
+        if w.get('path') == _BUILTIN_DEFAULT_WORKSPACE_PATH:
+            # Ensure correct name (may have been saved as 'Home' before)
+            if w.get('name') != 'Default':
+                w['name'] = 'Default'
+                try:
+                    save_workspaces(workspaces)
+                except Exception:
+                    pass
+            return workspaces
+    workspaces.insert(0, {'path': _BUILTIN_DEFAULT_WORKSPACE_PATH, 'name': 'Default'})
+    try:
+        save_workspaces(workspaces)
+    except Exception:
+        pass
+    return workspaces
+
+
 def load_workspaces() -> list:
     ws_file = _workspaces_file()
     if ws_file.exists():
@@ -166,7 +196,7 @@ def load_workspaces() -> list:
                     )
                 except Exception:
                     logger.debug("Failed to persist cleaned workspace list")
-            return cleaned or [{'path': profile_default_workspace(), 'name': 'Home'}]
+            return _ensure_builtin_default(cleaned or [{'path': profile_default_workspace(), 'name': 'Home'}])
         except Exception:
             logger.debug("Failed to load workspaces from %s", ws_file)
     # No profile-local file yet.
@@ -180,9 +210,9 @@ def load_workspaces() -> list:
     if is_default:
         migrated = _migrate_global_workspaces()
         if migrated:
-            return migrated
+            return _ensure_builtin_default(migrated)
     # Fresh start: single entry from the profile's configured workspace, labeled "Home"
-    return [{'path': profile_default_workspace(), 'name': 'Home'}]
+    return _ensure_builtin_default([{'path': profile_default_workspace(), 'name': 'Home'}])
 
 
 def save_workspaces(workspaces: list) -> None:
