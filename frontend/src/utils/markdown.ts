@@ -1,4 +1,4 @@
-import { marked } from 'marked';
+import { marked, Marked } from 'marked';
 import katex from 'katex';
 import Prism from 'prismjs';
 import 'prismjs/themes/prism-tomorrow.css';
@@ -13,7 +13,7 @@ import 'prismjs/components/prism-css';
 import 'prismjs/components/prism-go';
 import 'prismjs/components/prism-rust';
 
-// ── KaTeX math pre-processing (stash → let marked handle rest → restore) ──
+// ── URL auto-link stash (stash → let marked handle rest → restore) ──
 
 const STASH_PREFIX = '\x02';
 const STASH_SUFFIX = '\x03';
@@ -37,33 +37,44 @@ function restore(stash: ReturnType<typeof createStash>, html: string): string {
   return result;
 }
 
-function processMathBlocks(stash: ReturnType<typeof createStash>, text: string): string {
-  const ddCount = (text.match(/\$\$/g) || []).length;
-  let result = text;
+// ── Math extension for marked (KaTeX) ──
+// Registered as a marked inline extension so that marked's tokenizer respects
+// its own priority rules — codespan (backticks) is matched before inline math,
+// preventing $ inside `code` from being misinterpreted as LaTeX.
 
-  if (ddCount >= 2 && ddCount % 2 === 0) {
-    result = result.replace(/\$\$([\s\S]+?)\$\$/g, (_, math) => {
-      try {
-        return stashPut(stash, `<div class="katex-block">${katex.renderToString(math, { displayMode: true, strict: false })}</div>`);
-      } catch {
-        return stashPut(stash, `<div class="katex-block katex-error">${escapeHTML(math)}</div>`);
-      }
-    });
-  }
-
-  const dollarCount = (result.match(/\$/g) || []).length;
-  if (dollarCount >= 2) {
-    result = result.replace(/\$([^\s$][^$]*?[^\s$])\$/g, (_, math) => {
-      try {
-        return stashPut(stash, `<span class="katex-inline">${katex.renderToString(math, { displayMode: false, strict: false })}</span>`);
-      } catch {
-        return stashPut(stash, `<span class="katex-inline katex-error">${escapeHTML(math)}</span>`);
-      }
-    });
-  }
-
-  return result;
-}
+const mathExtension = {
+  name: 'math' as const,
+  level: 'inline' as const,
+  start(src: string) {
+    return src.match(/\$/)?.index;
+  },
+  tokenizer(src: string) {
+    // Block math: $$...$$
+    const blockMatch = src.match(/^\$\$([\s\S]+?)\$\$/);
+    if (blockMatch) {
+      return { type: 'math' as const, raw: blockMatch[0], text: blockMatch[1], display: true };
+    }
+    // Inline math: $...$ (skip empty or double-dollar)
+    const inlineMatch = src.match(/^\$([^\s$][^$]*?[^\s$])\$/);
+    if (inlineMatch) {
+      return { type: 'math' as const, raw: inlineMatch[0], text: inlineMatch[1], display: false };
+    }
+  },
+  renderer(token: { text: string; display: boolean }) {
+    try {
+      const html = katex.renderToString(token.text, { displayMode: token.display, strict: false });
+      return token.display
+        ? `<div class="katex-block">${html}</div>`
+        : `<span class="katex-inline">${html}</span>`;
+    } catch {
+      const escaped = escapeHTML(token.text);
+      const cls = token.display ? 'katex-block katex-error' : 'katex-inline katex-error';
+      return token.display
+        ? `<div class="${cls}">${escaped}</div>`
+        : `<span class="${cls}">${escaped}</span>`;
+    }
+  },
+};
 
 // ── Configure marked ──
 
@@ -130,26 +141,26 @@ export function renderMarkdown(raw: string, skipHighlight: boolean = false): str
   const textToRender = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '');
 
   const stash = createStash();
+  let html = textToRender;
 
-  // 1. Process math blocks (KaTeX → stash tokens)
-  let html = processMathBlocks(stash, textToRender);
-
-  // 2. Protect plain URLs before marked's GFM autolink swallows non-ASCII text.
+  // 1. Protect plain URLs before marked's GFM autolink swallows non-ASCII text.
   //    Stash them as inline code so marked leaves them untouched.
   html = html.replace(
     /(https?:\/\/[\w\-._~:/?#[\]@!$&'()*+,;=%]+)/g,
     (_, url) => stashPut(stash, `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`),
   );
 
-  // 3. Parse markdown with marked
-  html = marked.parse(html, {
+  // 2. Parse markdown with marked (math extension handles $...$ / $$...$$)
+  const mkd = new Marked();
+  mkd.use({ extensions: [mathExtension] });
+  html = mkd.parse(html, {
     renderer: skipHighlight ? fastRenderer : renderer,
     breaks: true,
     gfm: true,
     async: false,
   }) as string;
 
-  // 4. Restore stashed content (math + auto-linked URLs)
+  // 3. Restore stashed content (auto-linked URLs)
   html = restore(stash, html);
 
   // 5. Sanitize
