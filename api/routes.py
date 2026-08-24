@@ -380,7 +380,7 @@ def _normalize_session_model_in_place(session) -> str:
     if changed and effective_model and original_model and original_model != effective_model:
         session.model = effective_model
         session.sync_webui_metadata(touch_updated_at=False)
-    return effective_model
+    return effective_model or original_model
 
 
 def _resolve_effective_session_model_for_display(session) -> str:
@@ -392,7 +392,20 @@ def _resolve_effective_session_model_for_display(session) -> str:
     """
     original_model = getattr(session, "model", None) or ""
     effective_model, _changed = _resolve_compatible_session_model(original_model or None)
-    return effective_model or original_model
+    result = effective_model or original_model
+    # Warn on bare model names — they cannot uniquely identify a model across
+    # providers (e.g. "deepseek-v4-pro" exists on both DeepSeek and OpenRouter).
+    # The persisted model should always carry an @provider: prefix.
+    if result and not result.startswith("@") and "/" not in result:
+        logger.warning(
+            "Session %s has bare model name %r — should be @provider:model",
+            getattr(session, "session_id", "?"),
+            result,
+        )
+        # Normalize for display so the frontend model selector can match,
+        # but don't persist (this is a read-only path).
+        result = Session._normalize_model(result)
+    return result
 
 
 from api.models import (
@@ -922,6 +935,9 @@ def handle_get(handler, parsed) -> bool:
             item = dict(s)
             if isinstance(item.get("title"), str):
                 item["title"] = _redact_text(item["title"])
+            # Normalize bare model names for frontend display
+            if item.get("model") and not item["model"].startswith("@") and "/" not in item["model"]:
+                item["model"] = Session._normalize_model(item["model"])
             safe_merged.append(item)
         return j(handler, {
             "sessions": safe_merged,
@@ -1486,11 +1502,14 @@ def handle_post(handler, parsed) -> bool:
             # update_session_model unconditionally writes the model column
             # (no COALESCE) so the sidebar reflects the user's latest choice
             # even after a server restart.
+            # Normalize bare model names to @provider:model so the stored
+            # value can uniquely identify the model across providers.
+            persist_model = Session._normalize_model(s.model)
             try:
                 from api.models import _get_session_db
                 db = _get_session_db()
                 if db is not None:
-                    db.update_session_model(s.session_id, s.model)
+                    db.update_session_model(s.session_id, persist_model)
             except Exception:
                 logger.warning("Failed to persist model for session %s",
                                s.session_id, exc_info=True)
@@ -3809,6 +3828,8 @@ def _handle_chat_start(handler, body):
         return bad(handler, str(e))
     requested_model = body.get("model") or s.model
     model, normalized_model = _resolve_compatible_session_model(requested_model)
+    # Normalize bare model names to @provider:model for unique identification
+    model = Session._normalize_model(model)
 
     # ── Busy input mode ──
     _valid_modes = frozenset({"interrupt", "queue", "steer", "reject"})
@@ -3891,7 +3912,7 @@ def _handle_chat_sync(handler, body):
         return bad(handler, str(e))
     with _get_session_agent_lock(s.session_id):
         s.workspace = workspace
-        s.model = body.get("model") or s.model
+        s.model = Session._normalize_model(body.get("model") or s.model)
     from api.streaming import _ENV_LOCK
 
     # Register thread-local env overrides so subprocesses spawned by the agent

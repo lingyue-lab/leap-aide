@@ -352,6 +352,25 @@ class Session:
         # they survive a round-trip through save() → JSON → load().
         self.__dict__.update(kwargs)
 
+    @staticmethod
+    def _normalize_model(model: str) -> str:
+        """Normalize bare model names to @provider:model format.
+
+        Bare names like "deepseek-v4-pro" cannot uniquely identify a model
+        across providers. This method adds the @provider: prefix when the
+        model belongs to a non-default provider group.
+        """
+        if not model:
+            return model
+        # Already prefixed or namespaced — nothing to do.
+        if model.startswith("@") or "/" in model:
+            return model
+        try:
+            from api.config import normalize_model_prefix
+            return normalize_model_prefix(model)
+        except Exception:
+            return model
+
     @property
     def mode(self) -> str:
         return getattr(self, '_mode', 'manual')
