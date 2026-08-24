@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { FileNode, DirEntry, Workspace } from '@/types';
+import type { FileNode, DirEntry, Workspace, WorkspaceInfo } from '@/types';
 import { detectFileType } from '@/components/shared/FileView';
 
 interface WorkspaceState {
@@ -18,9 +18,12 @@ interface WorkspaceState {
   currentWorkspace: string | null;
   workspacesTabActive: boolean;
   showFileTree: boolean;
+  workspaceInfo: WorkspaceInfo | null;
+  workspaceInfoLoading: boolean;
 
   // Actions
   loadDir: (path: string) => Promise<void>;
+  loadWorkspaceInfo: (path: string) => Promise<void>;
   setPreview: (path: string | null) => Promise<void>;
   updatePreviewContent: (content: string) => void;
   setPreviewEditing: (editing: boolean) => void;
@@ -57,6 +60,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   workspacesTabActive: false,
   showFileTree: false,
   showNewWorkspaceForm: false,
+  workspaceInfo: null,
+  workspaceInfoLoading: false,
 
   loadDir: async (path) => {
     set({ loading: true });
@@ -79,6 +84,21 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     } catch (err) {
       set({ loading: false });
       throw err;
+    }
+  },
+
+  loadWorkspaceInfo: async (path) => {
+    set({ workspaceInfoLoading: true, workspaceInfo: null });
+    try {
+      const response = await fetch(
+        `/api/workspace/info?path=${encodeURIComponent(path)}`,
+        { credentials: 'include' }
+      );
+      if (!response.ok) throw new Error('Failed to load workspace info');
+      const data: WorkspaceInfo = await response.json();
+      set({ workspaceInfo: data, workspaceInfoLoading: false });
+    } catch (_err) {
+      set({ workspaceInfoLoading: false });
     }
   },
 
@@ -194,12 +214,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       set({ workspaces: data.workspaces || [], lastWorkspace: lastWs, currentWorkspace: lastWs });
       if (lastWs) {
         try {
-          await get().loadDir(lastWs);
-          const { entries } = get();
-          const firstFile = entries.find((e) => !e.is_dir);
-          if (firstFile) {
-            get().setPreview(firstFile.path).catch(() => {/* silent */});
-          }
+          await Promise.all([
+            get().loadDir(lastWs),
+            get().loadWorkspaceInfo(lastWs),
+          ]);
         } catch (_) {/* silent */}
       }
     } catch (err) {
@@ -220,14 +238,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     } catch (_err) {
       // Fail silently - local state already updated
     }
-    // Load directory for selected workspace, then auto-preview first file
+    // Load directory listing and workspace info (no auto-preview)
     try {
-      await get().loadDir(path);
-      const { entries } = get();
-      const firstFile = entries.find((e) => !e.is_dir);
-      if (firstFile) {
-        get().setPreview(firstFile.path).catch(() => {/* silent */});
-      }
+      await Promise.all([
+        get().loadDir(path),
+        get().loadWorkspaceInfo(path),
+      ]);
     } catch (_) {/* silent */}
   },
 

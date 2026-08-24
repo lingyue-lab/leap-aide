@@ -935,6 +935,37 @@
     position: relative;
   }
 
+  /* Markdown prose headings — match .skill-detail .prose styles */
+  .file-view-code .prose {
+    line-height: 1.7;
+  }
+  .file-view-code .prose h1 {
+    font-size: 1.5em;
+    font-weight: 700;
+    margin: 1.2em 0 0.6em;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.3em;
+  }
+  .file-view-code .prose h2 {
+    font-size: 1.3em;
+    font-weight: 600;
+    margin: 1em 0 0.5em;
+    border-bottom: 1px solid var(--border2);
+    padding-bottom: 0.2em;
+  }
+  .file-view-code .prose h3 {
+    font-size: 1.15em;
+    font-weight: 600;
+    margin: 0.8em 0 0.4em;
+  }
+  .file-view-code .prose h4,
+  .file-view-code .prose h5,
+  .file-view-code .prose h6 {
+    font-size: 1em;
+    font-weight: 600;
+    margin: 0.6em 0 0.3em;
+  }
+
   .file-view-copy-btn {
     position: absolute;
     top: 8px;

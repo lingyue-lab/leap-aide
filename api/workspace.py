@@ -800,3 +800,73 @@ def git_info_for_workspace(workspace: Path) -> dict:
         'behind': behind,
         'is_git': True,
     }
+
+
+def workspace_info(workspace: Path) -> dict:
+    """Return metadata overview for a workspace directory.
+
+    Includes creation time, file/dir counts, total size, and git log
+    (last 20 commits) when the workspace is a git repository.
+    """
+    import datetime
+
+    result = {
+        'path': str(workspace),
+        'created': None,
+        'total_size': 0,
+        'file_count': 0,
+        'dir_count': 0,
+        'git': None,
+    }
+
+    # -- filesystem stats --
+    try:
+        st = workspace.stat()
+        result['created'] = datetime.datetime.fromtimestamp(
+            st.st_ctime, tz=datetime.timezone.utc
+        ).isoformat()
+    except OSError:
+        pass
+
+    try:
+        for root, dirs, files in os.walk(workspace):
+            # skip .git directory
+            dirs[:] = [d for d in dirs if d != '.git']
+            result['dir_count'] += len(dirs)
+            result['file_count'] += len(files)
+            for f in files:
+                try:
+                    result['total_size'] += os.path.getsize(os.path.join(root, f))
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+    # -- git info --
+    git = git_info_for_workspace(workspace)
+    if git:
+        # Use \x1f (unit separator) as field delimiter and \x1e (record separator)
+        # between commits.  These never appear in commit messages.
+        log_raw = _run_git(
+            ['log', '--pretty=format:%H\x1f%an\x1f%ai\x1f%B\x1e', '-20'],
+            workspace,
+        )
+        commits = []
+        if log_raw:
+            for record in log_raw.split('\x1e'):
+                record = record.strip()
+                if not record:
+                    continue
+                parts = record.split('\x1f', 3)
+                if len(parts) == 4:
+                    h, author, date, msg = parts
+                    commits.append({
+                        'hash': h[:7],
+                        'author': author,
+                        'date': date,
+                        'message': msg.strip(),
+                    })
+        git['log'] = commits
+        result['git'] = git
+
+    return result

@@ -162,7 +162,32 @@ export interface DirEntry {
   git?: { branch?: string; modified?: number };
 }
 
-// types/settings.ts - 设置相关类型定义
+export interface GitCommit {
+  hash: string;
+  author: string;
+  date: string;
+  message: string;
+}
+
+export interface WorkspaceInfo {
+  path: string;
+  created: string | null;
+  total_size: number;
+  file_count: number;
+  dir_count: number;
+  git?: {
+    branch: string;
+    dirty: number;
+    modified: number;
+    untracked: number;
+    ahead: number;
+    behind: number;
+    is_git: boolean;
+    log: GitCommit[];
+  };
+}
+
+// types/settings.ts - Settings type definitions
 
 export type SendKey = 'enter' | 'ctrl+enter';
 export type Theme = 'system' | 'dark' | 'light';

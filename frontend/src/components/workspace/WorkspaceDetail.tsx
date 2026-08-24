@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 import FileTreePanel from '@/components/shared/FileTreePanel';
 import FileView from '@/components/shared/FileView';
 import type { FileType } from '@/components/shared/FileView';
 import type { FileNode } from '@/types';
 import { FolderOpenIcon } from '@/components/common/Icons';
+import WorkspaceOverview from './WorkspaceOverview';
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -104,7 +105,7 @@ export default function WorkspaceDetail() {
     setShowFileTree,
   } = useWorkspaceStore();
 
-  const workspaceLoader = async (path: string) => {
+  const workspaceLoader = useCallback(async (path: string) => {
     const res = await fetch(
       `/api/workspace/list?path=${encodeURIComponent(path)}`,
       { credentials: 'include' }
@@ -115,7 +116,7 @@ export default function WorkspaceDetail() {
       if (a.is_dir !== b.is_dir) return b.is_dir ? 1 : -1;
       return a.name.localeCompare(b.name);
     });
-  };
+  }, []);
 
   const handleTreeCreate = async (parentPath: string, name: string, isDir: boolean) => {
     const fullPath = parentPath ? `${parentPath}/${name}` : `${currentWorkspace || ''}/${name}`;
@@ -138,10 +139,14 @@ export default function WorkspaceDetail() {
 
   return (
     <div className="flex h-full overflow-hidden">
-      <WorkspaceFileMain
-        showFileTree={showFileTree}
-        onToggleFileTree={() => setShowFileTree(!showFileTree)}
-      />
+      {previewPath ? (
+        <WorkspaceFileMain
+          showFileTree={showFileTree}
+          onToggleFileTree={() => setShowFileTree(!showFileTree)}
+        />
+      ) : (
+        <WorkspaceOverview />
+      )}
       <FileTreePanel
         visible={showFileTree}
         defaultWidth={280}

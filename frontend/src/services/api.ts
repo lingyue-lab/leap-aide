@@ -216,9 +216,15 @@ export const workspaceService = {
       body: JSON.stringify({ path }),
     });
   },
+
+  getInfo: async (path: string) => {
+    return api<import('@/types').WorkspaceInfo>(
+      `/api/workspace/info?path=${encodeURIComponent(path)}`
+    );
+  },
 };
 
-// Settings API 服务
+// Settings API service
 export const settingsService = {
   getSettings: async () => {
     return api<import('@/types').Settings>('/api/settings');

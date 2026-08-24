@@ -1020,6 +1020,9 @@ def handle_get(handler, parsed) -> bool:
     if parsed.path == "/api/workspace/list":
         return _handle_workspace_list(handler, parsed)
 
+    if parsed.path == "/api/workspace/info":
+        return _handle_workspace_info(handler, parsed)
+
     if parsed.path == "/api/workspace/file":
         return _handle_workspace_file_read(handler, parsed)
 
@@ -4369,6 +4372,28 @@ def _handle_workspace_list(handler, parsed):
         return j(handler, {"entries": entries, "path": path_str, "git": git})
     except (FileNotFoundError, ValueError) as exc:
         return bad(handler, _sanitize_error(exc), 404)
+
+
+def _handle_workspace_info(handler, parsed):
+    """GET /api/workspace/info?path=<absolute_path>
+    Return metadata overview for a workspace directory.
+    """
+    from urllib.parse import parse_qs as _pqs
+    qs = _pqs(parsed.query)
+    path_str = qs.get("path", [""])[0].strip()
+    if not path_str:
+        return bad(handler, "path is required")
+    target = Path(path_str).expanduser().resolve()
+    if _is_blocked_system_path(target):
+        return bad(handler, "Path not allowed", 403)
+    if not target.is_dir():
+        return bad(handler, "Not a directory", 404)
+    try:
+        from api.workspace import workspace_info
+        info = workspace_info(target)
+        return j(handler, info)
+    except Exception as exc:
+        return bad(handler, _sanitize_error(exc), 500)
 
 
 def _handle_workspace_file_read(handler, parsed):
