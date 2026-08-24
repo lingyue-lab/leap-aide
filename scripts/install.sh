@@ -553,6 +553,73 @@ if [ -n "$AGENT_DIR" ] && [ -d "$AGENT_DIR/node_modules/playwright-core" ] && co
   fi
 fi
 
+# ── Step 2b: Apply Leap Aide defaults to hermes config ──
+say ""
+say "${B}Configuring hermes defaults...${R}"
+
+HERMES_CONFIG="${HERMES_HOME}/config.yaml"
+if [ -f "$HERMES_CONFIG" ]; then
+  # Ensure display.show_reasoning is true — Leap Aide displays reasoning
+  # blocks in the chat UI, so the backend must persist them.
+  # Use python3 + pyyaml to safely modify YAML (preserves comments/structure).
+  # Fall back to a simple text patch if pyyaml is not yet installed.
+  python3 - "$HERMES_CONFIG" <<'PYEOF'
+import sys, os
+cfg = sys.argv[1]
+try:
+    import yaml
+except ImportError:
+    # pyyaml not installed — fall back to text patch
+    with open(cfg) as f:
+        lines = f.readlines()
+    found_display = False
+    patched = False
+    out = []
+    for line in lines:
+        out.append(line)
+        stripped = line.rstrip()
+        if stripped == "display:":
+            found_display = True
+        elif found_display and "show_reasoning:" in stripped:
+            indent = len(line) - len(line.lstrip())
+            out[-1] = " " * indent + "show_reasoning: true\n"
+            patched = True
+            found_display = False
+        elif found_display and not stripped.startswith(" ") and stripped and not stripped.startswith("#"):
+            found_display = False
+    if not patched:
+        new_out = []
+        for line in out:
+            new_out.append(line)
+            if line.rstrip() == "display:":
+                new_out.append("  show_reasoning: true\n")
+        out = new_out
+    with open(cfg, "w") as f:
+        f.writelines(out)
+    print("  ✓ show_reasoning: true (text patch)")
+    sys.exit(0)
+
+# Full YAML path
+with open(cfg) as f:
+    data = yaml.safe_load(f) or {}
+display = data.get("display")
+if not isinstance(display, dict):
+    display = {}
+    data["display"] = display
+old = display.get("show_reasoning")
+if old is True:
+    print("  ✓ show_reasoning already true")
+else:
+    display["show_reasoning"] = True
+    with open(cfg, "w") as f:
+        yaml.safe_dump(data, f, default_flow_style=False, allow_unicode=True)
+    print(f"  ✓ show_reasoning: {old!r} → true")
+PYEOF
+  ok "Hermes defaults applied"
+else
+  info "No hermes config found — will use defaults on first run"
+fi
+
 # ── Step 3: Check our own dependencies ──
 say ""
 say "${B}Checking dependencies...${R}"

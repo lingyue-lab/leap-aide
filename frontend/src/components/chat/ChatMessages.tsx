@@ -355,7 +355,7 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
               }
               
               return result;
-            }, [sortedMessages, streaming, displayToolCalls, onFileOpen])}
+            }, [sortedMessages, streaming, displayToolCalls, onFileOpen, showReasoning])}
           </div>
 
         </div>
