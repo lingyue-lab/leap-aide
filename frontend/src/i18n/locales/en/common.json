@@ -70,7 +70,16 @@
     "clear_keep_label": "Messages to keep (0 = delete all)",
     "clear_streaming_warn": "Cannot clear history while the session is streaming. Please wait for the response to finish.",
     "compress_min_count": "At least 50 messages required",
-    "clear_empty": "No messages to clear"
+    "clear_empty": "No messages to clear",
+    "clear_delegates": "Clear Subagents",
+    "clear_delegates_confirm": "Clear Subagents",
+    "clear_delegates_desc": "Remove subagent sessions. Enter how many recent subagents to keep.",
+    "clear_delegates_keep_label": "Keep recent subagents",
+    "clear_delegates_empty": "No subagents to clear",
+    "subagent": "Subagent",
+    "subagent_count": "{{count}} subagent(s)",
+    "subagent_session": "Subagent session",
+    "clear_delegates_failed": "Clear subagents failed: {{error}}"
   },
   "settings": {
     "preferences": "Settings & Preferences",

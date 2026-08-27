@@ -8,11 +8,13 @@ import SessionItem from './SessionItem';
 import CustomScrollbar from '@/components/common/CustomScrollbar';
 import SessionSearchModal from '@/components/common/SessionSearchModal';
 import { Icon } from '@/components/common/Icons';
+import type { DelegateChildSession } from '@/types';
 
 
 export default function SessionList() {
   const { t } = useTranslation('common');
   const { sessions, currentSessionId, currentSession, loadSessions, createSession, selectSession } = useSessionStore();
+  const delegateChildrenVersion = useSessionStore((s) => s.delegateChildrenVersion);
   const { workspaces } = useWorkspaceStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
@@ -91,6 +93,56 @@ export default function SessionList() {
     });
     return map;
   }, [filteredSessions]);
+
+  // Delegate children map (lazy-loaded when expanded)
+  const [delegateChildrenMap, setDelegateChildrenMap] = useState<Map<string, DelegateChildSession[]>>(new Map());
+
+  const loadDelegateChildren = useCallback(async (sessionId: string) => {
+    if (delegateChildrenMap.has(sessionId)) return;
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/children`);
+      const data = await res.json();
+      setDelegateChildrenMap(prev => {
+        const next = new Map(prev);
+        next.set(sessionId, data.children || []);
+        return next;
+      });
+    } catch {
+      // non-fatal
+    }
+  }, [delegateChildrenMap]);
+
+  // Re-fetch children for every currently-expanded parent when the backend
+  // reports a delegate-children change (child added, completed, or deleted).
+  // Without this, stale child IDs — e.g. from a delegation that was dropped
+  // and rolled back out of state.db — stay cached forever and 404 on click.
+  const refreshDelegateChildren = useCallback(async (parentIds: string[]) => {
+    await Promise.all(parentIds.map(async (pid) => {
+      try {
+        const res = await fetch(`/api/sessions/${pid}/children`);
+        if (!res.ok) return;
+        const data = await res.json();
+        setDelegateChildrenMap(prev => {
+          const next = new Map(prev);
+          next.set(pid, data.children || []);
+          return next;
+        });
+      } catch {
+        // non-fatal
+      }
+    }));
+  }, []);
+
+  useEffect(() => {
+    if (delegateChildrenVersion === 0) return;
+    const parentIds = Array.from(delegateChildrenMap.keys());
+    if (parentIds.length > 0) {
+      refreshDelegateChildren(parentIds);
+    }
+    // Intentionally omit delegateChildrenMap — it's read fresh each time the
+    // version bumps; including it would re-run this effect on every fetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [delegateChildrenVersion]);
 
 
 
@@ -362,6 +414,8 @@ export default function SessionList() {
                       isActive={currentSessionId === session.session_id}
                       onClick={() => selectSession(session.session_id, (session as any).match_message_id ?? null)}
                       archivedChildren={archivedMap.get(session.session_id)}
+                      delegateChildren={delegateChildrenMap.get(session.session_id)}
+                      onToggleDelegateChildren={loadDelegateChildren}
                     />
                   ))}
                 </div>
@@ -398,7 +452,7 @@ export default function SessionList() {
                 <option value="webui">Web UI</option>
                 <option value="cron">Cron Jobs</option>
                 <option value="cli">CLI</option>
-                <option value="weixin">Weixin</option>
+                <option value="message">Messaging</option>
               </select>
             </div>
             <div className="clear-history-modal__field">

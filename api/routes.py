@@ -92,6 +92,7 @@ from api.helpers import (
     redact_session_data,
     _redact_text,
 )
+from api.stream_manager import stream_manager
 
 # ── CSRF: validate Origin/Referer on POST ────────────────────────────────────
 import re as _re
@@ -631,14 +632,12 @@ def handle_get(handler, parsed) -> bool:
         return True
 
     if parsed.path == "/health":
-        with STREAMS_LOCK:
-            n_streams = len(STREAMS)
         return j(
             handler,
             {
                 "status": "ok",
                 "sessions": len(SESSIONS),
-                "active_streams": n_streams,
+                "active_streams": stream_manager.active_count(),
                 "uptime_seconds": round(time.time() - SERVER_START_TIME, 1),
             },
         )
@@ -939,6 +938,21 @@ def handle_get(handler, parsed) -> bool:
             if item.get("model") and not item["model"].startswith("@") and "/" not in item["model"]:
                 item["model"] = Session._normalize_model(item["model"])
             safe_merged.append(item)
+
+        # Batch query delegate children for all sessions
+        try:
+            from api.models import _get_session_db, _get_all_delegate_children_map
+            _db = _get_session_db()
+            if _db is not None:
+                _delegate_map = _get_all_delegate_children_map(_db)
+                for item in safe_merged:
+                    _sid = item.get("session_id", "")
+                    _children = _delegate_map.get(_sid, [])
+                    item["_delegate_children_count"] = len(_children)
+                    item["_has_delegate_children"] = len(_children) > 0
+        except Exception:
+            pass  # non-fatal — delegate children info is additive
+
         return j(handler, {
             "sessions": safe_merged,
             "cli_count": len(deduped_cli),
@@ -1010,6 +1024,44 @@ def handle_get(handler, parsed) -> bool:
                 "prefix": prefix,
             },
         )
+
+    # /api/sessions/<id>/children — return delegate children for a session
+    if parsed.path.startswith("/api/sessions/") and parsed.path.endswith("/children"):
+        parts = parsed.path.split("/")
+        if len(parts) == 5 and parts[1] == "api" and parts[2] == "sessions":
+            session_id = parts[3]
+            try:
+                from api.models import _get_session_db, _get_all_delegate_children_map
+                _db = _get_session_db()
+                if _db is None:
+                    return j(handler, {"children": []})
+                _children_map = _get_all_delegate_children_map(_db)
+                _children = _children_map.get(session_id, [])
+                return j(handler, {"children": _children})
+            except Exception:
+                return j(handler, {"children": []})
+
+    # /api/sessions/<id>/children/status — return delegate children status
+    if parsed.path.startswith("/api/sessions/") and parsed.path.endswith("/children/status"):
+        parts = parsed.path.split("/")
+        if len(parts) == 6 and parts[1] == "api" and parts[2] == "sessions" and parts[5] == "status":
+            session_id = parts[3]
+            try:
+                from api.models import _get_session_db, _get_all_delegate_children_map
+                _db = _get_session_db()
+                if _db is None:
+                    return j(handler, {"children": [], "running_count": 0})
+                _children_map = _get_all_delegate_children_map(_db)
+                _children = _children_map.get(session_id, [])
+                # 统计正在运行的子 agent
+                running_count = sum(1 for c in _children if not c.get('ended_at'))
+                return j(handler, {
+                    "children": _children,
+                    "running_count": running_count,
+                    "total_count": len(_children),
+                })
+            except Exception:
+                return j(handler, {"children": [], "running_count": 0, "total_count": 0})
 
     if parsed.path == "/api/sessions/search":
         return _handle_sessions_search(handler, parsed)
@@ -1107,7 +1159,7 @@ def handle_get(handler, parsed) -> bool:
 
     if parsed.path == "/api/chat/stream/status":
         stream_id = parse_qs(parsed.query).get("stream_id", [""])[0]
-        return j(handler, {"active": stream_id in STREAMS, "stream_id": stream_id})
+        return j(handler, {"active": stream_manager.get_stream_by_id(stream_id) is not None, "stream_id": stream_id})
 
     if parsed.path == "/api/chat/cancel":
         stream_id = parse_qs(parsed.query).get("stream_id", [""])[0]
@@ -1119,14 +1171,11 @@ def handle_get(handler, parsed) -> bool:
     if parsed.path == "/api/chat/queue":
         return _handle_queue(handler, parsed)
 
-    if parsed.path == "/api/chat/stream":
-        return _handle_sse_stream(handler, parsed)
+    if parsed.path == "/api/chat/session/stream/replay":
+        return _handle_session_stream_replay(handler, parsed)
 
-    if parsed.path == "/api/chat/stream/replay":
-        return _handle_sse_stream_replay(handler, parsed)
-
-    if parsed.path == '/api/sessions/gateway/stream':
-        return _handle_gateway_sse_stream(handler, parsed)
+    if parsed.path == '/api/sessions/stream':
+        return _handle_sessions_sse_stream(handler, parsed)
 
     if parsed.path == "/api/media":
         return _handle_media(handler, parsed)
@@ -1563,6 +1612,12 @@ def handle_post(handler, parsed) -> bool:
                 existing.stop(remove_json=True)
         except Exception as e:
             logger.debug("SessionDisplay cleanup on delete failed for %s: %s", sid, e)
+        # Stop per-session process loop if running
+        with LOCK:
+            s = SESSIONS.get(sid)
+            if s and hasattr(s, '_process_loop_thread') and s._process_loop_thread:
+                s._process_loop_stop.set()
+                s._process_loop_thread.join(timeout=2)
         # Delete from WebUI session store
         with LOCK:
             SESSIONS.pop(sid, None)
@@ -1602,6 +1657,45 @@ def handle_post(handler, parsed) -> bool:
         except Exception:
             logger.debug("Failed to delete CLI session %s", sid)
         return j(handler, {"ok": True})
+
+    if parsed.path == "/api/session/clear-delegates":
+        session_id = body.get("session_id", "")
+        keep_count = int(body.get("keep_count", 0))
+        if not session_id:
+            return bad(handler, "session_id is required")
+        try:
+            from api.models import _get_session_db, _get_all_delegate_children_map
+            _db = _get_session_db()
+            if _db is None:
+                return j(handler, {"ok": True, "deleted": 0})
+            _children_map = _get_all_delegate_children_map(_db)
+            _children = _children_map.get(session_id, [])
+            # Sort by started_at descending (newest first), keep first N
+            _children.sort(key=lambda c: c.get('started_at', 0), reverse=True)
+            _to_delete = _children[keep_count:]
+            deleted = 0
+            for child in _to_delete:
+                child_id = child.get('id')
+                if not child_id:
+                    continue
+                try:
+                    _db.delete_session(child_id)
+                    # Also clean up from memory and JSON store
+                    with LOCK:
+                        SESSIONS.pop(child_id, None)
+                    p = (SESSION_DIR / f"{child_id}.json").resolve()
+                    try:
+                        p.relative_to(SESSION_DIR.resolve())
+                        p.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    deleted += 1
+                except Exception:
+                    logger.debug("Failed to delete delegate child %s", child_id)
+            return j(handler, {"ok": True, "deleted": deleted})
+        except Exception as e:
+            logger.debug("Failed to clear delegates for %s: %s", session_id, e)
+            return j(handler, {"ok": True, "deleted": 0})
 
     if parsed.path == "/api/session/truncate":
         try:
@@ -1763,12 +1857,7 @@ def handle_post(handler, parsed) -> bool:
             # tabs can sync mode state in real time.  Each stream's
             # EventSource listener filters by session_id.
             mode_event = json.dumps({"mode": mode, "session_id": sid}, ensure_ascii=False)
-            with STREAMS_LOCK:
-                for stream_id, q in list(STREAMS.items()):
-                    try:
-                        q.put(("mode_changed", mode_event))
-                    except Exception:
-                        pass
+            stream_manager.broadcast("mode_changed", mode_event)
             return j(handler, result)
         except KeyError:
             return bad(handler, "Session not found", 404)
@@ -2692,22 +2781,41 @@ def _handle_list_dir(handler, parsed):
         return bad(handler, _sanitize_error(e), 404)
 
 
-def _handle_sse_stream(handler, parsed):
-    stream_id = parse_qs(parsed.query).get("stream_id", [""])[0]
-    q = STREAMS.get(stream_id)
-    if q is None:
-        return j(handler, {"error": "stream not found"}, status=404)
+def _handle_session_stream_replay(handler, parsed):
+    """SSE endpoint keyed by session_id (supports both main and subagent sessions)."""
+    session_id = parse_qs(parsed.query).get("session_id", [""])[0]
+    if not session_id:
+        return j(handler, {"error": "session_id required"}, status=400)
+
+    # Wait for stream creation (up to 30 seconds)
+    stream = stream_manager.get_stream(session_id)
+    if stream is None:
+        for _ in range(300):
+            time.sleep(0.1)
+            stream = stream_manager.get_stream(session_id)
+            if stream:
+                break
+    if stream is None:
+        return j(handler, {"error": "no active stream for session"}, status=404)
+
     handler.send_response(200)
     handler.send_header("Content-Type", "text/event-stream; charset=utf-8")
     handler.send_header("Cache-Control", "no-cache")
     handler.send_header("X-Accel-Buffering", "no")
     handler.send_header("Connection", "keep-alive")
     handler.end_headers()
-    # Each SSE consumer gets its own dedicated queue via fan-out subscription.
-    # This allows multiple tabs to connect to the same stream without stealing
-    # each other's events (replaced the old single queue.Queue approach).
-    sq = q.subscribe()
+
+    sq = stream.subscribe()
     try:
+        # Replay history
+        history = stream.replay()
+        if history:
+            _sse(handler, 'replay_start', {'count': len(history)})
+            for event, data in history:
+                _sse(handler, event, data)
+            _sse(handler, 'replay_end', {})
+
+        # Live events
         while True:
             try:
                 event, data = sq.get(timeout=30)
@@ -2715,103 +2823,15 @@ def _handle_sse_stream(handler, parsed):
                 handler.wfile.write(b": heartbeat\n\n")
                 handler.wfile.flush()
                 continue
+            if event is None:  # sentinel from close()
+                break
             _sse(handler, event, data)
-            if event in ("stream_end", "error", "cancel", "apperror", "done"):
+            if event in ('stream_close', 'stream_end', 'error', 'cancel', 'apperror'):
                 break
     except (BrokenPipeError, ConnectionResetError):
         pass
     finally:
-        q.unsubscribe(sq)
-    return True
-
-
-def _handle_sse_stream_replay(handler, parsed):
-    """SSE endpoint that replays all past events then streams live events.
-
-    Used by the frontend after a page refresh so the user sees all tokens
-    that were already produced before the refresh, followed seamlessly by
-    any new tokens still arriving from the backend agent.
-
-    Protocol:
-      1. 'replay_start'  {"count": N}   — N past events will follow
-      2. <all past events replayed in order>
-      3. 'replay_end'    {}             — replay complete; live events follow
-      4. <live events from here on>
-
-    If the stream already ended before the client connected, only the replay
-    phase is sent (no live phase needed).
-    """
-    stream_id = parse_qs(parsed.query).get("stream_id", [""])[0]
-    q = STREAMS.get(stream_id)
-    if q is None:
-        return j(handler, {"error": "stream not found"}, status=404)
-    handler.send_response(200)
-    handler.send_header("Content-Type", "text/event-stream; charset=utf-8")
-    handler.send_header("Cache-Control", "no-cache")
-    handler.send_header("X-Accel-Buffering", "no")
-    handler.send_header("Connection", "keep-alive")
-    handler.end_headers()
-    # Subscribe BEFORE taking the history snapshot to ensure no live events
-    # slip through the gap between snapshot and subscribe.
-    sq = q.subscribe()
-    try:
-        # Phase 1: replay history snapshot
-        history = q.replay()
-
-        # Two-pass filter: skip clarify/approval events that were already resolved.
-        # Pass 1 — collect IDs of resolved events
-        resolved_clarify_ids: set = set()
-        resolved_approval_ids: set = set()
-        for event, data in history:
-            if event == "clarify_resolved":
-                cid = data.get("clarify_id") if isinstance(data, dict) else None
-                if cid:
-                    resolved_clarify_ids.add(cid)
-            elif event == "approval_resolved":
-                aid = data.get("approval_id") if isinstance(data, dict) else None
-                if aid:
-                    resolved_approval_ids.add(aid)
-
-        _sse(handler, 'replay_start', {'count': len(history)})
-        already_done = False
-        for event, data in history:
-            # Pass 2 — skip resolved events and the markers themselves
-            if event in ("clarify_resolved", "approval_resolved"):
-                continue
-            if event == "clarify":
-                cid = data.get("clarify_id") if isinstance(data, dict) else None
-                if cid and cid in resolved_clarify_ids:
-                    continue
-            if event == "approval":
-                aid = data.get("approval_id") if isinstance(data, dict) else None
-                if aid and aid in resolved_approval_ids:
-                    continue
-            _sse(handler, event, data)
-            if event in ('done', 'stream_end', 'error', 'cancel', 'apperror'):
-                already_done = True
-                break
-        if already_done:
-            return True
-
-        _sse(handler, 'replay_end', {})
-
-        # Phase 2: live events (if stream is still running)
-        if q.is_done():
-            return True
-        while True:
-            try:
-                event, data = sq.get(timeout=30)
-            except queue.Empty:
-                handler.wfile.write(b": heartbeat\n\n")
-                handler.wfile.flush()
-                continue
-            _sse(handler, event, data)
-            if event in ("stream_end", "error", "cancel", "apperror", "done"):
-                break
-    except (BrokenPipeError, ConnectionResetError):
-        pass
-    finally:
-        q.unsubscribe(sq)
+        stream.unsubscribe(sq)
     return True
 
 
@@ -2876,14 +2896,15 @@ def _gateway_sse_probe_payload(settings, watcher):
     return payload, 200
 
 
-def _handle_gateway_sse_stream(handler, parsed):
-    """SSE endpoint for real-time gateway session updates.
-    Streams change events from the gateway watcher background thread.
-    Active when either show_cli_sessions or show_messaging_sessions is enabled.
+def _handle_sessions_sse_stream(handler, parsed):
+    """SSE endpoint for real-time session updates.
+    Pushes all session-related changes:
+    - sessions_changed: Session list updates (gateway sessions + delegate children info)
+    - delegate_children_changed: Delegate children updates
     """
     settings = load_settings()
 
-    from api.gateway_watcher import get_watcher
+    from api.session_watcher import get_watcher
     watcher = get_watcher()
 
     probe = parse_qs(parsed.query).get('probe', [''])[0].lower() in {'1', 'true', 'yes'}
@@ -2907,9 +2928,19 @@ def _handle_gateway_sse_stream(handler, parsed):
 
     q = watcher.subscribe()
     try:
-        # Send initial snapshot immediately
-        from api.models import get_cli_sessions
+        # Send initial snapshot immediately (包含 delegate children 信息)
+        from api.models import get_cli_sessions, _get_session_db, _get_all_delegate_children_map
         initial = get_cli_sessions()
+        try:
+            db = _get_session_db()
+            if db is not None:
+                delegate_map = _get_all_delegate_children_map(db)
+                for session in initial:
+                    children = delegate_map.get(session['session_id'], [])
+                    session['_delegate_children_count'] = len(children)
+                    session['_has_delegate_children'] = len(children) > 0
+        except Exception:
+            pass
         _sse(handler, 'sessions_changed', {'sessions': initial})
 
         while True:
@@ -3472,6 +3503,14 @@ def _handle_session_cleanup(handler, body):
                     "SELECT id FROM sessions WHERE source = 'cron' AND ended_at IS NOT NULL AND ended_at < ?",
                     (cutoff,),
                 )
+            elif source == "message":
+                # Clean up all messaging platform sessions
+                from api.models import MESSAGING_SOURCE_TAGS
+                placeholders = ", ".join("?" for _ in MESSAGING_SOURCE_TAGS)
+                cur.execute(
+                    f"SELECT id FROM sessions WHERE source IN ({placeholders}) AND ended_at IS NOT NULL AND ended_at < ?",
+                    list(MESSAGING_SOURCE_TAGS) + [cutoff],
+                )
             else:
                 cur.execute(
                     "SELECT id FROM sessions WHERE source = ? AND ended_at IS NOT NULL AND ended_at < ?",
@@ -3490,6 +3529,13 @@ def _handle_session_cleanup(handler, body):
                 cur.execute(
                     "DELETE FROM sessions WHERE source = 'cron' AND ended_at IS NOT NULL AND ended_at < ?",
                     (cutoff,),
+                )
+            elif source == "message":
+                from api.models import MESSAGING_SOURCE_TAGS
+                placeholders = ", ".join("?" for _ in MESSAGING_SOURCE_TAGS)
+                cur.execute(
+                    f"DELETE FROM sessions WHERE source IN ({placeholders}) AND ended_at IS NOT NULL AND ended_at < ?",
+                    list(MESSAGING_SOURCE_TAGS) + [cutoff],
                 )
             else:
                 cur.execute(
@@ -3525,9 +3571,8 @@ def _handle_btw(handler, body):
     # Duplicate-stream guard (same pattern as chat/start)
     current_stream_id = getattr(s, "active_stream_id", None)
     if current_stream_id:
-        with STREAMS_LOCK:
-            if current_stream_id in STREAMS:
-                return j(handler, {"error": "session already has an active stream"}, status=409)
+        if stream_manager.get_stream_by_id(current_stream_id) is not None:
+            return j(handler, {"error": "session already has an active stream"}, status=409)
         s.active_stream_id = None
     # Create ephemeral hidden session inheriting context
     from api.models import new_session as _new_session
@@ -3536,12 +3581,11 @@ def _handle_btw(handler, body):
     ephemeral.messages = list(s.messages or [])
     ephemeral.title = f"btw: {question[:60]}"
     ephemeral.sync_webui_metadata()
-    stream_id = uuid.uuid4().hex
+    stream_id = stream_manager.start_stream(ephemeral.session_id)
+    if not stream_id:
+        return j(handler, {"error": "session already has active stream"}, status=409)
     ephemeral.active_stream_id = stream_id
     ephemeral.sync_webui_metadata()
-    q = ReplayableStream()
-    with STREAMS_LOCK:
-        STREAMS[stream_id] = q
     from api.background import track_btw
     track_btw(body["session_id"], ephemeral.session_id, stream_id, question)
     thr = threading.Thread(
@@ -3572,12 +3616,11 @@ def _start_background_task(parent_session, prompt, keep_session=True):
     bg.pending_user_message = prompt
     bg._pending_user_message_ts = time.time()
     bg.sync_webui_metadata()
-    stream_id = uuid.uuid4().hex
+    stream_id = stream_manager.start_stream(bg.session_id)
+    if not stream_id:
+        return None
     bg.active_stream_id = stream_id
     bg.sync_webui_metadata()
-    q = ReplayableStream()
-    with STREAMS_LOCK:
-        STREAMS[stream_id] = q
     task_id = uuid.uuid4().hex[:8]
     parent_sid = parent_session.session_id
     bg_sid = bg.session_id
@@ -3707,8 +3750,7 @@ def _resolve_busy_handling(s, mode, body):
                 return ("proceed", None)
             # Timeout — fall through to normal busy handling below
 
-        with STREAMS_LOCK:
-            current_active = current_stream_id in STREAMS
+        current_active = stream_manager.get_stream_by_id(current_stream_id) is not None
         if not current_active:
             # Stale stream id — clear and proceed
             s.active_stream_id = None
@@ -3888,9 +3930,9 @@ def _handle_chat_start(handler, body):
         s.pending_attachments = attachments
         s.pending_started_at = time.time()
         s.sync_webui_metadata()
-    q = ReplayableStream()
-    with STREAMS_LOCK:
-        STREAMS[stream_id] = q
+    stream_id = stream_manager.start_stream(s.session_id)
+    if not stream_id:
+        return j(handler, {"error": "session already has active stream"}, status=409)
     thr = threading.Thread(
         target=_run_agent_streaming,
         args=(s.session_id, msg, model, workspace, stream_id, attachments),
@@ -4590,8 +4632,7 @@ def _handle_approval_respond(handler, body):
         s = get_session(sid)
         stream_id = getattr(s, "active_stream_id", None)
         if stream_id and approval_id:
-            with STREAMS_LOCK:
-                stream = STREAMS.get(stream_id)
+            stream = stream_manager.get_stream_by_id(stream_id)
             if stream is not None:
                 stream.put("approval_resolved", {"approval_id": approval_id})
     except Exception:
@@ -4657,8 +4698,7 @@ def _handle_clarify_respond(handler, body):
         s = get_session(sid)
         stream_id = getattr(s, "active_stream_id", None)
         if stream_id:
-            with STREAMS_LOCK:
-                stream = STREAMS.get(stream_id)
+            stream = stream_manager.get_stream_by_id(stream_id)
             if stream is not None:
                 stream.put("clarify_resolved", {"clarify_id": clarify_id})
     except Exception:

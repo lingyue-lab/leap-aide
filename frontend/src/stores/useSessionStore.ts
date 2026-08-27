@@ -10,6 +10,9 @@ interface SessionState {
   gatewayOnline: boolean;
   /** DB rowid of the search-hit message to scroll to after session loads */
   matchMessageId: number | null;
+  /** Bumped on every delegate_children_changed SSE event so the sidebar can
+   *  refresh its cached delegate-children list (dropping stale child IDs). */
+  delegateChildrenVersion: number;
 
   // Actions
   loadSessions: () => Promise<void>;
@@ -47,6 +50,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   error: null,
   gatewayOnline: false,
   matchMessageId: null,
+  delegateChildrenVersion: 0,
 
   loadSessions: async () => {
     set({ loading: true, error: null });
@@ -354,11 +358,28 @@ export const useSessionStore = create<SessionState>((set) => ({
     let stopped = false;
     // Throttle auto-reload of read-only active sessions: min 5s between reloads
     const _lastReloadTs: Record<string, number> = {};
+    // Track sessions that have had their active_stream_id cleared by the frontend
+    // so sessions_changed doesn't restore them from backend data.
+    const _clearedStreamIds = new Set<string>();
+
+    // When a subagent session completes, clear its active_stream_id
+    // so the sidebar pulse indicator stops.
+    const onSubagentComplete = (e: Event) => {
+      const { sessionId } = (e as CustomEvent).detail;
+      if (!sessionId) return;
+      _clearedStreamIds.add(sessionId);
+      set((state) => ({
+        sessions: state.sessions.map(s =>
+          s.session_id === sessionId ? { ...s, active_stream_id: null } : s
+        ),
+      }));
+    };
+    window.addEventListener('subagent-complete', onSubagentComplete);
 
     const connect = () => {
       if (stopped) return;
 
-      es = new EventSource('/api/sessions/gateway/stream', { withCredentials: true });
+      es = new EventSource('/api/sessions/stream', { withCredentials: true });
 
       es.addEventListener('open', () => {
         set({ gatewayOnline: true });
@@ -367,35 +388,67 @@ export const useSessionStore = create<SessionState>((set) => ({
       es.addEventListener('sessions_changed', (event) => {
         try {
           const data = JSON.parse(event.data);
-          const gatewaySessions: SessionListItem[] = (data.sessions || []).map(
-            (s: Record<string, unknown>) => {
-              const existing = useSessionStore.getState().sessions.find(
-                (ex) => ex.session_id === s.session_id
-              );
-              return {
-                session_id: s.session_id as string,
-                title: (s.title as string) || 'Gateway Session',
-                workspace: s.workspace as string | undefined,
-                model: s.model as string | undefined,
-                message_count: s.message_count as number | undefined,
-                last_seen_msg_count: (s.last_seen_msg_count ?? existing?.last_seen_msg_count) as number | undefined,
-                created_at: s.created_at as number,
-                updated_at: s.updated_at as number | undefined,
-                pinned: false,
-                source_tag: (s.source_tag as string) || (s.source as string) || undefined,
-                is_cli_session: true,
-                user_id: s.user_id as string | undefined,
-                active_stream_id: s.active_stream_id as (string | null | undefined),
-              };
+          const gatewaySessions: SessionListItem[] = [];
+          // Map of webui session active_stream_id from backend (for sessions
+          // with backend-initiated streaming, e.g., drain → _run_agent_streaming).
+          const webuiStreamIds: Record<string, string> = {};
+
+          for (const s of (data.sessions || [])) {
+            const sessionId = s.session_id as string;
+            const source = (s.source as string) || '';
+            const backendStreamId = s.active_stream_id as (string | null | undefined);
+
+            if (source === 'webui') {
+              // Webui session with active_stream_id — backend-initiated streaming.
+              // Only track the stream_id; preserve other fields from current state.
+              if (backendStreamId && !_clearedStreamIds.has(sessionId)) {
+                webuiStreamIds[sessionId] = backendStreamId;
+              }
+              continue;
             }
+
+            const existing = useSessionStore.getState().sessions.find(
+              (ex) => ex.session_id === sessionId
+            );
+            // Don't restore active_stream_id if it was cleared by the frontend
+            const activeStreamId = _clearedStreamIds.has(sessionId) ? null : backendStreamId;
+            gatewaySessions.push({
+              session_id: sessionId,
+              title: (s.title as string) || 'Gateway Session',
+              workspace: s.workspace as string | undefined,
+              message_count: s.message_count as number | undefined,
+              last_seen_msg_count: (s.last_seen_msg_count ?? existing?.last_seen_msg_count) as number | undefined,
+              created_at: s.created_at as number,
+              updated_at: s.updated_at as number | undefined,
+              pinned: false,
+              source_tag: (s.source_tag as string) || source || undefined,
+              is_cli_session: true,
+              user_id: s.user_id as string | undefined,
+              active_stream_id: activeStreamId,
+            });
+          }
+
+          // Detect if the current session got a new active_stream_id from
+          // backend-initiated streaming BEFORE updating state.
+          const prevCurrentId = useSessionStore.getState().currentSessionId;
+          const prevCurrentSession = useSessionStore.getState().sessions.find(
+            (s) => s.session_id === prevCurrentId
           );
+          const prevStreamId = prevCurrentSession?.active_stream_id ?? null;
+          const newStreamId = prevCurrentId ? (webuiStreamIds[prevCurrentId] ?? null) : null;
 
           set((state) => {
-            // Preserve WebUI-native and cron sessions (SSE only emits cli/messaging),
-            // replace cli/messaging gateway sessions.
-            const webuiSessions = state.sessions.filter(
-              (s) => !s.is_cli_session || s.source_tag === 'cron'
-            );
+            // Preserve WebUI-native and cron sessions, merging active_stream_id
+            // from backend for sessions with backend-initiated streaming.
+            const webuiSessions = state.sessions
+              .filter((s) => !s.is_cli_session || s.source_tag === 'cron')
+              .map((s) => {
+                const streamId = webuiStreamIds[s.session_id];
+                if (streamId !== undefined) {
+                  return { ...s, active_stream_id: streamId };
+                }
+                return s;
+              });
             // Build merged session list from WebUI-native and gateway sessions
             const merged: SessionListItem[] = [
               ...webuiSessions,
@@ -409,13 +462,30 @@ export const useSessionStore = create<SessionState>((set) => ({
             return { sessions: merged };
           });
 
-          // Auto-reload read-only active session when message_count increases
+          // If the current session just got a new active_stream_id from the
+          // backend (e.g., drain notification triggered _run_agent_streaming),
+          // connect to the StreamManager SSE stream via the session-based
+          // replay endpoint (/api/chat/session/stream/replay).
+          if (prevCurrentId && newStreamId && !prevStreamId) {
+            import('@/stores/streamManager').then((mod) => {
+              mod.startSessionStream(prevCurrentId);
+            });
+          }
+
+          // Auto-reload active session when message_count increases.
+          // Covers all sessions (webui + gateway): when the backend agent
+          // writes new messages to state.db, the SESSIONS cache is evicted
+          // by the end_stream callback, and this handler triggers a reload
+          // that picks up the fresh data.
           const current = useSessionStore.getState().currentSession;
           const currentId = useSessionStore.getState().currentSessionId;
-          if (current?._readonly && currentId) {
+          if (current && currentId) {
             const oldCount = current.message_count ?? 0;
-            const gw = gatewaySessions.find((s) => s.session_id === currentId);
-            const newCount = gw?.message_count ?? 0;
+            // Search in the just-updated sessions list
+            const updated = useSessionStore.getState().sessions.find(
+              (s) => s.session_id === currentId
+            );
+            const newCount = updated?.message_count ?? 0;
             if (newCount > oldCount) {
               const lastTs = _lastReloadTs[currentId] || 0;
               const now = Date.now();
@@ -428,7 +498,64 @@ export const useSessionStore = create<SessionState>((set) => ({
             }
           }
         } catch (err) {
-          console.error('[Gateway SSE] Failed to parse sessions_changed event:', err);
+          console.error('[Sessions SSE] Failed to parse sessions_changed event:', err);
+        }
+      });
+
+      es.addEventListener('delegate_children_changed', (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          const changes = data.changes || [];
+
+          // Collect child session IDs that have completed
+          const completedChildIds: string[] = [];
+          for (const change of changes) {
+            const children = (change as { children?: Array<{ id: string; ended_at?: number }> }).children || [];
+            for (const child of children) {
+              if (child.ended_at) {
+                completedChildIds.push(child.id);
+              }
+            }
+          }
+
+          if (completedChildIds.length > 0) {
+            console.log('[Sessions SSE] Completed child sessions:', completedChildIds);
+            // Add to _clearedStreamIds so sessions_changed doesn't restore them
+            for (const id of completedChildIds) {
+              _clearedStreamIds.add(id);
+            }
+          }
+
+          set((state) => {
+            let updatedSessions = state.sessions.map(session => {
+              const change = changes.find((c: { session_id: string }) => c.session_id === session.session_id);
+              if (change) {
+                return {
+                  ...session,
+                  _delegate_children_count: (change as { children_count: number }).children_count,
+                  _has_delegate_children: (change as { has_children: boolean }).has_children,
+                };
+              }
+              return session;
+            });
+
+            // Clear active_stream_id for child sessions that have completed
+            for (const childId of completedChildIds) {
+              updatedSessions = updatedSessions.map(s =>
+                s.session_id === childId ? { ...s, active_stream_id: null } : s
+              );
+            }
+
+            return {
+              sessions: updatedSessions,
+              // Signal SessionList to refresh its cached delegate children so
+              // stale child IDs (e.g. from a delegation that was dropped and
+              // rolled back) don't linger in the sidebar and 404 on click.
+              delegateChildrenVersion: state.delegateChildrenVersion + 1,
+            };
+          });
+        } catch (err) {
+          console.error('[Sessions SSE] Failed to parse delegate_children_changed event:', err);
         }
       });
 
@@ -449,6 +576,7 @@ export const useSessionStore = create<SessionState>((set) => ({
 
     return () => {
       stopped = true;
+      window.removeEventListener('subagent-complete', onSubagentComplete);
       if (es) {
         es.close();
         es = null;

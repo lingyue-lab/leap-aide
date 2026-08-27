@@ -239,7 +239,7 @@ def main() -> None:
     # ── Stage 6: Start gateway watcher ──
     _stage(6, 'Starting gateway watcher')
     try:
-        from api.gateway_watcher import start_watcher
+        from api.session_watcher import start_watcher
         start_watcher()
         _done()
     except Exception as e:
@@ -342,7 +342,7 @@ def main() -> None:
 
         # 3. Stop gateway watcher
         try:
-            from api.gateway_watcher import stop_watcher
+            from api.session_watcher import stop_watcher
             stop_watcher()
         except Exception:
             pass

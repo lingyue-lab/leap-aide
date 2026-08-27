@@ -26,6 +26,7 @@ from api.config import (
     resolve_model_provider, ReplayableStream,
 )
 from api.helpers import redact_session_data
+from api.stream_manager import stream_manager
 from api.metering import meter
 
 # Global lock for os.environ writes. Per-session locks (_agent_lock) prevent
@@ -1338,13 +1339,82 @@ def _postprocess_messages(messages, *, start_idx=0,
         _tag_attachments(messages, msg_text, attachments)
 
 
-def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, attachments=None, *, ephemeral=False):
-    """Run agent in background thread, writing SSE events to STREAMS[stream_id].
+def _ensure_process_loop(session, session_id):
+    """确保 session 有且仅有一个活跃的主循环。"""
+    if hasattr(session, '_process_loop_thread') and session._process_loop_thread and session._process_loop_thread.is_alive():
+        session._process_loop_last_active = time.time()
+        return
+
+    session._process_loop_stop.clear()
+    session._process_loop_last_active = time.time()
+
+    def _process_loop():
+        """Session 级别的主循环，只负责 drain completion events。"""
+        while not session._process_loop_stop.wait(timeout=1.0):
+            try:
+                from api.config import get_idle_timeout
+                if time.time() - session._process_loop_last_active > get_idle_timeout():
+                    break
+                _drain_process_notifications_for_session(session, session_id)
+            except Exception as e:
+                logger.debug("Process loop error for session %s: %s", session_id, e)
+
+    session._process_loop_thread = threading.Thread(
+        target=_process_loop, daemon=True,
+        name=f"process-{session_id[:8]}",
+    )
+    session._process_loop_thread.start()
+
+
+def _drain_process_notifications_for_session(session, session_id):
+    """Drain completion events, spawn new agent thread for each."""
+    try:
+        from tools.process_registry import process_registry
+        from tools.async_delegation import claim_event_delivery, complete_event_delivery
+
+        session_key = f"agent:main:webui:dm:{session_id}"
+
+        def _owns_current_session_event(evt):
+            """精确匹配当前 session 的事件。"""
+            sk = str(evt.get("session_key") or "")
+            origin_ui = str(evt.get("origin_ui_session_id") or "")
+            target_sid = origin_ui
+            if not target_sid and sk.startswith("agent:main:webui:dm:"):
+                target_sid = sk.split(":")[-1]
+            return target_sid == session_id
+
+        for event, synthetic_message in process_registry.drain_notifications(
+            session_key=session_key,
+            owns_event=_owns_current_session_event,
+        ):
+            claim = claim_event_delivery(event, "webui-process-loop")
+            if claim is None:
+                continue
+            # 通过 StreamManager 启动 stream
+            sid = stream_manager.start_stream(session_id)
+            if not sid:
+                continue
+            thr = threading.Thread(
+                target=_run_agent_streaming,
+                args=(session_id, synthetic_message, session.model, session.workspace, sid, None, True),
+                daemon=True,
+            )
+            thr.start()
+            session._process_loop_last_active = time.time()
+            complete_event_delivery(event, claim)
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.debug("Drain error: %s", e)
+
+
+def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, attachments=None, drain_message=False, *, ephemeral=False):
+    """Run agent in background thread, writing SSE events to stream_manager.
 
     When ephemeral=True, session mutations are skipped — used by /btw to get
     a streaming answer without persisting to the parent session.
     """
-    q = STREAMS.get(stream_id)
+    q = stream_manager.get_stream_by_id(stream_id)
     if q is None:
         return
     s = None
@@ -1410,7 +1480,21 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
     _agent_lock = None
     try:
         s = get_session(session_id)
+
+        # 确保 session 有活跃的主循环（对齐 CLI 的 process_loop）
+        _ensure_process_loop(s, session_id)
+
         put('phase', {'stage': 'initializing'})
+
+        # For drain-loop messages (async delegation completions), send a
+        # user_message event so the frontend can display the synthetic user
+        # message bubble.  Regular user messages are optimistically added by
+        # the frontend before startChat, so they don't need this event.
+        if drain_message:
+            put('user_message', {
+                'text': msg_text,
+                'ts': time.time(),
+            })
         s.workspace = str(Path(workspace).expanduser().resolve())
         s.model = model
 
@@ -1435,7 +1519,8 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
         _set_thread_env(
             TERMINAL_CWD=str(s.workspace),
             HERMES_EXEC_ASK='1',
-            HERMES_SESSION_KEY=session_id,
+            HERMES_SESSION_KEY=f"agent:main:webui:dm:{session_id}",
+            HERMES_UI_SESSION_ID=session_id,
             HERMES_HOME=_profile_home,
             HERMES_GATEWAY_SESSION='1',
             BROWSER_CDP_URL=(CDP_URL_SENTINEL if _cdp_port else ''),
@@ -1461,7 +1546,8 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             old_https_proxy = os.environ.get('HTTPS_PROXY')
             os.environ['TERMINAL_CWD'] = str(s.workspace)
             os.environ['HERMES_EXEC_ASK'] = '1'
-            os.environ['HERMES_SESSION_KEY'] = session_id
+            os.environ['HERMES_SESSION_KEY'] = f"agent:main:webui:dm:{session_id}"
+            os.environ['HERMES_UI_SESSION_ID'] = session_id
             os.environ['HERMES_GATEWAY_SESSION'] = '1'
             # BROWSER_CDP_URL: use sentinel so agent-browser-wrapper.sh resolves
             # the real port from sessions_display/<sid>.json.  If a global CDP
@@ -1746,6 +1832,157 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         _emit_metering()
                     return
 
+                # ── Deferred end_stream for subagent completion ──
+                # When a subagent completes, the child agent may still be writing
+                # final messages to state.db. We defer end_stream until ended_at
+                # is set (meaning the agent's close() has run and all messages are
+                # persisted). This prevents the frontend from loading incomplete data.
+                def _deferred_end_stream(child_session_id: str):
+                    """Poll state.db until the child session's ended_at is set, then close the stream."""
+                    import sqlite3 as _sqlite3
+                    from pathlib import Path as _Path
+
+                    def _poll():
+                        try:
+                            from api.profiles import get_active_hermes_home
+                            _hermes_home = _Path(get_active_hermes_home()).expanduser().resolve()
+                        except Exception:
+                            _hermes_home = _Path(os.environ.get("HERMES_HOME", str(_Path.home() / ".hermes"))).expanduser().resolve()
+                        _db_path = _hermes_home / "state.db"
+                        if not _db_path.exists():
+                            # No state.db — fall back to immediate close
+                            stream_manager.end_stream(child_session_id)
+                            return
+
+                        logger.info("[deferred_end_stream] Polling started for child %s", child_session_id[:12])
+                        for _i in range(60):  # max 60s (60 * 1s)
+                            time.sleep(1)
+                            try:
+                                conn = _sqlite3.connect(str(_db_path), timeout=5)
+                                row = conn.execute(
+                                    "SELECT ended_at FROM sessions WHERE id = ?",
+                                    (child_session_id,)
+                                ).fetchone()
+                                conn.close()
+                                if row and row[0] is not None:
+                                    # ended_at is set — agent has finished, messages are persisted.
+                                    # end_stream triggers the cache eviction callback registered
+                                    # in models.py (_setup_stream_cache_invalidation).
+                                    logger.info("[deferred_end_stream] ended_at detected for child %s after %ds, closing stream", child_session_id[:12], _i + 1)
+                                    stream_manager.end_stream(child_session_id)
+                                    return
+                            except Exception:
+                                pass  # retry on next tick
+
+                        # Timeout — force close anyway to avoid leaking streams
+                        logger.warning("[deferred_end_stream] Timeout for child %s after 60s", child_session_id[:12])
+                        stream_manager.end_stream(child_session_id)
+
+                    threading.Thread(target=_poll, daemon=True).start()
+
+                # ── Subagent events: route to child agent's independent stream ──
+                # The delegate_tool relays child agent events to the parent's
+                # tool_progress_callback. We create an independent ReplayableStream
+                # for each child agent so the frontend can subscribe directly.
+                # Track active tool per child stream so we can emit tool_complete
+                # when a new tool starts or the child finishes (hermes-agent SDK
+                # only sends subagent.tool, not subagent.tool_complete).
+                if not hasattr(_run_agent_streaming, '_active_child_tools'):
+                    _run_agent_streaming._active_child_tools = {}
+                _active_child_tools = _run_agent_streaming._active_child_tools
+
+                if event_type and event_type.startswith('subagent.'):
+                    args_snap_subagent = {}
+                    if isinstance(args, dict):
+                        for k, v in list(args.items())[:4]:
+                            s2 = str(v)
+                            args_snap_subagent[k] = s2[:120] + ('...' if len(s2) > 120 else '')
+                    # Log subagent events for debugging
+                    child_sid = cb_kwargs.get('child_session_id', 'unknown')
+                    print(f'[webui] subagent event: type={event_type} child={child_sid} session={session_id}', flush=True)
+
+                    # ── Create child stream on subagent.start ──
+                    if event_type == 'subagent.start':
+                        stream_manager.start_stream(child_sid)
+                        # Notify main agent stream about child start (for UI)
+                        put('subagent_start', {
+                            'child_session_id': child_sid,
+                            'subagent_id': cb_kwargs.get('subagent_id'),
+                            'task_index': cb_kwargs.get('task_index'),
+                            'goal': cb_kwargs.get('goal'),
+                        })
+
+                    # ── Route event to child's stream ──
+                    child_stream = stream_manager.get_stream(child_sid)
+                    if child_stream:
+                        def _finish_active_child_tool():
+                            """Emit tool_complete for the currently active child tool, if any."""
+                            active = _active_child_tools.pop(child_sid, None)
+                            if active:
+                                duration = time.time() - active['start_ts']
+                                child_stream.put('tool_complete', {
+                                    'event_type': 'tool.completed',
+                                    'name': active['name'],
+                                    'tid': active['tid'],
+                                    'output': '',
+                                    'preview': '',
+                                    'duration': duration,
+                                    'is_error': False,
+                                })
+
+                        # Map subagent.* events to standard event types for child stream
+                        if event_type == 'subagent.text':
+                            _finish_active_child_tool()
+                            child_stream.put('token', {'text': preview or ''})
+                        elif event_type == 'subagent.thinking':
+                            child_stream.put('reasoning', {'text': preview or ''})
+                        elif event_type == 'subagent.tool':
+                            # Finish previous tool before starting a new one
+                            _finish_active_child_tool()
+                            tid = f"tool-{name}-{int(time.time() * 1000)}"
+                            _active_child_tools[child_sid] = {
+                                'tid': tid, 'name': name, 'start_ts': time.time(),
+                            }
+                            child_stream.put('message_start', {'ts': time.time()})
+                            child_stream.put('tool', {
+                                'event_type': 'tool.started',
+                                'name': name,
+                                'tid': tid,
+                                'preview': preview or '',
+                                'args': args_snap_subagent,
+                                'ts': time.time(),
+                            })
+                        elif event_type == 'subagent.start':
+                            child_stream.put('message_start', {'ts': time.time()})
+                        elif event_type == 'subagent.complete':
+                            _finish_active_child_tool()
+                            child_stream.put('done', {
+                                'status': cb_kwargs.get('status', 'completed'),
+                            })
+                            # Defer end_stream until the child agent has finished
+                            # writing all messages to state.db. The agent's close()
+                            # method sets ended_at after the final message is saved.
+                            # We poll state.db in a background thread to detect this.
+                            _deferred_end_stream(child_sid)
+                        else:
+                            # Forward other subagent events as-is
+                            child_stream.put('subagent', {
+                                'event_type': event_type,
+                                'subagent_id': cb_kwargs.get('subagent_id'),
+                                'child_session_id': child_sid,
+                                'task_index': cb_kwargs.get('task_index'),
+                                'goal': cb_kwargs.get('goal'),
+                                'preview': preview or name or '',
+                                'status': cb_kwargs.get('status'),
+                                'tool_name': name,
+                                'args': args_snap_subagent,
+                                'model': cb_kwargs.get('model'),
+                                'depth': cb_kwargs.get('depth'),
+                                'tool_count': cb_kwargs.get('tool_count'),
+                            })
+
+                    return
+
                 args_snap = {}
                 if isinstance(args, dict):
                     for k, v in list(args.items())[:4]:
@@ -1996,8 +2233,10 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             # Without this, 'per-session' Honcho strategy creates a new Honcho
             # session on every streaming request because HonchoSessionManager is
             # re-instantiated fresh each turn (#855).
+            # Use the proper session_key format for gateway routing so async
+            # delegation completion events can be delivered back to the session.
             if 'gateway_session_key' in _agent_params:
-                _agent_kwargs['gateway_session_key'] = session_id
+                _agent_kwargs['gateway_session_key'] = f"agent:main:webui:dm:{session_id}"
 
             # ── Filesystem checkpoint support ──
             # Read checkpoints config from hermes config.yaml; defaults to disabled.
@@ -2961,8 +3200,9 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
         if _ckpt_thread is not None:
             _ckpt_thread.join(timeout=15)
         _clear_thread_env()  # TD1: always clear thread-local context
+        # End the stream via StreamManager (handles ReplayableStream.close())
+        stream_manager.end_stream(session_id)
         with STREAMS_LOCK:
-            STREAMS.pop(stream_id, None)
             CANCEL_FLAGS.pop(stream_id, None)
             AGENT_INSTANCES.pop(stream_id, None)  # Clean up agent instance reference
             STREAM_PARTIAL_TEXT.pop(stream_id, None)  # Clean up partial text buffer (#893)
@@ -3009,10 +3249,9 @@ def _dequeue_next(session_id: str) -> None:
                 SESSION_MESSAGE_QUEUE[session_id] = q
             q.insert(0, payload)
         return
-    with STREAMS_LOCK:
-        from api.config import STREAMS as _cfg_STREAMS
-        _q = ReplayableStream()
-        _cfg_STREAMS[stream_id] = _q
+    stream_id = stream_manager.start_stream(session_id)
+    if not stream_id:
+        return
     with _get_session_agent_lock(session_id):
         s.active_stream_id = stream_id
         s.pending_user_message = payload.get("message", "")
@@ -3060,8 +3299,7 @@ def _try_steer(session_id: str, text: str) -> dict:
     active_stream_id = getattr(s, "active_stream_id", None) or None
     if not active_stream_id:
         return {"accepted": False, "fallback": "not_running", "stream_id": None}
-    with _cfg.STREAMS_LOCK:
-        stream_alive = active_stream_id in _cfg.STREAMS
+    stream_alive = stream_manager.get_stream_by_id(active_stream_id) is not None
     if not stream_alive:
         return {"accepted": False, "fallback": "stream_dead", "stream_id": None}
 
@@ -3105,27 +3343,14 @@ def cancel_stream(stream_id: str) -> bool:
       4. Wait for agent thread to exit (AGENT_INSTANCES removed by finally)
       5. Pop stream state + session cleanup + "Interrupted." separator
     """
-    from api import config as _live_config
-
-    # Use module-level aliases (imported from api.config at startup).
-    streams = STREAMS
-    cancel_flags = CANCEL_FLAGS
-    agent_instances = AGENT_INSTANCES
-    streams_lock = STREAMS_LOCK
-    if stream_id not in streams and getattr(_live_config, 'STREAMS', streams) is not streams:
-        streams = _live_config.STREAMS
-        cancel_flags = _live_config.CANCEL_FLAGS
-        agent_instances = _live_config.AGENT_INSTANCES
-        streams_lock = _live_config.STREAMS_LOCK
-
     # ── Step 1: set cancel flag ──────────────────────────────────────────
-    with streams_lock:
-        if stream_id not in streams:
+    with STREAMS_LOCK:
+        if stream_manager.get_stream_by_id(stream_id) is None:
             return False
-        flag = cancel_flags.get(stream_id)
+        flag = CANCEL_FLAGS.get(stream_id)
         if flag:
             flag.set()
-        agent = agent_instances.get(stream_id)
+        agent = AGENT_INSTANCES.get(stream_id)
 
     # ── Step 2: wait for agent to be initialised ─────────────────────────
     # The agent thread registers itself in AGENT_INSTANCES partway through
@@ -3174,23 +3399,23 @@ def cancel_stream(stream_id: str) -> bool:
     if agent:
         deadline = time.time() + 10.0
         while time.time() < deadline:
-            with streams_lock:
-                if stream_id not in agent_instances:
+            with STREAMS_LOCK:
+                if stream_id not in AGENT_INSTANCES:
                     break
             time.sleep(0.1)
 
     # ── Step 5: stream cleanup + session cleanup ─────────────────────────
     # Put a cancel event into the stream queue for the SSE client.
-    with streams_lock:
-        q = streams.get(stream_id)
-        if q:
-            try:
-                q.put('cancel', {'message': 'Cancelled by user'})
-            except Exception:
-                pass
-        streams.pop(stream_id, None)
-        cancel_flags.pop(stream_id, None)
-        agent_instances.pop(stream_id, None)
+    q = stream_manager.get_stream_by_id(stream_id)
+    if q:
+        try:
+            q.put('cancel', {'message': 'Cancelled by user'})
+        except Exception:
+            pass
+    # Find session_id for this stream to end it properly
+    with STREAMS_LOCK:
+        CANCEL_FLAGS.pop(stream_id, None)
+        AGENT_INSTANCES.pop(stream_id, None)
 
     if _cancel_session_id:
         try:

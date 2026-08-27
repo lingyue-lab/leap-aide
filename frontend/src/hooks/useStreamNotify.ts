@@ -98,6 +98,29 @@ export function useStreamNotify() {
 
     window.addEventListener('bg-stream-done', onDone);
 
+    // When a subagent session completes, load the final content from state.db
+    const onSubagentLoadSession = async (e: Event) => {
+      const { sessionId } = (e as CustomEvent).detail;
+      if (!sessionId) return;
+      try {
+        await useSessionStore.getState().loadSession(sessionId);
+        const session = useSessionStore.getState().currentSession;
+        // If this is the currently displayed session, also update ChatStore messages
+        if (useSessionStore.getState().currentSessionId === sessionId && session?.messages) {
+          const { useChatStore } = await import('@/stores/useChatStore');
+          useChatStore.getState().setMessages(session.messages);
+          useChatStore.getState().setToolCalls(session.tool_calls ?? []);
+        }
+        // Clear the stream state after loading
+        setTimeout(() => {
+          StreamManager.clearSessionStream(sessionId);
+        }, 1000);
+      } catch (err) {
+        console.error('[Subagent] Failed to load session:', err);
+      }
+    };
+    window.addEventListener('subagent-load-session', onSubagentLoadSession);
+
     // bg-stream-title: always update the sidebar list item when a title
     // event arrives.  Unlike the listener in useChatStream (which is tied
     // to ChatInterface and can be torn down between done→title), this
@@ -112,6 +135,7 @@ export function useStreamNotify() {
     return () => {
       window.removeEventListener('app-error-card', onAppError);
       window.removeEventListener('bg-stream-done', onDone);
+      window.removeEventListener('subagent-load-session', onSubagentLoadSession);
       window.removeEventListener('bg-stream-title', onTitle);
     };
   }, []);

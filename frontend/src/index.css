@@ -2022,7 +2022,7 @@
     flex-shrink: 0;
     line-height: 16px;
     width: 28px;
-    text-align: right;
+    text-align: center;
   }
 
   .sidebar-item-actions {
@@ -5284,6 +5284,224 @@
 
 .sidebar-item-archived-icon {
   flex-shrink: 0;
+}
+.sidebar-item-archived-icon.streaming > .material-symbols-rounded {
+  animation: bg-stream-pulse 1.4s ease-in-out infinite;
+  color: var(--gold);
+}
+
+/* ── Subagent (delegate children) badge ────────────────────────────────── */
+.sidebar-item-delegate-badge {
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+  opacity: 0.6;
+  transition: opacity 0.12s;
+  color: var(--muted);
+}
+.sidebar-item-delegate-badge:hover {
+  opacity: 1;
+  color: var(--text);
+}
+.sidebar-item-delegate-badge.pulsing {
+  opacity: 1;
+  color: var(--primary);
+}
+.sidebar-item-delegate-badge.pulsing > .material-symbols-rounded {
+  animation: bg-stream-pulse 1.4s ease-in-out infinite;
+}
+.sidebar-item-delegate-count {
+  font-size: 9.143px;
+  font-weight: 700;
+  color: var(--muted);
+  margin-left: 1px;
+}
+.sidebar-item-delegate-running {
+  font-size: 9.143px;
+  font-weight: 700;
+  color: var(--primary);
+  margin-left: 1px;
+  animation: pulse 1.5s infinite;
+}
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* ── Subagent Progress (child agent real-time display) ───────────────────── */
+.subagent-progress-container {
+  margin: 8px 0;
+  padding: 0 16px;
+}
+
+.subagent-block {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 8px;
+  background: var(--bg-secondary, var(--bg));
+}
+
+.subagent-block.subagent-running {
+  border-color: var(--primary);
+  border-left: 3px solid var(--primary);
+}
+
+.subagent-block.subagent-complete {
+  border-color: var(--success, #4caf50);
+  border-left: 3px solid var(--success, #4caf50);
+}
+
+.subagent-block.subagent-error {
+  border-color: var(--error, #f44336);
+  border-left: 3px solid var(--error, #f44336);
+}
+
+.subagent-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  background: var(--hover);
+}
+
+.subagent-header:hover {
+  background: var(--active);
+}
+
+.subagent-toggle {
+  font-size: 10px;
+  color: var(--muted);
+  width: 12px;
+  text-align: center;
+}
+
+.subagent-icon {
+  font-size: 16px;
+}
+
+.subagent-goal {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-stats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.subagent-tool-count {
+  background: var(--bg-tertiary, var(--hover));
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.subagent-duration {
+  color: var(--success, #4caf50);
+}
+
+.subagent-events {
+  padding: 8px 0;
+  max-height: 300px;
+  overflow-y: auto;
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.subagent-event {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 2px 12px;
+  color: var(--text);
+}
+
+.subagent-event:hover {
+  background: var(--hover);
+}
+
+.subagent-event-icon {
+  width: 20px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.subagent-event-prefix {
+  color: var(--muted);
+  width: 20px;
+  text-align: center;
+  flex-shrink: 0;
+  font-family: var(--font-mono, monospace);
+}
+
+.subagent-event-tool-name {
+  font-weight: 500;
+  color: var(--primary);
+}
+
+.subagent-event-preview {
+  color: var(--muted);
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-event-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-start .subagent-event-text {
+  font-weight: 500;
+}
+
+.subagent-text {
+  background: var(--bg-tertiary, var(--hover));
+  border-radius: 4px;
+  margin: 2px 8px;
+  padding: 4px 8px;
+}
+
+.subagent-text .subagent-event-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.subagent-thinking .subagent-event-text {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.subagent-complete-event .subagent-event-text {
+  font-weight: 500;
+}
+
+.subagent-complete-event .subagent-event-icon {
+  color: var(--success, #4caf50);
+}
+
+.subagent-block.subagent-error .subagent-complete-event .subagent-event-icon {
+  color: var(--error, #f44336);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────

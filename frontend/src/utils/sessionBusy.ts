@@ -26,6 +26,27 @@ export function getIsSessionBusy(sessionId?: string): boolean {
 }
 
 /**
+ * 获取子 agent 的运行状态
+ * @param sessionId 主 agent session ID
+ * @returns Promise<{running_count: number, total_count: number}> 子 agent 的运行状态
+ */
+export async function getDelegateChildrenStatus(sessionId: string): Promise<{running_count: number, total_count: number}> {
+  try {
+    const response = await fetch(`/api/sessions/${sessionId}/children/status`, {
+      credentials: 'include',
+    });
+    if (!response.ok) return {running_count: 0, total_count: 0};
+    const data = await response.json();
+    return {
+      running_count: data.running_count || 0,
+      total_count: data.total_count || 0,
+    };
+  } catch {
+    return {running_count: 0, total_count: 0};
+  }
+}
+
+/**
  * React hook — subscribes to StreamManager and re-renders when busy state
  * changes for the target session.
  *

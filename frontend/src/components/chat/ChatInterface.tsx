@@ -7,7 +7,6 @@ import { useChatStream } from '@/hooks/useChatStream';
 import { useModeSync } from '@/hooks/useModeSync';
 import { useSessionPolling } from '@/hooks/useSessionPolling';
 import * as StreamManager from '@/stores/streamManager';
-import { useIsBusy } from '@/utils/sessionBusy';
 import { chatService } from '@/services/api';
 import ChatMessages from './ChatMessages';
 import ChatComposer from './ChatComposer';
@@ -62,8 +61,11 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
     };
   }, []);
   const { messages, activeStreamId, canceling, setMessages, setToolCalls } = useChatStore();
-  const busy = useIsBusy();
-  const { startStream, cancelStream, streaming } = useChatStream();
+  const { startStream, cancelStream } = useChatStream();
+  // Use chatStore.activeStreamId for current session (set immediately by StreamManager),
+  // not sessionStore.active_stream_id (set via sessions_changed SSE, may lag).
+  const streaming = !!activeStreamId;
+  const busy = streaming;
   useModeSync(sessionId ?? null);
   useSessionPolling(sessionId ?? null);
 
@@ -212,8 +214,15 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
       });
       setSessionLoading(false);
       window.dispatchEvent(new CustomEvent('hermes:session-loading', { detail: false }));
-      // Still load session metadata (model, workspace, etc.) in background.
-      loadSession(sessionId);
+      // Load session from backend. When the stream is no longer actively
+      // streaming (done/completed), also refresh messages from state.db —
+      // the SSE replay may not include the final assistant message (e.g.
+      // subagent.complete closes the stream before the last message is sent).
+      if (bgState.streaming) {
+        loadSession(sessionId);
+      } else {
+        loadSession(sessionId).then(() => refreshFromBackend(sessionId));
+      }
       return;
     }
 

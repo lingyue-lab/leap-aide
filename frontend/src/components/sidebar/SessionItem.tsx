@@ -1,11 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import type { SessionListItem } from '@/types';
+import type { SessionListItem, DelegateChildSession } from '@/types';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { useChatStore } from '@/stores/useChatStore';
-import { subscribe as subscribeStream } from '@/stores/streamManager';
-import { getIsSessionBusy } from '@/utils/sessionBusy';
+import { getDelegateChildrenStatus } from '@/utils/sessionBusy';
+import { isSessionStreaming } from '@/stores/streamManager';
 import { sessionService } from '@/services/api';
 import { TrashMultiIcon, Icon } from '@/components/common/Icons';
 
@@ -14,11 +14,13 @@ interface SessionItemProps {
   isActive: boolean;
   onClick: () => void;
   archivedChildren?: SessionListItem[];
+  delegateChildren?: DelegateChildSession[];
+  onToggleDelegateChildren?: (sessionId: string) => void;
 }
 
-export default function SessionItem({ session, isActive, onClick, archivedChildren }: SessionItemProps) {
+export default function SessionItem({ session, isActive, onClick, archivedChildren, delegateChildren, onToggleDelegateChildren }: SessionItemProps) {
   const { t } = useTranslation('common');
-  const { renameSession, deleteSession, pinSession, updateSessionLastSeen, loadSession, selectSession, currentSessionId } = useSessionStore();
+  const { renameSession, deleteSession, pinSession, updateSessionLastSeen, loadSession, loadSessions, selectSession, currentSessionId } = useSessionStore();
 
   // Unread count: how many messages were added since the user last viewed this session.
   // When last_seen_msg_count is null (never tracked), treat as fully seen.
@@ -28,22 +30,20 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
 
   const [isEditing, setIsEditing] = useState(false);
   const [archivedExpanded, setArchivedExpanded] = useState(false);
+  const [delegateExpanded, setDelegateExpanded] = useState(false);
   const [editTitle, setEditTitle] = useState(session.title);
   const [menuOpen, setMenuOpen] = useState(false);
   const [compressing, setCompressing] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [showClearModal, setShowClearModal] = useState(false);
   const [keepLast, setKeepLast] = useState('0');
-  /** True when this session has a live background stream.
-   *  Initialise from active_stream_id (survives page refresh) and
-   *  StreamManager (more precise for already-reconnected sessions). */
-  const [bgStreaming, setBgStreaming] = useState(() =>
-    !!session.active_stream_id || getIsSessionBusy(session.session_id)
-  );
+  const [showClearDelegatesModal, setShowClearDelegatesModal] = useState(false);
+  const [keepDelegates, setKeepDelegates] = useState('0');
+  // Streaming pulse: use active_stream_id from sessionStore for background sessions,
+  // and chatStore.activeStreamId for the active session (set immediately by StreamManager).
+  const chatActiveStreamId = useChatStore((s) => s.activeStreamId);
+  const isStreaming = isActive ? !!chatActiveStreamId : !!session.active_stream_id;
   const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
-
-  // [DEBUG] Log only when badge state changes meaningfully
-  // Removed frequent per-render logging — use bg-stream-done and loadSessions logs instead
 
   const inputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -82,24 +82,6 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
   useEffect(() => {
     setEditTitle(session.title);
   }, [session.title]);
-
-  // When the backend clears active_stream_id (stream ended), turn off the dot
-  // even if we never reconnected to that stream.
-  useEffect(() => {
-    if (!session.active_stream_id) {
-      setBgStreaming(false);
-    }
-  }, [session.active_stream_id]);
-
-  // Subscribe to StreamManager to reflect background streaming state
-  useEffect(() => {
-    const unsub = subscribeStream((sid) => {
-      if (sid === session.session_id) {
-        setBgStreaming(getIsSessionBusy(session.session_id));
-      }
-    });
-    return unsub;
-  }, [session.session_id]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -163,7 +145,7 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
 
   const handleCompress = async () => {
     setMenuOpen(false);
-    if (bgStreaming) {
+    if (isStreaming) {
       alert(t('sessions.clear_streaming_warn'));
       return;
     }
@@ -188,7 +170,7 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
 
   const handleClear = () => {
     setMenuOpen(false);
-    if (bgStreaming) {
+    if (isStreaming) {
       alert(t('sessions.clear_streaming_warn'));
       return;
     }
@@ -222,6 +204,24 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
     } finally {
       setClearing(false);
       window.dispatchEvent(new CustomEvent('hermes:clear-history-done'));
+    }
+  };
+
+  const handleClearDelegatesConfirm = async () => {
+    setShowClearDelegatesModal(false);
+    setClearing(true);
+    const keepN = Math.max(0, parseInt(keepDelegates, 10) || 0);
+    try {
+      const result = await sessionService.clearDelegates(session.session_id, keepN);
+      await loadSessions();
+      if (result.deleted > 0) {
+        // Collapse delegate children view
+        setDelegateExpanded(false);
+      }
+    } catch (err) {
+      alert(t('sessions.clear_delegates_failed', { error: (err as Error).message }));
+    } finally {
+      setClearing(false);
     }
   };
 
@@ -259,10 +259,51 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
     }
   };
 
+  // Subagent icon click handler
+  const handleDelegateToggle = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDelegateExpanded(!delegateExpanded);
+    if (!delegateChildren && onToggleDelegateChildren) {
+      onToggleDelegateChildren(session.session_id);
+    }
+  };
+
+  // Determine readonly state (subagent sessions are NOT readonly)
+  const isSubagentSession = session.is_subagent_session;
+  const isReadonly = session._readonly && !isSubagentSession;
+
+  // 子 agent 运行状态
+  const [delegateChildrenStatus, setDelegateChildrenStatus] = useState({running_count: 0, total_count: 0});
+
+  // 异步获取子 agent 运行状态
+  useEffect(() => {
+    // 子 agent session 不检查
+    if (isSubagentSession) {
+      return;
+    }
+    // 如果没有子 agent，不检查
+    if (!session._has_delegate_children) {
+      return;
+    }
+    // 定期检查子 agent 状态
+    const checkStatus = async () => {
+      const status = await getDelegateChildrenStatus(session.session_id);
+      setDelegateChildrenStatus(status);
+    };
+    // 立即检查一次
+    checkStatus();
+    // 每 5 秒检查一次
+    const interval = setInterval(checkStatus, 5000);
+    return () => clearInterval(interval);
+  }, [session.session_id, isSubagentSession, session._has_delegate_children]);
+
+  // Derived: are any subagents currently running?
+  const subagentsActive = delegateChildrenStatus.running_count > 0;
+
   return (
     <>
       <div
-        className={`sidebar-item ${isActive && !isEditing ? 'active' : ''} ${bgStreaming && !isActive ? 'bg-streaming' : ''}`}
+        className={`sidebar-item ${isActive && !isEditing ? 'active' : ''} ${isStreaming && !isActive ? 'bg-streaming' : ''}`}
         onClick={isEditing ? undefined : handleClick}
         onContextMenu={handleContextMenu}
         data-session-id={session.session_id}
@@ -281,10 +322,12 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
                 onClick={(e) => e.stopPropagation()}
               />
             ) : (
-              <span className="sidebar-item-title">{session.title}</span>
+              <span className="sidebar-item-title">
+                {isSubagentSession ? t('sessions.subagent') : session.title}
+              </span>
             )}
             {/* Unread badge — shown after stream completes and user hasn't visited this session */}
-            {unreadCount > 0 && !isActive && !bgStreaming && (
+            {unreadCount > 0 && !isActive && !isStreaming && (
               <span className="sidebar-item-unread" data-tooltip={`${unreadCount} new response(s)`}>
                 {unreadCount > 99 ? '99+' : `+${unreadCount}`}
               </span>
@@ -294,7 +337,7 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
 
         <div className="sidebar-item-actions">
           {/* Streaming pulse — visible even when this session is active */}
-          {bgStreaming && (
+          {isStreaming && (
             <span className="sidebar-item-icon-wrap" data-tooltip={isActive ? 'Streaming' : 'Running in background'}>
               <span className="sidebar-item-streaming-dot" />
             </span>
@@ -314,8 +357,22 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
               <Icon name="description" size={16} />
             </span>
           )}
+          {session._has_delegate_children && (
+            <span
+              className={`sidebar-item-delegate-badge${subagentsActive ? ' pulsing' : ''}`}
+              data-tooltip={t('sessions.subagent_count', { count: session._delegate_children_count ?? 0 })}
+              onClick={handleDelegateToggle}
+            >
+              <Icon name="account_tree" size={16} />
+              {subagentsActive && (
+                <span className="sidebar-item-delegate-running">
+                  {delegateChildrenStatus.running_count}
+                </span>
+              )}
+            </span>
+          )}
           <span className="sidebar-item-time">{relativeTime}</span>
-          {session.is_cli_session || session._readonly ? (
+          {isReadonly ? (
             <span className="sidebar-item-actions-trigger" style={{cursor: 'default', opacity: 0.45}} title={session.is_cli_session ? t('sessions.readonly_gateway') : t('sessions.readonly_snapshot')}>
               <Icon name="lock" size={16} />
             </span>
@@ -407,6 +464,26 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
                     </button>
                   );
                 })()}
+                {(() => {
+                  const canClearDelegates = !!session._has_delegate_children;
+                  return (
+                    <button
+                      className={`sidebar-item-action-opt${!canClearDelegates ? ' disabled' : ''}`}
+                      onClick={() => {
+                        if (canClearDelegates) {
+                          setKeepDelegates('0');
+                          setShowClearDelegatesModal(true);
+                        }
+                      }}
+                      {...(!canClearDelegates ? { 'data-tooltip': t('sessions.clear_delegates_empty') } : {})}
+                    >
+                      <span className="ws-opt-action">
+                        <Icon name="account_tree" size={16} className="ws-opt-icon" />
+                        <span className="ws-opt-name">{t('sessions.clear_delegates')}</span>
+                      </span>
+                    </button>
+                  );
+                })()}
               </>
             )}
             {!session.is_cli_session && (
@@ -464,6 +541,40 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
         </div>
       )}
 
+      {/* Delegate (subagent) child sessions — collapsible, readable */}
+      {delegateChildren && delegateChildren.length > 0 && (
+        <div className="sidebar-item-archived-section">
+          {delegateExpanded && (
+            <div className="sidebar-item-archived-children">
+              {delegateChildren.map((child) => {
+                // StreamManager.isSessionStreaming is reliable for any session
+                // with an active SSE connection, regardless of which session is viewed.
+                const childStreaming = isSessionStreaming(child.id);
+                return (
+                <div
+                  key={child.id}
+                  className={`sidebar-item sidebar-item-archived ${currentSessionId === child.id ? 'active' : ''}`}
+                  onClick={(e) => { e.stopPropagation(); selectSession(child.id); }}
+                  data-session-id={child.id}
+                >
+                  <div className="sidebar-item-text">
+                    <div className="sidebar-item-title-row">
+                      <span className={`sidebar-item-archived-icon${childStreaming ? ' streaming' : ''}`} data-tooltip={t('sessions.subagent_session')}>
+                        <Icon name="account_tree" size={16} />
+                      </span>
+                      <span className="sidebar-item-title">
+                        {t('sessions.subagent')}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Clear History Modal */}
       {showClearModal && (
         <div className="clear-history-overlay" onClick={() => setShowClearModal(false)}>
@@ -490,6 +601,39 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
                 {t('common.cancel')}
               </button>
               <button className="clear-history-modal__btn clear-history-modal__btn--confirm" onClick={handleClearConfirm}>
+                {t('common.confirm')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Clear Delegates Modal */}
+      {showClearDelegatesModal && (
+        <div className="clear-history-overlay" onClick={() => setShowClearDelegatesModal(false)}>
+          <div className="clear-history-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="clear-history-modal__title">{t('sessions.clear_delegates_confirm')}</div>
+            <div className="clear-history-modal__desc">{t('sessions.clear_delegates_desc')}</div>
+            <div className="clear-history-modal__field">
+              <label className="clear-history-modal__label">{t('sessions.clear_delegates_keep_label')}</label>
+              <input
+                className="clear-history-modal__input"
+                type="number"
+                min="0"
+                value={keepDelegates}
+                onChange={(e) => setKeepDelegates(e.target.value)}
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleClearDelegatesConfirm();
+                  if (e.key === 'Escape') setShowClearDelegatesModal(false);
+                }}
+              />
+            </div>
+            <div className="clear-history-modal__actions">
+              <button className="clear-history-modal__btn clear-history-modal__btn--cancel" onClick={() => setShowClearDelegatesModal(false)}>
+                {t('common.cancel')}
+              </button>
+              <button className="clear-history-modal__btn clear-history-modal__btn--confirm" onClick={handleClearDelegatesConfirm}>
                 {t('common.confirm')}
               </button>
             </div>

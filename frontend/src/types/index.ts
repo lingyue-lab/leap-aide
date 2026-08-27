@@ -61,6 +61,7 @@ export interface SessionListItem {
   // Gateway session fields (non-WebUI sessions from agent state.db)
   source_tag?: string;
   is_cli_session?: boolean;
+  is_subagent_session?: boolean;
   user_id?: string;
   // Active stream indicator — non-null means a backend stream is running for this session
   active_stream_id?: string | null;
@@ -71,10 +72,22 @@ export interface SessionListItem {
   _parent_session_id?: string | null;
   _readonly?: boolean;
   _compaction_n?: number;
+  // Delegate children (subagent sessions)
+  _has_delegate_children?: boolean;
+  _delegate_children_count?: number;
   // Search result fields
   match_type?: 'title' | 'content';
   match_message_id?: number;
   match_snippet?: string;
+}
+
+export interface DelegateChildSession {
+  id: string;
+  title: string;
+  model?: string;
+  started_at: number;
+  ended_at?: number;
+  message_count?: number;
 }
 
 // types/message.ts - 消息相关类型定义

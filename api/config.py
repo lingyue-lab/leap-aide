@@ -2050,11 +2050,14 @@ class ReplayableStream:
         self._subscribers: list[_queue.Queue] = []
         self._lock = threading.Lock()
         self._done = False
+        self._closed = False
 
     def put(self, event: str, data: dict) -> None:  # noqa: D401
         """Write one event to history and fan-out to all live subscribers."""
         import queue as _queue
         with self._lock:
+            if self._closed:
+                return
             if len(self._history) >= self.MAX_HISTORY:
                 # Smart eviction: drop low-value events (token, metering)
                 # before touching structural events needed for replay.
@@ -2100,6 +2103,25 @@ class ReplayableStream:
         """True once a terminal event (done/cancel/error/stream_end) was put."""
         with self._lock:
             return self._done
+
+    def close(self, reason='closed'):
+        """Force-close the stream, notifying all subscribers."""
+        import queue as _queue
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._history.append(('stream_close', {'reason': reason}))
+            for sq in list(self._subscribers):
+                try:
+                    sq.put_nowait(('stream_close', {'reason': reason}))
+                except _queue.Full:
+                    pass
+                try:
+                    sq.put_nowait(None)  # sentinel
+                except _queue.Full:
+                    pass
+            self._subscribers.clear()
 
 
 STREAMS: dict = {}
@@ -2330,6 +2352,16 @@ def load_settings() -> dict:
     )
     settings["default_model"] = get_effective_default_model()
     return settings
+
+
+# 默认 idle 时长：60分钟
+DEFAULT_IDLE_TIMEOUT = 3600  # 秒
+
+
+def get_idle_timeout():
+    """获取 idle 时长配置。"""
+    settings = load_settings()
+    return settings.get('idle_timeout', DEFAULT_IDLE_TIMEOUT)
 
 
 _SETTINGS_ALLOWED_KEYS = set(_SETTINGS_DEFAULTS.keys()) - {

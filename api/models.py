@@ -3,6 +3,7 @@ import collections
 import json
 import logging
 import os
+import queue
 import threading
 import time
 import uuid
@@ -348,6 +349,11 @@ class Session:
         self.last_compression_time = last_compression_time or 0
         self.lineage_root_id = lineage_root_id
         self.lineage_tip_id = lineage_tip_id
+        # Per-session 主循环（类似 CLI 的 process_loop）
+        self._process_loop_thread = None
+        self._process_loop_stop = threading.Event()
+        self._process_loop_last_active = time.time()
+        self._pending_input = queue.Queue()  # 统一队列：用户输入 + 完成事件
         # Store any extra fields (e.g. session_approved, llm_title_generated) so
         # they survive a round-trip through save() → JSON → load().
         self.__dict__.update(kwargs)
@@ -633,11 +639,18 @@ class Session:
                 kwargs[k] = v
 
         kwargs['messages'] = messages or []
-        # Gateway/CLI sessions are read-only
-        if row.get('source') and row['source'] != 'webui':
-            kwargs['_readonly'] = True
-            kwargs['is_cli_session'] = True
-            kwargs['source_tag'] = row['source']
+        # Gateway/CLI sessions are read-only (except subagent sessions)
+        source = row.get('source')
+        if source and source != 'webui':
+            if source == 'subagent':
+                # Subagent sessions can continue conversation, not read-only
+                kwargs['_readonly'] = False
+                kwargs['is_subagent_session'] = True
+                kwargs['source_tag'] = source
+            else:
+                kwargs['_readonly'] = True
+                kwargs['is_cli_session'] = True
+                kwargs['source_tag'] = source
         # Normalize: strip empty tool_calls (JSON "[]" stored in DB)
         # and convert None→absent. LLM APIs reject empty tool_calls arrays.
         for _m in kwargs['messages']:
@@ -796,8 +809,10 @@ class Session:
             # Gateway/CLI session markers (set by _from_db_row for non-webui sessions)
             '_readonly': getattr(self, '_readonly', None),
             'is_cli_session': getattr(self, 'is_cli_session', None),
+            'is_subagent_session': getattr(self, 'is_subagent_session', None),
             'source_tag': getattr(self, 'source_tag', None),
             'auto_compress_disabled': getattr(self, 'auto_compress_disabled', False),
+            '_has_process_loop': getattr(self, '_process_loop_thread', None) is not None and self._process_loop_thread.is_alive(),
         }
 
 def get_session(sid, metadata_only=False):
@@ -1071,8 +1086,12 @@ def _all_sessions_from_db(db, active_stream_ids):
     # Overlay in-memory sessions (may have runtime state not yet flushed to DB).
     # The state.db title is authoritative (it goes through set_session_title
     # with a UNIQUE constraint), so preserve it over the in-memory value.
+    # Skip subagent sessions — they only appear as delegate children, not in
+    # the main sidebar list.
     with LOCK:
         for s in SESSIONS.values():
+            if getattr(s, 'is_subagent_session', False):
+                continue
             found = False
             for c in compact_list:
                 if c['session_id'] == s.session_id:
@@ -1198,6 +1217,43 @@ def title_from(messages, fallback: str='Untitled'):
             if text:
                 return text[:64]
     return fallback
+
+
+def _get_all_delegate_children_map(db) -> dict[str, list[dict]]:
+    """批量查询所有委托子 agent session，返回 parent_id -> children 映射。
+
+    一次查询获取所有子 session 关系，避免 N+1 查询问题。
+    只返回带有 _delegate_from 标记的子 session，排除压缩延续。
+
+    返回的 message_count 只统计 user + assistant 消息（不含 tool/system），
+    与前端 msg-row 的渲染逻辑保持一致。
+    """
+    try:
+        rows = db._conn.execute(
+            """
+            SELECT s.id, s.title, s.model, s.started_at, s.ended_at,
+                   (SELECT COUNT(*) FROM messages m
+                    WHERE m.session_id = s.id
+                    AND m.role IN ('user', 'assistant')) AS message_count,
+                   s.parent_session_id
+            FROM sessions s
+            WHERE s.parent_session_id IS NOT NULL
+            AND json_extract(COALESCE(s.model_config, '{}'), '$._delegate_from') IS NOT NULL
+            ORDER BY s.started_at DESC
+            """
+        ).fetchall()
+
+        children_map: dict[str, list[dict]] = {}
+        for row in rows:
+            row_dict = dict(row)
+            parent_id = row_dict.pop('parent_session_id')
+            if parent_id not in children_map:
+                children_map[parent_id] = []
+            children_map[parent_id].append(row_dict)
+
+        return children_map
+    except Exception:
+        return {}
 
 
 # ── Migration: JSON → state.db ──────────────────────────────────────────────
@@ -1360,6 +1416,8 @@ def session_source_category(source) -> str:
     - 'cli'       → hermes CLI sessions
     - 'cron'      → scheduled cron-job sessions
     - 'messaging' → IM/gateway platforms (weixin, telegram, discord, ...)
+    - 'subagent'  → delegate subagent sessions (never shown in main list,
+                     only as delegate children under their parent)
     """
     s = source or 'cli'  # NULL/empty → treat as CLI (matches legacy fallback)
     if s == 'webui':
@@ -1368,6 +1426,8 @@ def session_source_category(source) -> str:
         return 'cron'
     if s == 'cli':
         return 'cli'
+    if s == 'subagent':
+        return 'subagent'
     return 'messaging'
 
 
@@ -1380,6 +1440,8 @@ def session_visible(source, show_cli: bool, show_messaging: bool, show_cron: boo
         return bool(show_cli)
     if category == 'cron':
         return bool(show_cron)
+    if category == 'subagent':
+        return False  # Subagent sessions only appear as delegate children
     return bool(show_messaging)
 
 
@@ -1481,7 +1543,9 @@ def get_cli_sessions(show_cli: bool = True, show_messaging: bool = True,
                 'project_id': None,
                 'profile': profile,
                 'source_tag': _source,
-                'is_cli_session': True,
+                'is_cli_session': _source != 'subagent',
+                'is_subagent_session': _source == 'subagent',
+                '_readonly': _source != 'subagent',
                 'user_id': _user_id,
                 'active_stream_id': row.get('active_stream_id'),
             })
@@ -1581,3 +1645,21 @@ def delete_cli_session(sid) -> bool:
             return cur.rowcount > 0
     except Exception:
         return False
+
+
+# ── Stream end cache invalidation ─────────────────────────────────────────
+# Register a callback so that when a stream ends (end_stream), the SESSIONS
+# cache entry for that session is evicted.  The next GET /api/session will
+# then reload from state.db, picking up any messages written by the agent
+# after the cache was originally populated.
+
+def _setup_stream_cache_invalidation():
+    from api.stream_manager import stream_manager
+    def _evict(session_id: str):
+        with LOCK:
+            evicted = SESSIONS.pop(session_id, None)
+        if evicted:
+            logger.debug("[cache-invalidation] Evicted session %s", session_id[:12])
+    stream_manager.register_on_end(_evict)
+
+_setup_stream_cache_invalidation()

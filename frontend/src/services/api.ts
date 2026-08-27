@@ -52,17 +52,10 @@ export const chatService = {
     });
   },
 
-  createSSEConnection: (streamId: string): EventSource => {
-    const url = `/api/chat/stream?stream_id=${encodeURIComponent(streamId)}`;
-    return new EventSource(url, { withCredentials: true });
-  },
-
-  createReplaySSEConnection: (streamId: string): EventSource => {
-    // Connects to the replay endpoint which first sends all past events
-    // (replay_start → <history> → replay_end) then continues with live events.
-    // Used when reconnecting after a page refresh so the user sees all tokens
-    // that were already produced before the refresh.
-    const url = `/api/chat/stream/replay?stream_id=${encodeURIComponent(streamId)}`;
+  createSessionStreamConnection: (sessionId: string): EventSource => {
+    // Connects to the session-based SSE endpoint keyed by session_id.
+    // Supports both main and subagent sessions with independent streams.
+    const url = `/api/chat/session/stream/replay?session_id=${encodeURIComponent(sessionId)}`;
     return new EventSource(url, { withCredentials: true });
   },
 
@@ -167,6 +160,16 @@ export const sessionService = {
       {
         method: 'POST',
         body: JSON.stringify({ session_id: sessionId, keep_last: keepLast }),
+      }
+    );
+  },
+
+  clearDelegates: async (sessionId: string, keepCount = 0) => {
+    return api<{ ok: boolean; deleted: number }>(
+      '/api/session/clear-delegates',
+      {
+        method: 'POST',
+        body: JSON.stringify({ session_id: sessionId, keep_count: keepCount }),
       }
     );
   },
