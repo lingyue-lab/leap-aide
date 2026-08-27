@@ -6,6 +6,7 @@ import { useSessionStore } from '@/stores/useSessionStore';
 import { useChatStore } from '@/stores/useChatStore';
 import { getDelegateChildrenStatus } from '@/utils/sessionBusy';
 import { isSessionStreaming } from '@/stores/streamManager';
+import { markSessionSeen } from '@/utils/sessionSeen';
 import { sessionService } from '@/services/api';
 import { TrashMultiIcon, Icon } from '@/components/common/Icons';
 
@@ -20,7 +21,7 @@ interface SessionItemProps {
 
 export default function SessionItem({ session, isActive, onClick, archivedChildren, delegateChildren, onToggleDelegateChildren }: SessionItemProps) {
   const { t } = useTranslation('common');
-  const { renameSession, deleteSession, pinSession, updateSessionLastSeen, loadSession, loadSessions, selectSession, currentSessionId } = useSessionStore();
+  const { renameSession, deleteSession, pinSession, loadSession, loadSessions, selectSession, currentSessionId } = useSessionStore();
 
   // Unread count: how many messages were added since the user last viewed this session.
   // When last_seen_msg_count is null (never tracked), treat as fully seen.
@@ -247,16 +248,7 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
 
   const handleClick = () => {
     onClick();
-    // Mark as seen: persist current message count so badge clears
-    if (unreadCount > 0) {
-      const currentCount = session.message_count ?? 0;
-      // Optimistic update immediately (no flicker wait)
-      updateSessionLastSeen(session.session_id, currentCount);
-      // Persist to backend (fire-and-forget)
-      sessionService.markSessionSeen(session.session_id, currentCount).catch(() => {
-        // Ignore errors — worst case badge reappears on next page load
-      });
-    }
+    markSessionSeen(session.session_id);
   };
 
   // Subagent icon click handler

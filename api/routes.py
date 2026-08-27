@@ -772,7 +772,7 @@ def handle_get(handler, parsed) -> bool:
             raw = s.compact() | {
                 "messages": _truncated_msgs,
                 "tool_calls": getattr(s, "tool_calls", []) if load_messages else [],
-                "active_stream_id": getattr(s, "active_stream_id", None),
+                "active_stream_id": stream_manager.get_stream_id(sid),
                 "pending_user_message": getattr(s, "pending_user_message", None),
                 "pending_original_message": getattr(s, "_pending_original_message", None),
                 "pending_user_message_ts": getattr(s, "_pending_user_message_ts", None),
@@ -1361,6 +1361,28 @@ def handle_get(handler, parsed) -> bool:
         from api.observer import handle_observer_page
         return handle_observer_page(handler, _obs_root.group(1))
 
+    # ── SPA fallback: serve index.html for client-side routes ──────────────
+    # Non-API, non-static paths are React Router routes (e.g. /session/:id).
+    # Serve index.html so the SPA can handle them client-side.
+    if not parsed.path.startswith("/api/") and not parsed.path.startswith("/static/"):
+        try:
+            html = _INDEX_HTML_PATH.read_text(encoding="utf-8")
+            try:
+                settings = load_settings()
+                font_size = settings.get("font_size", "medium")
+                theme = settings.get("theme", "dark")
+            except Exception:
+                font_size = "medium"
+                theme = "dark"
+            injected = (
+                '<script>window.__HERMES_INJECTED__={font_size:"' + font_size
+                + '",theme:"' + theme + '"};</script>\n</head>'
+            )
+            html = html.replace("</head>", injected)
+            return t(handler, html, content_type="text/html; charset=utf-8")
+        except Exception:
+            pass
+
     return False  # 404
 
 
@@ -1769,7 +1791,6 @@ def handle_post(handler, parsed) -> bool:
             s.auto_compress_fail_count = 0
             s.pending_user_message = None
             s.pending_attachments = []
-            s.active_stream_id = None
             s.pending_started_at = None
             # ── Persist message truncation to state.db ──
             # /clear truncates from the head (keeps last N), which
@@ -3569,11 +3590,10 @@ def _handle_btw(handler, body):
     if not question:
         return bad(handler, "question is required")
     # Duplicate-stream guard (same pattern as chat/start)
-    current_stream_id = getattr(s, "active_stream_id", None)
+    current_stream_id = stream_manager.get_stream_id(sid)
     if current_stream_id:
         if stream_manager.get_stream_by_id(current_stream_id) is not None:
             return j(handler, {"error": "session already has an active stream"}, status=409)
-        s.active_stream_id = None
     # Create ephemeral hidden session inheriting context
     from api.models import new_session as _new_session
     ephemeral = _new_session(workspace=s.workspace, model=s.model, profile=getattr(s, 'profile', None))
@@ -3581,10 +3601,9 @@ def _handle_btw(handler, body):
     ephemeral.messages = list(s.messages or [])
     ephemeral.title = f"btw: {question[:60]}"
     ephemeral.sync_webui_metadata()
-    stream_id = stream_manager.start_stream(ephemeral.session_id)
+    stream_id = stream_manager.begin_stream(ephemeral)
     if not stream_id:
         return j(handler, {"error": "session already has active stream"}, status=409)
-    ephemeral.active_stream_id = stream_id
     ephemeral.sync_webui_metadata()
     from api.background import track_btw
     track_btw(body["session_id"], ephemeral.session_id, stream_id, question)
@@ -3616,10 +3635,9 @@ def _start_background_task(parent_session, prompt, keep_session=True):
     bg.pending_user_message = prompt
     bg._pending_user_message_ts = time.time()
     bg.sync_webui_metadata()
-    stream_id = stream_manager.start_stream(bg.session_id)
+    stream_id = stream_manager.begin_stream(bg)
     if not stream_id:
         return None
-    bg.active_stream_id = stream_id
     bg.sync_webui_metadata()
     task_id = uuid.uuid4().hex[:8]
     parent_sid = parent_session.session_id
@@ -3738,7 +3756,7 @@ def _resolve_busy_handling(s, mode, body):
       - "queued"      — message enqueued for later
       - "steered"     — steer injected into running agent
     """
-    current_stream_id = getattr(s, "active_stream_id", None)
+    current_stream_id = stream_manager.get_stream_id(s.session_id)
     if current_stream_id:
         # Check if a cancel is in progress for this session.  If so,
         # spin-wait for it to complete instead of returning a 409.
@@ -3752,8 +3770,7 @@ def _resolve_busy_handling(s, mode, body):
 
         current_active = stream_manager.get_stream_by_id(current_stream_id) is not None
         if not current_active:
-            # Stale stream id — clear and proceed
-            s.active_stream_id = None
+            # Stale stream id — proceed
             return ("proceed", None)
     else:
         # No active stream
@@ -3920,17 +3937,15 @@ def _handle_chat_start(handler, body):
     # after SSE connection is established) so the frontend receives a
     # `compressing` event and can show a toast instead of a silent pause.
 
-    stream_id = uuid.uuid4().hex
     with _get_session_agent_lock(s.session_id):
         s.workspace = workspace
         s.model = model
-        s.active_stream_id = stream_id
         s.pending_user_message = msg
         s._pending_user_message_ts = time.time()
         s.pending_attachments = attachments
         s.pending_started_at = time.time()
         s.sync_webui_metadata()
-    stream_id = stream_manager.start_stream(s.session_id)
+    stream_id = stream_manager.begin_stream(s)
     if not stream_id:
         return j(handler, {"error": "session already has active stream"}, status=409)
     thr = threading.Thread(
@@ -4630,7 +4645,7 @@ def _handle_approval_respond(handler, body):
     # Write approval_resolved marker to the active stream so replay can skip it
     try:
         s = get_session(sid)
-        stream_id = getattr(s, "active_stream_id", None)
+        stream_id = stream_manager.get_stream_id(sid)
         if stream_id and approval_id:
             stream = stream_manager.get_stream_by_id(stream_id)
             if stream is not None:
@@ -4696,7 +4711,7 @@ def _handle_clarify_respond(handler, body):
     # Write clarify_resolved marker to the active stream so replay can skip it
     try:
         s = get_session(sid)
-        stream_id = getattr(s, "active_stream_id", None)
+        stream_id = stream_manager.get_stream_id(sid)
         if stream_id:
             stream = stream_manager.get_stream_by_id(stream_id)
             if stream is not None:
@@ -5051,7 +5066,7 @@ def _handle_session_compress(handler, body):
     except KeyError:
         return bad(handler, "Session not found", 404)
 
-    if getattr(s, "active_stream_id", None):
+    if stream_manager.get_stream_id(sid):
         return bad(handler, "Session is still streaming; wait for the current turn to finish.", 409)
 
     try:
@@ -5166,7 +5181,6 @@ def _handle_session_compress(handler, body):
             s.messages = compressed
             s.tool_calls = []
             s.last_compression_time = time.time()
-            s.active_stream_id = None
             s.pending_user_message = None
             s.pending_attachments = []
             s.pending_started_at = None
@@ -5200,7 +5214,7 @@ def _handle_session_compress(handler, body):
             s.compact() | {
                 "messages": s.messages,
                 "tool_calls": s.tool_calls,
-                "active_stream_id": s.active_stream_id,
+                "active_stream_id": stream_manager.get_stream_id(s.session_id),
                 "pending_user_message": s.pending_user_message,
                 "pending_original_message": getattr(s, "_pending_original_message", None),
                 "pending_user_message_ts": getattr(s, "_pending_user_message_ts", None),

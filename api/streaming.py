@@ -56,6 +56,17 @@ try:
 except ImportError:
     AIAgent = None
 
+def _get_or_stub_session(session_id: str):
+    """Return a session object for *session_id*, or a lightweight stub if the
+    session is not yet known to the WebUI (e.g. a child session created by the
+    hermes-agent SDK whose metadata hasn't been synced to the WebUI store)."""
+    try:
+        return get_session(session_id)
+    except (KeyError, Exception):
+        import types
+        return types.SimpleNamespace(session_id=session_id)
+
+
 def _get_ai_agent():
     """Return AIAgent class, retrying the import if the initial attempt failed.
 
@@ -1340,24 +1351,34 @@ def _postprocess_messages(messages, *, start_idx=0,
 
 
 def _ensure_process_loop(session, session_id):
-    """确保 session 有且仅有一个活跃的主循环。"""
+    """Ensure the session has exactly one active process loop."""
     if hasattr(session, '_process_loop_thread') and session._process_loop_thread and session._process_loop_thread.is_alive():
         session._process_loop_last_active = time.time()
+        logger.debug("[_ensure_process_loop] already alive for session=%s", session_id[:12])
         return
+    logger.debug("[_ensure_process_loop] creating new process loop for session=%s", session_id[:12])
 
     session._process_loop_stop.clear()
     session._process_loop_last_active = time.time()
 
     def _process_loop():
-        """Session 级别的主循环，只负责 drain completion events。"""
+        """Session-level main loop, only responsible for draining completion events."""
+        logger.debug("[process_loop] started for session=%s", session_id[:12])
+        _poll_count = 0
         while not session._process_loop_stop.wait(timeout=1.0):
             try:
                 from api.config import get_idle_timeout
                 if time.time() - session._process_loop_last_active > get_idle_timeout():
+                    logger.debug("[process_loop] idle timeout for session=%s", session_id[:12])
                     break
+                _poll_count += 1
+                if _poll_count % 30 == 1:  # log every 30s
+                    from tools.process_registry import process_registry
+                    logger.debug("[process_loop] polling session=%s count=%d queue=%d", session_id[:12], _poll_count, process_registry.completion_queue.qsize())
                 _drain_process_notifications_for_session(session, session_id)
             except Exception as e:
-                logger.debug("Process loop error for session %s: %s", session_id, e)
+                logger.warning("[process_loop] error for session=%s: %s", session_id[:12], e)
+        logger.debug("[process_loop] exited for session=%s", session_id[:12])
 
     session._process_loop_thread = threading.Thread(
         target=_process_loop, daemon=True,
@@ -1375,7 +1396,7 @@ def _drain_process_notifications_for_session(session, session_id):
         session_key = f"agent:main:webui:dm:{session_id}"
 
         def _owns_current_session_event(evt):
-            """精确匹配当前 session 的事件。"""
+            """Exact-match events for the current session."""
             sk = str(evt.get("session_key") or "")
             origin_ui = str(evt.get("origin_ui_session_id") or "")
             target_sid = origin_ui
@@ -1383,17 +1404,27 @@ def _drain_process_notifications_for_session(session, session_id):
                 target_sid = sk.split(":")[-1]
             return target_sid == session_id
 
+        queue_size = process_registry.completion_queue.qsize()
+        if queue_size > 0:
+            logger.debug("[drain] session=%s queue_size=%d", session_id[:12], queue_size)
+
         for event, synthetic_message in process_registry.drain_notifications(
             session_key=session_key,
             owns_event=_owns_current_session_event,
         ):
+            evt_type = event.get("type", "?")
+            evt_sid = event.get("session_id", "?")[:12]
+            logger.debug("[drain] event type=%s child=%s session=%s", evt_type, evt_sid, session_id[:12])
             claim = claim_event_delivery(event, "webui-process-loop")
             if claim is None:
+                logger.debug("[drain] claim failed, skipping")
                 continue
-            # 通过 StreamManager 启动 stream
-            sid = stream_manager.start_stream(session_id)
+            # Start stream via StreamManager
+            sid = stream_manager.begin_stream(session)
             if not sid:
+                logger.debug("[drain] begin_stream failed, skipping")
                 continue
+            logger.debug("[drain] spawning _run_agent_streaming for session=%s new_stream=%s", session_id[:12], sid[:8])
             thr = threading.Thread(
                 target=_run_agent_streaming,
                 args=(session_id, synthetic_message, session.model, session.workspace, sid, None, True),
@@ -1405,7 +1436,7 @@ def _drain_process_notifications_for_session(session, session_id):
     except ImportError:
         pass
     except Exception as e:
-        logger.debug("Drain error: %s", e)
+        logger.debug("[drain] error: %s", e)
 
 
 def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, attachments=None, drain_message=False, *, ephemeral=False):
@@ -1842,6 +1873,10 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                     import sqlite3 as _sqlite3
                     from pathlib import Path as _Path
 
+                    def _close_child_stream():
+                        child_session = _get_or_stub_session(child_session_id)
+                        stream_manager.end_stream(child_session)
+
                     def _poll():
                         try:
                             from api.profiles import get_active_hermes_home
@@ -1851,7 +1886,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         _db_path = _hermes_home / "state.db"
                         if not _db_path.exists():
                             # No state.db — fall back to immediate close
-                            stream_manager.end_stream(child_session_id)
+                            _close_child_stream()
                             return
 
                         logger.info("[deferred_end_stream] Polling started for child %s", child_session_id[:12])
@@ -1869,14 +1904,14 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                                     # end_stream triggers the cache eviction callback registered
                                     # in models.py (_setup_stream_cache_invalidation).
                                     logger.info("[deferred_end_stream] ended_at detected for child %s after %ds, closing stream", child_session_id[:12], _i + 1)
-                                    stream_manager.end_stream(child_session_id)
+                                    _close_child_stream()
                                     return
                             except Exception:
                                 pass  # retry on next tick
 
                         # Timeout — force close anyway to avoid leaking streams
                         logger.warning("[deferred_end_stream] Timeout for child %s after 60s", child_session_id[:12])
-                        stream_manager.end_stream(child_session_id)
+                        _close_child_stream()
 
                     threading.Thread(target=_poll, daemon=True).start()
 
@@ -1903,7 +1938,8 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
 
                     # ── Create child stream on subagent.start ──
                     if event_type == 'subagent.start':
-                        stream_manager.start_stream(child_sid)
+                        _child_session = _get_or_stub_session(child_sid)
+                        stream_manager.begin_stream(_child_session)
                         # Notify main agent stream about child start (for UI)
                         put('subagent_start', {
                             'child_session_id': child_sid,
@@ -2844,7 +2880,6 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                     # Persist the error so it survives page reload.
                     # _error=True ensures _sanitize_messages_for_api excludes it from
                     # subsequent API calls so the LLM never sees its own error as prior context.
-                    s.active_stream_id = None
                     s.pending_user_message = None
                     s.pending_attachments = []
                     s.pending_started_at = None
@@ -2897,7 +2932,6 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                     live_tool_calls=_live_tool_calls,
                 )
                 s.tool_calls = tool_calls
-                s.active_stream_id = None
                 s.pending_user_message = None
                 s.pending_attachments = []
                 s.pending_started_at = None
@@ -3175,12 +3209,11 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             _lock_ctx = _agent_lock if _agent_lock is not None else contextlib.nullcontext()
             with _lock_ctx:
                 # Guard: only mutate session if we are still the active stream.
-                # After cancel_stream (interrupt mode), s.active_stream_id is
-                # either None or points to the new stream that replaced us.
-                if getattr(s, 'active_stream_id', None) != stream_id:
+                # After cancel_stream (interrupt mode), stream may have been
+                # replaced by a new one.
+                if stream_manager.get_stream_id(s.session_id) != stream_id:
                     _owned = False
                 if _owned:
-                    s.active_stream_id = None
                     s.pending_user_message = None
                     s.pending_attachments = []
                     s.pending_started_at = None
@@ -3201,7 +3234,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             _ckpt_thread.join(timeout=15)
         _clear_thread_env()  # TD1: always clear thread-local context
         # End the stream via StreamManager (handles ReplayableStream.close())
-        stream_manager.end_stream(session_id)
+        stream_manager.end_stream(s, stream_id)
         with STREAMS_LOCK:
             CANCEL_FLAGS.pop(stream_id, None)
             AGENT_INSTANCES.pop(stream_id, None)  # Clean up agent instance reference
@@ -3241,7 +3274,7 @@ def _dequeue_next(session_id: str) -> None:
     # Guard: if the session already has an active stream (e.g. interrupt mode
     # started a new stream before this dequeue fired), re-enqueue the message
     # so the active stream's own exit handler picks it up when it finishes.
-    if getattr(s, 'active_stream_id', None):
+    if stream_manager.get_stream_id(s.session_id):
         with SESSION_MESSAGE_QUEUE_LOCK:
             q = SESSION_MESSAGE_QUEUE.get(session_id)
             if q is None:
@@ -3249,11 +3282,10 @@ def _dequeue_next(session_id: str) -> None:
                 SESSION_MESSAGE_QUEUE[session_id] = q
             q.insert(0, payload)
         return
-    stream_id = stream_manager.start_stream(session_id)
+    stream_id = stream_manager.begin_stream(s)
     if not stream_id:
         return
     with _get_session_agent_lock(session_id):
-        s.active_stream_id = stream_id
         s.pending_user_message = payload.get("message", "")
         s.pending_attachments = payload.get("attachments", [])
         _oc = payload.get("original_content", "")
@@ -3296,7 +3328,7 @@ def _try_steer(session_id: str, text: str) -> dict:
         s = get_session(session_id)
     except KeyError:
         return {"accepted": False, "fallback": "session_not_found", "stream_id": None}
-    active_stream_id = getattr(s, "active_stream_id", None) or None
+    active_stream_id = stream_manager.get_stream_id(session_id)
     if not active_stream_id:
         return {"accepted": False, "fallback": "not_running", "stream_id": None}
     stream_alive = stream_manager.get_stream_by_id(active_stream_id) is not None
@@ -3510,7 +3542,6 @@ def cancel_stream(stream_id: str) -> bool:
                         all_message_ts=getattr(_cs, '_all_message_ts', None),
                     )
 
-                    _cs.active_stream_id = None
                     _cs.pending_user_message = None
                     _cs.pending_attachments = []
                     _cs.pending_started_at = None

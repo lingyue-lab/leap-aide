@@ -22,6 +22,7 @@ import { onBackgroundTaskCardVisibleChange } from '@/components/dialogs/Backgrou
 import ThinkingIndicator from './ThinkingIndicator';
 import { EmptyState, CHAT_ICON } from '@/components/common/Placeholder';
 import { Icon } from '@/components/common/Icons';
+import { markSessionSeen } from '@/utils/sessionSeen';
 
 interface ChatInterfaceProps {
   sessionId?: string | null;
@@ -47,7 +48,7 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const prevSessionIdRef = useRef<string | null>(null);
-  const { currentSession, loadSession, loading: sessionsLoading } = useSessionStore();
+  const { currentSession, loadSession, selectSession, loading: sessionsLoading } = useSessionStore();
   const [sessionLoading, setSessionLoading] = useState(false);
   // Listen for clear-history operation from sidebar
   useEffect(() => {
@@ -106,12 +107,19 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
   useEffect(() => {
     const prevId = prevSessionIdRef.current;
     prevSessionIdRef.current = sessionId;
-    
+
     if (!sessionId) return;
     if (prevId === sessionId) return;
 
     setSessionLoading(true);
     window.dispatchEvent(new CustomEvent('hermes:session-loading', { detail: true }));
+
+    // Ensure session store's currentSessionId is in sync. This is critical when
+    // sessionId comes from route params (/session/:id) — the store starts with
+    // currentSessionId=null and loadSession's stale-guard would never set it.
+    if (useSessionStore.getState().currentSessionId !== sessionId) {
+      selectSession(sessionId);
+    }
 
     // Tell the store which session is "current" so updateSessionCache knows
     // whether to update live state or just the cache.
@@ -263,14 +271,28 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
     const el = scrollContainerRef.current;
     if (!el) return;
     // Consider "at bottom" if within 40px of the true bottom
-    isAtBottomRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 40;
-  }, []);
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 40;
+    isAtBottomRef.current = atBottom;
+    // User scrolled to bottom → mark session as seen
+    if (atBottom && sessionId) {
+      markSessionSeen(sessionId);
+    }
+  }, [sessionId]);
 
   useEffect(() => {
     if (isAtBottomRef.current) {
       scrollToBottom();
     }
   }, [messages.length, scrollToBottom]);
+
+  // ── Auto-read: mark session as seen after 5 seconds of viewing ──────────
+  useEffect(() => {
+    if (!sessionId) return;
+    const timer = setTimeout(() => {
+      markSessionSeen(sessionId);
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [sessionId]);
 
   // ── Send / Cancel ────────────────────────────────────────────────────────────
   const handleSend = useCallback(async (text: string, attachments?: string[], mode?: string) => {
@@ -303,7 +325,7 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
   }
 
   return (
-    <div className="chat-interface">
+    <div className="chat-interface" onClick={() => sessionId && markSessionSeen(sessionId)}>
       {sessionLoading && (
         <div className="session-loading-overlay">
           <Icon name="progress_activity" size={27} style={{ animation: 'spin 0.8s linear infinite' }} />

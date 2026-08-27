@@ -11,6 +11,7 @@ from typing import Any
 
 from api.config import LOCK, _get_session_agent_lock
 from api.models import get_session, SESSIONS
+from api.stream_manager import stream_manager
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +151,7 @@ def session_status(session_id: str) -> dict[str, Any]:
         'message_count': len(s.messages or []),
         'created_at': s.created_at,
         'updated_at': s.updated_at,
-        'agent_running': bool(getattr(s, 'active_stream_id', None)),
+        'agent_running': bool(stream_manager.get_stream_id(s.session_id)),
         'input_tokens': inp,
         'output_tokens': out,
         'total_tokens': inp + out,

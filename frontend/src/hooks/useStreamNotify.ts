@@ -12,7 +12,7 @@ import { useEffect } from 'react';
 import { useSessionStore } from '@/stores/useSessionStore';
 import * as StreamManager from '@/stores/streamManager';
 import { notifyCompletion } from '@/utils/notify';
-import { sessionService } from '@/services/api';
+import { markSessionSeen } from '@/utils/sessionSeen';
 import { showInfoCard } from '@/components/dialogs/InfoCard';
 
 // ── Chat panel visibility tracker ──────────────────────────────────────
@@ -77,14 +77,7 @@ export function useStreamNotify() {
       // have already "read" all messages — mark as seen to avoid a false
       // unread badge when they switch to another session.
       if (wasActive) {
-        const ses = useSessionStore.getState().sessions.find(
-          (s) => s.session_id === sessionId
-        );
-        if (ses) {
-          const mc = ses.message_count ?? 0;
-          useSessionStore.getState().updateSessionLastSeen(sessionId, mc);
-          sessionService.markSessionSeen(sessionId, mc).catch(() => {/* ignore */});
-        }
+        markSessionSeen(sessionId);
       }
 
       // Clean up the stream state after a short delay

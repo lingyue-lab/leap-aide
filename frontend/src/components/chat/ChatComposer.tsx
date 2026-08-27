@@ -13,6 +13,7 @@ import MultiSelection from '@/components/common/MultiSelection';
 import ContextUsageIndicator from '@/components/chat/ContextUsageIndicator';
 import { useModeShortcut } from '@/hooks/useModeShortcut';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
+import { markSessionSeen } from '@/utils/sessionSeen';
 import SlashCommandDropdown from '@/components/chat/SlashCommandDropdown';
 import { useIsBusy } from '@/utils/sessionBusy';
 import { useWorkspaceDisplay } from '@/hooks/useWorkspaceDisplay';
@@ -563,6 +564,10 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
           rows={1}
           placeholder={t('composer.placeholder')}
           value={input}
+          onFocus={() => {
+            const sid = currentSession?.session_id;
+            if (sid) markSessionSeen(sid);
+          }}
           onChange={(e) => {
             const value = e.target.value;
             const pos = e.target.selectionStart ?? value.length;

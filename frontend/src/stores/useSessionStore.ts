@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { Session, SessionListItem } from '@/types';
+import { ts } from '@/utils/logTs';
 
 interface SessionState {
   sessions: SessionListItem[];
@@ -388,6 +389,20 @@ export const useSessionStore = create<SessionState>((set) => ({
       es.addEventListener('sessions_changed', (event) => {
         try {
           const data = JSON.parse(event.data);
+          const _sessions = data.sessions || [];
+          const _curId = useSessionStore.getState().currentSessionId;
+          const _streaming = _sessions.filter((s: Record<string, unknown>) => s.active_stream_id);
+          console.debug(`[${ts()}] [Sessions SSE] sessions_changed received`, {
+            count: _sessions.length,
+            currentSessionId: _curId,
+            currentInPayload: _sessions.some((s: Record<string, unknown>) => s.session_id === _curId),
+            streamingSessions: _streaming.map((s: Record<string, unknown>) => ({
+              id: (s.session_id as string)?.slice(0, 12),
+              stream: (s.active_stream_id as string)?.slice(0, 8),
+              msgCount: s.message_count,
+              lastSeen: s.last_seen_msg_count,
+            })),
+          });
           const gatewaySessions: SessionListItem[] = [];
           // Map of webui session active_stream_id from backend (for sessions
           // with backend-initiated streaming, e.g., drain → _run_agent_streaming).
@@ -467,6 +482,10 @@ export const useSessionStore = create<SessionState>((set) => ({
           // connect to the StreamManager SSE stream via the session-based
           // replay endpoint (/api/chat/session/stream/replay).
           if (prevCurrentId && newStreamId && !prevStreamId) {
+            console.debug(`[${ts()}] [Sessions SSE] current session got new stream, connecting`, {
+              sessionId: prevCurrentId?.slice(0, 12),
+              newStreamId: newStreamId?.slice(0, 8),
+            });
             import('@/stores/streamManager').then((mod) => {
               mod.startSessionStream(prevCurrentId);
             });
@@ -486,6 +505,17 @@ export const useSessionStore = create<SessionState>((set) => ({
               (s) => s.session_id === currentId
             );
             const newCount = updated?.message_count ?? 0;
+            const unread = Math.max(0, newCount - (updated?.last_seen_msg_count ?? 0));
+            if (newCount > oldCount || unread > 0) {
+              console.debug(`[${ts()}] [Sessions SSE] current session message_count / unread`, {
+                sessionId: currentId?.slice(0, 12),
+                oldCount,
+                newCount,
+                lastSeen: updated?.last_seen_msg_count,
+                unread,
+                webuiStreamIds: Object.keys(webuiStreamIds).map((k) => k.slice(0, 12)),
+              });
+            }
             if (newCount > oldCount) {
               const lastTs = _lastReloadTs[currentId] || 0;
               const now = Date.now();
@@ -519,7 +549,7 @@ export const useSessionStore = create<SessionState>((set) => ({
           }
 
           if (completedChildIds.length > 0) {
-            console.log('[Sessions SSE] Completed child sessions:', completedChildIds);
+            console.log(`[${ts()}] [Sessions SSE] Completed child sessions:`, completedChildIds);
             // Add to _clearedStreamIds so sessions_changed doesn't restore them
             for (const id of completedChildIds) {
               _clearedStreamIds.add(id);

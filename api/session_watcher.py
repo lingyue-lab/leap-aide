@@ -28,41 +28,29 @@ logger = logging.getLogger(__name__)
 def _snapshot_hash(sessions: list) -> str:
     """Create a lightweight hash of session IDs and timestamps for change detection.
 
-    Includes active_stream_id from SESSIONS cache so that backend-initiated
+    Includes active_stream_id from StreamManager so that backend-initiated
     streaming state changes (e.g., drain → _run_agent_streaming) also trigger
     sessions_changed events even when db fields haven't changed yet.
     Also includes webui sessions with active_stream_id that aren't in the
     db sessions list (webui sessions are excluded by read_importable_agent_session_rows).
     """
-    try:
-        from api.models import LOCK, SESSIONS
-    except ImportError:
-        LOCK = None
-        SESSIONS = {}
+    from api.stream_manager import stream_manager
 
     parts = []
     db_ids = set()
     for s in sorted(sessions, key=lambda x: x['session_id']):
         sid = s['session_id']
         db_ids.add(sid)
-        stream_id = ''
-        if LOCK is not None:
-            with LOCK:
-                cached = SESSIONS.get(sid)
-            if cached:
-                stream_id = getattr(cached, 'active_stream_id', '') or ''
+        stream_id = stream_manager.get_stream_id(sid) or ''
         parts.append(f"{sid}:{s.get('updated_at', 0)}:{s.get('message_count', 0)}:{stream_id}")
 
-    # Include webui sessions with active_stream_id that aren't in the db list.
+    # Include webui sessions with active stream that aren't in the db list.
     # These are sessions with backend-initiated streaming (drain → _run_agent_streaming).
-    if LOCK is not None:
-        with LOCK:
-            for sid, cached in SESSIONS.items():
-                if sid in db_ids:
-                    continue
-                stream_id = getattr(cached, 'active_stream_id', '') or ''
-                if stream_id:
-                    parts.append(f"{sid}:streaming:{stream_id}")
+    for sid in stream_manager.get_active_session_ids():
+        if sid in db_ids:
+            continue
+        stream_id = stream_manager.get_stream_id(sid) or ''
+        parts.append(f"{sid}:streaming:{stream_id}")
 
     key = '|'.join(sorted(parts))
     return hashlib.md5(key.encode(), usedforsecurity=False).hexdigest()
@@ -253,6 +241,27 @@ class SessionWatcher:
             except ValueError:
                 pass
 
+    def notify_now(self):
+        """Unconditionally push sessions_changed.
+
+        Called by StreamManager.begin_stream / end_stream at deterministic
+        trigger points where the session state is guaranteed to have changed,
+        so no hash check is needed.  Hash-based change detection is left to
+        the 5-second polling in _check_and_push.
+        """
+        logger.debug("[notify_now] called")
+        try:
+            sessions = _get_agent_sessions_from_db()
+        except Exception as e:
+            logger.warning("[notify_now] failed to get sessions: %s", e)
+            return
+        self._enrich_active_stream_ids(sessions)
+        self._include_streaming_webui_sessions(sessions)
+        new_hash = _snapshot_hash(sessions)
+        logger.debug("[notify_now] pushing sessions_changed (%d sessions) hash=%s", len(sessions), new_hash[:8])
+        self._last_hash = new_hash
+        self._notify_subscribers(sessions)
+
     def _notify_subscribers(self, sessions: list):
         """Push change event to all subscribers."""
         event = {
@@ -358,49 +367,48 @@ class SessionWatcher:
 
     @staticmethod
     def _enrich_active_stream_ids(sessions: list):
-        """Add active_stream_id from SESSIONS cache to session data.
+        """Add active_stream_id from StreamManager to session data.
 
-        active_stream_id is in-memory only (set by _run_agent_streaming,
+        active_stream_id is in-memory only (managed by StreamManager,
         not persisted to state.db).  This lets the frontend know which
         sessions are currently streaming so it can connect to the SSE stream.
         """
-        try:
-            from api.models import LOCK, SESSIONS
-        except ImportError:
-            return
+        from api.stream_manager import stream_manager
 
         for s in sessions:
             sid = s.get('session_id')
             if not sid:
                 continue
-            with LOCK:
-                cached = SESSIONS.get(sid)
-            if cached:
-                stream_id = getattr(cached, 'active_stream_id', None)
-                if stream_id:
-                    s['active_stream_id'] = stream_id
+            stream_id = stream_manager.get_stream_id(sid)
+            if stream_id:
+                s['active_stream_id'] = stream_id
 
     @staticmethod
     def _include_streaming_webui_sessions(sessions: list):
-        """Add webui sessions with active_stream_id to the sessions list.
+        """Add webui sessions with active streams to the sessions list.
 
         sessions_changed events only contain non-webui sessions (from
         read_importable_agent_session_rows).  Webui sessions that have
-        active_stream_id set (from backend-initiated streaming via drain
+        an active stream (from backend-initiated streaming via drain
         notifications) need to be included so the frontend can detect
         the streaming state and connect to the StreamManager SSE stream.
         """
+        from api.stream_manager import stream_manager
         try:
             from api.models import LOCK, SESSIONS
         except ImportError:
             return
 
         existing_ids = {s['session_id'] for s in sessions}
+        active_sids = set(stream_manager.get_active_session_ids())
         with LOCK:
-            for sid, cached in SESSIONS.items():
+            for sid in active_sids:
                 if sid in existing_ids:
                     continue
-                stream_id = getattr(cached, 'active_stream_id', None)
+                cached = SESSIONS.get(sid)
+                if not cached:
+                    continue
+                stream_id = stream_manager.get_stream_id(sid)
                 if not stream_id:
                     continue
                 sessions.append({
@@ -409,6 +417,7 @@ class SessionWatcher:
                     'workspace': str(getattr(cached, 'workspace', '')),
                     'model': getattr(cached, 'model', None),
                     'message_count': len(getattr(cached, 'messages', []) or []),
+                    'last_seen_msg_count': getattr(cached, 'last_seen_msg_count', None),
                     'created_at': getattr(cached, 'created_at', 0),
                     'updated_at': getattr(cached, 'updated_at', 0),
                     'source': 'webui',
@@ -498,6 +507,9 @@ def start_watcher():
         if _watcher is None:
             _watcher = SessionWatcher()
             _watcher.start()
+            # Inject into StreamManager so begin_stream/end_stream can push changes
+            from api.stream_manager import stream_manager as _sm
+            _sm.register_watcher(_watcher)
 
 
 def stop_watcher():

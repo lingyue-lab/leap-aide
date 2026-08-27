@@ -17,6 +17,7 @@
 
 import type { Message, ToolCall, UsageInfo, ContentBlock } from '@/types';
 import { chatService } from '@/services/api';
+import { ts } from '@/utils/logTs';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -97,6 +98,21 @@ function _dismissCompressing(sessionId: string) {
   import('@/components/dialogs/InfoCard').then(({ dismissInfoCard }) => {
     dismissInfoCard(sessionId);
   });
+}
+
+/**
+ * Safely read current messages from useChatStore.
+ * Uses static import — streamManager.ts and useChatStore.ts are leaf modules
+ * with no circular dependency (useChatStore does NOT import streamManager).
+ */
+import { useChatStore } from '@/stores/useChatStore';
+
+function _getChatStoreMessages(): Message[] {
+  try {
+    return useChatStore.getState().messages || [];
+  } catch {
+    return [];
+  }
 }
 
 function _getOrCreateState(sessionId: string, streamId: string, initialMessages: Message[]): SessionStreamState {
@@ -300,7 +316,7 @@ function _attachEventListeners(es: EventSource, sessionId: string, streamId: str
   es.addEventListener('subagent_start', (e: MessageEvent) => {
     const data = JSON.parse(e.data);
     const childSessionId = data.child_session_id;
-    console.log('[StreamManager] subagent_start received, creating independent stream for child:', childSessionId);
+    console.log(`[${ts()}] [StreamManager] subagent_start received, creating independent stream for child:`, childSessionId);
     if (!childSessionId) return;
 
     // Create initial messages for the child session
@@ -661,7 +677,12 @@ export function startSessionStream(sessionId: string, initialMessages?: Message[
   if (existing?.streaming) return;
 
   const streamId = `session-${sessionId}`;
-  const seedMessages = initialMessages || [];
+  // When called from sessions_changed (drain path), initialMessages is not
+  // passed.  Fall back to the current useChatStore messages so old turn
+  // messages are preserved during the new stream.
+  const seedMessages = initialMessages
+    ? [...initialMessages]
+    : _getChatStoreMessages();
 
   _sessionStates.set(sessionId, {
     sessionId,

@@ -281,7 +281,8 @@ def _cmd_status(session, args: str) -> dict[str, Any]:
     """Show session status."""
     msg_count = len(getattr(session, 'messages', []) or [])
     ctx_len = getattr(session, 'context_length', None)
-    active_stream_id = getattr(session, 'active_stream_id', None)
+    from api.stream_manager import stream_manager
+    active_stream_id = stream_manager.get_stream_id(session.session_id)
     pending_user_message = getattr(session, 'pending_user_message', None)
     from api.models import _is_streaming_session, _active_stream_ids
     is_streaming = _is_streaming_session(active_stream_id, _active_stream_ids())

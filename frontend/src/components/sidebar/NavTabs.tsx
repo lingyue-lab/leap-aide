@@ -7,7 +7,7 @@ import { useTerminalStore } from '@/stores/useTerminalStore';
 import { useSettingsTabStore } from '@/stores/useSettingsTabStore';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { setChatPanelActive } from '@/hooks/useStreamNotify';
-import { sessionService } from '@/services/api';
+import { markSessionSeen } from '@/utils/sessionSeen';
 import type { NavPanel } from '@/types';
 import { Icon } from '@/components/common/Icons';
 import { useAuth } from '@/contexts/AuthContext';
@@ -122,17 +122,7 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
       // back to chat tab the session is already selected — no click needed)
       const currentSessionId = useSessionStore.getState().currentSessionId;
       if (currentSessionId) {
-        const currentSession = useSessionStore.getState().sessions.find(
-          (s) => s.session_id === currentSessionId
-        );
-        if (currentSession) {
-          const mc = currentSession.message_count ?? 0;
-          const lsc = currentSession.last_seen_msg_count ?? 0;
-          if (mc > lsc) {
-            useSessionStore.getState().updateSessionLastSeen(currentSessionId, mc);
-            sessionService.markSessionSeen(currentSessionId, mc).catch(() => {/* ignore */});
-          }
-        }
+        markSessionSeen(currentSessionId);
       }
     }
   };

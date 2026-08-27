@@ -12,11 +12,12 @@ from pathlib import Path
 import api.config as _cfg
 from api.config import (
     SESSION_DIR, SESSION_INDEX_FILE, SESSIONS, SESSIONS_MAX,
-    LOCK, STREAMS, STREAMS_LOCK, DEFAULT_WORKSPACE, DEFAULT_MODEL, PROJECTS_FILE, HOME,
+    LOCK, DEFAULT_WORKSPACE, DEFAULT_MODEL, PROJECTS_FILE, HOME,
     get_effective_default_model, get_first_available_model,
 )
 from api.workspace import get_last_workspace, get_first_non_external_workspace
 from api.agent_sessions import read_importable_agent_session_rows
+from api.stream_manager import stream_manager
 
 logger = logging.getLogger(__name__)
 
@@ -85,8 +86,7 @@ def _write_session_index(updates=None):
 
 
 def _active_stream_ids():
-    with STREAMS_LOCK:
-        return set(STREAMS.keys())
+    return set(stream_manager.get_active_session_ids())
 
 
 def _is_streaming_session(active_stream_id, active_stream_ids):
@@ -292,7 +292,6 @@ class Session:
                  project_id: str=None, profile=None,
                  input_tokens: int=0, output_tokens: int=0, estimated_cost=None,
                  personality=None,
-                 active_stream_id: str=None,
                  pending_user_message: str=None,
                  pending_attachments=None,
                  pending_started_at=None,
@@ -328,7 +327,6 @@ class Session:
         self.output_tokens = output_tokens or 0
         self.estimated_cost = estimated_cost
         self.personality = personality
-        self.active_stream_id = active_stream_id
         self.skills = skills if isinstance(skills, list) else None
         self.pending_user_message = pending_user_message
         self.pending_attachments = pending_attachments or []
@@ -757,7 +755,7 @@ class Session:
         except Exception:
             return cls.load(sid)
 
-    def compact(self, include_runtime=False, active_stream_ids=None) -> dict:
+    def compact(self, include_runtime=False, active_stream_ids=None, active_stream_id=None) -> dict:
         active_stream_ids = active_stream_ids if active_stream_ids is not None else set()
         # Clamp last_seen_msg_count: it should never exceed message_count.
         # When last_seen > message_count, it means history was cleared or
@@ -802,9 +800,9 @@ class Session:
             'last_prompt_tokens': getattr(self, 'last_prompt_tokens', 0) or 0,
             'threshold_tokens': getattr(self, 'threshold_tokens', 0) or 0,
             'last_compression_time': getattr(self, 'last_compression_time', 0) or 0,
-            'active_stream_id': self.active_stream_id,
+            'active_stream_id': active_stream_id,
             'is_streaming': _is_streaming_session(
-                self.active_stream_id, active_stream_ids
+                active_stream_id, active_stream_ids
             ) if include_runtime else False,
             # Gateway/CLI session markers (set by _from_db_row for non-webui sessions)
             '_readonly': getattr(self, '_readonly', None),
@@ -1092,19 +1090,23 @@ def _all_sessions_from_db(db, active_stream_ids):
         for s in SESSIONS.values():
             if getattr(s, 'is_subagent_session', False):
                 continue
+            _sid = s.session_id
+            _stream_id = stream_manager.get_stream_id(_sid)
             found = False
             for c in compact_list:
-                if c['session_id'] == s.session_id:
+                if c['session_id'] == _sid:
                     db_title = c.get('title', '')
                     c.update(s.compact(include_runtime=True,
-                                       active_stream_ids=active_stream_ids))
+                                       active_stream_ids=active_stream_ids,
+                                       active_stream_id=_stream_id))
                     if db_title:
                         c['title'] = db_title
                     found = True
                     break
             if not found:
                 compact_list.append(s.compact(include_runtime=True,
-                                               active_stream_ids=active_stream_ids))
+                                               active_stream_ids=active_stream_ids,
+                                               active_stream_id=_stream_id))
 
     result = [s for s in compact_list if not _hide_from_default_sidebar(s)]
     result = _append_archived_sessions(result)
@@ -1141,17 +1143,23 @@ def _all_sessions_from_index(active_stream_ids):
         except Exception:
             logger.debug("Failed to persist last_activity_at backfill")
     for s in index:
+        _sid = s.get('session_id')
+        _stream_id = stream_manager.get_stream_id(_sid) if _sid else None
+        s['active_stream_id'] = _stream_id
         s['is_streaming'] = _is_streaming_session(
-            s.get('active_stream_id'),
+            _stream_id,
             active_stream_ids,
         )
     # Overlay any in-memory sessions that may be newer than the index
     index_map = {s['session_id']: s for s in index}
     with LOCK:
         for s in SESSIONS.values():
-            index_map[s.session_id] = s.compact(
+            _sid = s.session_id
+            _stream_id = stream_manager.get_stream_id(_sid)
+            index_map[_sid] = s.compact(
                 include_runtime=True,
                 active_stream_ids=active_stream_ids,
+                active_stream_id=_stream_id,
             )
     result = sorted(index_map.values(), key=lambda s: (s.get('pinned', False), _session_sort_timestamp(s)), reverse=True)
     result = [s for s in result if not (
@@ -1192,7 +1200,9 @@ def _all_sessions_from_json(active_stream_ids):
     # index-path filter above. No grace window: a 0-message Untitled session is
     # never shown regardless of age (#1171).
     # Exception: sessions that have had prior activity are NOT hidden.
-    result = [s.compact(include_runtime=True, active_stream_ids=active_stream_ids) for s in out if not (
+    result = [s.compact(include_runtime=True, active_stream_ids=active_stream_ids,
+                        active_stream_id=stream_manager.get_stream_id(s.session_id))
+              for s in out if not (
         s.title == 'Untitled'
         and len(s.messages) == 0
         and (s.input_tokens or 0) == 0
@@ -1547,7 +1557,7 @@ def get_cli_sessions(show_cli: bool = True, show_messaging: bool = True,
                 'is_subagent_session': _source == 'subagent',
                 '_readonly': _source != 'subagent',
                 'user_id': _user_id,
-                'active_stream_id': row.get('active_stream_id'),
+                'active_stream_id': stream_manager.get_stream_id(sid),
             })
     except Exception as _cli_err:
         # DB schema changed, locked, or corrupted -- log warning so admins can diagnose.
