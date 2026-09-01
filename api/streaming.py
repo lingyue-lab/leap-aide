@@ -59,7 +59,17 @@ except ImportError:
 def _get_or_stub_session(session_id: str):
     """Return a session object for *session_id*, or a lightweight stub if the
     session is not yet known to the WebUI (e.g. a child session created by the
-    hermes-agent SDK whose metadata hasn't been synced to the WebUI store)."""
+    hermes-agent SDK whose metadata hasn't been synced to the WebUI store).
+
+    Checks SESSIONS in-memory cache first (for placeholder sessions created
+    during subagent.start), then falls back to DB via get_session().
+    """
+    from api.models import SESSIONS, LOCK
+    # Check in-memory cache first (includes placeholder sessions)
+    with LOCK:
+        cached = SESSIONS.get(session_id)
+    if cached is not None:
+        return cached
     try:
         return get_session(session_id)
     except (KeyError, Exception):
@@ -1425,9 +1435,20 @@ def _drain_process_notifications_for_session(session, session_id):
                 logger.debug("[drain] begin_stream failed, skipping")
                 continue
             logger.debug("[drain] spawning _run_agent_streaming for session=%s new_stream=%s", session_id[:12], sid[:8])
+            # Normalize model — same logic as _handle_chat_start.
+            # Bare names (e.g. "deepseek-v4-flash") lose the provider hint,
+            # causing resolve_runtime_provider to fall back to OpenRouter.
+            _drain_model = session.model
+            try:
+                from api.routes import _resolve_compatible_session_model
+                from api.models import Session as _DrainSession
+                _drain_model, _ = _resolve_compatible_session_model(_drain_model)
+                _drain_model = _DrainSession._normalize_model(_drain_model)
+            except Exception:
+                pass
             thr = threading.Thread(
                 target=_run_agent_streaming,
-                args=(session_id, synthetic_message, session.model, session.workspace, sid, None, True),
+                args=(session_id, synthetic_message, _drain_model, session.workspace, sid, None, True),
                 daemon=True,
             )
             thr.start()
@@ -1875,6 +1896,16 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
 
                     def _close_child_stream():
                         child_session = _get_or_stub_session(child_session_id)
+                        # If placeholder, try to load real session from DB and update in-place
+                        if getattr(child_session, '_is_placeholder', False):
+                            try:
+                                from api.models import get_session as _get_sess
+                                real_session = _get_sess(child_session_id)
+                                if isinstance(real_session, _Session):
+                                    child_session.copy_from(real_session)
+                                    child_session._is_placeholder = False
+                            except (KeyError, Exception):
+                                pass  # keep placeholder if DB load fails
                         stream_manager.end_stream(child_session)
 
                     def _poll():
@@ -1938,14 +1969,69 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
 
                     # ── Create child stream on subagent.start ──
                     if event_type == 'subagent.start':
+                        from api.models import Session as _Session, LOCK as _MODELS_LOCK, SESSIONS as _SESSIONS, _notify_session_event as _notify
+                        goal = cb_kwargs.get('goal', '')
+
+                        # Try to load real session from state.db (get_session
+                        # triggers upsert_session notify if found).
                         _child_session = _get_or_stub_session(child_sid)
+
+                        # If not in state.db yet, create a placeholder so the
+                        # frontend can show the subagent in the sidebar immediately.
+                        if not isinstance(_child_session, _Session):
+                            _child_session = _Session(
+                                session_id=child_sid,
+                                title=goal[:80] or 'Subagent Task',
+                                parent_session_id=session_id,
+                            )
+                            _child_session._is_placeholder = True
+                            _child_session.source_tag = 'subagent'
+                            _child_session.is_subagent_session = True
+                            # Seed user message so the frontend can load it
+                            # via HTTP when begin_stream triggers startSessionStream.
+                            _child_session.messages = [{
+                                'role': 'user',
+                                'content': goal,
+                                'timestamp': time.time(),
+                            }]
+                            with _MODELS_LOCK:
+                                _SESSIONS[child_sid] = _child_session
+                                _SESSIONS.move_to_end(child_sid)
+                            _notify('upsert_session', _child_session)
+
+                        # Create stream (triggers begin_stream notify)
                         stream_manager.begin_stream(_child_session)
-                        # Notify main agent stream about child start (for UI)
+
+                        # Update parent session's delegate children count
+                        # AFTER begin_stream so the child's stream is active
+                        with _MODELS_LOCK:
+                            _parent = _SESSIONS.get(session_id)
+                        if _parent:
+                            # Count delegate children for this parent
+                            _delegate_count = sum(
+                                1 for s in _SESSIONS.values()
+                                if getattr(s, 'parent_session_id', None) == session_id
+                                and getattr(s, 'is_subagent_session', False)
+                            )
+                            # Count running children (those with active streams)
+                            _active_ids = set(stream_manager.get_active_session_ids())
+                            _running_count = sum(
+                                1 for s in _SESSIONS.values()
+                                if getattr(s, 'parent_session_id', None) == session_id
+                                and getattr(s, 'is_subagent_session', False)
+                                and s.session_id in _active_ids
+                            )
+                            _parent._delegate_children_count = _delegate_count
+                            _parent._has_delegate_children = _delegate_count > 0
+                            _parent._delegate_running_count = _running_count
+                            _notify('upsert_session', _parent)
+
+                        # Notify parent stream (for UI: subagent_start event)
                         put('subagent_start', {
                             'child_session_id': child_sid,
                             'subagent_id': cb_kwargs.get('subagent_id'),
                             'task_index': cb_kwargs.get('task_index'),
-                            'goal': cb_kwargs.get('goal'),
+                            'goal': goal,
                         })
 
                     # ── Route event to child's stream ──
@@ -2875,6 +2961,19 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         'type': _err_type,
                         'hint': _err_hint,
                     })
+                    # Also push via notify channel so the frontend receives the
+                    # error before end_stream disconnects the replay listener.
+                    try:
+                        from api.notify_stream import notify_stream as _ns
+                        _ns.put('apperror', {
+                            'session_id': s.session_id,
+                            'stream_id': stream_id,
+                            'message': _err_str or f'{_err_label}.',
+                            'type': _err_type,
+                            'hint': _err_hint,
+                        })
+                    except Exception:
+                        pass
                     # Clear stream/pending state so the session does not appear
                     # "agent_running" on reload after a silent failure.
                     # Persist the error so it survives page reload.
@@ -3221,6 +3320,16 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
         if _exc_hint:
             _apperror_payload['hint'] = _exc_hint
         put('apperror', _apperror_payload)
+        # Also push via notify channel (same rationale as inner handler).
+        try:
+            from api.notify_stream import notify_stream as _ns
+            _ns.put('apperror', {
+                'session_id': s.session_id,
+                'stream_id': stream_id,
+                **_apperror_payload,
+            })
+        except Exception:
+            pass
         # Check for queued messages before cleanup so the dequeued stream
         # can register itself in STREAMS before the current stream is popped.
         # Skip if we lost ownership — the active stream's exit handler will dequeue.

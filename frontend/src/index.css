@@ -2,6 +2,20 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Font Loading Fix ──────────────────────────────────────────────────────────
+   Override font-display from 'block' to 'swap' to prevent invisible text
+   when font loading fails (e.g., SSL connection issues with self-signed certs).
+   Icons will show as fallback characters initially, then swap to Material Symbols
+   when the font loads successfully.
+   ───────────────────────────────────────────────────────────────────────────── */
+@font-face {
+  font-family: "Material Symbols Rounded";
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: swap;
+  src: url("/assets/material-symbols-rounded-BSes1r24.woff2") format("woff2");
+}
+
 /* ── CSS Variables for Themes ── */
 /* Material Design 3 (M3) 语义角色为唯一真相来源。暗色为默认；亮色在
    [data-theme="light"] 覆盖 --md-*；旧组件 token 均为 --md-* 别名，自动跟随。 */
@@ -1981,8 +1995,8 @@
   .gateway-icon .material-symbols-rounded,
   .sidebar-item-readonly-marker svg,
   .sidebar-item-readonly-marker .material-symbols-rounded,
-  .sidebar-item-archived-icon svg,
-  .sidebar-item-archived-icon .material-symbols-rounded {
+  .sidebar-item-child-icon svg,
+  .sidebar-item-child-icon .material-symbols-rounded {
     pointer-events: none;
   }
 
@@ -5282,10 +5296,10 @@
   font-weight: 400;
 }
 
-.sidebar-item-archived-icon {
+.sidebar-item-child-icon {
   flex-shrink: 0;
 }
-.sidebar-item-archived-icon.streaming > .material-symbols-rounded {
+.sidebar-item-child-icon.streaming > .material-symbols-rounded {
   animation: bg-stream-pulse 1.4s ease-in-out infinite;
   color: var(--gold);
 }

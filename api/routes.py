@@ -588,6 +588,7 @@ def handle_get(handler, parsed) -> bool:
             handler.send_response(200)
             handler.send_header("Content-Type", "application/manifest+json; charset=utf-8")
             handler.send_header("Cache-Control", "no-store")
+            handler.send_header("Connection", "close")
             handler.send_header("Content-Length", str(len(data)))
             handler.end_headers()
             handler.wfile.write(data)
@@ -609,6 +610,7 @@ def handle_get(handler, parsed) -> bool:
             handler.send_header("Content-Type", "application/javascript; charset=utf-8")
             handler.send_header("Cache-Control", "no-store")
             handler.send_header("Service-Worker-Allowed", "/")
+            handler.send_header("Connection", "close")
             handler.send_header("Content-Length", str(len(data)))
             handler.end_headers()
             handler.wfile.write(data)
@@ -624,10 +626,12 @@ def handle_get(handler, parsed) -> bool:
             handler.send_header("Content-Type", "image/x-icon")
             handler.send_header("Content-Length", str(len(data)))
             handler.send_header("Cache-Control", "public, max-age=86400")
+            handler.send_header("Connection", "close")
             handler.end_headers()
             handler.wfile.write(data)
         else:
             handler.send_response(204)
+            handler.send_header("Connection", "close")
             handler.end_headers()
         return True
 
@@ -945,11 +949,18 @@ def handle_get(handler, parsed) -> bool:
             _db = _get_session_db()
             if _db is not None:
                 _delegate_map = _get_all_delegate_children_map(_db)
+                _active_ids = set(stream_manager.get_active_session_ids())
                 for item in safe_merged:
                     _sid = item.get("session_id", "")
                     _children = _delegate_map.get(_sid, [])
                     item["_delegate_children_count"] = len(_children)
                     item["_has_delegate_children"] = len(_children) > 0
+                    # Count running children (active stream + no ended_at)
+                    _running = sum(
+                        1 for c in _children
+                        if not c.get('ended_at') and c.get('id') in _active_ids
+                    )
+                    item["_delegate_running_count"] = _running
         except Exception:
             pass  # non-fatal — delegate children info is additive
 
@@ -1053,8 +1064,18 @@ def handle_get(handler, parsed) -> bool:
                     return j(handler, {"children": [], "running_count": 0})
                 _children_map = _get_all_delegate_children_map(_db)
                 _children = _children_map.get(session_id, [])
-                # 统计正在运行的子 agent
-                running_count = sum(1 for c in _children if not c.get('ended_at'))
+                # Cross-reference ended_at with actual stream activity:
+                # A child is "running" only if its stream is still active in
+                # StreamManager.  This avoids false positives when ended_at
+                # was never set by the SDK (timeout/crash).
+                _active_ids = set(stream_manager.get_active_session_ids())
+                running_count = 0
+                for c in _children:
+                    _cid = c.get('id', '')
+                    _ended = c.get('ended_at')
+                    if not _ended and _cid in _active_ids:
+                        running_count += 1
+                    c['streaming'] = _cid in _active_ids
                 return j(handler, {
                     "children": _children,
                     "running_count": running_count,
@@ -1174,8 +1195,8 @@ def handle_get(handler, parsed) -> bool:
     if parsed.path == "/api/chat/session/stream/replay":
         return _handle_session_stream_replay(handler, parsed)
 
-    if parsed.path == '/api/sessions/stream':
-        return _handle_sessions_sse_stream(handler, parsed)
+    if parsed.path == '/api/chat/session/stream/notify':
+        return _handle_session_notify(handler)
 
     if parsed.path == "/api/media":
         return _handle_media(handler, parsed)
@@ -1642,7 +1663,10 @@ def handle_post(handler, parsed) -> bool:
                 s._process_loop_thread.join(timeout=2)
         # Delete from WebUI session store
         with LOCK:
-            SESSIONS.pop(sid, None)
+            _deleted_session = SESSIONS.pop(sid, None)
+        if _deleted_session:
+            from api.models import _notify_session_event
+            _notify_session_event('delete_session', _deleted_session)
         # Evict cached agent so turn count doesn't leak into a recycled session
         from api.config import _evict_session_agent
         _evict_session_agent(sid)
@@ -1686,7 +1710,7 @@ def handle_post(handler, parsed) -> bool:
         if not session_id:
             return bad(handler, "session_id is required")
         try:
-            from api.models import _get_session_db, _get_all_delegate_children_map
+            from api.models import _get_session_db, _get_all_delegate_children_map, _notify_session_event
             _db = _get_session_db()
             if _db is None:
                 return j(handler, {"ok": True, "deleted": 0})
@@ -1714,6 +1738,18 @@ def handle_post(handler, parsed) -> bool:
                     deleted += 1
                 except Exception:
                     logger.debug("Failed to delete delegate child %s", child_id)
+
+            # Update parent session's delegate children count and notify frontend
+            if deleted > 0:
+                with LOCK:
+                    parent = SESSIONS.get(session_id)
+                if parent:
+                    remaining = len(_children) - deleted
+                    parent._delegate_children_count = remaining
+                    parent._has_delegate_children = remaining > 0
+                    parent._delegate_running_count = 0  # cleared all running children
+                    _notify_session_event('upsert_session', parent)
+
             return j(handler, {"ok": True, "deleted": deleted})
         except Exception as e:
             logger.debug("Failed to clear delegates for %s: %s", session_id, e)
@@ -1815,6 +1851,9 @@ def handle_post(handler, parsed) -> bool:
             SESSION_INDEX_FILE.unlink(missing_ok=True)
         except Exception:
             pass
+        # Notify frontend about the updated session (message_count changed)
+        from api.models import _notify_session_event
+        _notify_session_event('upsert_session', s)
         return j(handler, {"ok": True, "session_id": sid, "kept": len(s.messages)})
 
     if parsed.path == "/api/session/retry":
@@ -2176,6 +2215,7 @@ def handle_post(handler, parsed) -> bool:
         handler.send_header("Content-Type", "application/json; charset=utf-8")
         handler.send_header("Content-Length", str(len(response_body)))
         handler.send_header("Cache-Control", "no-store")
+        handler.send_header("Connection", "close")
         set_auth_cookie(handler, new_cookie)
         _security_headers(handler)
         handler.end_headers()
@@ -2479,6 +2519,7 @@ def handle_post(handler, parsed) -> bool:
         handler.send_response(200)
         handler.send_header("Content-Type", "application/json")
         handler.send_header("Cache-Control", "no-store")
+        handler.send_header("Connection", "close")
         _security_headers(handler)
         set_auth_cookie(handler, cookie_val)
         handler.end_headers()
@@ -2494,6 +2535,7 @@ def handle_post(handler, parsed) -> bool:
         handler.send_response(200)
         handler.send_header("Content-Type", "application/json")
         handler.send_header("Cache-Control", "no-store")
+        handler.send_header("Connection", "close")
         _security_headers(handler)
         clear_auth_cookie(handler)
         handler.end_headers()
@@ -2545,6 +2587,7 @@ def _serve_static(handler, parsed):
     handler.send_response(200)
     handler.send_header("Content-Type", ct_header)
     handler.send_header("Cache-Control", "no-store")
+    handler.send_header("Connection", "close")
     raw = static_file.read_bytes()
     handler.send_header("Content-Length", str(len(raw)))
     handler.end_headers()
@@ -2560,6 +2603,7 @@ def _serve_assets(handler, parsed):
     This function maps /assets/* → static/assets/* so the built frontend
     works correctly when served by the Python server directly.
     """
+    logger.warning('[ASSET] Serving %s', parsed.path)
     static_root = (Path(__file__).parent.parent / "static").resolve()
     # Strip the leading '/assets/' prefix, then prepend 'assets/' so the
     # resolved path is static/assets/<rest> rather than static/<rest>.
@@ -2574,13 +2618,31 @@ def _serve_assets(handler, parsed):
     ext = asset_file.suffix.lower()
     ct = _STATIC_MIME.get(ext.lstrip("."), "text/plain")
     ct_header = f"{ct}; charset=utf-8" if ct in _TEXT_MIME_TYPES else ct
-    handler.send_response(200)
-    handler.send_header("Content-Type", ct_header)
-    handler.send_header("Cache-Control", "no-store")
-    raw = asset_file.read_bytes()
-    handler.send_header("Content-Length", str(len(raw)))
-    handler.end_headers()
-    handler.wfile.write(raw)
+    try:
+        handler.send_response(200)
+        handler.send_header("Content-Type", ct_header)
+        handler.send_header("Cache-Control", "no-store")
+        handler.send_header("Connection", "close")
+        raw = asset_file.read_bytes()
+        handler.send_header("Content-Length", str(len(raw)))
+        handler.end_headers()
+        handler.wfile.write(raw)
+        logger.warning('[ASSET] Sent %s (%d bytes)', parsed.path, len(raw))
+    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
+        logger.warning('[ASSET] Client disconnected %s: %s', parsed.path, e)
+        pass
+    except Exception as e:
+        import ssl
+        import socket
+        # Silently ignore SSL errors and broken pipe errors
+        if isinstance(e, ssl.SSLError):
+            logger.warning('[ASSET] SSL error %s: %s', parsed.path, e)
+            pass
+        elif isinstance(e, socket.error) and e.errno == 32:
+            logger.warning('[ASSET] Broken pipe %s: %s', parsed.path, e)
+            pass
+        else:
+            logger.warning('[ASSET] Error serving %s: %s', parsed.path, e)
     return True
 
 
@@ -2601,6 +2663,7 @@ def _handle_session_export(handler, parsed):
     )
     handler.send_header("Content-Length", str(len(payload.encode("utf-8"))))
     handler.send_header("Cache-Control", "no-store")
+    handler.send_header("Connection", "close")
     handler.end_headers()
     handler.wfile.write(payload.encode("utf-8"))
     return True
@@ -2851,8 +2914,55 @@ def _handle_session_stream_replay(handler, parsed):
                 break
     except (BrokenPipeError, ConnectionResetError):
         pass
+    except Exception as e:
+        # Handle SSL errors from abrupt client disconnects
+        import ssl
+        if not isinstance(e, ssl.SSLError):
+            logger.debug('Chat stream SSE error: %s', e)
     finally:
         stream.unsubscribe(sq)
+    return True
+
+
+def _handle_session_notify(handler):
+    """SSE endpoint for global session notifications (non-replayable).
+
+    First event is subscribe_success with a timestamp. Frontend MUST call
+    loadSessions after receiving subscribe_success to establish baseline
+    state. The notify queue (size 1000) caches events during the gap,
+    ensuring no events are lost.
+    """
+    from api.notify_stream import notify_stream
+
+    handler.send_response(200)
+    handler.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+    handler.send_header('Cache-Control', 'no-cache')
+    handler.send_header('X-Accel-Buffering', 'no')
+    handler.send_header('Connection', 'keep-alive')
+    handler.end_headers()
+
+    q = notify_stream.subscribe()
+    try:
+        _sse(handler, 'subscribe_success', {'ts': time.time()})
+        while True:
+            try:
+                event, data = q.get(timeout=30)
+            except queue.Empty:
+                handler.wfile.write(b': heartbeat\n\n')
+                handler.wfile.flush()
+                continue
+            if event is None:
+                break
+            _sse(handler, event, data)
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+    except Exception as e:
+        # Handle SSL errors from abrupt client disconnects
+        import ssl
+        if not isinstance(e, ssl.SSLError):
+            logger.debug('Notify SSE error: %s', e)
+    finally:
+        notify_stream.unsubscribe(q)
     return True
 
 
@@ -2887,98 +2997,6 @@ def _write_gateway_last_seen(sid: str, msg_count: int) -> None:
         conn.close()
     except Exception:
         pass  # best-effort — don't fail the HTTP response
-
-
-def _gateway_sse_probe_payload(settings, watcher):
-    enabled = bool(settings.get('show_cli_sessions')) or bool(settings.get('show_messaging_sessions'))
-    # Use the public is_alive() accessor where available (current GatewayWatcher);
-    # fall back to the private _thread check for any older in-memory instance
-    # that might still be hanging around mid-upgrade, and for test doubles that
-    # don't implement the full public API.
-    if watcher is None:
-        watcher_alive = False
-    elif hasattr(watcher, 'is_alive') and callable(getattr(watcher, 'is_alive')):
-        watcher_alive = bool(watcher.is_alive())
-    else:
-        _t = getattr(watcher, '_thread', None)
-        watcher_alive = _t is not None and _t.is_alive()
-    payload = {
-        'enabled': enabled,
-        'fallback_poll_ms': 30000,
-        'ok': enabled and watcher_alive,
-        'watcher_running': watcher_alive,
-    }
-    if not enabled:
-        payload['error'] = 'agent sessions not enabled'
-        return payload, 404
-    if not watcher_alive:
-        payload['error'] = 'watcher not started'
-        return payload, 503
-    return payload, 200
-
-
-def _handle_sessions_sse_stream(handler, parsed):
-    """SSE endpoint for real-time session updates.
-    Pushes all session-related changes:
-    - sessions_changed: Session list updates (gateway sessions + delegate children info)
-    - delegate_children_changed: Delegate children updates
-    """
-    settings = load_settings()
-
-    from api.session_watcher import get_watcher
-    watcher = get_watcher()
-
-    probe = parse_qs(parsed.query).get('probe', [''])[0].lower() in {'1', 'true', 'yes'}
-    if probe:
-        payload, status = _gateway_sse_probe_payload(settings, watcher)
-        return j(handler, payload, status=status)
-
-    # SSE connection is always available — frontend toggle controls display
-    # Same watcher_alive semantics as the probe path — centralised via
-    # the helper so both branches stay in sync.
-    _probe_body, _probe_status = _gateway_sse_probe_payload(settings, watcher)
-    if not _probe_body['watcher_running']:
-        return j(handler, {'error': 'watcher not started'}, status=503)
-
-    handler.send_response(200)
-    handler.send_header('Content-Type', 'text/event-stream; charset=utf-8')
-    handler.send_header('Cache-Control', 'no-cache')
-    handler.send_header('X-Accel-Buffering', 'no')
-    handler.send_header('Connection', 'keep-alive')
-    handler.end_headers()
-
-    q = watcher.subscribe()
-    try:
-        # Send initial snapshot immediately (包含 delegate children 信息)
-        from api.models import get_cli_sessions, _get_session_db, _get_all_delegate_children_map
-        initial = get_cli_sessions()
-        try:
-            db = _get_session_db()
-            if db is not None:
-                delegate_map = _get_all_delegate_children_map(db)
-                for session in initial:
-                    children = delegate_map.get(session['session_id'], [])
-                    session['_delegate_children_count'] = len(children)
-                    session['_has_delegate_children'] = len(children) > 0
-        except Exception:
-            pass
-        _sse(handler, 'sessions_changed', {'sessions': initial})
-
-        while True:
-            try:
-                event_data = q.get(timeout=30)
-            except queue.Empty:
-                handler.wfile.write(b': keepalive\n\n')
-                handler.wfile.flush()
-                continue
-            if event_data is None:
-                break  # watcher is stopping
-            _sse(handler, event_data.get('type', 'sessions_changed'), event_data)
-    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-        pass
-    finally:
-        watcher.unsubscribe(q)
-    return True
 
 
 def _content_disposition_value(disposition: str, filename: str) -> str:
@@ -3025,6 +3043,7 @@ def _handle_media(handler, parsed):
         if not (cv and verify_session(cv)):
             handler.send_response(401)
             handler.send_header("Content-Type", "application/json")
+            handler.send_header("Connection", "close")
             handler.end_headers()
             handler.wfile.write(b'{"error":"Authentication required"}')
             return
@@ -3089,6 +3108,7 @@ def _handle_media(handler, parsed):
     handler.send_header("Content-Type", mime)
     handler.send_header("Content-Length", str(len(raw_bytes)))
     handler.send_header("Cache-Control", "private, max-age=3600")
+    handler.send_header("Connection", "close")
     _security_headers(handler)
 
     if mime in _DOWNLOAD_TYPES or mime not in _INLINE_IMAGE_TYPES:
@@ -3127,6 +3147,7 @@ def _handle_file_raw(handler, parsed):
     handler.send_header("Content-Type", mime)
     handler.send_header("Content-Length", str(len(raw_bytes)))
     handler.send_header("Cache-Control", "no-store")
+    handler.send_header("Connection", "close")
     # Security: force download for dangerous MIME types to prevent XSS.
     # Exception: ?inline=1 permits text/html to be served inline for the
     # sandboxed workspace HTML preview iframe (sandbox="allow-scripts" with no
@@ -3892,6 +3913,13 @@ def _handle_chat_start(handler, body):
     model, normalized_model = _resolve_compatible_session_model(requested_model)
     # Normalize bare model names to @provider:model for unique identification
     model = Session._normalize_model(model)
+    # Persist normalized model so drain/replay paths resolve the provider correctly.
+    if model and s.model != model:
+        s.model = model
+        try:
+            s.sync_webui_metadata(touch_updated_at=False)
+        except Exception:
+            pass
 
     # ── Busy input mode ──
     _valid_modes = frozenset({"interrupt", "queue", "steer", "reject"})
@@ -4475,6 +4503,7 @@ def _handle_workspace_file_read(handler, parsed):
         content = target.read_text(encoding="utf-8", errors="replace")
         handler.send_response(200)
         handler.send_header("Content-Type", "text/plain; charset=utf-8")
+        handler.send_header("Connection", "close")
         handler.end_headers()
         handler.wfile.write(content.encode("utf-8"))
     except OSError as exc:
@@ -5685,6 +5714,8 @@ def _handle_session_import(handler, body):
         SESSIONS.move_to_end(s.session_id)
         while len(SESSIONS) > SESSIONS_MAX:
             SESSIONS.popitem(last=False)
+    from api.models import _notify_session_event
+    _notify_session_event('upsert_session', s)
     # ── Persist imported messages to state.db ──
     try:
         _db = _get_session_db()

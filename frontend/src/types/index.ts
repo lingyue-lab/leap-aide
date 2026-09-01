@@ -75,6 +75,7 @@ export interface SessionListItem {
   // Delegate children (subagent sessions)
   _has_delegate_children?: boolean;
   _delegate_children_count?: number;
+  _delegate_running_count?: number;
   // Search result fields
   match_type?: 'title' | 'content';
   match_message_id?: number;

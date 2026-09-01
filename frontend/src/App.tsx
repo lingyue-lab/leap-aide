@@ -9,6 +9,9 @@ import { useSettingsStore } from './stores/useSettingsStore';
 import { useTheme } from './contexts/ThemeContext';
 import { ProtectedRoute } from './contexts/AuthContext';
 import { useStreamNotify } from './hooks/useStreamNotify';
+import { handleNotifyEvent } from './stores/notifyManager';
+import { wsManager } from './stores/wsManager';
+import { initFontMonitor, checkMaterialSymbolsFont } from './utils/fontMonitor';
 import { FONT_ZOOM_MAP } from './constants';
 
 function App() {
@@ -16,11 +19,23 @@ function App() {
   const { currentSessionId } = useSessionStore();
   const { settings, loadSettings } = useSettingsStore();
   const { setTheme } = useTheme();
-  useStreamNotify();
+  useStreamNotify(currentSessionId);
 
-  // Load settings on mount
+  // Load settings and init font monitor on mount
   React.useEffect(() => {
     loadSettings();
+    initFontMonitor();
+    checkMaterialSymbolsFont();
+  }, []);
+
+  // Connect to WebSocket with a small delay to allow font loading first.
+  React.useEffect(() => {
+    const timer = setTimeout(() => {
+      // Register notify event handler for WebSocket
+      wsManager.addNotifyListener(handleNotifyEvent);
+      wsManager.connect();
+    }, 100); // Small delay to let font requests start first
+    return () => clearTimeout(timer);
   }, []);
 
   // Apply language from settings

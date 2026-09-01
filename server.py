@@ -26,6 +26,7 @@ from api.updates import WEBUI_VERSION
 
 class QuietHTTPServer(ThreadingHTTPServer):
     """Custom HTTP server that silently handles common network errors."""
+    request_queue_size = 128  # Increase backlog for concurrent SSE connections
 
     def handle_error(self, request, client_address):
         """Override to suppress logging for common client disconnect errors."""
@@ -41,6 +42,11 @@ class QuietHTTPServer(ThreadingHTTPServer):
             # errno 104 is Connection reset by peer on Linux
             if exc_value.errno in (54, 104, 32):  # ECONNRESET, EPIPE
                 return
+
+        # Handle SSL errors from abrupt client disconnects (e.g., browser refresh during streaming)
+        import ssl
+        if exc_type is ssl.SSLError:
+            return
 
         # For other errors, use default logging
         super().handle_error(request, client_address)
@@ -66,6 +72,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         self._req_t0 = time.time()
+        # Log all incoming requests for debugging
+        logger.warning('[REQ] %s %s from %s', self.command, self.path, self.client_address)
         # Per-request profile context from cookie (issue #798)
         cookie_profile = get_profile_cookie(self)
         if cookie_profile:
@@ -94,12 +102,28 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 return j(self, {'error': 'websocket upgrade required'}, status=426)
 
+            # ── WebSocket events endpoint ─────────────────────────────────────
+            if parsed.path == '/api/ws/events':
+                if self.headers.get('Upgrade', '').lower() == 'websocket':
+                    from api.ws_events import handle_ws_events
+                    handle_ws_events(self)
+                    return
+                return j(self, {'error': 'websocket upgrade required'}, status=426)
+
             result = handle_get(self, parsed)
             if result is False:
                 return j(self, {'error': 'not found'}, status=404)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            # Silently ignore client disconnect errors
+            pass
         except Exception as e:
-            logger.error('%s %s\n%s', self.command, self.path, traceback.format_exc())
-            return j(self, {'error': 'Internal server error'}, status=500)
+            # Check if this is a socket error (errno 32 = Broken pipe)
+            import socket
+            if isinstance(e, socket.error) and e.errno == 32:
+                pass  # Silently ignore broken pipe
+            else:
+                logger.error('%s %s\n%s', self.command, self.path, traceback.format_exc())
+                return j(self, {'error': 'Internal server error'}, status=500)
         finally:
             clear_request_profile()
 
@@ -115,9 +139,17 @@ class Handler(BaseHTTPRequestHandler):
             result = handle_post(self, parsed)
             if result is False:
                 return j(self, {'error': 'not found'}, status=404)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            # Silently ignore client disconnect errors
+            pass
         except Exception as e:
-            logger.error('%s %s\n%s', self.command, self.path, traceback.format_exc())
-            return j(self, {'error': 'Internal server error'}, status=500)
+            # Check if this is a socket error (errno 32 = Broken pipe)
+            import socket
+            if isinstance(e, socket.error) and e.errno == 32:
+                pass  # Silently ignore broken pipe
+            else:
+                logger.error('%s %s\n%s', self.command, self.path, traceback.format_exc())
+                return j(self, {'error': 'Internal server error'}, status=500)
         finally:
             clear_request_profile()
 
@@ -256,6 +288,8 @@ def main() -> None:
             ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             ctx.minimum_version = ssl.TLSVersion.TLSv1_2
             ctx.load_cert_chain(TLS_CERT, TLS_KEY)
+            # Use permissive SSL settings for browser compatibility
+            ctx.set_ciphers('DEFAULT:@SECLEVEL=1')  # Allow more cipher suites
             httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
             _done(f'TLS={TLS_CERT}')
         except Exception as e:

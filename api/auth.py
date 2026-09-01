@@ -225,11 +225,13 @@ def check_auth(handler, parsed) -> bool:
     if parsed.path.startswith('/api/'):
         handler.send_response(401)
         handler.send_header('Content-Type', 'application/json')
+        handler.send_header('Connection', 'close')
         handler.end_headers()
         handler.wfile.write(b'{"error":"Authentication required"}')
     else:
         handler.send_response(302)
         handler.send_header('Location', '/login')
+        handler.send_header('Connection', 'close')
         handler.end_headers()
     return False
 

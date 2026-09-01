@@ -4,8 +4,7 @@ import { useTranslation } from 'react-i18next';
 import type { SessionListItem, DelegateChildSession } from '@/types';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { useChatStore } from '@/stores/useChatStore';
-import { getDelegateChildrenStatus } from '@/utils/sessionBusy';
-import { isSessionStreaming } from '@/stores/streamManager';
+import { useSessionStreaming } from '@/hooks/useSessionStreaming';
 import { markSessionSeen } from '@/utils/sessionSeen';
 import { sessionService } from '@/services/api';
 import { TrashMultiIcon, Icon } from '@/components/common/Icons';
@@ -187,6 +186,12 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
     try {
       await sessionService.clearHistory(session.session_id, keepN);
       await loadSession(session.session_id);
+      // Update message_count in sessions list so the clear button becomes disabled
+      useSessionStore.setState((state) => ({
+        sessions: state.sessions.map((s) =>
+          s.session_id === session.session_id ? { ...s, message_count: keepN } : s
+        ),
+      }));
       // Sync chatStore with the cleared session data
       const chatStore = useChatStore.getState();
       chatStore.clearCache(session.session_id);
@@ -264,33 +269,9 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
   const isSubagentSession = session.is_subagent_session;
   const isReadonly = session._readonly && !isSubagentSession;
 
-  // 子 agent 运行状态
-  const [delegateChildrenStatus, setDelegateChildrenStatus] = useState({running_count: 0, total_count: 0});
-
-  // 异步获取子 agent 运行状态
-  useEffect(() => {
-    // 子 agent session 不检查
-    if (isSubagentSession) {
-      return;
-    }
-    // 如果没有子 agent，不检查
-    if (!session._has_delegate_children) {
-      return;
-    }
-    // 定期检查子 agent 状态
-    const checkStatus = async () => {
-      const status = await getDelegateChildrenStatus(session.session_id);
-      setDelegateChildrenStatus(status);
-    };
-    // 立即检查一次
-    checkStatus();
-    // 每 5 秒检查一次
-    const interval = setInterval(checkStatus, 5000);
-    return () => clearInterval(interval);
-  }, [session.session_id, isSubagentSession, session._has_delegate_children]);
-
-  // Derived: are any subagents currently running?
-  const subagentsActive = delegateChildrenStatus.running_count > 0;
+  // Delegate children running state — reactive from notify stream
+  const delegateRunningCount = session._delegate_running_count ?? 0;
+  const subagentsActive = delegateRunningCount > 0;
 
   return (
     <>
@@ -358,7 +339,7 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
               <Icon name="account_tree" size={16} />
               {subagentsActive && (
                 <span className="sidebar-item-delegate-running">
-                  {delegateChildrenStatus.running_count}
+                  {delegateRunningCount}
                 </span>
               )}
             </span>
@@ -516,7 +497,7 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
                   >
                     <div className="sidebar-item-text">
                       <div className="sidebar-item-title-row">
-                        <span className="sidebar-item-archived-icon" data-tooltip="Archived snapshot">
+                        <span className="sidebar-item-child-icon" data-tooltip="Archived snapshot">
                           <Icon name="description" size={16} />
                         </span>
                         <span className="sidebar-item-title">
@@ -538,30 +519,14 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
         <div className="sidebar-item-archived-section">
           {delegateExpanded && (
             <div className="sidebar-item-archived-children">
-              {delegateChildren.map((child) => {
-                // StreamManager.isSessionStreaming is reliable for any session
-                // with an active SSE connection, regardless of which session is viewed.
-                const childStreaming = isSessionStreaming(child.id);
-                return (
-                <div
+              {delegateChildren.map((child) => (
+                <DelegateChildItem
                   key={child.id}
-                  className={`sidebar-item sidebar-item-archived ${currentSessionId === child.id ? 'active' : ''}`}
-                  onClick={(e) => { e.stopPropagation(); selectSession(child.id); }}
-                  data-session-id={child.id}
-                >
-                  <div className="sidebar-item-text">
-                    <div className="sidebar-item-title-row">
-                      <span className={`sidebar-item-archived-icon${childStreaming ? ' streaming' : ''}`} data-tooltip={t('sessions.subagent_session')}>
-                        <Icon name="account_tree" size={16} />
-                      </span>
-                      <span className="sidebar-item-title">
-                        {t('sessions.subagent')}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-                );
-              })}
+                  child={child}
+                  isActive={currentSessionId === child.id}
+                  onClick={() => selectSession(child.id)}
+                />
+              ))}
             </div>
           )}
         </div>
@@ -633,5 +598,38 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
         </div>
       )}
     </>
+  );
+}
+
+/**
+ * DelegateChildItem — A single delegate (subagent) child session in the sidebar.
+ * Uses useSessionStreaming hook to subscribe to streaming state changes
+ * for real-time breathing animation.
+ */
+function DelegateChildItem({ child, isActive, onClick }: {
+  child: DelegateChildSession;
+  isActive: boolean;
+  onClick: () => void;
+}) {
+  const { t } = useTranslation('common');
+  const childStreaming = useSessionStreaming(child.id);
+
+  return (
+    <div
+      className={`sidebar-item sidebar-item-archived ${isActive ? 'active' : ''}`}
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      data-session-id={child.id}
+    >
+      <div className="sidebar-item-text">
+        <div className="sidebar-item-title-row">
+          <span className={`sidebar-item-child-icon${childStreaming ? ' streaming' : ''}`} data-tooltip={t('sessions.subagent_session')}>
+            <Icon name="account_tree" size={16} />
+          </span>
+          <span className="sidebar-item-title">
+            {t('sessions.subagent')}
+          </span>
+        </div>
+      </div>
+    </div>
   );
 }

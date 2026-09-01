@@ -44,14 +44,6 @@ export default function SessionList() {
     loadSessions();
   }, [loadSessions, showCliSessions, showMessagingSessions, showCronSessions]);
 
-  // Subscribe to Gateway SSE for real-time session updates (CLI + messaging only;
-  // cron sessions are static and arrive via loadSessions).
-  useEffect(() => {
-    if (!showCliSessions && !showMessagingSessions) return;
-    const unsubscribe = useSessionStore.getState().subscribeGatewaySSE();
-    return unsubscribe;
-  }, [showCliSessions, showMessagingSessions]);
-
   // Client-side source filter — mirrors backend session_visible(). This is a
   // final display gate so SSE-pushed sessions also respect the three toggles.
   const isVisibleBySource = useCallback((s: any) => {
@@ -146,9 +138,9 @@ export default function SessionList() {
 
 
 
-  // All sessions (WebUI + gateway/CLI), excluding archived compaction snapshots
+  // All sessions (WebUI + gateway/CLI), excluding archived compaction snapshots and subagent sessions
   const allSessions = useMemo(
-    () => filteredSessions.filter((s) => !(s._readonly && s._parent_session_id)),
+    () => filteredSessions.filter((s) => !(s._readonly && s._parent_session_id) && !s.is_subagent_session),
     [filteredSessions]
   );
 

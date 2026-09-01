@@ -5,7 +5,6 @@ import { useSessionStore } from '@/stores/useSessionStore';
 import { useModeStore } from '@/stores/useModeStore';
 import { useChatStream } from '@/hooks/useChatStream';
 import { useModeSync } from '@/hooks/useModeSync';
-import { useSessionPolling } from '@/hooks/useSessionPolling';
 import * as StreamManager from '@/stores/streamManager';
 import { chatService } from '@/services/api';
 import ChatMessages from './ChatMessages';
@@ -68,7 +67,6 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
   const streaming = !!activeStreamId;
   const busy = streaming;
   useModeSync(sessionId ?? null);
-  useSessionPolling(sessionId ?? null);
 
   // ── Queue consistency cleanup ─────────────────────────────────────────────
   // When the agent goes idle, check that queuedMessages is in sync with
@@ -111,6 +109,7 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
     if (!sessionId) return;
     if (prevId === sessionId) return;
 
+    console.log(`[ChatInterface] session switch`, { from: prevId, to: sessionId });
     setSessionLoading(true);
     window.dispatchEvent(new CustomEvent('hermes:session-loading', { detail: true }));
 
@@ -150,15 +149,51 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
 
     // ── Helper: refresh session data from backend and reconnect to any active stream ──
     const refreshFromBackend = async (sid: string) => {
+      console.log(`[ChatInterface] refreshFromBackend called`, { sid });
+
       // Guard against stale responses: if the user switched sessions while this
       // loadSession was in flight, its late response must not overwrite the
       // current session's messages / usage / stream reconnection.
       if (useSessionStore.getState().currentSessionId !== sid) {
+        console.log(`[ChatInterface] refreshFromBackend: session changed, skipping`);
         return;
       }
       const session = useSessionStore.getState().currentSession;
-      if (!session) { setSessionLoading(false); window.dispatchEvent(new CustomEvent('hermes:session-loading', { detail: false })); return; }
-      if (session.messages) setMessages(session.messages);
+      if (!session) {
+        console.log(`[ChatInterface] refreshFromBackend: no session`);
+        setSessionLoading(false);
+        window.dispatchEvent(new CustomEvent('hermes:session-loading', { detail: false }));
+        return;
+      }
+
+      console.log(`[ChatInterface] refreshFromBackend: session loaded`, {
+        sessionId: session.session_id,
+        messagesCount: session.messages?.length,
+        activeStreamId: session.active_stream_id,
+        hasPendingMsg: !!session.pending_user_message,
+      });
+
+      // Merge pending_user_message into messages before display.
+      // During streaming, run_conversation has not yet added the user message
+      // to session.messages — it lives only in pending_user_message.
+      // Without this merge, a force-refresh would briefly show stale messages
+      // without the current user bubble.
+      const msgs = session.messages ? [...session.messages] : [];
+      const pendingMsg = session.pending_user_message;
+      const pendingOriginalMsg = session.pending_original_message ?? undefined;
+      const pendingUserMsgTs = session.pending_user_message_ts ?? undefined;
+      if (pendingMsg) {
+        const last = msgs[msgs.length - 1];
+        if (!(last?.role === 'user' && typeof last.content === 'string' && last.content === pendingMsg)) {
+          msgs.push({
+            role: 'user',
+            content: pendingMsg,
+            timestamp__webui: pendingUserMsgTs ?? (Date.now() / 1000),
+            ...(pendingOriginalMsg ? { original_content__webui: pendingOriginalMsg } : {}),
+          });
+        }
+      }
+      if (msgs.length) setMessages(msgs);
       if (session.tool_calls) setToolCalls(session.tool_calls);
       setSessionLoading(false);
       window.dispatchEvent(new CustomEvent('hermes:session-loading', { detail: false }));
@@ -176,20 +211,36 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
       }
 
       // If there's an active backend stream for this session (e.g. started by a
-      // CLI script), re-attach to it so the browser sees tokens in real time.
+      // CLI script or subagent), re-attach to it so the browser sees tokens in real time.
       const activeStreamId = session.active_stream_id;
-      const pendingMsg = session.pending_user_message;
-      const pendingOriginalMsg = session.pending_original_message ?? undefined;
-      const pendingUserMsgTs = session.pending_user_message_ts ?? undefined;
-      if (activeStreamId && pendingMsg) {
+
+      console.log(`[ChatInterface] refreshFromBackend: checking stream`, {
+        activeStreamId,
+        hasPendingMsg: !!pendingMsg,
+      });
+
+      // Reconnect if there's an active stream — even without pendingMsg.
+      // Subagent sessions have active streams but no pendingMsg (the parent
+      // agent drives the conversation, not a user message).
+      if (activeStreamId) {
         try {
           const status = await chatService.checkStreamStatus(activeStreamId);
+          console.log(`[ChatInterface] refreshFromBackend: stream status`, { active: status.active });
+
           if (status.active) {
-            StreamManager.reconnectStream(sid, activeStreamId, pendingMsg, session.messages ?? [], pendingOriginalMsg, pendingUserMsgTs);
+            console.log(`[ChatInterface] refreshFromBackend: calling reconnectStream`, {
+              sid,
+              activeStreamId,
+              messagesCount: (session.messages ?? []).length,
+            });
+            StreamManager.reconnectStream(sid, activeStreamId, pendingMsg || '', session.messages ?? [], pendingOriginalMsg, pendingUserMsgTs);
             // StreamManager.reconnectStream sets busy=true internally.
             // useIsBusy() will pick it up via the subscriber.
           }
-        } catch { /* network error — ignore, already showing persisted messages */ }
+        } catch (err) {
+          console.error(`[ChatInterface] refreshFromBackend: stream check failed`, err);
+          /* network error — ignore, already showing persisted messages */
+        }
       }
     };
 

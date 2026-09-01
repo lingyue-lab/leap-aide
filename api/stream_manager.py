@@ -20,12 +20,6 @@ class StreamManager:
         self._streams: dict[str, ReplayableStream] = {}      # stream_id -> stream
         self._session_streams: dict[str, str] = {}            # session_id -> stream_id
         self._on_end_callbacks: list = []                     # end_stream callbacks
-        self._watcher = None                                  # SessionWatcher (lazy injection)
-
-    def register_watcher(self, watcher):
-        """Inject a watcher reference so begin_stream/end_stream can proactively push sessions_changed."""
-        self._watcher = watcher
-        logger.debug("[register_watcher] watcher registered: %s", watcher)
 
     def register_on_end(self, callback):
         """Register an end_stream callback, triggered when a stream closes (used for cache eviction, etc.)."""
@@ -35,8 +29,8 @@ class StreamManager:
         """Create a stream for *session*.  Returns stream_id or None if one already exists.
 
         Only updates ``_session_streams`` — session objects never hold
-        ``active_stream_id``.  The watcher reads streaming state from
-        StreamManager, not from session objects.
+        ``active_stream_id``.  Pushes a begin_stream notification to the
+        global notify stream so all connected frontends are informed.
         """
         session_id = session.session_id
         with self._lock:
@@ -46,17 +40,19 @@ class StreamManager:
             stream = ReplayableStream()
             self._streams[stream_id] = stream
             self._session_streams[session_id] = stream_id
-        logger.debug("[begin_stream] session=%s stream=%s watcher=%s",
-                     session_id[:12], stream_id[:8], self._watcher is not None)
-        if self._watcher is not None:
-            self._watcher.notify_now()
+        logger.debug("[begin_stream] session=%s stream=%s",
+                     session_id[:12], stream_id[:8])
+        # Push notify outside lock to avoid deadlocks
+        from api.models import _notify_session_event
+        _notify_session_event('begin_stream', session, stream_id)
         return stream_id
 
     def end_stream(self, session, stream_id: str = None) -> str | None:
         """Close and remove stream for *session*.  Returns removed stream_id or None.
 
         Only updates ``_session_streams`` — session objects never hold
-        ``active_stream_id``.
+        ``active_stream_id``.  Pushes an end_stream notification to the
+        global notify stream so all connected frontends are informed.
         """
         session_id = session.session_id
         with self._lock:
@@ -67,11 +63,11 @@ class StreamManager:
                     stream.close()
         # Fire callbacks outside the lock to avoid deadlocks (callbacks may acquire models.LOCK)
         if removed_id:
-            logger.debug("[end_stream] session=%s removed=%s watcher=%s",
-                         session_id[:12], removed_id[:8] if removed_id else None,
-                         self._watcher is not None)
-            if self._watcher is not None:
-                self._watcher.notify_now()
+            logger.debug("[end_stream] session=%s removed=%s",
+                         session_id[:12], removed_id[:8] if removed_id else None)
+            # Push notify outside lock
+            from api.models import _notify_session_event
+            _notify_session_event('end_stream', session, removed_id)
             for cb in self._on_end_callbacks:
                 try:
                     cb(session_id)

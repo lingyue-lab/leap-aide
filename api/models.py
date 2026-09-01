@@ -356,6 +356,103 @@ class Session:
         # they survive a round-trip through save() → JSON → load().
         self.__dict__.update(kwargs)
 
+    # ── copy_from / clone ────────────────────────────────────────────────
+
+    def copy_from(self, other: 'Session') -> None:
+        """Update data fields from another Session in-place.
+
+        Preserves runtime fields (session_id, process loop, pending state)
+        that are managed by the streaming/threading infrastructure.
+        All holders of this Session reference automatically see the updated data.
+        """
+        self.title = other.title
+        self.workspace = getattr(other, 'workspace', None)
+        self.model = other.model
+        self.messages = list(other.messages)       # copy content, not reference
+        self.tool_calls = list(other.tool_calls)
+        self.created_at = other.created_at
+        self.updated_at = other.updated_at
+        self.pinned = other.pinned
+        self.archived = other.archived
+        self.project_id = other.project_id
+        self.profile = other.profile
+        self.input_tokens = other.input_tokens
+        self.output_tokens = other.output_tokens
+        self.estimated_cost = other.estimated_cost
+        self.personality = other.personality
+        self.skills = other.skills
+        self.last_seen_msg_count = other.last_seen_msg_count
+        self._mode = other._mode
+        self.reasoning_effort = other.reasoning_effort
+        self.service_tier = other.service_tier
+        self._metadata_message_count = other._metadata_message_count
+        self.parent_session_id = other.parent_session_id
+        self.compression_segment_count = other.compression_segment_count
+        self.context_length = other.context_length
+        self.last_prompt_tokens = other.last_prompt_tokens
+        self.threshold_tokens = other.threshold_tokens
+        self.last_compression_time = other.last_compression_time
+        self.lineage_root_id = other.lineage_root_id
+        self.lineage_tip_id = other.lineage_tip_id
+        self.compression_anchor_visible_idx = other.compression_anchor_visible_idx
+        self.compression_anchor_message_key = other.compression_anchor_message_key
+        # Preserve runtime fields: session_id, pending_*, _process_loop_*, _pending_input
+
+    def clone(self) -> 'Session':
+        """Return a frozen snapshot for read-only use (notify, compact, etc.).
+
+        The snapshot has no runtime state (no process loop, no pending input).
+        Mutable fields (messages, tool_calls) are deep-copied so the snapshot
+        is immune to subsequent mutations on the original.
+        """
+        snapshot = Session.__new__(Session)
+        snapshot.session_id = self.session_id
+        snapshot.title = self.title
+        snapshot.workspace = getattr(self, 'workspace', None)
+        snapshot.model = getattr(self, 'model', None)
+        snapshot.messages = list(self.messages)
+        snapshot.tool_calls = list(self.tool_calls)
+        snapshot.created_at = getattr(self, 'created_at', 0)
+        snapshot.updated_at = getattr(self, 'updated_at', 0)
+        snapshot.pinned = getattr(self, 'pinned', False)
+        snapshot.archived = getattr(self, 'archived', False)
+        snapshot.project_id = getattr(self, 'project_id', None)
+        snapshot.profile = getattr(self, 'profile', None)
+        snapshot.input_tokens = getattr(self, 'input_tokens', 0)
+        snapshot.output_tokens = getattr(self, 'output_tokens', 0)
+        snapshot.estimated_cost = getattr(self, 'estimated_cost', 0.0)
+        snapshot.personality = getattr(self, 'personality', None)
+        snapshot.skills = getattr(self, 'skills', None)
+        snapshot.last_seen_msg_count = getattr(self, 'last_seen_msg_count', None)
+        snapshot._mode = getattr(self, '_mode', None)
+        snapshot.reasoning_effort = getattr(self, 'reasoning_effort', None)
+        snapshot.service_tier = getattr(self, 'service_tier', None)
+        snapshot._metadata_message_count = getattr(self, '_metadata_message_count', None)
+        snapshot.parent_session_id = getattr(self, 'parent_session_id', None)
+        snapshot.compression_segment_count = getattr(self, 'compression_segment_count', 0)
+        snapshot.context_length = getattr(self, 'context_length', None)
+        snapshot.last_prompt_tokens = getattr(self, 'last_prompt_tokens', None)
+        snapshot.threshold_tokens = getattr(self, 'threshold_tokens', None)
+        snapshot.last_compression_time = getattr(self, 'last_compression_time', None)
+        snapshot.lineage_root_id = getattr(self, 'lineage_root_id', None)
+        snapshot.lineage_tip_id = getattr(self, 'lineage_tip_id', None)
+        snapshot.compression_anchor_visible_idx = getattr(self, 'compression_anchor_visible_idx', None)
+        snapshot.compression_anchor_message_key = getattr(self, 'compression_anchor_message_key', None)
+        # Runtime fields: empty sentinel (snapshot has no live state)
+        snapshot.pending_user_message = None
+        snapshot.pending_attachments = []
+        snapshot.pending_started_at = None
+        snapshot._process_loop_thread = None
+        snapshot._process_loop_stop = threading.Event()
+        snapshot._process_loop_last_active = 0
+        snapshot._pending_input = queue.Queue()
+        # Preserve extra kwargs (session_approved, llm_title_generated, etc.)
+        snapshot.__dict__.update({
+            k: v for k, v in self.__dict__.items()
+            if k not in snapshot.__dict__
+        })
+        return snapshot
+
     @staticmethod
     def _normalize_model(model: str) -> str:
         """Normalize bare model names to @provider:model format.
@@ -811,6 +908,10 @@ class Session:
             'source_tag': getattr(self, 'source_tag', None),
             'auto_compress_disabled': getattr(self, 'auto_compress_disabled', False),
             '_has_process_loop': getattr(self, '_process_loop_thread', None) is not None and self._process_loop_thread.is_alive(),
+            # Delegate children info (computed by _update_parent_delegate_count)
+            '_has_delegate_children': getattr(self, '_has_delegate_children', False),
+            '_delegate_children_count': getattr(self, '_delegate_children_count', 0),
+            '_delegate_running_count': getattr(self, '_delegate_running_count', 0),
         }
 
 def get_session(sid, metadata_only=False):
@@ -853,6 +954,10 @@ def get_session(sid, metadata_only=False):
             SESSIONS.move_to_end(sid)
             while len(SESSIONS) > SESSIONS_MAX:
                 SESSIONS.popitem(last=False)  # evict least recently used
+        # Compute delegate children info before notifying so the frontend
+        # gets accurate _has_delegate_children / _delegate_running_count.
+        _compute_delegate_info(s)
+        _notify_session_event('upsert_session', s)
         return s
     raise KeyError(sid)
 
@@ -911,6 +1016,9 @@ def new_session(workspace=None, model=None, profile=None):
         except ImportError:
             profile = None
     effective_model = model or get_first_available_model()
+    # Normalize bare model names to @provider:model so downstream paths
+    # (drain, replay) can resolve the provider without ambiguity.
+    effective_model = Session._normalize_model(effective_model)
     # Inherit default_mode from global settings for new sessions
     try:
         from api.config import load_settings
@@ -929,6 +1037,7 @@ def new_session(workspace=None, model=None, profile=None):
         SESSIONS.move_to_end(s.session_id)
         while len(SESSIONS) > SESSIONS_MAX:
             SESSIONS.popitem(last=False)
+    _notify_session_event('upsert_session', s)
     # Persist defaults to state.db immediately so the composer footer
     # reflects the selected workspace / model / reasoning / etc.
     try:
@@ -1657,19 +1766,129 @@ def delete_cli_session(sid) -> bool:
         return False
 
 
+# ── Notify stream helper ────────────────────────────────────────────────
+
+def _notify_session_event(event_type: str, session, stream_id: str = None):
+    """Push session event to the global notify stream.
+
+    Takes a clone() snapshot to ensure data consistency even if the
+    original session is mutated concurrently.
+    event_type: 'upsert_session' | 'delete_session' | 'begin_stream' | 'end_stream'
+    """
+    from api.notify_stream import notify_stream
+    snap = session.clone() if hasattr(session, 'clone') else session
+    data = {
+        'session_id': snap.session_id,
+        'parent_session_id': snap.parent_session_id,
+        'stream_id': stream_id,
+        'source_tag': getattr(snap, 'source_tag', None),
+        'title': snap.title,
+        'message_count': len(snap.messages or []),
+        'last_seen_msg_count': snap.last_seen_msg_count,
+        'ts': time.time(),
+        # Delegate children info — always included for consistent updates.
+        # Defaults to False/0 when not explicitly set (e.g. from DB load).
+        '_has_delegate_children': getattr(snap, '_has_delegate_children', False),
+        '_delegate_children_count': getattr(snap, '_delegate_children_count', 0),
+        '_delegate_running_count': getattr(snap, '_delegate_running_count', 0),
+    }
+    notify_stream.put(event_type, data)
+
+    # When a child stream ends, update parent's delegate children count
+    if event_type == 'end_stream' and snap.parent_session_id:
+        _update_parent_delegate_count(snap.parent_session_id)
+
+
+def _update_parent_delegate_count(parent_session_id: str):
+    """Update parent session's delegate children count and notify frontend."""
+    with LOCK:
+        parent = SESSIONS.get(parent_session_id)
+    if not parent:
+        return
+    _compute_delegate_info(parent)
+    _notify_session_event('upsert_session', parent)
+
+
+def _compute_delegate_info(session):
+    """Compute delegate children info using cache-first strategy.
+
+    Data source priority:
+    1. SESSIONS cache → children list (real-time, has parent_session_id)
+    2. DB → ended_at (accurate, persisted)
+    3. StreamManager → active streams (real-time)
+    """
+    try:
+        from api.stream_manager import stream_manager
+
+        # 1. Get children from SESSIONS cache (real-time data)
+        with LOCK:
+            cached_children = [
+                s for s in SESSIONS.values()
+                if getattr(s, 'parent_session_id', None) == session.session_id
+                and getattr(s, 'is_subagent_session', False)
+            ]
+
+        # 2. Get ended_at mapping from DB (persisted data)
+        db_ended_map = {}
+        try:
+            db = _get_session_db()
+            if db:
+                rows = db._conn.execute(
+                    "SELECT id, ended_at FROM sessions WHERE parent_session_id = ?",
+                    (session.session_id,)
+                ).fetchall()
+                db_ended_map = {r['id']: r['ended_at'] for r in rows}
+        except Exception:
+            pass
+
+        # 3. Compute running count
+        active_ids = set(stream_manager.get_active_session_ids())
+        running_count = 0
+        for child in cached_children:
+            # Prefer DB ended_at, fallback to cache attribute
+            ended_at = db_ended_map.get(child.session_id) or getattr(child, 'ended_at', None)
+            if not ended_at and child.session_id in active_ids:
+                running_count += 1
+
+        # 4. Merge children count (cache + DB, deduplicated)
+        seen_ids = {c.session_id for c in cached_children}
+        all_children_count = len(cached_children)
+        for sid in db_ended_map:
+            if sid not in seen_ids:
+                all_children_count += 1
+
+        logger.info(
+            "[delegate_info] session=%s cached=%d db=%d active=%d running=%d",
+            session.session_id[:12], len(cached_children), len(db_ended_map),
+            len(active_ids), running_count
+        )
+        session._delegate_children_count = all_children_count
+        session._has_delegate_children = all_children_count > 0
+        session._delegate_running_count = running_count
+    except Exception:
+        pass  # non-fatal
+
+
 # ── Stream end cache invalidation ─────────────────────────────────────────
 # Register a callback so that when a stream ends (end_stream), the SESSIONS
-# cache entry for that session is evicted.  The next GET /api/session will
-# then reload from state.db, picking up any messages written by the agent
-# after the cache was originally populated.
+# cache entry for that session is reloaded from state.db via copy_from(),
+# and an upsert_session notification is pushed to all connected frontends.
 
 def _setup_stream_cache_invalidation():
     from api.stream_manager import stream_manager
-    def _evict(session_id: str):
+    def _on_stream_end(session_id: str):
         with LOCK:
-            evicted = SESSIONS.pop(session_id, None)
-        if evicted:
-            logger.debug("[cache-invalidation] Evicted session %s", session_id[:12])
-    stream_manager.register_on_end(_evict)
+            cached = SESSIONS.get(session_id)
+        if cached:
+            try:
+                fresh = Session.load(session_id)
+                if fresh:
+                    with LOCK:
+                        cached.copy_from(fresh)
+                        SESSIONS.move_to_end(session_id)
+                    _notify_session_event('upsert_session', cached)
+            except (KeyError, Exception):
+                pass
+    stream_manager.register_on_end(_on_stream_end)
 
 _setup_stream_cache_invalidation()

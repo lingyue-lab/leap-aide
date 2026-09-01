@@ -629,40 +629,40 @@ def _resolve_provider_alias(name: str) -> str:
 # Well-known models per provider (used to populate dropdown for direct API providers)
 _PROVIDER_MODELS = {
     "anthropic": [
-        {"id": "claude-opus-4.6", "label": "Claude Opus 4.6"},
-        {"id": "claude-sonnet-4.6", "label": "Claude Sonnet 4.6"},
-        {"id": "claude-sonnet-4-5", "label": "Claude Sonnet 4.5"},
-        {"id": "claude-haiku-4-5", "label": "Claude Haiku 4.5"},
+        {"id": "@anthropic:claude-opus-4.6", "label": "Claude Opus 4.6"},
+        {"id": "@anthropic:claude-sonnet-4.6", "label": "Claude Sonnet 4.6"},
+        {"id": "@anthropic:claude-sonnet-4-5", "label": "Claude Sonnet 4.5"},
+        {"id": "@anthropic:claude-haiku-4-5", "label": "Claude Haiku 4.5"},
     ],
     "openai": [
-        {"id": "gpt-5.5",      "label": "GPT-5.5"},
-        {"id": "gpt-5.5-mini", "label": "GPT-5.5 Mini"},
-        {"id": "gpt-5.4-mini", "label": "GPT-5.4 Mini"},
-        {"id": "gpt-5.4",      "label": "GPT-5.4"},
+        {"id": "@openai:gpt-5.5",      "label": "GPT-5.5"},
+        {"id": "@openai:gpt-5.5-mini", "label": "GPT-5.5 Mini"},
+        {"id": "@openai:gpt-5.4-mini", "label": "GPT-5.4 Mini"},
+        {"id": "@openai:gpt-5.4",      "label": "GPT-5.4"},
     ],
     "openai-codex": [
-        {"id": "gpt-5.5", "label": "GPT-5.5"},
-        {"id": "gpt-5.5-mini", "label": "GPT-5.5 Mini"},
-        {"id": "gpt-5.4", "label": "GPT-5.4"},
-        {"id": "gpt-5.4-mini", "label": "GPT-5.4 Mini"},
-        {"id": "gpt-5.3-codex", "label": "GPT-5.3 Codex"},
-        {"id": "gpt-5.2-codex", "label": "GPT-5.2 Codex"},
-        {"id": "gpt-5.1-codex-max", "label": "GPT-5.1 Codex Max"},
-        {"id": "gpt-5.1-codex-mini", "label": "GPT-5.1 Codex Mini"},
-        {"id": "codex-mini-latest", "label": "Codex Mini (latest)"},
+        {"id": "@openai-codex:gpt-5.5", "label": "GPT-5.5"},
+        {"id": "@openai-codex:gpt-5.5-mini", "label": "GPT-5.5 Mini"},
+        {"id": "@openai-codex:gpt-5.4", "label": "GPT-5.4"},
+        {"id": "@openai-codex:gpt-5.4-mini", "label": "GPT-5.4 Mini"},
+        {"id": "@openai-codex:gpt-5.3-codex", "label": "GPT-5.3 Codex"},
+        {"id": "@openai-codex:gpt-5.2-codex", "label": "GPT-5.2 Codex"},
+        {"id": "@openai-codex:gpt-5.1-codex-max", "label": "GPT-5.1 Codex Max"},
+        {"id": "@openai-codex:gpt-5.1-codex-mini", "label": "GPT-5.1 Codex Mini"},
+        {"id": "@openai-codex:codex-mini-latest", "label": "Codex Mini (latest)"},
     ],
     "google": [
-        {"id": "gemini-3.1-pro-preview",            "label": "Gemini 3.1 Pro Preview"},
-        {"id": "gemini-3-flash-preview",            "label": "Gemini 3 Flash Preview"},
-        {"id": "gemini-3.1-flash-lite-preview",     "label": "Gemini 3.1 Flash Lite Preview"},
-        {"id": "gemini-2.5-pro",                    "label": "Gemini 2.5 Pro"},
-        {"id": "gemini-2.5-flash",                  "label": "Gemini 2.5 Flash"},
+        {"id": "@google:gemini-3.1-pro-preview",            "label": "Gemini 3.1 Pro Preview"},
+        {"id": "@google:gemini-3-flash-preview",            "label": "Gemini 3 Flash Preview"},
+        {"id": "@google:gemini-3.1-flash-lite-preview",     "label": "Gemini 3.1 Flash Lite Preview"},
+        {"id": "@google:gemini-2.5-pro",                    "label": "Gemini 2.5 Pro"},
+        {"id": "@google:gemini-2.5-flash",                  "label": "Gemini 2.5 Flash"},
     ],
     "deepseek": [
-        {"id": "deepseek-v4-pro", "label": "DeepSeek V4 Pro"},
-        {"id": "deepseek-v4-flash", "label": "DeepSeek V4 Flash"},
-        {"id": "deepseek-chat-v3-0324", "label": "DeepSeek V3"},
-        {"id": "deepseek-reasoner", "label": "DeepSeek Reasoner"},
+        {"id": "@deepseek:deepseek-v4-pro", "label": "DeepSeek V4 Pro"},
+        {"id": "@deepseek:deepseek-v4-flash", "label": "DeepSeek V4 Flash"},
+        {"id": "@deepseek:deepseek-chat-v3-0324", "label": "DeepSeek V3"},
+        {"id": "@deepseek:deepseek-reasoner", "label": "DeepSeek Reasoner"},
     ],
     "nous": [
         {"id": "@nous:anthropic/claude-opus-4.6",     "label": "Claude Opus 4.6 (via Nous)"},
@@ -671,109 +671,107 @@ _PROVIDER_MODELS = {
         {"id": "@nous:google/gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro Preview (via Nous)"},
     ],
     "zai": [
-        {"id": "glm-5.1", "label": "GLM-5.1"},
-        {"id": "glm-5", "label": "GLM-5"},
-        {"id": "glm-5-turbo", "label": "GLM-5 Turbo"},
-        {"id": "glm-4.7", "label": "GLM-4.7"},
-        {"id": "glm-4.5", "label": "GLM-4.5"},
-        {"id": "glm-4.5-flash", "label": "GLM-4.5 Flash"},
+        {"id": "@zai:glm-5.1", "label": "GLM-5.1"},
+        {"id": "@zai:glm-5", "label": "GLM-5"},
+        {"id": "@zai:glm-5-turbo", "label": "GLM-5 Turbo"},
+        {"id": "@zai:glm-4.7", "label": "GLM-4.7"},
+        {"id": "@zai:glm-4.5", "label": "GLM-4.5"},
+        {"id": "@zai:glm-4.5-flash", "label": "GLM-4.5 Flash"},
     ],
     "kimi-coding": [
-        {"id": "moonshot-v1-8k", "label": "Moonshot v1 8k"},
-        {"id": "moonshot-v1-32k", "label": "Moonshot v1 32k"},
-        {"id": "moonshot-v1-128k", "label": "Moonshot v1 128k"},
-        {"id": "kimi-latest", "label": "Kimi Latest"},
-        {"id": "kimi-k2.5", "label": "Kimi K2.5"},
+        {"id": "@kimi-coding:moonshot-v1-8k", "label": "Moonshot v1 8k"},
+        {"id": "@kimi-coding:moonshot-v1-32k", "label": "Moonshot v1 32k"},
+        {"id": "@kimi-coding:moonshot-v1-128k", "label": "Moonshot v1 128k"},
+        {"id": "@kimi-coding:kimi-latest", "label": "Kimi Latest"},
+        {"id": "@kimi-coding:kimi-k2.5", "label": "Kimi K2.5"},
     ],
     "minimax": [
-        {"id": "MiniMax-M2.7", "label": "MiniMax M2.7"},
-        {"id": "MiniMax-M2.7-highspeed", "label": "MiniMax M2.7 Highspeed"},
-        {"id": "MiniMax-M2.5", "label": "MiniMax M2.5"},
-        {"id": "MiniMax-M2.5-highspeed", "label": "MiniMax M2.5 Highspeed"},
-        {"id": "MiniMax-M2.1", "label": "MiniMax M2.1"},
+        {"id": "@minimax:MiniMax-M2.7", "label": "MiniMax M2.7"},
+        {"id": "@minimax:MiniMax-M2.7-highspeed", "label": "MiniMax M2.7 Highspeed"},
+        {"id": "@minimax:MiniMax-M2.5", "label": "MiniMax M2.5"},
+        {"id": "@minimax:MiniMax-M2.5-highspeed", "label": "MiniMax M2.5 Highspeed"},
+        {"id": "@minimax:MiniMax-M2.1", "label": "MiniMax M2.1"},
     ],
     # GitHub Copilot — model IDs served via the Copilot API
     "copilot": [
-        {"id": "gpt-5.5", "label": "GPT-5.5"},
-        {"id": "gpt-5.5-mini", "label": "GPT-5.5 Mini"},
-        {"id": "gpt-5.4", "label": "GPT-5.4"},
-        {"id": "gpt-5.4-mini", "label": "GPT-5.4 Mini"},
-        {"id": "gpt-4o", "label": "GPT-4o"},
-        {"id": "claude-opus-4.6", "label": "Claude Opus 4.6"},
-        {"id": "claude-sonnet-4.6", "label": "Claude Sonnet 4.6"},
-        {"id": "gemini-3-flash-preview", "label": "Gemini 3 Flash Preview"},
+        {"id": "@copilot:gpt-5.5", "label": "GPT-5.5"},
+        {"id": "@copilot:gpt-5.5-mini", "label": "GPT-5.5 Mini"},
+        {"id": "@copilot:gpt-5.4", "label": "GPT-5.4"},
+        {"id": "@copilot:gpt-5.4-mini", "label": "GPT-5.4 Mini"},
+        {"id": "@copilot:gpt-4o", "label": "GPT-4o"},
+        {"id": "@copilot:claude-opus-4.6", "label": "Claude Opus 4.6"},
+        {"id": "@copilot:claude-sonnet-4.6", "label": "Claude Sonnet 4.6"},
+        {"id": "@copilot:gemini-3-flash-preview", "label": "Gemini 3 Flash Preview"},
     ],
     # OpenCode Zen — curated models via opencode.ai/zen (pay-as-you-go credits)
     "opencode-zen": [
-        {"id": "gpt-5.4-pro", "label": "GPT-5.4 Pro"},
-        {"id": "gpt-5.4", "label": "GPT-5.4"},
-        {"id": "gpt-5.4-mini", "label": "GPT-5.4 Mini"},
-        {"id": "gpt-5.4-nano", "label": "GPT-5.4 Nano"},
-        {"id": "gpt-5.3-codex", "label": "GPT-5.3 Codex"},
-        {"id": "gpt-5.3-codex-spark", "label": "GPT-5.3 Codex Spark"},
-        {"id": "gpt-5.2", "label": "GPT-5.2"},
-        {"id": "gpt-5.2-codex", "label": "GPT-5.2 Codex"},
-        {"id": "gpt-5.1", "label": "GPT-5.1"},
-        {"id": "gpt-5.1-codex", "label": "GPT-5.1 Codex"},
-        {"id": "gpt-5.1-codex-max", "label": "GPT-5.1 Codex Max"},
-        {"id": "gpt-5.1-codex-mini", "label": "GPT-5.1 Codex Mini"},
-        {"id": "gpt-5", "label": "GPT-5"},
-        {"id": "gpt-5-codex", "label": "GPT-5 Codex"},
-        {"id": "gpt-5-nano", "label": "GPT-5 Nano"},
-        {"id": "claude-opus-4-6", "label": "Claude Opus 4.6"},
-        {"id": "claude-opus-4-5", "label": "Claude Opus 4.5"},
-        {"id": "claude-opus-4-1", "label": "Claude Opus 4.1"},
-        {"id": "claude-sonnet-4-6", "label": "Claude Sonnet 4.6"},
-        {"id": "claude-sonnet-4-5", "label": "Claude Sonnet 4.5"},
-        {"id": "claude-sonnet-4", "label": "Claude Sonnet 4"},
-        {"id": "claude-haiku-4-5", "label": "Claude Haiku 4.5"},
-        {"id": "claude-3-5-haiku", "label": "Claude 3.5 Haiku"},
-        {"id": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro Preview"},
-        {"id": "gemini-3-flash-preview", "label": "Gemini 3 Flash Preview"},
-        {"id": "gemini-3.1-flash-lite-preview", "label": "Gemini 3.1 Flash Lite Preview"},
-        {"id": "gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
-        {"id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash"},
-        {"id": "glm-5.1", "label": "GLM-5.1"},
-        {"id": "glm-5", "label": "GLM-5"},
-        {"id": "kimi-k2.5", "label": "Kimi K2.5"},
-        {"id": "minimax-m2.5", "label": "MiniMax M2.5"},
-        {"id": "minimax-m2.5-free", "label": "MiniMax M2.5 Free"},
-        {"id": "nemotron-3-super-free", "label": "Nemotron 3 Super Free"},
-        {"id": "big-pickle", "label": "Big Pickle"},
+        {"id": "@opencode-zen:gpt-5.4-pro", "label": "GPT-5.4 Pro"},
+        {"id": "@opencode-zen:gpt-5.4", "label": "GPT-5.4"},
+        {"id": "@opencode-zen:gpt-5.4-mini", "label": "GPT-5.4 Mini"},
+        {"id": "@opencode-zen:gpt-5.4-nano", "label": "GPT-5.4 Nano"},
+        {"id": "@opencode-zen:gpt-5.3-codex", "label": "GPT-5.3 Codex"},
+        {"id": "@opencode-zen:gpt-5.3-codex-spark", "label": "GPT-5.3 Codex Spark"},
+        {"id": "@opencode-zen:gpt-5.2", "label": "GPT-5.2"},
+        {"id": "@opencode-zen:gpt-5.2-codex", "label": "GPT-5.2 Codex"},
+        {"id": "@opencode-zen:gpt-5.1", "label": "GPT-5.1"},
+        {"id": "@opencode-zen:gpt-5.1-codex", "label": "GPT-5.1 Codex"},
+        {"id": "@opencode-zen:gpt-5.1-codex-max", "label": "GPT-5.1 Codex Max"},
+        {"id": "@opencode-zen:gpt-5.1-codex-mini", "label": "GPT-5.1 Codex Mini"},
+        {"id": "@opencode-zen:gpt-5", "label": "GPT-5"},
+        {"id": "@opencode-zen:gpt-5-codex", "label": "GPT-5 Codex"},
+        {"id": "@opencode-zen:gpt-5-nano", "label": "GPT-5 Nano"},
+        {"id": "@opencode-zen:claude-opus-4-6", "label": "Claude Opus 4.6"},
+        {"id": "@opencode-zen:claude-opus-4-5", "label": "Claude Opus 4.5"},
+        {"id": "@opencode-zen:claude-opus-4-1", "label": "Claude Opus 4.1"},
+        {"id": "@opencode-zen:claude-sonnet-4-6", "label": "Claude Sonnet 4.6"},
+        {"id": "@opencode-zen:claude-sonnet-4-5", "label": "Claude Sonnet 4.5"},
+        {"id": "@opencode-zen:claude-sonnet-4", "label": "Claude Sonnet 4"},
+        {"id": "@opencode-zen:claude-haiku-4-5", "label": "Claude Haiku 4.5"},
+        {"id": "@opencode-zen:claude-3-5-haiku", "label": "Claude 3.5 Haiku"},
+        {"id": "@opencode-zen:gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro Preview"},
+        {"id": "@opencode-zen:gemini-3-flash-preview", "label": "Gemini 3 Flash Preview"},
+        {"id": "@opencode-zen:gemini-3.1-flash-lite-preview", "label": "Gemini 3.1 Flash Lite Preview"},
+        {"id": "@opencode-zen:gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
+        {"id": "@opencode-zen:gemini-2.5-flash", "label": "Gemini 2.5 Flash"},
+        {"id": "@opencode-zen:glm-5.1", "label": "GLM-5.1"},
+        {"id": "@opencode-zen:glm-5", "label": "GLM-5"},
+        {"id": "@opencode-zen:kimi-k2.5", "label": "Kimi K2.5"},
+        {"id": "@opencode-zen:minimax-m2.5", "label": "MiniMax M2.5"},
+        {"id": "@opencode-zen:minimax-m2.5-free", "label": "MiniMax M2.5 Free"},
+        {"id": "@opencode-zen:nemotron-3-super-free", "label": "Nemotron 3 Super Free"},
+        {"id": "@opencode-zen:big-pickle", "label": "Big Pickle"},
     ],
     # OpenCode Go — flat-rate models via opencode.ai/go ($10/month)
     "opencode-go": [
-        {"id": "glm-5.1", "label": "GLM-5.1"},
-        {"id": "glm-5", "label": "GLM-5"},
-        {"id": "kimi-k2.5", "label": "Kimi K2.5"},
-        {"id": "mimo-v2-pro", "label": "MiMo V2 Pro"},
-        {"id": "mimo-v2-omni", "label": "MiMo V2 Omni"},
-        {"id": "minimax-m2.7", "label": "MiniMax M2.7"},
-        {"id": "minimax-m2.5", "label": "MiniMax M2.5"},
+        {"id": "@opencode-go:glm-5.1", "label": "GLM-5.1"},
+        {"id": "@opencode-go:glm-5", "label": "GLM-5"},
+        {"id": "@opencode-go:kimi-k2.5", "label": "Kimi K2.5"},
+        {"id": "@opencode-go:mimo-v2-pro", "label": "MiMo V2 Pro"},
+        {"id": "@opencode-go:mimo-v2-omni", "label": "MiMo V2 Omni"},
+        {"id": "@opencode-go:minimax-m2.7", "label": "MiniMax M2.7"},
+        {"id": "@opencode-go:minimax-m2.5", "label": "MiniMax M2.5"},
     ],
     # 'gemini' is the hermes_cli provider ID for Google AI Studio
-    # Model IDs are bare — sent directly to:
-    #   https://generativelanguage.googleapis.com/v1beta/openai/chat/completions
     "gemini": [
-        {"id": "gemini-3.1-pro-preview",            "label": "Gemini 3.1 Pro Preview"},
-        {"id": "gemini-3-flash-preview",            "label": "Gemini 3 Flash Preview"},
-        {"id": "gemini-3.1-flash-lite-preview",     "label": "Gemini 3.1 Flash Lite Preview"},
-        {"id": "gemini-2.5-pro",                    "label": "Gemini 2.5 Pro"},
-        {"id": "gemini-2.5-flash",                  "label": "Gemini 2.5 Flash"},
+        {"id": "@gemini:gemini-3.1-pro-preview",            "label": "Gemini 3.1 Pro Preview"},
+        {"id": "@gemini:gemini-3-flash-preview",            "label": "Gemini 3 Flash Preview"},
+        {"id": "@gemini:gemini-3.1-flash-lite-preview",     "label": "Gemini 3.1 Flash Lite Preview"},
+        {"id": "@gemini:gemini-2.5-pro",                    "label": "Gemini 2.5 Pro"},
+        {"id": "@gemini:gemini-2.5-flash",                  "label": "Gemini 2.5 Flash"},
     ],
     # Mistral — prefix used in OpenRouter model IDs (mistralai/mistral-large-latest)
     "mistralai": [
-        {"id": "mistral-large-latest", "label": "Mistral Large"},
-        {"id": "mistral-small-latest", "label": "Mistral Small"},
+        {"id": "@mistralai:mistral-large-latest", "label": "Mistral Large"},
+        {"id": "@mistralai:mistral-small-latest", "label": "Mistral Small"},
     ],
     # Qwen (Alibaba) — prefix used in OpenRouter model IDs (qwen/qwen3-coder)
     "qwen": [
-        {"id": "qwen3-coder",   "label": "Qwen3 Coder"},
-        {"id": "qwen3.6-plus",  "label": "Qwen3.6 Plus"},
+        {"id": "@qwen:qwen3-coder",   "label": "Qwen3 Coder"},
+        {"id": "@qwen:qwen3.6-plus",  "label": "Qwen3.6 Plus"},
     ],
     # xAI — prefix used in OpenRouter model IDs (x-ai/grok-4-20)
     "x-ai": [
-        {"id": "grok-4.20", "label": "Grok 4.20"},
+        {"id": "@x-ai:grok-4.20", "label": "Grok 4.20"},
     ],
 }
 
@@ -855,14 +853,13 @@ def _apply_provider_prefix(
     provider_id: str,
     active_provider: str | None,
 ) -> list[dict]:
-    """Return *raw_models* with @provider: prefixes applied when needed.
+    """Return *raw_models* with @provider: prefixes applied.
 
-    Prefixing is skipped when (a) the provider is already the active one, or
-    (b) a model id already starts with '@' or contains '/' (already routable).
+    All model IDs are normalized to ``@provider:model`` format so that
+    downstream paths (session storage, drain, resolve_model_provider) can
+    always extract the provider hint.  Models that already carry ``@`` or
+    ``/`` are passed through unchanged.
     """
-    _active = (active_provider or "").lower()
-    if not _active or provider_id == _active:
-        return list(raw_models)
     result = []
     for m in raw_models:
         mid = m["id"]
@@ -1042,10 +1039,7 @@ def normalize_model_prefix(model_id: str) -> str:
             # Match either the bare name or a stored @gid:bare form.
             if mid == model or (mid.startswith("@") and ":" in mid
                                 and mid.split(":", 1)[1] == model):
-                # If this provider is the active one, bare name is fine.
-                if gid == active_provider:
-                    return model
-                # Non-default provider — add prefix.
+                # Always return @provider:model for consistent identification.
                 return f"@{gid}:{model}"
     return model
 
@@ -2018,7 +2012,7 @@ _INDEX_HTML_PATH = REPO_ROOT / "static" / "index.html"
 
 # ── Thread synchronisation ───────────────────────────────────────────────────
 LOCK = threading.Lock()
-SESSIONS_MAX = 100
+SESSIONS_MAX = 100_000  # Increased from 100 — notify stream replaced polling, no eviction pressure
 CHAT_LOCK = threading.Lock()
 class ReplayableStream:
     """Fan-out SSE stream with full event history for page-refresh replay.
@@ -2145,6 +2139,13 @@ SESSION_AGENT_CACHE_LOCK = threading.Lock()
 SESSION_MESSAGE_QUEUE: dict[str, list] = {}  # session_id -> [{payload}, ...]
 SESSION_MESSAGE_QUEUE_LOCK = threading.Lock()
 _MAX_QUEUE_LENGTH = 20
+
+# ── WebSocket configuration ──────────────────────────────────────────────────
+WS_HEARTBEAT_INTERVAL = 30      # Heartbeat interval in seconds
+WS_MAX_REPLAY_SUBS = 10         # Max replay subscriptions per connection
+WS_MESSAGE_MAX_SIZE = 65536     # Max message size in bytes (64KB)
+WS_REPLAY_HISTORY_LIMIT = 1000  # Max events to keep in replay history
+WS_QUEUE_TIMEOUT = 0.1          # Queue polling timeout in seconds (100ms)
 
 
 def _evict_session_agent(session_id: str) -> None:

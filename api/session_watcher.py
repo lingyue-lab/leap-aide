@@ -1,83 +1,31 @@
 """
-Hermes Web UI -- Gateway session watcher.
+Hermes Web UI -- Session watcher.
 
 Background daemon thread that polls state.db every 5 seconds for changes
-to gateway sessions (telegram, discord, slack, etc.). When changes are
-detected, it pushes notifications to all subscribed SSE clients.
+to non-webui sessions (CLI, gateway, cron). When changes are detected,
+it pushes upsert_session / delete_session events to the global notify stream.
 
-This enables real-time session list updates in the sidebar without
-requiring any changes to hermes-agent.
+Also handles subagent placeholder upgrades: when a real subagent session
+appears in state.db, the placeholder created by subagent.start is upgraded
+with real data. Once ended_at is set, the subagent is marked as finalized
+and skipped on future polls (subagent sessions are immutable after ended_at).
+
+Webui sessions do NOT need polling — their SESSIONS cache mutations
+(new_session, get_session, end_stream callback) push notifications directly.
 """
 import hashlib
-import json
 import logging
 import os
-import queue
 import threading
 import time
 from pathlib import Path
 
 from api.config import HOME
-from api.agent_sessions import read_importable_agent_session_rows
 
 logger = logging.getLogger(__name__)
 
 
-# ── State hash tracking ─────────────────────────────────────────────────────
-
-def _snapshot_hash(sessions: list) -> str:
-    """Create a lightweight hash of session IDs and timestamps for change detection.
-
-    Includes active_stream_id from StreamManager so that backend-initiated
-    streaming state changes (e.g., drain → _run_agent_streaming) also trigger
-    sessions_changed events even when db fields haven't changed yet.
-    Also includes webui sessions with active_stream_id that aren't in the
-    db sessions list (webui sessions are excluded by read_importable_agent_session_rows).
-    """
-    from api.stream_manager import stream_manager
-
-    parts = []
-    db_ids = set()
-    for s in sorted(sessions, key=lambda x: x['session_id']):
-        sid = s['session_id']
-        db_ids.add(sid)
-        stream_id = stream_manager.get_stream_id(sid) or ''
-        parts.append(f"{sid}:{s.get('updated_at', 0)}:{s.get('message_count', 0)}:{stream_id}")
-
-    # Include webui sessions with active stream that aren't in the db list.
-    # These are sessions with backend-initiated streaming (drain → _run_agent_streaming).
-    for sid in stream_manager.get_active_session_ids():
-        if sid in db_ids:
-            continue
-        stream_id = stream_manager.get_stream_id(sid) or ''
-        parts.append(f"{sid}:streaming:{stream_id}")
-
-    key = '|'.join(sorted(parts))
-    return hashlib.md5(key.encode(), usedforsecurity=False).hexdigest()
-
-
-def _get_delegate_children_hash() -> str:
-    """获取delegate children的哈希值，用于变化检测。"""
-    try:
-        from api.models import _get_session_db, _get_all_delegate_children_map
-        db = _get_session_db()
-        if db is None:
-            return ""
-        children_map = _get_all_delegate_children_map(db)
-        # 创建哈希值：parent_id:child_id:ended_at
-        # 包含每个子session的ended_at状态，以便检测子session完成
-        parts = []
-        for pid, children in sorted(children_map.items()):
-            for child in sorted(children, key=lambda c: c['id']):
-                ended = child.get('ended_at') or 0
-                parts.append(f"{pid}:{child['id']}:{ended}")
-        key = '|'.join(parts)
-        return hashlib.md5(key.encode(), usedforsecurity=False).hexdigest()
-    except Exception:
-        return ""
-
-
-# ── DB resolution (shared pattern with state_sync.py) ──────────────────────
+# ── DB helpers ──────────────────────────────────────────────────────────
 
 def _get_state_db_path() -> Path:
     """Resolve state.db path for the active profile."""
@@ -90,13 +38,13 @@ def _get_state_db_path() -> Path:
 
 
 def _get_agent_sessions_from_db() -> list:
-    """Read all non-webui sessions from state.db.
+    """Read all non-webui, non-subagent sessions from state.db.
 
-    Returns list of session dicts compatible with the frontend SSE handler,
-    including workspace, user_id, and source_tag for proper sidebar grouping.
+    Returns list of session compact dicts for CLI/gateway/cron sessions.
     Returns empty list on any error.
     """
     import os as _os
+    from api.agent_sessions import read_importable_agent_session_rows
 
     db_path = _get_state_db_path()
     if not db_path.exists():
@@ -106,13 +54,10 @@ def _get_agent_sessions_from_db() -> list:
         sessions = []
         for row in read_importable_agent_session_rows(db_path, limit=200, log=logger):
             _source = row['source'] or 'cli'
-            # Skip subagent sessions — they only appear as delegate children,
-            # not in the main sidebar list.
+            # Skip subagent sessions — handled separately via placeholder upgrade
             if _source == 'subagent':
                 continue
             _user_id = row.get('user_id') or _os.environ.get('USER', 'default')
-            # Use cwd from state.db as workspace when available (CLI sessions have a real working directory).
-            # For sessions without cwd (gateway platforms), resolve the actual gateway working directory.
             _cwd = row.get('cwd')
             if _cwd:
                 _workspace = str(Path(_cwd).expanduser().resolve())
@@ -120,7 +65,6 @@ def _get_agent_sessions_from_db() -> list:
                 from api.models import _resolve_gateway_workspace
                 _workspace = _resolve_gateway_workspace()
             _msg_count = row['message_count'] or row['actual_message_count'] or 0
-            # Read-time clamp: last_seen_msg_count must never exceed message_count.
             _last_seen = row.get('last_seen_msg_count__webui')
             _clamped_last_seen = min(_last_seen or 0, _msg_count) if _last_seen is not None else None
             sessions.append({
@@ -136,365 +80,193 @@ def _get_agent_sessions_from_db() -> list:
                 'source_tag': _source,
                 'user_id': _user_id,
                 'is_cli_session': True,
-                'active_stream_id': row.get('active_stream_id'),
+                '_parent_session_id': row.get('parent_session_id'),
             })
-
-        # 添加delegate children信息
-        try:
-            from api.models import _get_session_db, _get_all_delegate_children_map
-            db = _get_session_db()
-            if db is not None:
-                children_map = _get_all_delegate_children_map(db)
-                for session in sessions:
-                    sid = session['session_id']
-                    children = children_map.get(sid, [])
-                    session['_delegate_children_count'] = len(children)
-                    session['_has_delegate_children'] = len(children) > 0
-        except Exception:
-            pass  # non-fatal
-
         return sessions
     except Exception:
         return []
 
 
-# ── SessionWatcher ──────────────────────────────────────────────────────────
+# ── SessionWatcher ──────────────────────────────────────────────────────
 
 class SessionWatcher:
-    """Background thread that polls state.db for session changes.
+    """Background daemon that polls state.db for non-webui session changes.
 
-    Monitors:
-    - Gateway session changes (CLI, messaging platforms)
-    - Delegate children changes (subagent sessions)
-
-    Usage:
-        watcher = SessionWatcher()
-        watcher.start()
-        q = watcher.subscribe()
-        # ... receive change events via q.get() ...
-        watcher.unsubscribe(q)
-        watcher.stop()
+    Pushes upsert_session / delete_session to the global notify stream.
+    Subagent placeholders are upgraded once when real data appears, then
+    skipped once finalized (ended_at set).
     """
 
-    POLL_INTERVAL = 5  # seconds between polls
-    SUBSCRIBER_TIMEOUT = 30  # seconds before sending keepalive comment
+    POLL_INTERVAL = 5  # seconds
 
     def __init__(self):
-        self._subscribers: list[queue.Queue] = []
-        self._sub_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
-        self._last_hash: str = ''
-        self._last_sessions: list = []
-        self._last_delegate_hash: str = ''  # delegate children哈希
+        # CLI/gateway sessions: session_id -> compact dict from last poll
+        self._last_cli_sessions: dict[str, dict] = {}
+        # Subagent sessions: session_id -> True when finalized (ended_at set)
+        self._finalized_subagents: set[str] = set()
 
     def start(self):
         """Start the watcher daemon thread."""
         if self._thread and self._thread.is_alive():
             return
         self._stop_event.clear()
-        self._thread = threading.Thread(target=self._poll_loop, daemon=True, name='gateway-watcher')
+        self._thread = threading.Thread(
+            target=self._poll_loop, daemon=True, name='session-watcher',
+        )
         self._thread.start()
 
     def is_alive(self) -> bool:
-        """Return True when the poll thread is running.
-
-        Public accessor used by ``/api/sessions/gateway/stream`` probe mode and
-        the live SSE handler to detect a watcher instance whose poll thread
-        died silently (e.g. uncaught exception in ``_poll_loop``).  Callers
-        use this to decide whether to return 503 and trigger the client-side
-        polling fallback, instead of handing out an SSE connection that would
-        never emit events.
-        """
+        """Return True when the poll thread is running."""
         t = self._thread
         return t is not None and t.is_alive()
 
     def stop(self):
         """Stop the watcher thread."""
         self._stop_event.set()
-        # Wake up any subscribers
-        with self._sub_lock:
-            for q in self._subscribers:
-                try:
-                    q.put(None)  # sentinel
-                except Exception:
-                    logger.debug("Failed to send sentinel to subscriber")
         if self._thread:
             self._thread.join(timeout=3)
             self._thread = None
 
-    def subscribe(self) -> queue.Queue:
-        """Subscribe to change events. Returns a queue.Queue.
-        Events are dicts: {'type': 'sessions_changed', 'sessions': [...]}
-        A None sentinel means the watcher is stopping.
-        """
-        q = queue.Queue(maxsize=10)
-        with self._sub_lock:
-            self._subscribers.append(q)
-        return q
-
-    def unsubscribe(self, q: queue.Queue):
-        """Remove a subscriber queue."""
-        with self._sub_lock:
-            try:
-                self._subscribers.remove(q)
-            except ValueError:
-                pass
-
-    def notify_now(self):
-        """Unconditionally push sessions_changed.
-
-        Called by StreamManager.begin_stream / end_stream at deterministic
-        trigger points where the session state is guaranteed to have changed,
-        so no hash check is needed.  Hash-based change detection is left to
-        the 5-second polling in _check_and_push.
-        """
-        logger.debug("[notify_now] called")
-        try:
-            sessions = _get_agent_sessions_from_db()
-        except Exception as e:
-            logger.warning("[notify_now] failed to get sessions: %s", e)
-            return
-        self._enrich_active_stream_ids(sessions)
-        self._include_streaming_webui_sessions(sessions)
-        new_hash = _snapshot_hash(sessions)
-        logger.debug("[notify_now] pushing sessions_changed (%d sessions) hash=%s", len(sessions), new_hash[:8])
-        self._last_hash = new_hash
-        self._notify_subscribers(sessions)
-
-    def _notify_subscribers(self, sessions: list):
-        """Push change event to all subscribers."""
-        event = {
-            'type': 'sessions_changed',
-            'sessions': sessions,
-        }
-        with self._sub_lock:
-            dead = []
-            for q in self._subscribers:
-                try:
-                    q.put_nowait(event)
-                except queue.Full:
-                    dead.append(q)  # remove slow consumers
-                except Exception:
-                    dead.append(q)
-            for q in dead:
-                try:
-                    self._subscribers.remove(q)
-                except ValueError:
-                    pass
-                # Send a None sentinel so the SSE handler unblocks, closes,
-                # and lets the browser's EventSource auto-reconnect.
-                try:
-                    q.put_nowait(None)
-                except Exception:
-                    logger.debug("Failed to send sentinel to dead subscriber")
+    # ── Main loop ────────────────────────────────────────────────────────
 
     def _poll_loop(self):
-        """Main polling loop. Runs in a daemon thread."""
+        from api.notify_stream import notify_stream
+
         while not self._stop_event.is_set():
             try:
-                sessions = _get_agent_sessions_from_db()
-                current_hash = _snapshot_hash(sessions)
-                current_delegate_hash = _get_delegate_children_hash()
-
-                # 检测 session 变化
-                if current_hash != self._last_hash:
-                    # Evict stale SESSIONS cache entries before notifying frontend.
-                    # This ensures the next GET /api/session reloads from state.db.
-                    self._evict_stale_sessions(self._last_sessions, sessions)
-
-                    # Enrich sessions with active_stream_id from SESSIONS cache.
-                    # active_stream_id is in-memory only (not in state.db), so we
-                    # read it from the cache to let the frontend know which sessions
-                    # are currently streaming (e.g., from drain notifications).
-                    self._enrich_active_stream_ids(sessions)
-
-                    # Include webui sessions with active_stream_id.
-                    # sessions_changed normally excludes webui sessions (they're
-                    # managed by the frontend).  But when the backend starts
-                    # streaming on a webui session (drain → _run_agent_streaming),
-                    # the frontend needs to know so it can connect to the SSE stream.
-                    self._include_streaming_webui_sessions(sessions)
-
-                    self._last_hash = current_hash
-                    self._last_sessions = sessions
-                    event = {
-                        'type': 'sessions_changed',
-                        'sessions': sessions,
-                    }
-                    with self._sub_lock:
-                        dead = []
-                        for q in self._subscribers:
-                            try:
-                                q.put_nowait(event)
-                            except queue.Full:
-                                dead.append(q)
-                        for q in dead:
-                            try:
-                                self._subscribers.remove(q)
-                            except ValueError:
-                                pass
-
-                # 检测 delegate children 变化
-                if current_delegate_hash != self._last_delegate_hash:
-                    self._last_delegate_hash = current_delegate_hash
-                    changes = self._get_delegate_children_changes()
-                    if changes:
-                        event = {
-                            'type': 'delegate_children_changed',
-                            'changes': changes,
-                        }
-                        with self._sub_lock:
-                            dead = []
-                            for q in self._subscribers:
-                                try:
-                                    q.put_nowait(event)
-                                except queue.Full:
-                                    dead.append(q)
-                            for q in dead:
-                                try:
-                                    self._subscribers.remove(q)
-                                except ValueError:
-                                    pass
+                self._poll_cli_sessions(notify_stream)
+                self._poll_subagent_sessions(notify_stream)
             except Exception:
-                logger.debug("Error in gateway watcher poll loop", exc_info=True)
+                logger.debug("Error in session watcher poll loop", exc_info=True)
 
-            # Sleep in small increments so we can stop promptly
+            # Sleep in small increments for responsive stop
             for _ in range(self.POLL_INTERVAL * 10):
                 if self._stop_event.is_set():
                     return
                 time.sleep(0.1)
 
-    @staticmethod
-    def _enrich_active_stream_ids(sessions: list):
-        """Add active_stream_id from StreamManager to session data.
+    # ── CLI/Gateway session polling ──────────────────────────────────────
 
-        active_stream_id is in-memory only (managed by StreamManager,
-        not persisted to state.db).  This lets the frontend know which
-        sessions are currently streaming so it can connect to the SSE stream.
-        """
-        from api.stream_manager import stream_manager
+    def _poll_cli_sessions(self, notify_stream):
+        """Detect CLI/gateway session changes. Push upsert/delete on diff."""
+        current_list = _get_agent_sessions_from_db()
+        current_map = {s['session_id']: s for s in current_list}
+        current_ids = set(current_map.keys())
+        last_ids = set(self._last_cli_sessions.keys())
 
-        for s in sessions:
-            sid = s.get('session_id')
-            if not sid:
-                continue
-            stream_id = stream_manager.get_stream_id(sid)
-            if stream_id:
-                s['active_stream_id'] = stream_id
+        # New or updated sessions
+        for sid in current_ids:
+            old = self._last_cli_sessions.get(sid)
+            new = current_map[sid]
+            if old is None or self._session_changed(old, new):
+                self._push_upsert(notify_stream, new)
 
-    @staticmethod
-    def _include_streaming_webui_sessions(sessions: list):
-        """Add webui sessions with active streams to the sessions list.
+        # Deleted sessions
+        for sid in last_ids - current_ids:
+            old = self._last_cli_sessions[sid]
+            self._push_delete(notify_stream, sid, old)
 
-        sessions_changed events only contain non-webui sessions (from
-        read_importable_agent_session_rows).  Webui sessions that have
-        an active stream (from backend-initiated streaming via drain
-        notifications) need to be included so the frontend can detect
-        the streaming state and connect to the StreamManager SSE stream.
-        """
-        from api.stream_manager import stream_manager
-        try:
-            from api.models import LOCK, SESSIONS
-        except ImportError:
-            return
-
-        existing_ids = {s['session_id'] for s in sessions}
-        active_sids = set(stream_manager.get_active_session_ids())
-        with LOCK:
-            for sid in active_sids:
-                if sid in existing_ids:
-                    continue
-                cached = SESSIONS.get(sid)
-                if not cached:
-                    continue
-                stream_id = stream_manager.get_stream_id(sid)
-                if not stream_id:
-                    continue
-                sessions.append({
-                    'session_id': sid,
-                    'title': getattr(cached, 'title', None),
-                    'workspace': str(getattr(cached, 'workspace', '')),
-                    'model': getattr(cached, 'model', None),
-                    'message_count': len(getattr(cached, 'messages', []) or []),
-                    'last_seen_msg_count': getattr(cached, 'last_seen_msg_count', None),
-                    'created_at': getattr(cached, 'created_at', 0),
-                    'updated_at': getattr(cached, 'updated_at', 0),
-                    'source': 'webui',
-                    'source_tag': 'webui',
-                    'is_cli_session': False,
-                    'active_stream_id': stream_id,
-                })
+        self._last_cli_sessions = current_map
 
     @staticmethod
-    def _evict_stale_sessions(old_sessions: list, new_sessions: list):
-        """Evict SESSIONS cache entries whose message_count increased.
+    def _session_changed(old: dict, new: dict) -> bool:
+        """Compare two session compact dicts for meaningful changes."""
+        return (
+            old.get('message_count') != new.get('message_count')
+            or old.get('title') != new.get('title')
+            or old.get('updated_at') != new.get('updated_at')
+            or old.get('last_seen_msg_count') != new.get('last_seen_msg_count')
+        )
 
-        Compares old and new session snapshots to find sessions where the
-        message_count changed (indicating the agent wrote new messages to
-        state.db).  Evicts those entries so the next GET /api/session reloads
-        the fresh data.
+    # ── Subagent placeholder upgrade ─────────────────────────────────────
+
+    def _poll_subagent_sessions(self, notify_stream):
+        """Detect real subagent sessions and upgrade placeholders.
+
+        For each placeholder in SESSIONS with _is_placeholder=True:
+        - Try to load real data from state.db
+        - If found and ended_at is set → finalize (upgrade + mark finalized)
+        - If found but not ended → upgrade placeholder (keep polling)
+        - If not found → keep placeholder, retry next poll
+
+        Once finalized (ended_at set), the session is skipped on future polls.
+        Subagent sessions are immutable after ended_at — no further updates.
         """
-        try:
-            from api.models import LOCK, SESSIONS
-        except ImportError:
-            return
+        from api.models import LOCK as MODELS_LOCK, SESSIONS, Session, _notify_session_event
 
-        old_map = {s['session_id']: s for s in (old_sessions or [])}
-        evict_ids = []
-        for new_s in (new_sessions or []):
-            sid = new_s.get('session_id')
-            if not sid:
-                continue
-            old_s = old_map.get(sid)
-            old_count = (old_s or {}).get('message_count', 0) or 0
-            new_count = new_s.get('message_count', 0) or 0
-            if new_count > old_count:
-                evict_ids.append(sid)
+        with MODELS_LOCK:
+            placeholders = [
+                sid for sid, s in SESSIONS.items()
+                if getattr(s, '_is_placeholder', False)
+                and sid not in self._finalized_subagents
+            ]
 
-        if evict_ids:
-            with LOCK:
-                actually_evicted = []
-                for sid in evict_ids:
-                    if SESSIONS.pop(sid, None) is not None:
-                        actually_evicted.append(sid)
-            if actually_evicted:
-                # These entries survived the end_stream callback — indicates
-                # an external write (non-streaming, CLI, or direct state.db mutation).
-                logger.warning(
-                    "[session-watcher] Evicted %d cache entries NOT covered by end_stream: %s",
-                    len(actually_evicted),
-                    ', '.join(s[:12] for s in actually_evicted),
-                )
+        for child_sid in placeholders:
+            try:
+                real = Session.load(child_sid)
+                if real is None:
+                    continue
 
-    def _get_delegate_children_changes(self) -> list:
-        """获取delegate children的变化信息。"""
-        try:
-            from api.models import _get_session_db, _get_all_delegate_children_map
-            db = _get_session_db()
-            if db is None:
-                return []
-            children_map = _get_all_delegate_children_map(db)
-            changes = []
-            for parent_id, children in children_map.items():
-                # 统计正在运行的子session
-                running_count = sum(1 for c in children if not c.get('ended_at'))
-                changes.append({
-                    'session_id': parent_id,
-                    'children_count': len(children),
-                    'has_children': len(children) > 0,
-                    'running_count': running_count,
-                    'children': [{
-                        'id': c['id'],
-                        'ended_at': c.get('ended_at'),
-                    } for c in children],
-                })
-            return changes
-        except Exception:
-            return []
+                # Check if ended_at is set (session is final)
+                ended_at = None
+                try:
+                    from api.models import _get_session_db
+                    db = _get_session_db()
+                    if db:
+                        row = db.get_session(child_sid)
+                        if row:
+                            ended_at = row.get('ended_at')
+                except Exception:
+                    pass
+
+                # Upgrade placeholder with real data (in-place to preserve references)
+                with MODELS_LOCK:
+                    cached = SESSIONS.get(child_sid)
+                    if cached and getattr(cached, '_is_placeholder', False):
+                        cached.copy_from(real)
+                        cached._is_placeholder = False
+                    else:
+                        SESSIONS[child_sid] = real
+                    SESSIONS.move_to_end(child_sid)
+                _notify_session_event('upsert_session', real)
+
+                if ended_at:
+                    self._finalized_subagents.add(child_sid)
+                    logger.debug("[session-watcher] subagent %s finalized", child_sid[:12])
+
+            except (KeyError, Exception):
+                pass  # Not yet persisted, retry next poll
+
+    # ── Push helpers ─────────────────────────────────────────────────────
+
+    def _push_upsert(self, notify_stream, session_data: dict):
+        notify_stream.put('upsert_session', {
+            'session_id': session_data['session_id'],
+            'parent_session_id': session_data.get('_parent_session_id'),
+            'stream_id': None,
+            'source_tag': session_data.get('source_tag'),
+            'title': session_data.get('title'),
+            'message_count': session_data.get('message_count', 0),
+            'last_seen_msg_count': session_data.get('last_seen_msg_count'),
+            'ts': time.time(),
+        })
+
+    def _push_delete(self, notify_stream, session_id: str, old_data: dict):
+        notify_stream.put('delete_session', {
+            'session_id': session_id,
+            'parent_session_id': old_data.get('_parent_session_id'),
+            'stream_id': None,
+            'source_tag': old_data.get('source_tag'),
+            'title': old_data.get('title'),
+            'message_count': 0,
+            'last_seen_msg_count': None,
+            'ts': time.time(),
+        })
 
 
-# ── Module-level singleton ─────────────────────────────────────────────────
+# ── Module-level singleton ─────────────────────────────────────────────
 
 _watcher: SessionWatcher | None = None
 _watcher_lock = threading.Lock()
@@ -507,9 +279,6 @@ def start_watcher():
         if _watcher is None:
             _watcher = SessionWatcher()
             _watcher.start()
-            # Inject into StreamManager so begin_stream/end_stream can push changes
-            from api.stream_manager import stream_manager as _sm
-            _sm.register_watcher(_watcher)
 
 
 def stop_watcher():
