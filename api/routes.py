@@ -3,11 +3,13 @@ Hermes Web UI -- Route handlers for GET and POST endpoints.
 Extracted from server.py (Sprint 11) so server.py is a thin shell.
 """
 
+import hashlib
 import html as _html
 import json
 import logging
 import os
 import queue
+import re as _re
 import sys
 import threading
 import time
@@ -95,7 +97,6 @@ from api.helpers import (
 from api.stream_manager import stream_manager
 
 # ── CSRF: validate Origin/Referer on POST ────────────────────────────────────
-import re as _re
 
 
 def _normalize_host_port(value: str) -> tuple[str, str | None]:
@@ -2568,12 +2569,90 @@ _STATIC_MIME = {
 }
 # MIME types that are text-based and should carry charset=utf-8
 _TEXT_MIME_TYPES = {"text/css", "application/javascript", "text/html", "image/svg+xml", "text/plain"}
+# Text MIME types eligible for pre-compressed (.gz) serving
+_COMPRESSIBLE_MIME = {"text/css", "application/javascript", "text/html", "image/svg+xml"}
+
+# ── ETag helpers ──────────────────────────────────────────────────────────────
+# Cache ETag values keyed by (filepath, size, mtime_ns) so repeated requests
+# skip the hashlib computation.  The dict is small (bounded by the number of
+# static files) and never needs explicit eviction.
+_etag_cache: dict[str, tuple[str, str]] = {}
+
+
+def _get_etag(filepath: Path) -> str:
+    """Return an ETag derived from file size and mtime (fast, no content read)."""
+    try:
+        stat = filepath.stat()
+    except OSError:
+        return ""
+    cache_key = f"{stat.st_size}-{stat.st_mtime_ns}"
+    str_path = str(filepath)
+    cached = _etag_cache.get(str_path)
+    if cached and cached[0] == cache_key:
+        return cached[1]
+    etag = hashlib.md5(cache_key.encode()).hexdigest()[:16]
+    _etag_cache[str_path] = (cache_key, etag)
+    return etag
+
+
+# Regex for Vite content-hash filenames (e.g. index-7g0fwQV9.js)
+_IMMUTABLE_RE = _re.compile(r'-[a-zA-Z0-9]{8,}\.')
+
+
+def _is_immutable_asset(filename: str) -> bool:
+    """Return True if the filename looks like a Vite content-hashed asset."""
+    return bool(_IMMUTABLE_RE.search(filename))
+
+
+def _send_static_response(handler, filepath: Path, ct_header: str, is_text: bool) -> None:
+    """Shared logic for serving a static file with ETag, caching, and gzip."""
+    etag = _get_etag(filepath)
+    client_etag = handler.headers.get("If-None-Match", "")
+    if etag and client_etag == etag:
+        handler.send_response(304)
+        handler.send_header("ETag", etag)
+        handler.end_headers()
+        return
+
+    # Determine cache policy
+    if _is_immutable_asset(filepath.name):
+        cache_control = "public, max-age=31536000, immutable"
+    else:
+        cache_control = "no-store"
+
+    # Check for pre-compressed .gz variant (text assets only)
+    raw = None
+    using_gzip = False
+    if is_text:
+        gz_path = filepath.with_suffix(filepath.suffix + ".gz")
+        accept_enc = handler.headers.get("Accept-Encoding", "")
+        if gz_path.exists() and "gzip" in accept_enc:
+            try:
+                raw = gz_path.read_bytes()
+                using_gzip = True
+            except OSError:
+                raw = None  # fallback to uncompressed
+
+    if raw is None:
+        raw = filepath.read_bytes()
+
+    handler.send_response(200)
+    handler.send_header("Content-Type", ct_header)
+    handler.send_header("Cache-Control", cache_control)
+    if etag:
+        handler.send_header("ETag", etag)
+    if using_gzip:
+        handler.send_header("Content-Encoding", "gzip")
+        handler.send_header("Vary", "Accept-Encoding")
+    handler.send_header("Content-Length", str(len(raw)))
+    handler.end_headers()
+    handler.wfile.write(raw)
 
 
 def _serve_static(handler, parsed):
     static_root = (Path(__file__).parent.parent / "static").resolve()
     # Strip the leading '/static/' prefix, then resolve and sandbox
-    rel = parsed.path[len("/static/") :]
+    rel = parsed.path[len("/static/"):]
     static_file = (static_root / rel).resolve()
     try:
         static_file.relative_to(static_root)
@@ -2584,14 +2663,11 @@ def _serve_static(handler, parsed):
     ext = static_file.suffix.lower()
     ct = _STATIC_MIME.get(ext.lstrip("."), "text/plain")
     ct_header = f"{ct}; charset=utf-8" if ct in _TEXT_MIME_TYPES else ct
-    handler.send_response(200)
-    handler.send_header("Content-Type", ct_header)
-    handler.send_header("Cache-Control", "no-store")
-    handler.send_header("Connection", "close")
-    raw = static_file.read_bytes()
-    handler.send_header("Content-Length", str(len(raw)))
-    handler.end_headers()
-    handler.wfile.write(raw)
+    is_text = ct in _COMPRESSIBLE_MIME
+    try:
+        _send_static_response(handler, static_file, ct_header, is_text)
+    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+        pass
     return True
 
 
@@ -2603,11 +2679,10 @@ def _serve_assets(handler, parsed):
     This function maps /assets/* → static/assets/* so the built frontend
     works correctly when served by the Python server directly.
     """
-    logger.warning('[ASSET] Serving %s', parsed.path)
     static_root = (Path(__file__).parent.parent / "static").resolve()
     # Strip the leading '/assets/' prefix, then prepend 'assets/' so the
     # resolved path is static/assets/<rest> rather than static/<rest>.
-    rel = "assets/" + parsed.path[len("/assets/") :]
+    rel = "assets/" + parsed.path[len("/assets/"):]
     asset_file = (static_root / rel).resolve()
     try:
         asset_file.relative_to(static_root)
@@ -2618,28 +2693,15 @@ def _serve_assets(handler, parsed):
     ext = asset_file.suffix.lower()
     ct = _STATIC_MIME.get(ext.lstrip("."), "text/plain")
     ct_header = f"{ct}; charset=utf-8" if ct in _TEXT_MIME_TYPES else ct
+    is_text = ct in _COMPRESSIBLE_MIME
     try:
-        handler.send_response(200)
-        handler.send_header("Content-Type", ct_header)
-        handler.send_header("Cache-Control", "no-store")
-        handler.send_header("Connection", "close")
-        raw = asset_file.read_bytes()
-        handler.send_header("Content-Length", str(len(raw)))
-        handler.end_headers()
-        handler.wfile.write(raw)
-        logger.warning('[ASSET] Sent %s (%d bytes)', parsed.path, len(raw))
-    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
-        logger.warning('[ASSET] Client disconnected %s: %s', parsed.path, e)
+        _send_static_response(handler, asset_file, ct_header, is_text)
+    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
         pass
     except Exception as e:
         import ssl
         import socket
-        # Silently ignore SSL errors and broken pipe errors
-        if isinstance(e, ssl.SSLError):
-            logger.warning('[ASSET] SSL error %s: %s', parsed.path, e)
-            pass
-        elif isinstance(e, socket.error) and e.errno == 32:
-            logger.warning('[ASSET] Broken pipe %s: %s', parsed.path, e)
+        if isinstance(e, (ssl.SSLError, socket.error)):
             pass
         else:
             logger.warning('[ASSET] Error serving %s: %s', parsed.path, e)

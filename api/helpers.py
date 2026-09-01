@@ -100,7 +100,6 @@ def t(handler, payload, status: int=200, content_type: str='text/plain; charset=
     handler.send_header('Content-Type', content_type)
     handler.send_header('Content-Length', str(len(body)))
     handler.send_header('Cache-Control', 'no-store')
-    handler.send_header('Connection', 'close')
     _security_headers(handler)
     handler.end_headers()
     handler.wfile.write(body)

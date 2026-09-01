@@ -114,6 +114,8 @@ clean_build() {
 
   # Static files
   if [ -d "$PROJECT_ROOT/static" ]; then
+    # Clean pre-compressed files first (before removing the directory)
+    find "$PROJECT_ROOT/static" -name "*.gz" -delete 2>/dev/null || true
     rm -rf "$PROJECT_ROOT/static"
     ok "Cleaned static/"
   fi
@@ -154,6 +156,20 @@ build_frontend() {
     npm run build -- --minify
   else
     npm run build
+  fi
+
+  # Pre-compress text assets (.js, .css) with gzip for Content-Encoding serving.
+  # This avoids runtime gzip compression which is CPU-intensive on large files.
+  if command -v gzip >/dev/null 2>&1; then
+    local count=0
+    for f in "$PROJECT_ROOT"/static/assets/*.js "$PROJECT_ROOT"/static/assets/*.css; do
+      [ -f "$f" ] || continue
+      gzip -k -9 "$f"
+      count=$((count + 1))
+    done
+    if [ "$count" -gt 0 ]; then
+      ok "Pre-compressed $count text assets"
+    fi
   fi
 
   ok "Frontend built"

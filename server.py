@@ -54,6 +54,7 @@ class QuietHTTPServer(ThreadingHTTPServer):
 
 class Handler(BaseHTTPRequestHandler):
     timeout = 30  # seconds — kills idle/incomplete connections to prevent thread exhaustion
+    protocol_version = 'HTTP/1.1'  # Enable keep-alive and proper cache semantics
     _ver_suffix = WEBUI_VERSION.removeprefix('v')
     server_version = ('leap-aide/' + _ver_suffix) if _ver_suffix != 'unknown' else 'leap-aide'
     def log_message(self, fmt, *args): pass  # suppress default Apache-style log
@@ -80,6 +81,9 @@ class Handler(BaseHTTPRequestHandler):
             set_request_profile(cookie_profile)
         try:
             parsed = urlparse(self.path)
+            # Static asset requests use a shorter timeout to release threads quickly
+            if parsed.path.startswith('/assets/') or parsed.path.startswith('/static/'):
+                self.timeout = 5
             if not check_auth(self, parsed): return
 
             # ── WebSocket terminal upgrade ─────────────────────────────────────
