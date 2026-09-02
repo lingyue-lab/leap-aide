@@ -42,7 +42,6 @@ window.addEventListener('compressed-reload', ((ev: Event) => {
     }
   });
 }) as EventListener);
-import type { Message } from '@/types';
 
 /**
  * useChatStream
@@ -279,11 +278,9 @@ export function useChatStream() {
         timestamp: Date.now() / 1000,
       });
     }
-    // Busy state is now managed by StreamManager (single source of truth).
-    // StreamManager.startBackgroundStream sets busy=true when the SSE
-    // connection opens, and the subscriber propagates it to the store.
-    // We no longer optimistically set busy here — the UI reads busy from
-    // StreamManager via useIsBusy().
+    // Set busy immediately to control composer input (queue/steer modes).
+    // StreamManager.startSessionStream also sets busy=true when the begin_stream
+    // notification arrives; this early set prevents double-submission in the gap.
     store.setBusy(true);
 
     // ── Slash commands: show loading card immediately, support cancel ──
@@ -296,9 +293,16 @@ export function useChatStream() {
       });
     }
 
+    // For interrupt mode: register pending load BEFORE the HTTP request so that
+    // startSessionStream (triggered by begin_stream during the request) waits
+    // for loadSession to complete before reading useChatStore.
+    if (mode === 'interrupt') {
+      StreamManager.beginPendingLoad(sessionId);
+    }
+
     try {
-      // Start the chat on the backend
-      const result = await chatService.startChat(
+      // Start the chat on the backend (pure HTTP, no state changes)
+      const result = await StreamManager.submitStreamRequest(
         sessionId, message, model, workspace, attachments, mode,
         abortController?.signal,
       );
@@ -308,10 +312,10 @@ export function useChatStream() {
         // ── Background task: show card notification instead of chat message ──
         const update = result.session_update as Record<string, unknown> | undefined;
         if (update?.background_session) {
-          // Busy state is managed by StreamManager.  startBackgroundStream
-          // below sets busy=true for the new background session; the
-          // current session's busy state is unchanged (StreamManager
-          // subscriber handles it).
+          // Busy state is managed by StreamManager.  The begin_stream
+          // notification triggers startSessionStream which sets busy=true
+          // for the new background session; the current session's busy
+          // state is unchanged (StreamManager subscriber handles it).
           // Dismiss the "Running command..." info card — its job is done,
           // the BackgroundTaskCard takes over showing the task status.
           dismissInfoCard(sessionId);
@@ -321,14 +325,8 @@ export function useChatStream() {
           };
           // Show floating notification card
           showBackgroundTaskCard(sessionId, bg);
-          // Connect to the background session's SSE stream so the sidebar shows
-          // the streaming indicator and tokens accumulate for live viewing.
-          StreamManager.startBackgroundStream(
-            bg.session_id,
-            bg.stream_id,
-            { role: 'user' as const, content: bg.prompt, timestamp: Date.now() / 1000 },
-            [],
-          );
+          // Stream initialization for the background session is handled by
+          // startSessionStream() via the begin_stream WebSocket notification.
           // Optimistically prepend to sidebar session list
           const sStore = useSessionStore.getState();
           const entry = {
@@ -541,56 +539,24 @@ export function useChatStream() {
 
       // For interrupt mode: backend has already cancelled the old stream
       // synchronously (writing [User interrupted]) and started a new one.
-      // Clean up the old SSE and dismiss the spinner.
+      // Reload from backend to get the authoritative baseline.
       if (mode === 'interrupt') {
         StreamManager.stopBackgroundStream(sessionId);
-      }
-
-      // Build the seed messages for StreamManager.
-      // For interrupt mode: reload from backend to get the authoritative
-      // baseline.  useChatStore.messages may contain live SSE tokens from
-      // the cancelled stream, which would otherwise leak into the new stream.
-      let seedMessages: Message[];
-      if (mode === 'interrupt') {
         dismissInfoCard(sessionId);
         await loadSession(sessionId);
-        const session = useSessionStore.getState().currentSession;
-        const msgs: Message[] = session?.messages ?? [];
-        // If the agent thread already appended our user message, strip it
-        // so startBackgroundStream can prepend it cleanly.
-        const last = msgs[msgs.length - 1];
-        if (last?.role === 'user' && typeof last.content === 'string' && last.content === message) {
-          seedMessages = msgs.slice(0, -1);
-        } else {
-          seedMessages = msgs;
-        }
-      } else {
-        // Snapshot messages BEFORE the user message we just added above.
-        // StreamManager will prepend the user message itself.
-        // Snapshot messages BEFORE the user message we just added above.
-        // StreamManager will prepend the user message itself.
-        const currentMessages = useChatStore.getState().messages;
-        seedMessages = currentMessages.slice(0, currentMessages.length - 1);
+        StreamManager.endPendingLoad(sessionId);
       }
 
-      // Hand off to the global StreamManager.
-      // It opens the EventSource, accumulates all tokens into the session cache,
-      // and keeps running even after the user navigates to another session.
-      StreamManager.startBackgroundStream(
-        sessionId,
-        stream_id,
-        { role: 'user', content: message, attachments, timestamp: Date.now() / 1000 },
-        seedMessages
-      );
+      // State initialization is handled by startSessionStream() via the
+      // begin_stream WebSocket notification — no explicit call needed here.
 
     } catch (err) {
-      // Dismiss any interrupt-mode spinner
+      // Dismiss any interrupt-mode spinner and clear pending load guard
       if (mode === 'interrupt') {
         dismissInfoCard(sessionId);
+        StreamManager.endPendingLoad(sessionId);
       }
-      // startBackgroundStream was never called (the request failed before
-      // reaching the streaming path), so StreamManager has no state to clear.
-      // Busy is managed by StreamManager — the UI reads from useIsBusy().
+      // The request failed before reaching the streaming path.
       store.setAbortController(null);
       // AbortError from user dismissing the loading card — just dismiss silently
       if ((err as Error).name === 'AbortError') {

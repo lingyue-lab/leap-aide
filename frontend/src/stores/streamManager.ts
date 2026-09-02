@@ -50,6 +50,13 @@ const _listeners = new Set<ChangeListener>();
 const _pendingNotifies = new Map<string, number>(); // sessionId → setTimeout ID
 const NOTIFY_INTERVAL_MS = 150; // ~6-7 updates/sec during streaming (balanced: smooth enough for UX, safe for render budget)
 
+/** Safety timeouts to auto-clear stuck busy state if done is never received */
+const _safetyTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** Sessions with a pending loadSession (interrupt mode) — startSessionStream
+ *  waits for the load to complete before reading from useChatStore. */
+const _pendingLoads = new Map<string, { promise: Promise<void>; resolve: () => void }>();
+
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 function _notify(sessionId: string) {
@@ -101,24 +108,49 @@ function _dismissCompressing(sessionId: string) {
  */
 import { useChatStore } from '@/stores/useChatStore';
 
-function _getOrCreateState(sessionId: string, streamId: string, initialMessages: Message[]): SessionStreamState {
-  let state = _sessionStates.get(sessionId);
-  if (!state) {
-    state = {
-      sessionId,
-      streamId,
-      messages: initialMessages,
-      toolCalls: [],
-      busy: true,
-      lastUsage: null,
-      streaming: true,
-      completedAt: null,
-      error: null,
-      initialMessageCount: initialMessages.length,
-    };
-    _sessionStates.set(sessionId, state);
+// ── Pending load tracking (interrupt mode) ─────────────────────────────────
+
+/**
+ * Signal that a loadSession is in progress for interrupt mode.
+ * startSessionStream will wait for it to complete before reading from useChatStore.
+ */
+export function beginPendingLoad(sessionId: string): Promise<void> {
+  let entry = _pendingLoads.get(sessionId);
+  if (!entry) {
+    let resolve: () => void;
+    const promise = new Promise<void>((r) => { resolve = r; });
+    entry = { promise, resolve: resolve! };
+    _pendingLoads.set(sessionId, entry);
   }
-  return state;
+  return entry.promise;
+}
+
+/** Signal that loadSession has completed — useChatStore is now fresh. */
+export function endPendingLoad(sessionId: string): void {
+  const entry = _pendingLoads.get(sessionId);
+  if (entry) {
+    _pendingLoads.delete(sessionId);
+    entry.resolve();
+  }
+}
+
+// ── submitStreamRequest ─────────────────────────────────────────────────────
+
+/**
+ * Pure HTTP request to start a chat stream. No frontend state changes.
+ * All state initialization is handled by startSessionStream() via begin_stream notification.
+ */
+export async function submitStreamRequest(
+  sessionId: string,
+  message: string,
+  model: string,
+  workspace?: string,
+  attachments?: string[],
+  mode?: string,
+  abortSignal?: AbortSignal,
+): Promise<any> {
+  const { chatService } = await import('@/services/api');
+  return chatService.startChat(sessionId, message, model, workspace, attachments, mode, abortSignal);
 }
 
 function _appendToLastAssistant(messages: Message[], token: string): Message[] {
@@ -196,54 +228,9 @@ function _updateToolMessage(messages: Message[], toolCallId: string, updates: Pa
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
- * Start a background stream for sessionId.
- * initialMessages should be the current chat history BEFORE the new user message is added.
- *
- * Uses WebSocket replay.
- * The streamId parameter is kept for backward compatibility but the actual connection
- * is keyed by sessionId.
- */
-export async function startBackgroundStream(
-  sessionId: string,
-  _streamId: string,  // Kept for backward compatibility, not used
-  userMessage: Message,
-  initialMessages: Message[]
-): Promise<void> {
-  // Close any previous stream for this session
-  stopBackgroundStream(sessionId);
-
-  // Use session-based stream ID for internal tracking
-  const sessionStreamId = `session-${sessionId}`;
-
-  // Seed the state with existing history + the new user message
-  const seedMessages = [...initialMessages, userMessage];
-  const state = _getOrCreateState(sessionId, sessionStreamId, seedMessages);
-  _sessionStates.set(sessionId, {
-    ...state,
-    streamId: sessionStreamId,
-    busy: true,
-    streaming: true,
-    completedAt: null,
-    error: null,
-    messages: seedMessages,
-    toolCalls: [],
-    // Record how many messages the backend already has (before the user message
-    // and the streaming response).  Used at stream-end to compute how many new
-    // timestamps to POST.
-    initialMessageCount: initialMessages.length,
-  });
-
-  // Use WebSocket replay
-  const { wsManager } = await import('@/stores/wsManager');
-  wsManager.connectSession(sessionId, handleReplayEvent);
-
-  _notify(sessionId);
-}
-
-/**
  * Reconnect to an existing backend stream after a page refresh.
  *
- * Unlike startBackgroundStream(), this does NOT start a new backend run —
+ * Unlike startSessionStream(), this does NOT start a new backend run —
  * it uses WebSocket replay to:
  *   1. Send a 'replay_start' event with the count of historical events
  *   2. Replay all past events (token, tool, tool_complete, etc.) in order
@@ -266,11 +253,7 @@ export async function reconnectStream(
   pendingOriginalMsg?: string,
   pendingUserMsgTs?: number,
 ): Promise<void> {
-  console.log(`[StreamManager] reconnectStream called`, {
-    sessionId,
-    existingMessagesCount: existingMessages.length,
-    pendingUserMsg: pendingUserMsg?.substring(0, 50),
-  });
+  console.log(`[StreamManager] reconnectStream: session=${sessionId}`);
 
   // Close any pre-existing stream/state for this session
   stopBackgroundStream(sessionId);
@@ -325,47 +308,58 @@ export async function startSessionStream(sessionId: string): Promise<void> {
   // If already streaming this session, skip
   const existing = _sessionStates.get(sessionId);
   if (existing?.streaming) {
+    console.log(`[StreamManager] startSessionStream: already streaming session=${sessionId}`);
     return;
+  }
+  console.log(`[StreamManager] startSessionStream: session=${sessionId}`);
+
+  // Wait for any pending loadSession (interrupt mode) to complete so
+  // useChatStore has the authoritative baseline before we read it.
+  const pendingLoad = _pendingLoads.get(sessionId);
+  if (pendingLoad) {
+    console.log(`[StreamManager] startSessionStream: waiting for pending loadSession session=${sessionId}`);
+    await pendingLoad.promise;
   }
 
   const streamId = `session-${sessionId}`;
-  // For the active session, useChatStore has the latest messages including
-  // the optimistic user message added by send() before POST /api/chat/start.
-  // The backend session.messages won't have it yet (pending_user_message).
-  // For background sessions (child agents, page refresh), load from backend.
+  // For the active session, always read from useChatStore — it has the latest
+  // messages including the optimistic user message added by send().
+  // For background sessions with existing state, preserve existing messages.
+  // For background sessions without state, load from backend.
   let seedMessages: Message[];
-  if (existing?.messages?.length) {
-    // Preserve existing messages (e.g., from reconnectStream)
+  const { useSessionStore } = await import('@/stores/useSessionStore');
+  const currentSid = useSessionStore.getState().currentSessionId;
+
+  if (currentSid === sessionId) {
+    // Active session: always read from useChatStore (has optimistic user message)
+    seedMessages = useChatStore.getState().messages || [];
+  } else if (existing?.messages?.length) {
+    // Background session with existing state: preserve existing messages
     seedMessages = existing.messages;
   } else {
-    const { useSessionStore } = await import('@/stores/useSessionStore');
-    const currentSid = useSessionStore.getState().currentSessionId;
-    if (currentSid === sessionId) {
-      seedMessages = useChatStore.getState().messages || [];
-    } else {
-      try {
-        const { sessionService } = await import('@/services/api');
-        const resp = await sessionService.getSession(sessionId);
-        const session = (resp as any)?.session;
-        seedMessages = session?.messages || [];
-        // During streaming, the SDK hasn't persisted the user message to
-        // session.messages yet — it lives only in pending_user_message.
-        // Merge it into seed so the replay baseline includes the user bubble.
-        const pendingMsg = session?.pending_user_message;
-        if (pendingMsg && typeof pendingMsg === 'string') {
-          const last = seedMessages[seedMessages.length - 1];
-          if (!(last?.role === 'user' && typeof last.content === 'string' && last.content === pendingMsg)) {
-            seedMessages = [...seedMessages, {
-              role: 'user' as const,
-              content: pendingMsg,
-              timestamp__webui: session?.pending_user_message_ts ?? (Date.now() / 1000),
-              ...(session?.pending_original_message ? { original_content__webui: session.pending_original_message } : {}),
-            }];
-          }
+    // Background session, no existing state: load from backend
+    try {
+      const { sessionService } = await import('@/services/api');
+      const resp = await sessionService.getSession(sessionId);
+      const session = (resp as any)?.session;
+      seedMessages = session?.messages || [];
+      // During streaming, the SDK hasn't persisted the user message to
+      // session.messages yet — it lives only in pending_user_message.
+      // Merge it into seed so the replay baseline includes the user bubble.
+      const pendingMsg = session?.pending_user_message;
+      if (pendingMsg && typeof pendingMsg === 'string') {
+        const last = seedMessages[seedMessages.length - 1];
+        if (!(last?.role === 'user' && typeof last.content === 'string' && last.content === pendingMsg)) {
+          seedMessages = [...seedMessages, {
+            role: 'user' as const,
+            content: pendingMsg,
+            timestamp__webui: session?.pending_user_message_ts ?? (Date.now() / 1000),
+            ...(session?.pending_original_message ? { original_content__webui: session.pending_original_message } : {}),
+          }];
         }
-      } catch {
-        seedMessages = [];
       }
+    } catch {
+      seedMessages = [];
     }
   }
 
@@ -387,12 +381,28 @@ export async function startSessionStream(sessionId: string): Promise<void> {
   wsManager.connectSession(sessionId, handleReplayEvent);
 
   _notify(sessionId);
+
+  // Diagnostic timeout: log a warning if done is never received.
+  // Does NOT auto-clear state — subagent sessions can legitimately run for minutes.
+  // The clearSubscription fix (done/no_stream handlers) is the real fix.
+  const _safetyTimeoutId = setTimeout(() => {
+    const currentState = _sessionStates.get(sessionId);
+    if (currentState?.busy && currentState?.streaming) {
+      console.error(
+        `[StreamManager] STILL BUSY after 2min: session=${sessionId} — done event may be lost`,
+        { busy: currentState.busy, streaming: currentState.streaming, messagesCount: currentState.messages.length },
+      );
+    }
+  }, 2 * 60 * 1000);
+  // Store timeout ID so stopBackgroundStream can cancel it
+  _safetyTimeouts.set(sessionId, _safetyTimeoutId);
 }
 
 /** Stop (cancel) the background stream for a session. Does NOT call backend cancel. */
 export function stopBackgroundStream(sessionId: string): void {
   const s = _sessionStates.get(sessionId);
   if (!s) return;
+  console.log(`[StreamManager] stopBackgroundStream: session=${sessionId}`);
   // Disconnect WebSocket session if connected
   import('@/stores/wsManager').then(({ wsManager }) => {
     wsManager.disconnectSession(sessionId);
@@ -406,6 +416,12 @@ export function stopBackgroundStream(sessionId: string): void {
     clearTimeout(pending);
     _pendingNotifies.delete(sessionId);
   }
+  // Cancel safety timeout
+  const safetyTimeout = _safetyTimeouts.get(sessionId);
+  if (safetyTimeout) {
+    clearTimeout(safetyTimeout);
+    _safetyTimeouts.delete(sessionId);
+  }
   // Mark as no longer streaming so the UI (ThinkingIndicator, sidebar pulse)
   // reflects the stopped state even if state persists for a while.
   _sessionStates.set(sessionId, { ...s, streaming: false, busy: false });
@@ -414,6 +430,7 @@ export function stopBackgroundStream(sessionId: string): void {
 
 /** Remove all state for a session (call after done event is handled by UI) */
 export function clearSessionStream(sessionId: string): void {
+  console.log(`[StreamManager] clearSessionStream: session=${sessionId}`);
   // ── Notify subscribers BEFORE deleting state ──────────────────────────
   // stopBackgroundStream already sets busy=false, streaming=false and calls
   // _notify.  But _notify reads from _sessionStates, so we must ensure the
@@ -495,22 +512,11 @@ export function handleReplayEvent(sessionId: string, event: string, data: any): 
     return;
   }
 
-  // Log key events for debugging
-  if (['replay_start', 'replay_end', 'message_start', 'done', 'no_stream', 'error'].includes(event)) {
-    console.log(`[StreamManager] handleReplayEvent: ${event}`, {
-      sessionId,
-      messagesCount: s.messages.length,
-      streaming: s.streaming,
-      busy: s.busy,
-    });
-  }
-
   switch (event) {
     case 'replay_start':
       // Reset messages to baseline before replay
       // Keep the existing seed messages (from reconnectStream or startSessionStream)
       // instead of fetching from useChatStore which may be stale during page refresh
-      console.log(`[StreamManager] replay_start: keeping ${s.messages.length} existing messages`);
       _sessionStates.set(sessionId, {
         ...s,
         toolCalls: [],
@@ -524,7 +530,29 @@ export function handleReplayEvent(sessionId: string, event: string, data: any): 
 
     case 'no_stream':
       // No active stream for this session
-      console.log(`[StreamManager] No stream for session ${sessionId}`);
+      console.warn(`[StreamManager] NO_STREAM for session=${sessionId} — backend stream already gone`);
+      // Clear busy state so the UI doesn't stay stuck
+      if (s.busy || s.streaming) {
+        console.warn(`[StreamManager] no_stream: clearing stale busy state for session=${sessionId}`);
+        _sessionStates.set(sessionId, {
+          ...s,
+          busy: false,
+          streaming: false,
+          completedAt: Date.now(),
+        });
+        _notifyImmediate(sessionId);
+        // Also clear useChatStore.busy
+        import('@/stores/useChatStore').then(({ useChatStore: chatStore }) => {
+          if (chatStore.getState().busy) {
+            chatStore.getState().setBusy(false);
+          }
+        });
+      }
+      // Reset subscription tracking — no stream exists, next begin_stream
+      // needs a fresh subscribeReplay.
+      import('@/stores/wsManager').then(({ wsManager }) => {
+        wsManager.clearSubscription(sessionId);
+      });
       break;
 
     case 'message_start': {
@@ -588,6 +616,20 @@ export function handleReplayEvent(sessionId: string, event: string, data: any): 
     }
 
     case 'done': {
+      // Always clear useChatStore.busy — even if StreamManager state was
+      // already cleared by subscribe_success's stale-cleaning, the done event
+      // means the backend has finished and the UI must not stay stuck.
+      import('@/stores/useChatStore').then(({ useChatStore: chatStore }) => {
+        if (chatStore.getState().busy) {
+          chatStore.getState().setBusy(false);
+        }
+      });
+      // Cancel safety timeout — done received successfully
+      const doneSafetyTimeout = _safetyTimeouts.get(sessionId);
+      if (doneSafetyTimeout) {
+        clearTimeout(doneSafetyTimeout);
+        _safetyTimeouts.delete(sessionId);
+      }
       _dismissCompressing(sessionId);
       _sessionStates.set(sessionId, {
         ...s,
@@ -618,8 +660,16 @@ export function handleReplayEvent(sessionId: string, event: string, data: any): 
               const { useChatStore } = await import('@/stores/useChatStore');
               useChatStore.getState().setToolCalls(session.tool_calls);
             }
+          }).catch((err) => {
+            console.error(`[StreamManager] DONE: loadSession FAILED for session=${sessionId}`, err);
           });
         }
+      });
+      // Reset frontend subscription tracking — backend stream is done,
+      // the old subscription is dead (sentinel already unsubscribed the
+      // backend side). Next begin_stream needs a fresh subscribeReplay.
+      import('@/stores/wsManager').then(({ wsManager }) => {
+        wsManager.clearSubscription(sessionId);
       });
       break;
     }
@@ -639,6 +689,10 @@ export function handleReplayEvent(sessionId: string, event: string, data: any): 
         ...s, busy: false, streaming: false, completedAt: Date.now(), error: errorMsg,
       });
       _notifyImmediate(sessionId);
+      // Reset subscription tracking — stream ended with error
+      import('@/stores/wsManager').then(({ wsManager }) => {
+        wsManager.clearSubscription(sessionId);
+      });
       break;
     }
 
@@ -650,6 +704,10 @@ export function handleReplayEvent(sessionId: string, event: string, data: any): 
         ...s, busy: false, streaming: false, completedAt: Date.now(), error: errMsg,
       });
       _notifyImmediate(sessionId);
+      // Reset subscription tracking — stream ended with error
+      import('@/stores/wsManager').then(({ wsManager }) => {
+        wsManager.clearSubscription(sessionId);
+      });
       break;
     }
 

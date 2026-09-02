@@ -64,16 +64,21 @@ export function handleNotifyEvent(event: string, data: any): void {
       useSessionStore.getState().loadSessions();
 
       // Hardening: clear stale stream states from before disconnection.
-      // loadSessions() now returns ALL sessions (including subagents) with
-      // active_stream_id, so we can correctly identify stale busy:true entries.
+      // Only clear streams that are busy but NOT streaming — those are truly
+      // stale (stream ended while disconnected). Streams with streaming=true
+      // may still be active on the backend; let done/no_stream handle them.
       {
         const sessions = useSessionStore.getState().sessions;
         const activeStreamSessionIds = new Set(
           sessions.filter(s => s.active_stream_id).map(s => s.session_id)
         );
-        for (const sid of StreamManager.getActiveSessionIds()) {
+        const streamSessionIds = StreamManager.getActiveSessionIds();
+        for (const sid of streamSessionIds) {
           const state = StreamManager.getSessionStreamState(sid);
-          if (state?.busy && !activeStreamSessionIds.has(sid)) {
+          // Only clear if busy=true AND streaming=false (truly stale).
+          // If streaming=true, the stream might still be active —
+          // done/no_stream will handle cleanup.
+          if (state?.busy && !state?.streaming && !activeStreamSessionIds.has(sid)) {
             console.warn(`[notifyManager] Clearing stale stream state for session ${sid}`);
             StreamManager.clearSessionStream(sid);
           }

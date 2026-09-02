@@ -1473,7 +1473,6 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
     _rt = {}
     old_cwd = None
     old_exec_ask = None
-    old_session_key = None
     old_gateway_session = None
     old_hermes_home = None
 
@@ -1568,6 +1567,20 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
         # session and the agent should connect to it.
         _cdp_port = _resolve_session_cdp_port(session_id)
 
+        # ── Concurrency-safe session context (ContextVar, per-thread) ──
+        # set_session_vars uses ContextVar so each _run_agent_streaming thread
+        # has its own HERMES_SESSION_KEY. This prevents child processes from
+        # inheriting a wrong session_key when multiple agents run concurrently.
+        from gateway.session_context import set_session_vars, clear_session_vars
+        _session_ctx_tokens = set_session_vars(
+            session_key=f"agent:main:webui:dm:{session_id}",
+            session_id=session_id,
+            ui_session_id=session_id,
+            source="webui",
+            cwd=str(s.workspace),
+            cron_session="",
+        )
+
         _set_thread_env(
             TERMINAL_CWD=str(s.workspace),
             HERMES_EXEC_ASK='1',
@@ -1590,7 +1603,6 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
         with _ENV_LOCK:
             old_cwd = os.environ.get('TERMINAL_CWD')
             old_exec_ask = os.environ.get('HERMES_EXEC_ASK')
-            old_session_key = os.environ.get('HERMES_SESSION_KEY')
             old_gateway_session = os.environ.get('HERMES_GATEWAY_SESSION')
             old_hermes_home = os.environ.get('HERMES_HOME')
             old_cdp_url = os.environ.get('BROWSER_CDP_URL')
@@ -1598,8 +1610,6 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             old_https_proxy = os.environ.get('HTTPS_PROXY')
             os.environ['TERMINAL_CWD'] = str(s.workspace)
             os.environ['HERMES_EXEC_ASK'] = '1'
-            os.environ['HERMES_SESSION_KEY'] = f"agent:main:webui:dm:{session_id}"
-            os.environ['HERMES_UI_SESSION_ID'] = session_id
             os.environ['HERMES_GATEWAY_SESSION'] = '1'
             # BROWSER_CDP_URL: use sentinel so agent-browser-wrapper.sh resolves
             # the real port from sessions_display/<sid>.json.  If a global CDP
@@ -3093,7 +3103,15 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 print(f'[title-sync-backend] title NOT run: should={_should_bg_title} u0={bool(_u0)} a0={bool(_a0)} session={session_id[:8]}', flush=True)
             # done is emitted AFTER title generation so the frontend sees the
             # final title when it reloads sessions on the done event.
-            put('done', {'session': redact_session_data(raw_session), 'usage': usage})
+            logger.info(
+                "[done] session=%s stream=%s subscribers=%d",
+                session_id[:12], stream_id[:8],
+                len(q._subscribers) if hasattr(q, '_subscribers') else -1,
+            )
+            put('done', {
+                'session': redact_session_data(raw_session),
+                'usage': usage,
+            })
             # Emit metering stats for the header TPS label
             meter_stats = meter().get_stats()
             meter_stats['session_id'] = session_id
@@ -3122,8 +3140,6 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 else: os.environ['TERMINAL_CWD'] = old_cwd
                 if old_exec_ask is None: os.environ.pop('HERMES_EXEC_ASK', None)
                 else: os.environ['HERMES_EXEC_ASK'] = old_exec_ask
-                if old_session_key is None: os.environ.pop('HERMES_SESSION_KEY', None)
-                else: os.environ['HERMES_SESSION_KEY'] = old_session_key
                 if old_gateway_session is None: os.environ.pop('HERMES_GATEWAY_SESSION', None)
                 else: os.environ['HERMES_GATEWAY_SESSION'] = old_gateway_session
                 if old_hermes_home is None: os.environ.pop('HERMES_HOME', None)
@@ -3139,6 +3155,11 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         os.environ['HTTPS_PROXY'] = old_https_proxy
                 except NameError:
                     pass
+            # Clear per-thread session context (ContextVar)
+            try:
+                clear_session_vars(_session_ctx_tokens)
+            except Exception:
+                pass
 
         # Close any remaining xterm windows for this session
         try:

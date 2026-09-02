@@ -138,6 +138,16 @@ class WsManager {
   }
 
   /**
+   * Remove a session from subscription tracking without sending unsubscribe_replay.
+   * Used when the backend stream is already done (sentinel already cleaned up
+   * the backend-side subscriber) and we just need to reset frontend state
+   * so the next subscribeReplay() call won't be skipped.
+   */
+  clearSubscription(sessionId: string): void {
+    this.subscriptions.delete(sessionId);
+  }
+
+  /**
    * Connect to a session's replay stream (subscribe + listen).
    * Returns an unsubscribe function.
    */
