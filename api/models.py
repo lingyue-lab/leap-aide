@@ -1193,14 +1193,19 @@ def _all_sessions_from_db(db, active_stream_ids):
     # Overlay in-memory sessions (may have runtime state not yet flushed to DB).
     # The state.db title is authoritative (it goes through set_session_title
     # with a UNIQUE constraint), so preserve it over the in-memory value.
-    # Skip subagent sessions — they only appear as delegate children, not in
-    # the main sidebar list.
+    # Subagent sessions: overlay active_stream_id so loadSessions() returns
+    # a complete baseline for stream state reconciliation on reconnect.
     with LOCK:
         for s in SESSIONS.values():
-            if getattr(s, 'is_subagent_session', False):
-                continue
             _sid = s.session_id
             _stream_id = stream_manager.get_stream_id(_sid)
+            if getattr(s, 'is_subagent_session', False):
+                # Subagent: only overlay active_stream_id, don't expand to full compact
+                for c in compact_list:
+                    if c['session_id'] == _sid:
+                        c['active_stream_id'] = _stream_id
+                        break
+                continue
             found = False
             for c in compact_list:
                 if c['session_id'] == _sid:
@@ -1773,14 +1778,18 @@ def _notify_session_event(event_type: str, session, stream_id: str = None):
 
     Takes a clone() snapshot to ensure data consistency even if the
     original session is mutated concurrently.
-    event_type: 'upsert_session' | 'delete_session' | 'begin_stream' | 'end_stream'
+    event_type: 'upsert_session' | 'delete_session' | 'begin_stream'
     """
     from api.notify_stream import notify_stream
+    from api.stream_manager import stream_manager
     snap = session.clone() if hasattr(session, 'clone') else session
+    # Query whether this session currently has an active stream
+    active_sid = stream_manager.get_stream_id(snap.session_id)
     data = {
         'session_id': snap.session_id,
         'parent_session_id': snap.parent_session_id,
         'stream_id': stream_id,
+        'active_stream_id': active_sid,
         'source_tag': getattr(snap, 'source_tag', None),
         'title': snap.title,
         'message_count': len(snap.messages or []),
@@ -1793,10 +1802,6 @@ def _notify_session_event(event_type: str, session, stream_id: str = None):
         '_delegate_running_count': getattr(snap, '_delegate_running_count', 0),
     }
     notify_stream.put(event_type, data)
-
-    # When a child stream ends, update parent's delegate children count
-    if event_type == 'end_stream' and snap.parent_session_id:
-        _update_parent_delegate_count(snap.parent_session_id)
 
 
 def _update_parent_delegate_count(parent_session_id: str):

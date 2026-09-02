@@ -1,6 +1,5 @@
 import { useEffect } from 'react';
 import { ts } from '@/utils/logTs';
-import * as StreamManager from '@/stores/streamManager';
 import { addNotifyListener } from '@/stores/notifyManager';
 import { useSessionStore } from '@/stores/useSessionStore';
 
@@ -14,10 +13,10 @@ export function isChatPanelActive() { return _chatPanelActive; }
  *
  * Flow:
  *   - begin_stream → update session's active_stream_id in store
- *   - end_stream → clear session's active_stream_id and stream state
  *
- * The actual reconnection is handled by ChatInterface.refreshFromBackend()
- * after loadSession completes, which checks session.active_stream_id.
+ * Stream completion is handled by the 'done' event in the replay channel
+ * (streamManager.handleReplayEvent). Sidebar breathing indicator is driven
+ * by active_stream_id in upsert_session.
  */
 export function useStreamNotify(sessionId: string | null) {
   useEffect(() => {
@@ -33,13 +32,6 @@ export function useStreamNotify(sessionId: string | null) {
         useSessionStore.getState().updateCurrentSession({
           active_stream_id: data.stream_id,
         });
-      } else if (event === 'end_stream') {
-        console.log(`[${ts()}] [NOTIFY] end_stream for session=${data.session_id}`);
-        // Clear active_stream_id
-        useSessionStore.getState().updateCurrentSession({
-          active_stream_id: null,
-        });
-        StreamManager.clearSessionStream(data.session_id);
       }
     });
 

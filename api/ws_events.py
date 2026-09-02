@@ -246,7 +246,14 @@ def _ws_events_loop(sock: socket.socket) -> None:
 
     try:
         while True:
-            # 1. Non-blocking check for client messages
+            # 1. Drain replay queues (non-blocking) FIRST — ensures replay
+            #    events (especially 'done') are sent before any notify events,
+            #    eliminating the end_stream/done race condition.
+            for sid, q in list(replay_subs.items()):
+                count = _drain_queue(q, sock, channel="replay", session_id=sid)
+                msg_count += count
+
+            # 2. Non-blocking check for client messages
             try:
                 readable, _, _ = select.select([sock], [], [], 0)
                 if readable:
@@ -265,7 +272,7 @@ def _ws_events_loop(sock: socket.socket) -> None:
             except (OSError, ValueError):
                 break
 
-            # 2. Drain notify queue (blocking WS_QUEUE_TIMEOUT seconds)
+            # 3. Drain notify queue (blocking WS_QUEUE_TIMEOUT seconds)
             if notify_q:
                 try:
                     item = notify_q.get(timeout=WS_QUEUE_TIMEOUT)
@@ -282,11 +289,6 @@ def _ws_events_loop(sock: socket.socket) -> None:
                         msg_count += 1
                 except queue.Empty:
                     pass
-
-            # 3. Drain replay queues (non-blocking)
-            for sid, q in list(replay_subs.items()):
-                count = _drain_queue(q, sock, channel="replay", session_id=sid)
-                msg_count += count
 
             # 4. Heartbeat (every WS_HEARTBEAT_INTERVAL seconds)
             now = time.time()

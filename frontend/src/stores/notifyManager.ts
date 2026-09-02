@@ -9,17 +9,17 @@
  *   5. On reconnect, subscribe_success fires again → reload baseline
  *
  * Event semantics:
- *   - begin_stream:  set active_stream_id, auto-connect replay
- *   - end_stream:    clear active_stream_id, update message_count, dispatch bg-stream-done
- *   - upsert_session: create or update session in sidebar (upsert)
- *   - delete_session: remove session from sidebar
+ *   - begin_stream:    set active_stream_id, auto-connect replay
+ *   - upsert_session:  create or update session in sidebar (upsert),
+ *                      includes active_stream_id for sidebar breathing indicator
+ *   - delete_session:  remove session from sidebar
  */
 import { useSessionStore } from '@/stores/useSessionStore';
 import type { SessionListItem } from '@/types';
 import * as StreamManager from '@/stores/streamManager';
 import { ts } from '@/utils/logTs';
 
-type NotifyEventType = 'begin_stream' | 'end_stream' | 'upsert_session' | 'delete_session' | 'apperror';
+type NotifyEventType = 'begin_stream' | 'upsert_session' | 'delete_session' | 'apperror';
 type NotifyListener = (event: NotifyEventType, data: any) => void;
 const _listeners: NotifyListener[] = [];
 
@@ -57,8 +57,28 @@ export function handleNotifyEvent(event: string, data: any): void {
 
   switch (event) {
     case 'subscribe_success':
-      // Load all sessions from DB as baseline
+      // Synchronous baseline: loadSessions() blocks until complete, including
+      // subagent sessions with active_stream_id. This ensures the baseline is
+      // fully populated before any subsequent begin_stream / upsert_session
+      // events are processed.
       useSessionStore.getState().loadSessions();
+
+      // Hardening: clear stale stream states from before disconnection.
+      // loadSessions() now returns ALL sessions (including subagents) with
+      // active_stream_id, so we can correctly identify stale busy:true entries.
+      {
+        const sessions = useSessionStore.getState().sessions;
+        const activeStreamSessionIds = new Set(
+          sessions.filter(s => s.active_stream_id).map(s => s.session_id)
+        );
+        for (const sid of StreamManager.getActiveSessionIds()) {
+          const state = StreamManager.getSessionStreamState(sid);
+          if (state?.busy && !activeStreamSessionIds.has(sid)) {
+            console.warn(`[notifyManager] Clearing stale stream state for session ${sid}`);
+            StreamManager.clearSessionStream(sid);
+          }
+        }
+      }
       break;
 
     case 'begin_stream':
@@ -88,62 +108,8 @@ export function handleNotifyEvent(event: string, data: any): void {
       StreamManager.handleReplayEvent(data.session_id, 'apperror', data);
       break;
 
-    case 'end_stream':
-      // Update session in sidebar
-      useSessionStore.setState((state) => ({
-        sessions: state.sessions.map((s) =>
-          s.session_id === data.session_id
-            ? {
-                ...s,
-                active_stream_id: undefined,
-                message_count: data.message_count ?? s.message_count,
-                last_seen_msg_count: data.last_seen_msg_count ?? s.last_seen_msg_count,
-              }
-            : s
-        ),
-      }));
-
-      // Disconnect replay
-      StreamManager.clearSessionStream(data.session_id);
-
-      // Notify listeners (useStreamNotify)
-      _emit('end_stream', data);
-
-      // Dispatch bg-stream-done for bg-stream-done.tsx overlay
-      window.dispatchEvent(new CustomEvent('bg-stream-done', {
-        detail: {
-          sessionId: data.session_id,
-          streamId: data.stream_id,
-          summary: data.title || '',
-          lastUserMessage: '',
-          taskCount: 0,
-        },
-      }));
-
-      // Trigger loadSession to reload messages from backend after stream ends.
-      // This ensures the UI has the complete message history including the
-      // final messages persisted by the SDK (which may not have been received
-      // via SSE/WebSocket replay — e.g. after a force-refresh during streaming).
-      {
-        const _endStreamSid = data.session_id;
-        const _currentSid = useSessionStore.getState().currentSessionId;
-        if (_currentSid === _endStreamSid) {
-          useSessionStore.getState().loadSession(_endStreamSid).then(async () => {
-            if (useSessionStore.getState().currentSessionId !== _endStreamSid) return;
-            const session = useSessionStore.getState().currentSession;
-            if (session?.messages) {
-              const { useChatStore } = await import('@/stores/useChatStore');
-              useChatStore.getState().setMessages(session.messages);
-              StreamManager.replaceSessionMessages(_endStreamSid, session.messages);
-            }
-            if (session?.tool_calls) {
-              const { useChatStore } = await import('@/stores/useChatStore');
-              useChatStore.getState().setToolCalls(session.tool_calls);
-            }
-          });
-        }
-      }
-      break;
+    // end_stream removed — 'done' (replay channel) is the sole completion signal.
+    // Sidebar breathing indicator is now driven by active_stream_id in upsert_session.
 
     case 'upsert_session': {
       const existing = useSessionStore.getState().sessions.find(
@@ -168,7 +134,10 @@ export function handleNotifyEvent(event: string, data: any): void {
                   last_seen_msg_count: data.last_seen_msg_count ?? s.last_seen_msg_count,
                   source_tag: data.source_tag ?? s.source_tag,
                   _parent_session_id: data.parent_session_id ?? s._parent_session_id,
-                  active_stream_id: data.stream_id ?? s.active_stream_id,
+                  // Use active_stream_id from backend data (null = stream ended)
+                  active_stream_id: data.active_stream_id !== undefined
+                    ? data.active_stream_id
+                    : s.active_stream_id,
                   _has_delegate_children: data._has_delegate_children ?? s._has_delegate_children,
                   _delegate_children_count: data._delegate_children_count ?? s._delegate_children_count,
                   _delegate_running_count: data._delegate_running_count ?? s._delegate_running_count,
@@ -190,7 +159,7 @@ export function handleNotifyEvent(event: string, data: any): void {
           is_cli_session: data.source_tag === 'cli',
           is_subagent_session: data.source_tag === 'subagent',
           pinned: false,
-          active_stream_id: data.stream_id ?? undefined,
+          active_stream_id: data.active_stream_id ?? undefined,
           _has_delegate_children: data._has_delegate_children ?? false,
           _delegate_children_count: data._delegate_children_count ?? 0,
           _delegate_running_count: data._delegate_running_count ?? 0,

@@ -55,9 +55,16 @@ export const useSessionStore = create<SessionState>((set) => ({
   loadSessions: async () => {
     set({ loading: true, error: null });
     try {
-      const response = await fetch('/api/sessions', { credentials: 'include' });
-      if (!response.ok) throw new Error('Failed to load sessions');
-      const data = await response.json();
+      // Synchronous XHR: blocks until response arrives. This ensures the
+      // baseline state is fully populated before any subsequent notify events
+      // (begin_stream, upsert_session) are processed. The brief UI freeze
+      // (~100-300ms) only occurs once per WebSocket (re)connection.
+      const xhr = new XMLHttpRequest();
+      xhr.open('GET', '/api/sessions', false); // false = synchronous
+      xhr.withCredentials = true;
+      xhr.send();
+      if (xhr.status !== 200) throw new Error('Failed to load sessions');
+      const data = JSON.parse(xhr.responseText);
       const sessions: SessionListItem[] = data.sessions || [];
       // After loading sessions from DB, ensure the active session's title
       // stays in sync between sidebar (sessions[]) and topbar (currentSession).

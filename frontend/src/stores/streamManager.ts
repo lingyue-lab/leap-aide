@@ -598,31 +598,35 @@ export function handleReplayEvent(sessionId: string, event: string, data: any): 
       });
       _notifyImmediate(sessionId);
       window.dispatchEvent(new CustomEvent('bg-stream-done', { detail: { sessionId, streamId: s.streamId } }));
-      break;
-    }
 
-    case 'stream_end':
-    case 'stream_close': {
-      _dismissCompressing(sessionId);
-      _sessionStates.set(sessionId, {
-        ...s,
-        busy: false,
-        streaming: false,
-        completedAt: Date.now(),
+      // Reload messages from backend for the active session.
+      // Previously handled by the 'end_stream' notify event (now removed).
+      // The replay buffer may not include the final assistant message;
+      // loadSession ensures the UI has the complete persisted history.
+      import('@/stores/useSessionStore').then(({ useSessionStore }) => {
+        const currentSid = useSessionStore.getState().currentSessionId;
+        if (currentSid === sessionId) {
+          useSessionStore.getState().loadSession(sessionId).then(async () => {
+            if (useSessionStore.getState().currentSessionId !== sessionId) return;
+            const session = useSessionStore.getState().currentSession;
+            if (session?.messages) {
+              const { useChatStore } = await import('@/stores/useChatStore');
+              useChatStore.getState().setMessages(session.messages);
+              replaceSessionMessages(sessionId, session.messages);
+            }
+            if (session?.tool_calls) {
+              const { useChatStore } = await import('@/stores/useChatStore');
+              useChatStore.getState().setToolCalls(session.tool_calls);
+            }
+          });
+        }
       });
-      _notifyImmediate(sessionId);
-
-      // Handle subagent completion
-      const isSubagentStream = s.streamId.startsWith('session-');
-      window.dispatchEvent(new CustomEvent('bg-stream-done', { detail: { sessionId, streamId: s.streamId } }));
-      if (isSubagentStream) {
-        window.dispatchEvent(new CustomEvent('subagent-complete', { detail: { sessionId } }));
-        setTimeout(() => {
-          window.dispatchEvent(new CustomEvent('subagent-load-session', { detail: { sessionId } }));
-        }, 1000);
-      }
       break;
     }
+
+    // stream_end / stream_close removed — 'done' is the sole completion signal.
+    // Subagent completion logic was dead code (subagent-complete/subagent-load-session
+    // had no listeners).
 
     case 'apperror': {
       _dismissCompressing(sessionId);

@@ -3094,7 +3094,6 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             # done is emitted AFTER title generation so the frontend sees the
             # final title when it reloads sessions on the done event.
             put('done', {'session': redact_session_data(raw_session), 'usage': usage})
-            put('stream_end', {'session_id': session_id})
             # Emit metering stats for the header TPS label
             meter_stats = meter().get_stats()
             meter_stats['session_id'] = session_id

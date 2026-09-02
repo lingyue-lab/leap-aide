@@ -51,8 +51,9 @@ class StreamManager:
         """Close and remove stream for *session*.  Returns removed stream_id or None.
 
         Only updates ``_session_streams`` — session objects never hold
-        ``active_stream_id``.  Pushes an end_stream notification to the
-        global notify stream so all connected frontends are informed.
+        ``active_stream_id``.  The 'end_stream' notify event has been removed;
+        sidebar updates are handled by 'upsert_session' (via save_session) with
+        the ``active_stream_id`` field.
         """
         session_id = session.session_id
         with self._lock:
@@ -65,9 +66,12 @@ class StreamManager:
         if removed_id:
             logger.debug("[end_stream] session=%s removed=%s",
                          session_id[:12], removed_id[:8] if removed_id else None)
-            # Push notify outside lock
-            from api.models import _notify_session_event
-            _notify_session_event('end_stream', session, removed_id)
+            # Update parent delegate children count (previously triggered by
+            # _notify_session_event('end_stream') in models.py)
+            parent_sid = getattr(session, 'parent_session_id', None)
+            if parent_sid:
+                from api.models import _update_parent_delegate_count
+                _update_parent_delegate_count(parent_sid)
             for cb in self._on_end_callbacks:
                 try:
                     cb(session_id)
