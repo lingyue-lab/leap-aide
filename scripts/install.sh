@@ -394,6 +394,27 @@ if [ "$IN_DOCKER" = true ]; then
   if [ ! -f /etc/ssl/certs/ca-certificates.crt ] && [ ! -f /etc/pki/tls/certs/ca-bundle.crt ]; then
     _sys_deps_to_install="${_sys_deps_to_install} ca-certificates"
   fi
+  # VNC observation dependencies (Xvfb, x11vnc, openbox, wmctrl)
+  if ! command -v Xvfb >/dev/null 2>&1; then
+    _sys_deps_to_install="${_sys_deps_to_install} xvfb"
+  fi
+  if ! command -v x11vnc >/dev/null 2>&1; then
+    _sys_deps_to_install="${_sys_deps_to_install} x11vnc"
+  fi
+  if ! command -v openbox >/dev/null 2>&1; then
+    _sys_deps_to_install="${_sys_deps_to_install} openbox"
+  fi
+  if ! command -v wmctrl >/dev/null 2>&1; then
+    _sys_deps_to_install="${_sys_deps_to_install} wmctrl"
+  fi
+  # Chinese locale support
+  if ! locale -a 2>/dev/null | grep -q 'zh_CN.UTF-8'; then
+    _sys_deps_to_install="${_sys_deps_to_install} locales"
+  fi
+  # Fcitx5 input method for Chinese input
+  if ! command -v fcitx5 >/dev/null 2>&1; then
+    _sys_deps_to_install="${_sys_deps_to_install} fcitx5 fcitx5-chinese-addons fcitx5-frontend-gtk3 fcitx5-frontend-gtk4 dbus-x11 python3-dbus"
+  fi
   if [ -n "$_sys_deps_to_install" ]; then
     warn "Installing system dependencies:${_sys_deps_to_install}"
     # shellcheck disable=SC2086
@@ -404,6 +425,20 @@ if [ "$IN_DOCKER" = true ]; then
     else
       warn "Some system deps failed to install"
     fi
+  fi
+
+  # Configure Chinese locale
+  if ! locale -a 2>/dev/null | grep -q 'zh_CN.UTF-8'; then
+    warn "Configuring Chinese locale..."
+    sed -i 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen
+    locale-gen zh_CN.UTF-8 2>&1 || warn "Failed to generate zh_CN.UTF-8 locale"
+    ok "Chinese locale configured"
+  fi
+
+  # fcitx5 trigger key is configured at runtime via D-Bus SetConfig
+  # (see api/session_display.py _configure_fcitx5_trigger_key)
+  if command -v fcitx5 >/dev/null 2>&1; then
+    ok "fcitx5 installed (trigger key set at session start via D-Bus)"
   fi
 fi
 

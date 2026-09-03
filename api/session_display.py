@@ -1,12 +1,12 @@
 """
-Hermes Web UI — Per-session virtual display lifecycle manager.
+Hermes Web UI - Per-session virtual display lifecycle manager.
 
 Manages Xvfb + openbox + x11vnc triple for desktop-level browser observation.
 Thread-safe: uses a module-level RLock for all mutable shared state.
 
 Lifecycle is bound to session pin state (FR-009a):
-    Session Pinned   → SessionDisplay.start()  → runs until unpinned/deleted
-    Session Unpinned → no SessionDisplay       → eye button greyed out
+    Session Pinned   -> SessionDisplay.start()  -> runs until unpinned/deleted
+    Session Unpinned -> no SessionDisplay       -> eye button greyed out
 
 chrome-wrapper.sh and agent-browser-wrapper.sh must be installed ONCE before
 SessionDisplay is used:
@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import signal
 import shutil
 import socket
 import subprocess
@@ -29,7 +30,7 @@ from api.config import STATE_DIR
 
 logger = logging.getLogger(__name__)
 
-# ── Configuration ─────────────────────────────────────────────────────────────
+# -- Configuration ---------------------------------------------------------------
 
 DISPLAY_START = int(os.environ.get("HERMES_OBSERVE_DISPLAY_START", "99"))
 DISPLAY_END = int(os.environ.get("HERMES_OBSERVE_DISPLAY_END", "90"))
@@ -45,7 +46,7 @@ SESSIONS_DISPLAY_DIR = STATE_DIR / "sessions_display"
 # Ensure directory exists
 SESSIONS_DISPLAY_DIR.mkdir(parents=True, exist_ok=True)
 
-# ── Required binaries ─────────────────────────────────────────────────────────
+# -- Required binaries -----------------------------------------------------------
 
 _REQUIRED_BINARIES = {
     "Xvfb": "/usr/bin/Xvfb",
@@ -76,7 +77,7 @@ def purge_orphaned_configs() -> int:
     """
     from api.config import SESSION_DIR
 
-    # ── Collect existing session IDs from both stores ──────────────────
+    # -- Collect existing session IDs from both stores ----------------------
     existing_ids: set[str] = set()
     pinned_ids: set[str] = set()
 
@@ -104,7 +105,7 @@ def purge_orphaned_configs() -> int:
         if not sid.startswith('_'):
             existing_ids.add(sid)
 
-    # ── Clean up ──────────────────────────────────────────────────────
+    # -- Clean up -------------------------------------------------------
     removed = 0
     if not SESSIONS_DISPLAY_DIR.exists():
         return removed
@@ -119,7 +120,7 @@ def purge_orphaned_configs() -> int:
             except OSError:
                 pass
         elif pinned_ids and sid not in pinned_ids:
-            # Session exists but is not pinned — stale display config
+            # Session exists but is not pinned - stale display config
             try:
                 f.unlink()
                 removed += 1
@@ -147,7 +148,7 @@ def sync_gateway_session_cwd() -> int:
         updated = 0
         # Only sync messaging platform sessions (weixin, telegram, etc.)
         # where cwd is always controlled by the gateway config.
-        # CLI sessions can have arbitrary cwd — don't touch them.
+        # CLI sessions can have arbitrary cwd - don't touch them.
         placeholders = ", ".join("?" for _ in MESSAGING_SOURCE_TAGS)
         cur = db._conn.execute(
             f"SELECT id, cwd FROM sessions WHERE source IN ({placeholders})",
@@ -163,7 +164,7 @@ def sync_gateway_session_cwd() -> int:
                 )
                 updated += 1
                 logger.info(
-                    "sync_gateway_cwd: %s cwd %s → %s", sid, old_cwd, current_cwd,
+                    "sync_gateway_cwd: %s cwd %s -> %s", sid, old_cwd, current_cwd,
                 )
         if updated:
             db._conn.commit()
@@ -202,7 +203,7 @@ def ensure_pinned_displays() -> int:
     return started
 
 
-# ── Module-level shared state ─────────────────────────────────────────────────
+# -- Module-level shared state -----------------------------------------------
 
 _LOCK = threading.RLock()
 _DISPLAYS: dict[str, "SessionDisplay"] = {}
@@ -245,11 +246,11 @@ def _find_free_display_and_ports() -> tuple[int, int, int]:
         socket_dir = Path(f"/tmp/.X11-unix")
         socket_file = socket_dir / f"X{display}"
 
-        # Check Xvfb lock file — if the owning process is dead, clean up
+        # Check Xvfb lock file - if the owning process is dead, clean up
         if lock_file.exists():
             if _lock_owner_alive(lock_file):
                 continue
-            # Stale lock from a dead process — remove it
+            # Stale lock from a dead process - remove it
             try:
                 lock_file.unlink()
             except OSError:
@@ -280,7 +281,7 @@ def _find_free_display_and_ports() -> tuple[int, int, int]:
         return display, vnc_port, cdp_port
 
     raise RuntimeError(
-        f"已达到最大观察会话数 ({DISPLAY_RANGE})，请等待其他会话超时释放"
+        f"Max observer sessions reached ({DISPLAY_RANGE}), wait for other sessions to release"
     )
 
 
@@ -307,7 +308,7 @@ def _wait_for_tcp_port(host: str, port: int, timeout: float = 10.0) -> bool:
     return False
 
 
-# ── SessionDisplay ────────────────────────────────────────────────────────────
+# -- SessionDisplay -----------------------------------------------------------
 
 
 class SessionDisplay:
@@ -323,18 +324,20 @@ class SessionDisplay:
         self.vnc_port: int | None = None
         self.cdp_port: int | None = None
         self.xvfb_proc: subprocess.Popen | None = None
+        self.fcitx_proc: subprocess.Popen | None = None
         self.openbox_proc: subprocess.Popen | None = None
         self.vnc_proc: subprocess.Popen | None = None
         self.chrome_proc: subprocess.Popen | None = None
         self.xterm_procs: dict[str, subprocess.Popen] = {}
+        self._dbus_pid: int = 0
 
-    # ── Public API ──────────────────────────────────────────────────────────
+    # -- Public API -----------------------------------------------------------
 
     def start(self) -> dict:
         """Start Xvfb + openbox + x11vnc for this session. Idempotent.
 
         Called when a session is pinned (via POST /api/session/pin) or when
-        the user clicks 👁 on an already-pinned session without a running
+        the user clicks the eye button on an already-pinned session without a running
         SessionDisplay.
 
         Returns:
@@ -368,17 +371,56 @@ class SessionDisplay:
                 )
                 socket_path = Path(f"/tmp/.X11-unix/X{display}")
                 if not _wait_for_socket(socket_path, timeout=5.0):
-                    raise RuntimeError(f"Xvfb 启动失败 (display :{display}): socket 未出现")
+                    raise RuntimeError(f"Xvfb startup failed (display :{display}): socket not found")
 
-                # 2. Start openbox window manager
+                # Fcitx5 input method environment
+                fcitx_env = {
+                    **os.environ,
+                    "DISPLAY": f":{display}",
+                    "GTK_IM_MODULE": "fcitx",
+                    "QT_IM_MODULE": "fcitx",
+                    "XMODIFIERS": "@im=fcitx",
+                    "INPUT_METHOD": "fcitx",
+                    "GLFW_IM_MODULE": "ibus",
+                }
+
+                # 2. Start D-Bus session bus (shared by fcitx5 and Chrome)
+                dbus_out = subprocess.check_output(
+                    ["dbus-launch", "--sh-syntax"],
+                    env=fcitx_env, stderr=subprocess.DEVNULL,
+                ).decode()
+                for line in dbus_out.splitlines():
+                    if line.startswith("export "):
+                        line = line[7:]
+                    if "=" in line:
+                        k, _, v = line.partition("=")
+                        k = k.strip()
+                        v = v.strip().rstrip(";").strip("'\"")
+                        if k in ("DBUS_SESSION_BUS_ADDRESS", "DBUS_SESSION_BUS_PID"):
+                            fcitx_env[k] = v
+                self._dbus_pid = int(fcitx_env.get("DBUS_SESSION_BUS_PID", "0"))
+
+                # 3. Configure and start fcitx5 input method daemon
+                self.fcitx_proc = subprocess.Popen(
+                    ["fcitx5", "-d"],
+                    env=fcitx_env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                time.sleep(2.0)  # let fcitx5 fully initialize
+
+                # Set trigger key via D-Bus (like the GUI config tool does)
+                self._configure_fcitx5_trigger_key(fcitx_env)
+
+                # 4. Start openbox window manager
                 self.openbox_proc = subprocess.Popen(
                     ["openbox"],
-                    env={**os.environ, "DISPLAY": f":{display}"},
+                    env=fcitx_env,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 )
                 time.sleep(0.5)  # let openbox initialize
 
-                # 3. Start x11vnc
+                # 5. Start x11vnc
                 self.vnc_proc = subprocess.Popen(
                     [
                         "x11vnc",
@@ -393,12 +435,15 @@ class SessionDisplay:
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 )
                 if not _wait_for_tcp_port("127.0.0.1", vnc_port, timeout=10.0):
-                    raise RuntimeError(f"x11vnc 启动失败 (port {vnc_port}): 端口未就绪")
+                    raise RuntimeError(f"x11vnc startup failed (port {vnc_port}): port not ready")
 
-                # 4. Launch Chrome on the virtual display
+                # 6. Launch Chrome on the virtual display
                 chrome_bin = self._find_chrome_binary()
                 profile_dir = STATE_DIR / "chrome_profiles" / self.session_id
                 profile_dir.mkdir(parents=True, exist_ok=True)
+
+                # Build Chrome env: inherit fcitx dbus/im vars but NOT XDG_CONFIG_HOME
+                chrome_env = {k: v for k, v in fcitx_env.items() if k != "XDG_CONFIG_HOME"}
 
                 self.chrome_proc = subprocess.Popen(
                     [
@@ -415,20 +460,19 @@ class SessionDisplay:
                         "--window-position=0,0",
                         "--disable-backgrounding-occluded-windows",
                     ],
-                    env={**os.environ,
-                         "DISPLAY": f":{display}",
+                    env={**chrome_env,
                          # Bypass proxy for localhost CDP; external sites still use proxy
                          "NO_PROXY": (_np + ",127.0.0.1,localhost" if (_np := os.environ.get("NO_PROXY", "")) else "127.0.0.1,localhost")},
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
                 if not _wait_for_tcp_port("127.0.0.1", cdp_port, timeout=10.0):
-                    raise RuntimeError(f"Chrome CDP 启动失败 (port {cdp_port}): 端口未就绪")
+                    raise RuntimeError(f"Chrome CDP startup failed (port {cdp_port}): port not ready")
 
-                # 5. Write JSON config (includes cdp_url for agent-browser-wrapper)
+                # 7. Write JSON config (includes cdp_url for agent-browser-wrapper)
                 self._write_config()
 
-                # 6. Register in module dict
+                # 8. Register in module dict
                 _DISPLAYS[self.session_id] = self
 
                 logger.info(
@@ -468,10 +512,11 @@ class SessionDisplay:
                     pass
             self.chrome_proc = None
 
-            # Kill processes: x11vnc first, then openbox, then Xvfb
+            # Kill processes: x11vnc first, then openbox, then fcitx5, then Xvfb
             for proc, name in [
                 (self.vnc_proc, "x11vnc"),
                 (self.openbox_proc, "openbox"),
+                (self.fcitx_proc, "fcitx5"),
                 (self.xvfb_proc, "Xvfb"),
             ]:
                 if proc and proc.poll() is None:
@@ -484,6 +529,14 @@ class SessionDisplay:
                             proc.wait(timeout=2)
                     except OSError:
                         pass
+
+            # Kill D-Bus session daemon
+            if self._dbus_pid:
+                try:
+                    os.kill(self._dbus_pid, signal.SIGTERM)
+                except OSError:
+                    pass
+                self._dbus_pid = 0
 
             self.xvfb_proc = None
             self.openbox_proc = None
@@ -516,7 +569,7 @@ class SessionDisplay:
             "status": "active" if self.is_running() else "error",
         }
 
-    # ── Static helpers ──────────────────────────────────────────────────────
+    # -- Static helpers -----------------------------------------------------
 
     @staticmethod
     def get_info(session_id: str) -> dict | None:
@@ -529,7 +582,7 @@ class SessionDisplay:
         except (json.JSONDecodeError, OSError):
             return None
 
-    # ── Window focus ──────────────────────────────────────────────────────
+    # -- Window focus -----------------------------------------------------
 
     def focus_chrome(self) -> None:
         """Bring the Chrome window to the foreground on Xvfb."""
@@ -573,7 +626,7 @@ class SessionDisplay:
             return candidates[0]
         raise FileNotFoundError("No Chrome binary found in Playwright cache")
 
-    # ── Internal ────────────────────────────────────────────────────────────
+    # -- Internal -----------------------------------------------------------
 
     def _write_config(self) -> None:
         """Write session display JSON config consumed by agent-browser-wrapper."""
@@ -588,6 +641,42 @@ class SessionDisplay:
         json_path = SESSIONS_DISPLAY_DIR / f"{self.session_id}.json"
         json_path.write_text(json.dumps(config))
 
+    @staticmethod
+    def _configure_fcitx5_trigger_key(fcitx_env: dict) -> None:
+        """Set fcitx5 trigger key via D-Bus (same as GUI config tool).
+
+        Uses fcitx://config/global URI and SetConfig API to set
+        TriggerKeys to Shift+space.  Falls back silently on error.
+        """
+        script = (
+            "import dbus, dbus.mainloop.glib\n"
+            "dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)\n"
+            "bus = dbus.SessionBus()\n"
+            "proxy = bus.get_object('org.fcitx.Fcitx5', '/controller')\n"
+            "c = dbus.Interface(proxy, 'org.fcitx.Fcitx.Controller1')\n"
+            "tk = dbus.Dictionary(signature='sv')\n"
+            "tk['0'] = dbus.String('Shift+space', variant_level=1)\n"
+            "hk = dbus.Dictionary(signature='sv')\n"
+            "hk['TriggerKeys'] = tk\n"
+            "cfg = dbus.Dictionary(signature='sv')\n"
+            "cfg['Hotkey'] = hk\n"
+            "c.SetConfig('fcitx://config/global', cfg)\n"
+            "c.Save()\n"
+        )
+        try:
+            # Use system python3 (venv lacks dbus-python)
+            result = subprocess.run(
+                ["/usr/bin/python3", "-c", script],
+                env=fcitx_env, timeout=5,
+                capture_output=True,
+            )
+            if result.returncode != 0:
+                logger.warning("fcitx5 SetConfig failed: %s", result.stderr.decode().strip())
+            else:
+                logger.info("fcitx5 trigger key set to Shift+Space via D-Bus")
+        except Exception as e:
+            logger.warning("fcitx5 SetConfig exception: %s", e)
+
     def _remove_config(self) -> None:
         """Remove the session display JSON file."""
         json_path = SESSIONS_DISPLAY_DIR / f"{self.session_id}.json"
@@ -596,7 +685,7 @@ class SessionDisplay:
         except OSError:
             pass
 
-# ── Module init: cleanup orphaned configs + sync gateway cwd ────────────────────
+# -- Module init: cleanup orphaned configs + sync gateway cwd ---------------------
 
 _purge_count = purge_orphaned_configs()
 if _purge_count:
