@@ -1205,12 +1205,20 @@ def _build_session_skills_block(skill_names: list) -> str:
 
 
 def _resolve_session_cdp_port(session_id: str) -> int | None:
-    """Return the CDP port for a session's SessionDisplay, or None if not running."""
-    from api.session_display import SessionDisplay
+    """Return the CDP port for a session's SessionDisplay, or None if not running.
+
+    Also ensures Chrome is alive — if it was closed by the user (e.g. via VNC),
+    it is restarted before returning the port.
+    """
+    from api.session_display import SessionDisplay, _DISPLAYS
     info = SessionDisplay.get_info(session_id)
-    if info:
-        return info.get("cdp_port")
-    return None
+    if not info:
+        return None
+    # Ensure Chrome is alive; restart if it was closed
+    sd = _DISPLAYS.get(session_id)
+    if sd and not sd.check_chrome_alive():
+        return None
+    return info.get("cdp_port")
 
 
 def _resolve_personality_prompt(config_dict, personality_name):
@@ -1588,7 +1596,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             HERMES_UI_SESSION_ID=session_id,
             HERMES_HOME=_profile_home,
             HERMES_GATEWAY_SESSION='1',
-            BROWSER_CDP_URL=(CDP_URL_SENTINEL if _cdp_port else ''),
+            BROWSER_CDP_URL=(f"http://127.0.0.1:{_cdp_port}" if _cdp_port else ''),
         )
         # ── os.environ mutation (under global lock) ──────────────────────
         # _IsolatedPopen (activated by _set_thread_env above) protects
@@ -1611,23 +1619,27 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             os.environ['TERMINAL_CWD'] = str(s.workspace)
             os.environ['HERMES_EXEC_ASK'] = '1'
             os.environ['HERMES_GATEWAY_SESSION'] = '1'
-            # BROWSER_CDP_URL: use sentinel so agent-browser-wrapper.sh resolves
-            # the real port from sessions_display/<sid>.json.  If a global CDP
-            # URL is already set (e.g. via CLI /browser connect), keep it —
-            # the sentinel must not overwrite a real user-configured value.
+            # BROWSER_CDP_URL: set the real CDP URL so Python browser_tool and
+            # agent-browser both connect directly to SessionDisplay's Chrome.
+            # If a global CDP URL is already set (e.g. via CLI /browser connect),
+            # keep it — a real user-configured value must not be overwritten.
             # agent-browser's HTTP client ignores NO_PROXY and routes ALL
             # connections through HTTP_PROXY, including 127.0.0.1 CDP. Clear
             # proxy vars so agent-browser reaches CDP directly.
+            _real_cdp = f"http://127.0.0.1:{_cdp_port}" if _cdp_port else ""
             _existing_cdp = os.environ.get('BROWSER_CDP_URL', '').strip()
             if _cdp_port:
                 if not _existing_cdp or _existing_cdp == CDP_URL_SENTINEL:
-                    os.environ['BROWSER_CDP_URL'] = CDP_URL_SENTINEL
+                    os.environ['BROWSER_CDP_URL'] = _real_cdp
                     old_http_proxy = os.environ.pop('HTTP_PROXY', None)
                     old_https_proxy = os.environ.pop('HTTPS_PROXY', None)
                     os.environ.pop('http_proxy', None)
                     os.environ.pop('https_proxy', None)
                 # else: global real CDP URL exists — keep it, don't overwrite
-            elif _existing_cdp == CDP_URL_SENTINEL:
+            elif _existing_cdp == CDP_URL_SENTINEL or (
+                _existing_cdp.startswith("http://127.0.0.1:")
+                and not _existing_cdp.endswith(":19999")
+            ):
                 # SessionDisplay gone but sentinel lingers from a prior run
                 del os.environ['BROWSER_CDP_URL']
             if _profile_home:

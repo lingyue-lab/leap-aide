@@ -64,14 +64,17 @@ def handle_observer_info(handler, session_id: str) -> bool:
         return j(handler, {"ok": False, "running": False,
                 "error": "请先 Pin 此会话以启用观察功能"})
 
-    from api.session_display import SessionDisplay
+    from api.session_display import SessionDisplay, _DISPLAYS
     info = SessionDisplay.get_info(session_id)
     if info:
-        sd = SessionDisplay(session_id)
+        sd = _DISPLAYS.get(session_id) or SessionDisplay(session_id)
         if sd.is_running():
+            # Ensure Chrome is alive — restart if user closed it in VNC
+            sd.check_chrome_alive()
             return j(handler, {"ok": True, "running": True,
                     "vnc_port": info.get("vnc_port"),
-                    "display_num": info.get("display"), "status": "active"})
+                    "display_num": info.get("display"),
+                    "cdp_port": info.get("cdp_port"), "status": "active"})
     try:
         sd = SessionDisplay(session_id)
         r = sd.start()

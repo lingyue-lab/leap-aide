@@ -438,36 +438,7 @@ class SessionDisplay:
                     raise RuntimeError(f"x11vnc startup failed (port {vnc_port}): port not ready")
 
                 # 6. Launch Chrome on the virtual display
-                chrome_bin = self._find_chrome_binary()
-                profile_dir = STATE_DIR / "chrome_profiles" / self.session_id
-                profile_dir.mkdir(parents=True, exist_ok=True)
-
-                # Build Chrome env: inherit fcitx dbus/im vars but NOT XDG_CONFIG_HOME
-                chrome_env = {k: v for k, v in fcitx_env.items() if k != "XDG_CONFIG_HOME"}
-
-                self.chrome_proc = subprocess.Popen(
-                    [
-                        chrome_bin,
-                        f"--remote-debugging-port={cdp_port}",
-                        f"--user-data-dir={profile_dir}",
-                        "--no-sandbox",
-                        "--disable-dev-shm-usage",
-                        "--no-first-run",
-                        "--no-default-browser-check",
-                        "--disable-features=TranslateUI",
-                        "--disable-blink-features=AutomationControlled",
-                        "--window-size=960,1080",
-                        "--window-position=0,0",
-                        "--disable-backgrounding-occluded-windows",
-                    ],
-                    env={**chrome_env,
-                         # Bypass proxy for localhost CDP; external sites still use proxy
-                         "NO_PROXY": (_np + ",127.0.0.1,localhost" if (_np := os.environ.get("NO_PROXY", "")) else "127.0.0.1,localhost")},
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                if not _wait_for_tcp_port("127.0.0.1", cdp_port, timeout=10.0):
-                    raise RuntimeError(f"Chrome CDP startup failed (port {cdp_port}): port not ready")
+                self._launch_chrome()
 
                 # 7. Write JSON config (includes cdp_url for agent-browser-wrapper)
                 self._write_config()
@@ -568,6 +539,84 @@ class SessionDisplay:
             "cdp_port": self.cdp_port,
             "status": "active" if self.is_running() else "error",
         }
+
+    # -- Chrome lifecycle ---------------------------------------------------
+
+    def _launch_chrome(self) -> None:
+        """Launch Chrome on the virtual display. Caller must hold _LOCK."""
+        chrome_bin = self._find_chrome_binary()
+        profile_dir = STATE_DIR / "chrome_profiles" / self.session_id
+        profile_dir.mkdir(parents=True, exist_ok=True)
+
+        chrome_env = {
+            **os.environ,
+            "DISPLAY": f":{self.display_num}",
+            "GTK_IM_MODULE": "fcitx",
+            "QT_IM_MODULE": "fcitx",
+            "XMODIFIERS": "@im=fcitx",
+        }
+        # Remove XDG_CONFIG_HOME to avoid interfering with fcitx config
+        chrome_env.pop("XDG_CONFIG_HOME", None)
+
+        self.chrome_proc = subprocess.Popen(
+            [
+                chrome_bin,
+                f"--remote-debugging-port={self.cdp_port}",
+                f"--user-data-dir={profile_dir}",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-features=TranslateUI",
+                "--disable-blink-features=AutomationControlled",
+                "--window-size=960,1080",
+                "--window-position=0,0",
+                "--disable-backgrounding-occluded-windows",
+            ],
+            env={**chrome_env,
+                 "NO_PROXY": (_np + ",127.0.0.1,localhost"
+                              if (_np := os.environ.get("NO_PROXY", ""))
+                              else "127.0.0.1,localhost")},
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if not _wait_for_tcp_port("127.0.0.1", self.cdp_port, timeout=10.0):
+            raise RuntimeError(
+                f"Chrome CDP startup failed (port {self.cdp_port}): port not ready"
+            )
+
+    def restart_chrome(self) -> bool:
+        """Restart Chrome if it died but Xvfb/VNC are still alive.
+
+        Returns True if Chrome is usable (restarted or already alive).
+        Returns False if the entire SessionDisplay is dead.
+        """
+        with _LOCK:
+            if not self.is_running():
+                return False
+            if self.chrome_proc and self.chrome_proc.poll() is None:
+                return True
+            # Chrome died — restart on the same display/port
+            logger.warning(
+                "Chrome died for session=%s (display=:%s), restarting",
+                self.session_id, self.display_num,
+            )
+            self.chrome_proc = None
+            try:
+                self._launch_chrome()
+                self._write_config()
+                logger.info(
+                    "Chrome restarted session=%s cdp=%s",
+                    self.session_id, self.cdp_port,
+                )
+                return True
+            except Exception as exc:
+                logger.error("Chrome restart failed for %s: %s", self.session_id, exc)
+                return False
+
+    def check_chrome_alive(self) -> bool:
+        """Check Chrome health and restart if needed. Returns True if usable."""
+        return self.restart_chrome()
 
     # -- Static helpers -----------------------------------------------------
 

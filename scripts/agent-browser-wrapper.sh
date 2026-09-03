@@ -27,7 +27,8 @@ set -euo pipefail
 # ── Sentinel CDP URL resolution ────────────────────────────────────────────
 SENTINEL="http://127.0.0.1:19999"
 SESSIONS_DIR="${HOME}/.hermes/webui/sessions_display"
-SID="${HERMES_SESSION_KEY:-}"
+# Extract session_id from HERMES_SESSION_KEY (strip "agent:main:webui:dm:" prefix)
+SID="${HERMES_SESSION_KEY##*:}"
 
 FINAL_CDP=""
 

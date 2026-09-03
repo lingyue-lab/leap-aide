@@ -83,7 +83,8 @@ fi
 REAL_CHROME="$_real_chrome"
 
 SESSIONS_DIR="${HOME}/.hermes/webui/sessions_display"
-SID="${HERMES_SESSION_KEY:-}"
+# Extract session_id from HERMES_SESSION_KEY (strip "agent:main:webui:dm:" prefix)
+SID="${HERMES_SESSION_KEY##*:}"
 
 # ── Fallback 1: No session key ────────────────────────────────────────────
 if [[ -z "$SID" ]]; then
