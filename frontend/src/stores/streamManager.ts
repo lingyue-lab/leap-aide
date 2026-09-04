@@ -148,9 +148,10 @@ export async function submitStreamRequest(
   attachments?: string[],
   mode?: string,
   abortSignal?: AbortSignal,
+  originalMsg?: string,
 ): Promise<any> {
   const { chatService } = await import('@/services/api');
-  return chatService.startChat(sessionId, message, model, workspace, attachments, mode, abortSignal);
+  return chatService.startChat(sessionId, message, model, workspace, attachments, mode, abortSignal, originalMsg);
 }
 
 function _appendToLastAssistant(messages: Message[], token: string): Message[] {

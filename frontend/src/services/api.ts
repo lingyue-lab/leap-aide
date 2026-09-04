@@ -37,8 +37,23 @@ export async function api<T>(
 
 // Chat API 服务
 export const chatService = {
-  startChat: async (sessionId: string, message: string, model: string, workspace?: string, attachments?: string[], mode?: string, signal?: AbortSignal) => {
-    return api<{ stream_id?: string; queued?: boolean; steered?: boolean; steer_fallback?: string; queue_position?: number; queue_length?: number; direct?: boolean; content?: string; session_update?: Record<string, unknown> }>('/api/chat/start', {
+  dispatchCommand: async (sessionId: string, message: string, signal?: AbortSignal) => {
+    return api<{
+      action: 'direct' | 'proceed';
+      content?: string;
+      session_update?: Record<string, unknown>;
+      message?: string;
+      mode?: string;
+      original_msg?: string;
+    }>('/api/chat/dispatch', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: sessionId, message }),
+      ...(signal ? { signal } : {}),
+    });
+  },
+
+  startChat: async (sessionId: string, message: string, model: string, workspace?: string, attachments?: string[], mode?: string, signal?: AbortSignal, originalMsg?: string) => {
+    return api<{ stream_id?: string; queued?: boolean; steered?: boolean; steer_fallback?: string; queue_position?: number; queue_length?: number }>('/api/chat/start', {
       method: 'POST',
       body: JSON.stringify({
         session_id: sessionId,
@@ -47,6 +62,7 @@ export const chatService = {
         workspace,
         attachments,
         ...(mode ? { mode } : {}),
+        ...(originalMsg ? { original_msg: originalMsg } : {}),
       }),
       ...(signal ? { signal } : {}),
     });

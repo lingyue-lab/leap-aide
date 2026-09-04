@@ -1966,6 +1966,9 @@ def handle_post(handler, parsed) -> bool:
     if parsed.path == "/api/background":
         return _handle_background(handler, body)
 
+    if parsed.path == "/api/chat/dispatch":
+        return _handle_chat_dispatch(handler, body)
+
     if parsed.path == "/api/chat/start":
         return _handle_chat_start(handler, body)
 
@@ -3924,6 +3927,68 @@ def _resolve_busy_handling(s, mode, body):
     return ("proceed", None)  # fallback
 
 
+def _handle_chat_dispatch(handler, body):
+    """Dispatch a slash command. Returns direct response or proceed instruction.
+
+    This endpoint determines the command type without starting a stream.
+    For direct commands (e.g. /help, /model, /clear), the response is returned
+    immediately.  For streaming commands (agent, force_mode), a proceed
+    instruction with the transformed message is returned so the frontend can
+    add the user message to the store before calling /api/chat/start.
+    """
+    try:
+        require(body, "session_id")
+    except ValueError as e:
+        return bad(handler, str(e))
+    try:
+        s = get_session(body["session_id"])
+    except KeyError:
+        return bad(handler, "Session not found", 404)
+    msg = str(body.get("message", "")).strip()
+    if not msg:
+        return bad(handler, "message is required")
+
+    if not msg.startswith("/"):
+        return j(handler, {"action": "proceed", "message": msg})
+
+    from api.slash_commands import dispatch_command
+    try:
+        result = dispatch_command(msg, s)
+    except Exception as _dc_err:
+        logger.debug("dispatch_command failed: %s", _dc_err, exc_info=True)
+        # dispatch failed — fall through to start with raw message
+        return j(handler, {"action": "proceed", "message": msg})
+
+    if result is None:
+        return j(handler, {"action": "proceed", "message": msg})
+
+    if result.get("type") == "direct":
+        resp = result["response"]
+        return j(handler, {
+            "action": "direct",
+            "content": resp.get("content", ""),
+            "session_id": s.session_id,
+            "session_update": resp.get("session_update", {}),
+        })
+
+    if result.get("type") == "agent":
+        return j(handler, {
+            "action": "proceed",
+            "message": result["transformed_msg"],
+            "original_msg": msg,
+        })
+
+    if result.get("type") == "force_mode":
+        return j(handler, {
+            "action": "proceed",
+            "message": result["prompt"],
+            "mode": result["mode"],
+            "original_msg": msg,
+        })
+
+    return j(handler, {"action": "proceed", "message": msg})
+
+
 def _handle_chat_start(handler, body):
     try:
         require(body, "session_id")
@@ -3937,36 +4002,14 @@ def _handle_chat_start(handler, body):
     if not msg:
         return bad(handler, "message is required")
 
-    # ── Slash-command dispatch ──
-    _dispatch_result = None
-    _original_msg = msg
-    if msg.startswith("/"):
-        try:
-            from api.slash_commands import dispatch_command as _dispatch
-            _dispatch_result = _dispatch(msg, s)
-        except Exception as _dc_err:
-            logger.debug("dispatch_command failed: %s", _dc_err, exc_info=True)
+    # Accept original_msg from frontend (set by dispatch for slash commands)
+    _original_msg = body.get("original_msg")
+    if _original_msg:
+        s._pending_original_message = _original_msg
 
-    _forced_mode = None
-
-    if _dispatch_result is not None:
-        if _dispatch_result.get("type") == "force_mode":
-            _forced_mode = _dispatch_result["mode"]
-            msg = _dispatch_result["prompt"]
-            s._pending_original_message = _original_msg
-            # Fall through — mode will be overridden before busy check below
-        elif _dispatch_result.get("type") == "direct":
-            _resp = _dispatch_result["response"]
-            return j(handler, {
-                "direct": True,
-                "content": _resp.get("content", ""),
-                "session_id": s.session_id,
-                "session_update": _resp.get("session_update", {}),
-            })
-        elif _dispatch_result.get("type") == "agent":
-            msg = _dispatch_result["transformed_msg"]
-            s._pending_original_message = _original_msg
-            # Fall through to normal streaming flow with transformed msg
+    # NOTE: Slash-command dispatch is now handled by /api/chat/dispatch.
+    # By the time we reach here, the message is already the transformed
+    # prompt (for agent/force_mode commands) or a plain user message.
 
     attachments = [str(a) for a in (body.get("attachments") or [])][:20]
     try:
@@ -3990,12 +4033,6 @@ def _handle_chat_start(handler, body):
     mode = str(body.get("mode") or "").strip()
     if not mode:
         mode = str(load_settings().get("busy_input_mode", "interrupt")).strip()
-    # Slash-command /queue or /steer overrides the global mode for this message.
-    # Also update the body so _resolve_busy_handling uses the cleaned prompt
-    # (without the /queue or /steer prefix).
-    if _forced_mode:
-        mode = _forced_mode
-        body["message"] = msg
     if mode not in _valid_modes:
         return bad(handler, f"invalid mode: {mode}. Must be one of: {', '.join(sorted(_valid_modes))}")
     result, result_stream_id = _resolve_busy_handling(s, mode, body)

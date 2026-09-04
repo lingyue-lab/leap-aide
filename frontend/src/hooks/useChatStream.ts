@@ -272,7 +272,7 @@ export function useChatStream() {
     }
 
     // Optimistically add the user message to the live display.
-    // For slash commands, defer — the response determines whether the
+    // For slash commands, defer — dispatch determines whether the
     // message should appear (card commands show no user message at all).
     const isSlash = message.startsWith('/');
     if (!isSlash) {
@@ -305,134 +305,159 @@ export function useChatStream() {
       StreamManager.beginPendingLoad(sessionId);
     }
 
-    try {
-      // Start the chat on the backend (pure HTTP, no state changes)
-      const result = await StreamManager.submitStreamRequest(
-        sessionId, message, model, workspace, attachments, mode,
-        abortController?.signal,
-      );
+    // ── Slash commands: dispatch first to determine response type ──
+    // Dispatch resolves whether this is a direct command (/help, /model, etc.)
+    // or a streaming command (skills, /retry, /undo).  For streaming commands,
+    // we add the user message to the store BEFORE calling start so that the
+    // begin_stream WS notification finds seedMessages already complete.
+    let originalMsg: string | undefined;
+    if (isSlash) {
+      try {
+        const { chatService } = await import('@/services/api');
+        const dispatchResult = await chatService.dispatchCommand(
+          sessionId, message, abortController?.signal,
+        );
 
-      // Handle direct command response (slash commands like /help, /model, /clear)
-      if (result.direct) {
-        // ── Background task: show card notification instead of chat message ──
-        const update = result.session_update as Record<string, unknown> | undefined;
-        if (update?.background_session) {
-          // Busy state is managed by StreamManager.  The begin_stream
-          // notification triggers startSessionStream which sets busy=true
-          // for the new background session; the current session's busy
-          // state is unchanged (StreamManager subscriber handles it).
-          // Dismiss the "Running command..." info card — its job is done,
-          // the BackgroundTaskCard takes over showing the task status.
+        if (dispatchResult.action === 'direct') {
+          // Direct commands: handle response, no streaming
           dismissInfoCard(sessionId);
-          const bg = update.background_session as {
-            session_id: string; title: string; created_at: number; workspace?: string;
-            stream_id: string; prompt: string;
-          };
-          // Show floating notification card
-          showBackgroundTaskCard(sessionId, bg);
-          // Stream initialization for the background session is handled by
-          // startSessionStream() via the begin_stream WebSocket notification.
-          // Optimistically prepend to sidebar session list
-          const sStore = useSessionStore.getState();
-          const entry = {
-            session_id: bg.session_id, title: bg.title,
-            created_at: bg.created_at, pinned: false, workspace: bg.workspace,
-          };
-          const current = sStore.sessions || [];
-          if (!current.some((s) => s.session_id === bg.session_id)) {
-            useSessionStore.setState({ sessions: [entry, ...current] });
-          }
-          sStore.loadSessions().catch(() => {});
-          return;
-        }
+          const update = dispatchResult.session_update as Record<string, unknown> | undefined;
 
-        // ── Info-card commands: show card instead of chat message ──
-        if (update?._as_card) {
-          // Info-card commands are read-only — they don't affect the
-          // running stream.  Busy state is managed by StreamManager.
-          // Apply session updates before showing card (e.g. /model changes)
-          if (update.model) {
-            const { updateSessionModel: _usm } = useSessionStore.getState();
-            _usm(sessionId, update.model as string).catch(() => {});
+          if (update?.background_session) {
+            const bg = update.background_session as {
+              session_id: string; title: string; created_at: number; workspace?: string;
+              stream_id: string; prompt: string;
+            };
+            showBackgroundTaskCard(sessionId, bg);
+            const sStore = useSessionStore.getState();
+            const entry = {
+              session_id: bg.session_id, title: bg.title,
+              created_at: bg.created_at, pinned: false, workspace: bg.workspace,
+            };
+            const current = sStore.sessions || [];
+            if (!current.some((s) => s.session_id === bg.session_id)) {
+              useSessionStore.setState({ sessions: [entry, ...current] });
+            }
+            sStore.loadSessions().catch(() => {});
+            return;
           }
-          if (update.title) {
-            const { updateCurrentSession, loadSessions: _ls2 } = useSessionStore.getState();
-            updateCurrentSession({ title: update.title as string });
-            _ls2().catch(() => {});
-          }
-          if (typeof update.show_reasoning === 'boolean') {
-            store.setShowReasoning(update.show_reasoning as boolean);
-          }
-          if ('reasoning_effort' in (update as Record<string, unknown>)) {
-            const { updateSessionReasoningEffort: _usre } = useSessionStore.getState();
-            _usre(sessionId, (update as Record<string, unknown>).reasoning_effort as string | null).catch(() => {});
-          }
-          if ('personality' in (update as Record<string, unknown>)) {
-            const { updateSessionPersonality: _usp } = useSessionStore.getState();
-            _usp(sessionId, (update as Record<string, unknown>).personality as string | null).catch(() => {});
-          }
-          if ('service_tier' in (update as Record<string, unknown>)) {
-            const { updateCurrentSession: _ucs } = useSessionStore.getState();
-            _ucs({ service_tier: (update as Record<string, unknown>).service_tier as string | null });
-          }
-          showInfoCard(sessionId, result.content || '');
-          refreshGoalStatus();
-          return;
-        }
 
-        // ── Normal direct commands: add message to chat history ──
-        if (isSlash) {
+          if (update?._as_card) {
+            if (update.model) {
+              const { updateSessionModel: _usm } = useSessionStore.getState();
+              _usm(sessionId, update.model as string).catch(() => {});
+            }
+            if (update.title) {
+              const { updateCurrentSession, loadSessions: _ls2 } = useSessionStore.getState();
+              updateCurrentSession({ title: update.title as string });
+              _ls2().catch(() => {});
+            }
+            if (typeof update.show_reasoning === 'boolean') {
+              store.setShowReasoning(update.show_reasoning as boolean);
+            }
+            if ('reasoning_effort' in (update as Record<string, unknown>)) {
+              const { updateSessionReasoningEffort: _usre } = useSessionStore.getState();
+              _usre(sessionId, (update as Record<string, unknown>).reasoning_effort as string | null).catch(() => {});
+            }
+            if ('personality' in (update as Record<string, unknown>)) {
+              const { updateSessionPersonality: _usp } = useSessionStore.getState();
+              _usp(sessionId, (update as Record<string, unknown>).personality as string | null).catch(() => {});
+            }
+            if ('service_tier' in (update as Record<string, unknown>)) {
+              const { updateCurrentSession: _ucs } = useSessionStore.getState();
+              _ucs({ service_tier: (update as Record<string, unknown>).service_tier as string | null });
+            }
+            showInfoCard(sessionId, dispatchResult.content || '');
+            refreshGoalStatus();
+            return;
+          }
+
+          // Normal direct commands: add messages to chat history
           store.addMessage({
             role: 'user',
             content: message,
             attachments,
             timestamp: Date.now() / 1000,
           });
+          store.addMessage({
+            role: 'assistant',
+            content: dispatchResult.content || '',
+            timestamp: Date.now() / 1000,
+          });
+
+          if (update) {
+            if (update.model) {
+              const { updateSessionModel } = useSessionStore.getState();
+              updateSessionModel(sessionId, update.model as string).catch(() => {});
+            }
+            if (update.title) {
+              const { updateCurrentSession, loadSessions } = useSessionStore.getState();
+              updateCurrentSession({ title: update.title as string });
+              loadSessions().catch(() => {});
+            }
+            if (update.cleared) {
+              const { loadSession } = useSessionStore.getState();
+              loadSession(sessionId).catch(() => {});
+            }
+            if ('personality' in (update as Record<string, unknown>)) {
+              const { updateSessionPersonality: _usp } = useSessionStore.getState();
+              _usp(sessionId, (update as Record<string, unknown>).personality as string | null).catch(() => {});
+            }
+            if ('service_tier' in (update as Record<string, unknown>)) {
+              const { updateCurrentSession: _ucs } = useSessionStore.getState();
+              _ucs({ service_tier: (update as Record<string, unknown>).service_tier as string | null });
+            }
+            if (update.new_session_id) {
+              const newSid = update.new_session_id as string;
+              window.history.replaceState(null, '', `?session=${encodeURIComponent(newSid)}`);
+              const { loadSession, selectSession, loadSessions } = useSessionStore.getState();
+              selectSession(newSid);
+              loadSession(newSid).catch(() => {});
+              loadSessions().catch(() => {});
+            }
+          }
+          return;
         }
+
+        // proceed: streaming path — add user message BEFORE calling start
+        dismissInfoCard(sessionId);
+        store.addMessage({
+          role: 'user',
+          content: dispatchResult.original_msg || message,
+          attachments,
+          timestamp: Date.now() / 1000,
+          ...(dispatchResult.message !== (dispatchResult.original_msg || message)
+            ? { original_content__webui: dispatchResult.original_msg || message }
+            : {}),
+        });
+
+        // Use transformed message and forced mode from dispatch
+        message = dispatchResult.message || message;
+        if (dispatchResult.mode) mode = dispatchResult.mode;
+        originalMsg = dispatchResult.original_msg;
+      } catch (err) {
+        // Dispatch failed — show error and abort
+        dismissInfoCard(sessionId);
+        if ((err as Error).name === 'AbortError') {
+          showInfoCard(sessionId, "Command cancelled.");
+          return;
+        }
+        const errorMsg = (err as Error).message || 'Unknown error';
         store.addMessage({
           role: 'assistant',
-          content: result.content || '',
+          content: `**Error:** ${errorMsg}`,
           timestamp: Date.now() / 1000,
         });
-        // Direct commands complete synchronously — busy state is
-        // unchanged (StreamManager handles the running stream if any).
-
-        // Apply session state updates from command
-        if (update) {
-          if (update.model) {
-            const { updateSessionModel } = useSessionStore.getState();
-            updateSessionModel(sessionId, update.model as string).catch(() => {});
-          }
-          if (update.title) {
-            const { updateCurrentSession, loadSessions } = useSessionStore.getState();
-            updateCurrentSession({ title: update.title as string });
-            loadSessions().catch(() => {});
-          }
-          if (update.cleared) {
-            // Reload session to get cleared messages
-            const { loadSession } = useSessionStore.getState();
-            loadSession(sessionId).catch(() => {});
-          }
-          if ('personality' in (update as Record<string, unknown>)) {
-            const { updateSessionPersonality: _usp } = useSessionStore.getState();
-            _usp(sessionId, (update as Record<string, unknown>).personality as string | null).catch(() => {});
-          }
-          if ('service_tier' in (update as Record<string, unknown>)) {
-            const { updateCurrentSession: _ucs } = useSessionStore.getState();
-            _ucs({ service_tier: (update as Record<string, unknown>).service_tier as string | null });
-          }
-          if (update.new_session_id) {
-            // Navigate to the new session
-            const newSid = update.new_session_id as string;
-            window.history.replaceState(null, '', `?session=${encodeURIComponent(newSid)}`);
-            const { loadSession, selectSession, loadSessions } = useSessionStore.getState();
-            selectSession(newSid);
-            loadSession(newSid).catch(() => {});
-            loadSessions().catch(() => {});
-          }
-        }
         return;
       }
+    }
+
+    try {
+      // Start the chat on the backend (pure HTTP, no state changes)
+      const result = await StreamManager.submitStreamRequest(
+        sessionId, message, model, workspace, attachments, mode,
+        abortController?.signal, originalMsg,
+      );
 
       // Handle queued/steered responses (no stream_id)
       if (result.queued || result.steered) {
@@ -519,22 +544,6 @@ export function useChatStream() {
         // Queued/steered: the running stream continues.  Busy state is
         // managed by StreamManager — no explicit setBusy needed.
         return;
-      }
-
-      // For slash commands that reach the streaming path (skills, /retry,
-      // /undo), dismiss the loading card and add the user message now.
-      // Regular messages were already optimistically added above; the
-      // seed-message logic below will strip it and StreamManager prepends
-      // it cleanly.  The user message is shown in chat history with its
-      // original_content (the raw /command text) when available.
-      if (isSlash) {
-        dismissInfoCard(sessionId);
-        store.addMessage({
-          role: 'user',
-          content: message,
-          attachments,
-          timestamp: Date.now() / 1000,
-        });
       }
 
       const stream_id = result.stream_id!;
