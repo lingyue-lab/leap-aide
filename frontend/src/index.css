@@ -841,6 +841,7 @@
   /* User message raw text — verbatim, no markdown */
   .msg-body-raw {
     white-space: pre-wrap;
+    word-break: break-all;
   }
 
   .msg-body ul, .msg-body ol {
