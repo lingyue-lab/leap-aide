@@ -255,6 +255,11 @@ export function useChatStream() {
     attachments?: string[],
     mode?: string,
   ) => {
+    // Ensure WS is alive before starting a stream — the backend sends
+    // begin_stream via WS, and _send() silently drops if disconnected.
+    const { wsManager: _ws } = await import('@/stores/wsManager');
+    _ws.ensureConnected();
+
     const store = useChatStore.getState();
 
     // For interrupt mode: show a spinner while the backend cancels the old

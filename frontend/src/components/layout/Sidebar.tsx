@@ -37,6 +37,8 @@ export default function Sidebar({ width = 300, onResizeStart }: SidebarProps) {
       // Different tab — switch panel and ensure sidebar is open
       setActivePanel(panel);
       setSidebarOpen(true);
+      // Ensure WS reconnects if it died (e.g. after screen lock).
+      import('@/stores/wsManager').then(({ wsManager }) => wsManager.ensureConnected());
     }
   };
 

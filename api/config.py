@@ -2099,20 +2099,21 @@ class ReplayableStream:
             return self._done
 
     def close(self, reason='closed'):
-        """Force-close the stream, notifying all subscribers."""
+        """Force-close the stream, notifying all subscribers.
+
+        Sends a sentinel (None) to each subscriber queue so SSE handlers
+        break their read loop.  The 'done' event (sent by the agent thread)
+        is the sole completion signal for the frontend; stream_close was
+        removed to avoid spurious 'Unknown replay event' warnings.
+        """
         import queue as _queue
         with self._lock:
             if self._closed:
                 return
             self._closed = True
-            self._history.append(('stream_close', {'reason': reason}))
             for sq in list(self._subscribers):
                 try:
-                    sq.put_nowait(('stream_close', {'reason': reason}))
-                except _queue.Full:
-                    pass
-                try:
-                    sq.put_nowait(None)  # sentinel
+                    sq.put_nowait(None)  # sentinel — closes SSE connection
                 except _queue.Full:
                     pass
             self._subscribers.clear()

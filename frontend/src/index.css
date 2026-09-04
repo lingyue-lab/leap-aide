@@ -5308,9 +5308,12 @@
 .sidebar-item-delegate-badge {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   position: relative;
   cursor: pointer;
   flex-shrink: 0;
+  width: 16px;
+  height: 16px;
   opacity: 0.6;
   transition: opacity 0.12s;
   color: var(--muted);
@@ -5327,16 +5330,24 @@
   animation: bg-stream-pulse 1.4s ease-in-out infinite;
 }
 .sidebar-item-delegate-count {
-  font-size: 9.143px;
+  position: absolute;
+  right: -2px;
+  top: -2px;
+  font-size: 7px;
   font-weight: 700;
+  line-height: 1;
   color: var(--muted);
-  margin-left: 1px;
+  white-space: nowrap;
 }
 .sidebar-item-delegate-running {
-  font-size: 9.143px;
+  position: absolute;
+  right: -2px;
+  top: -2px;
+  font-size: 7px;
   font-weight: 700;
+  line-height: 1;
   color: var(--primary);
-  margin-left: 1px;
+  white-space: nowrap;
   animation: pulse 1.5s infinite;
 }
 @keyframes pulse {

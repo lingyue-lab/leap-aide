@@ -110,6 +110,10 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
     if (prevId === sessionId) return;
 
     console.log(`[ChatInterface] session switch`, { from: prevId, to: sessionId });
+
+    // Ensure WS is alive so stream reconnection and session notifications work.
+    import('@/stores/wsManager').then(({ wsManager }) => wsManager.ensureConnected());
+
     setSessionLoading(true);
     window.dispatchEvent(new CustomEvent('hermes:session-loading', { detail: true }));
 

@@ -798,6 +798,10 @@ export function handleReplayEvent(sessionId: string, event: string, data: any): 
       // Phase events indicate agent execution phases — silently ignore
       break;
 
+    case 'subagent':
+      // Forwarded subagent events (status, etc.) not mapped to standard types — silently ignore
+      break;
+
     default:
       console.warn(`[StreamManager] Unknown replay event: ${event}`);
   }

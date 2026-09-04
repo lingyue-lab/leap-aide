@@ -58,6 +58,19 @@ class WsManager {
   }
 
   /**
+   * Ensure the WebSocket is connected. If disconnected and enabled,
+   * reset reconnect attempts and connect immediately.
+   * Safe to call multiple times — no-op if already connected.
+   */
+  ensureConnected(): void {
+    if (!this._connected && this._enabled) {
+      console.log('[WsManager] ensureConnected: reconnecting');
+      this.reconnectAttempts = 0;
+      this._doConnect();
+    }
+  }
+
+  /**
    * Enable and connect the WebSocket.
    */
   connect(): void {

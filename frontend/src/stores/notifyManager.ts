@@ -138,6 +138,17 @@ export function handleNotifyEvent(event: string, data: any): void {
                   message_count: data.message_count ?? s.message_count,
                   last_seen_msg_count: data.last_seen_msg_count ?? s.last_seen_msg_count,
                   source_tag: data.source_tag ?? s.source_tag,
+                  // Recalculate derived flags from source_tag; fall back to
+                  // parent_session_id for subagent detection (placeholder path
+                  // sets parent before source_tag arrives), then preserve old.
+                  is_subagent_session: data.source_tag != null
+                    ? data.source_tag === 'subagent'
+                    : (s._parent_session_id != null
+                      ? true
+                      : s.is_subagent_session),
+                  is_cli_session: data.source_tag != null
+                    ? data.source_tag === 'cli'
+                    : s.is_cli_session,
                   _parent_session_id: data.parent_session_id ?? s._parent_session_id,
                   // Use active_stream_id from backend data (null = stream ended)
                   active_stream_id: data.active_stream_id !== undefined

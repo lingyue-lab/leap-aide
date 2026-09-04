@@ -35,7 +35,21 @@ function App() {
       wsManager.addNotifyListener(handleNotifyEvent);
       wsManager.connect();
     }, 100); // Small delay to let font requests start first
-    return () => clearTimeout(timer);
+
+    // Reconnect WS when tab becomes visible (e.g. after screen lock).
+    // This is the primary mechanism for recovering from OS-level suspend
+    // where the browser's JS engine is frozen and reconnect attempts are exhausted.
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        wsManager.ensureConnected();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, []);
 
   // Apply language from settings

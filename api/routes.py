@@ -2972,7 +2972,7 @@ def _handle_session_stream_replay(handler, parsed):
             if event is None:  # sentinel from close()
                 break
             _sse(handler, event, data)
-            if event in ('stream_close', 'stream_end', 'error', 'cancel', 'apperror'):
+            if event in ('stream_end', 'error', 'cancel', 'apperror'):
                 break
     except (BrokenPipeError, ConnectionResetError):
         pass
