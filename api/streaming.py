@@ -3180,6 +3180,21 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
         except Exception:
             pass
 
+        # ── Chrome tab cleanup (observer) ──
+        # Close extra Chrome tabs if the setting is enabled (default: session).
+        try:
+            from api.session_display import _DISPLAYS, close_extra_chrome_tabs
+            from api.config import load_settings as _load_settings
+            _s = _load_settings()
+            if _s.get('observer_tab_cleanup', 'session') == 'session':
+                _sd = _DISPLAYS.get(session_id)
+                if _sd and _sd.cdp_port:
+                    _n = close_extra_chrome_tabs(_sd.cdp_port)
+                    if _n:
+                        logger.info("Closed %d orphaned Chrome tab(s) for session %s", _n, session_id[:12])
+        except Exception:
+            pass
+
         # ── Goal continuation (post-turn) ──
         # If a standing goal is active, evaluate the last assistant response
         # and auto-continue if the goal is not yet achieved (CLI behaviour).

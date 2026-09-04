@@ -225,6 +225,16 @@ function SessionsGroup({ form, set }: GroupProps) {
           placeholder="10"
         />
       </FieldRow>
+      <FieldRow label={t('settings.fields.observer_tab_cleanup')} hint={t('settings.fields.observer_tab_cleanup_hint')}>
+        <SelectField
+          value={form.observer_tab_cleanup ?? 'session'}
+          onChange={(v) => set('observer_tab_cleanup', v as 'session' | 'none')}
+          options={[
+            { value: 'session', label: t('settings.fields.observer_tab_cleanup_session') },
+            { value: 'none', label: t('settings.fields.observer_tab_cleanup_none') },
+          ]}
+        />
+      </FieldRow>
     </>
   );
 }

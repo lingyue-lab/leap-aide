@@ -231,6 +231,7 @@ export interface Settings {
   session_poll_interval_sec?: string;  // frontend session polling interval in seconds
   approval_timeout_sec?: string;        // Approval card auto-dismiss timeout (backend default: 60s)
   clarify_timeout_sec?: string;         // Clarify card auto-dismiss timeout (backend default: 600s)
+  observer_tab_cleanup?: 'session' | 'none';  // Chrome tab cleanup after agent session ends
 }
 
 // types/approval.ts - 审批相关类型定义

@@ -14,12 +14,16 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 import threading
 import time
 
 logger = logging.getLogger(__name__)
+
+_XTERM_AVAILABLE = shutil.which("xterm") is not None
+_XTERM_WARNED = False
 
 MAX_XTERMS = int(os.environ.get("HERMES_OBSERVE_MAX_XTERMS", "6"))
 _XTERM_CLOSE_DELAY = 5.0
@@ -43,6 +47,13 @@ def _format_json_like(value) -> str:
 
 def on_tool_started(session_id: str, name: str, args: dict | None, tid: str) -> None:
     """Spawn an xterm window for a tool that just started."""
+    global _XTERM_WARNED
+    if not _XTERM_AVAILABLE:
+        if not _XTERM_WARNED:
+            logger.warning("xterm not found — tool visualization disabled. Install with: apt install xterm")
+            _XTERM_WARNED = True
+        return
+
     from api.session_display import SessionDisplay, _DISPLAYS
 
     sd = _DISPLAYS.get(session_id)

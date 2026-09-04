@@ -31,6 +31,7 @@ const defaultSettings: Settings = {
   session_poll_interval_sec: '10',
   approval_timeout_sec: '60',
   clarify_timeout_sec: '600',
+  observer_tab_cleanup: 'session',
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({

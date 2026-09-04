@@ -734,6 +734,59 @@ class SessionDisplay:
         except OSError:
             pass
 
+
+# -- Chrome CDP tab helpers -------------------------------------------------------
+
+def get_chrome_page_targets(cdp_port: int) -> list[dict]:
+    """Return all page-type targets from Chrome's CDP /json endpoint.
+
+    Returns a list of dicts with at least 'id' and 'type' keys.
+    Returns an empty list if CDP is unreachable or has no pages.
+    """
+    import urllib.request
+    import urllib.error
+
+    try:
+        url = f"http://127.0.0.1:{cdp_port}/json"
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            targets = json.loads(resp.read().decode())
+        return [t for t in targets if t.get("type") == "page"]
+    except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError):
+        return []
+
+
+def close_chrome_target(cdp_port: int, target_id: str) -> bool:
+    """Close a single Chrome tab by target ID via CDP /json/close/<id>.
+
+    Returns True on success, False on failure.
+    """
+    import urllib.request
+    import urllib.error
+
+    try:
+        url = f"http://127.0.0.1:{cdp_port}/json/close/{target_id}"
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            resp.read()
+        return True
+    except (urllib.error.URLError, OSError):
+        return False
+
+
+def close_extra_chrome_tabs(cdp_port: int) -> int:
+    """Close all page-type Chrome tabs except the first one.
+
+    Returns the number of tabs closed.
+    """
+    pages = get_chrome_page_targets(cdp_port)
+    closed = 0
+    for tab in pages[1:]:  # skip the first page tab
+        if close_chrome_target(cdp_port, tab.get("id", "")):
+            closed += 1
+    return closed
+
+
 # -- Module init: cleanup orphaned configs + sync gateway cwd ---------------------
 
 _purge_count = purge_orphaned_configs()

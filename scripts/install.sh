@@ -407,6 +407,10 @@ if [ "$IN_DOCKER" = true ]; then
   if ! command -v wmctrl >/dev/null 2>&1; then
     _sys_deps_to_install="${_sys_deps_to_install} wmctrl"
   fi
+  # xterm for tool call visualization in observer
+  if ! command -v xterm >/dev/null 2>&1; then
+    _sys_deps_to_install="${_sys_deps_to_install} xterm"
+  fi
   # Chinese locale support
   if ! locale -a 2>/dev/null | grep -q 'zh_CN.UTF-8'; then
     _sys_deps_to_install="${_sys_deps_to_install} locales"
