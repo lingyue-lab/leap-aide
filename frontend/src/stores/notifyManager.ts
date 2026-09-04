@@ -99,7 +99,7 @@ export function handleNotifyEvent(event: string, data: any): void {
       // Auto-connect replay for this stream (via WebSocket)
       // This ensures subagent sessions are tracked in streamManager
       // for breathing animation and real-time message display
-      StreamManager.startSessionStream(data.session_id).catch(() => {
+      StreamManager.startSessionStream(data.session_id, data.stream_id).catch(() => {
         // non-fatal: stream may already be connected
       });
 

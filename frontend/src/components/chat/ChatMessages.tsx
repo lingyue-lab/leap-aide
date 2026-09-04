@@ -1,6 +1,7 @@
 import React, { forwardRef, useEffect, useRef, useMemo } from 'react';
 import type { Message, ToolCall } from '@/types';
 import MessageRow, { extractThinkingText, isContextCompactionMessage, ContextCompactionMessageRow } from './MessageRow';
+import ThinkingIndicator from './ThinkingIndicator';
 import { useChatStore } from '@/stores/useChatStore';
 import { useSessionStore } from '@/stores/useSessionStore';
 import ConversationMinimap from './ConversationMinimap';
@@ -9,6 +10,7 @@ import CustomScrollbar from '@/components/common/CustomScrollbar';
 interface ChatMessagesProps {
   messages: Message[];
   streaming?: boolean;
+  thinkingActive?: boolean;
   onFileOpen?: (path: string) => void;
   onScroll?: (e: React.UIEvent<HTMLDivElement>) => void;
 }
@@ -18,7 +20,7 @@ interface ChatMessagesProps {
 const selectToolCalls = (s: { toolCalls: ToolCall[] }) => s.toolCalls;
 
 const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
-  ({ messages, streaming, onFileOpen, onScroll }, ref) => {
+  ({ messages, streaming, thinkingActive, onFileOpen, onScroll }, ref) => {
     const innerRef = useRef<HTMLDivElement>(null);
     const scrollRef = ref || innerRef;
     const toolCalls = useChatStore(selectToolCalls);
@@ -356,6 +358,13 @@ const ChatMessages = React.memo(forwardRef<HTMLDivElement, ChatMessagesProps>(
               
               return result;
             }, [sortedMessages, streaming, displayToolCalls, onFileOpen, showReasoning])}
+
+            {/* Thinking indicator — last row in message list during streaming */}
+            {thinkingActive && (
+              <div data-msg-idx={sortedMessages.length} className="msg-row thinking-row">
+                <ThinkingIndicator />
+              </div>
+            )}
           </div>
 
         </div>

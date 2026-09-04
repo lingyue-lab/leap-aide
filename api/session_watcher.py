@@ -54,8 +54,10 @@ def _get_agent_sessions_from_db() -> list:
         sessions = []
         for row in read_importable_agent_session_rows(db_path, limit=200, log=logger):
             _source = row['source'] or 'cli'
-            # Skip subagent sessions — handled separately via placeholder upgrade
-            if _source == 'subagent':
+            # Skip subagent sessions — handled separately via placeholder upgrade.
+            # Use parent_session_id (not source) because webui-created subagents
+            # inherit HERMES_SESSION_SOURCE=webui and have source='webui' in DB.
+            if row.get('parent_session_id'):
                 continue
             _user_id = row.get('user_id') or _os.environ.get('USER', 'default')
             _cwd = row.get('cwd')

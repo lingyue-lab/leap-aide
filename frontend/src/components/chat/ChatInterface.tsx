@@ -18,7 +18,6 @@ import InfoCard, { setInfoCardCurrentSessionId, onInfoCardVisibleChange } from '
 import { onApprovalCardVisibleChange } from '@/components/dialogs/ApprovalCard';
 import { onClarifyCardVisibleChange } from '@/components/dialogs/ClarifyCard';
 import { onBackgroundTaskCardVisibleChange } from '@/components/dialogs/BackgroundTaskCard';
-import ThinkingIndicator from './ThinkingIndicator';
 import { EmptyState, CHAT_ICON } from '@/components/common/Placeholder';
 import { Icon } from '@/components/common/Icons';
 import { markSessionSeen } from '@/utils/sessionSeen';
@@ -31,7 +30,7 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
   const { sessionId: routeSessionId } = useParams<{ sessionId: string }>();
   const sessionId = propSessionId || routeSessionId || null;
 
-  // Track card visibility so ThinkingIndicator and composer hide when a card is shown
+  // Track card visibility so composer hides when a card is shown
   const [infoVisible, setInfoVisible] = useState(false);
   const [bgVisible, setBgVisible] = useState(false);
   const [approvalVisible, setApprovalVisible] = useState(false);
@@ -390,6 +389,7 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
         ref={scrollContainerRef}
         messages={messages}
         streaming={streaming}
+        thinkingActive={streaming && !cardVisible}
         onScroll={handleScroll}
       />
 
@@ -401,11 +401,10 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
       {!canceling && <BackgroundTaskCard />}
       <InfoCard />
 
-      {!sessionLoading && !currentSession?._readonly && (
+      {!sessionLoading && !currentSession?._readonly && !currentSession?.is_subagent_session && (
         <>
           <QueueStatusBar sessionId={sessionId} />
           <GoalStatusBar sessionId={sessionId} />
-          {streaming && !cardVisible && <ThinkingIndicator />}
           <ChatComposer
             onSend={handleSend}
             onCancel={handleCancel}

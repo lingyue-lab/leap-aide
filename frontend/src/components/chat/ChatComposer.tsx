@@ -283,9 +283,7 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
   const sendMode = busy ? (settings?.busy_input_mode ?? 'interrupt') : undefined;
   // Allow sending while busy if mode is interrupt, queue, or steer
   const busyAllowsSend = !!(busy && sendMode && (sendMode === 'interrupt' || sendMode === 'queue' || sendMode === 'steer'));
-  // 子 agent session 不允许发送消息
-  const isSubagentSession = (currentSession as any)?.is_subagent_session === true;
-  const canSend = hasInput && (!busy || busyAllowsSend) && !isSubagentSession;
+  const canSend = hasInput && (!busy || busyAllowsSend);
 
   // Derive last compression time: prefer persisted session field (survives page
   // refresh), fall back to scanning live messages' _compression metadata (SSE).

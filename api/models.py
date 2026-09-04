@@ -734,18 +734,20 @@ class Session:
                 kwargs[k] = v
 
         kwargs['messages'] = messages or []
-        # Gateway/CLI sessions are read-only (except subagent sessions)
+        # Gateway/CLI sessions are read-only (except subagent sessions).
+        # Use parent_session_id (not source) to detect subagent sessions —
+        # webui-created subagents inherit HERMES_SESSION_SOURCE=webui from
+        # the parent process, so their DB source is 'webui', not 'subagent'.
         source = row.get('source')
-        if source and source != 'webui':
-            if source == 'subagent':
-                # Subagent sessions can continue conversation, not read-only
-                kwargs['_readonly'] = False
-                kwargs['is_subagent_session'] = True
-                kwargs['source_tag'] = source
-            else:
-                kwargs['_readonly'] = True
-                kwargs['is_cli_session'] = True
-                kwargs['source_tag'] = source
+        _parent = row.get('parent_session_id')
+        if _parent:
+            kwargs['_readonly'] = False
+            kwargs['is_subagent_session'] = True
+            kwargs['source_tag'] = source or 'subagent'
+        elif source and source != 'webui':
+            kwargs['_readonly'] = True
+            kwargs['is_cli_session'] = True
+            kwargs['source_tag'] = source
         # Normalize: strip empty tool_calls (JSON "[]" stored in DB)
         # and convert None→absent. LLM APIs reject empty tool_calls arrays.
         for _m in kwargs['messages']:
@@ -904,7 +906,7 @@ class Session:
             # Gateway/CLI session markers (set by _from_db_row for non-webui sessions)
             '_readonly': getattr(self, '_readonly', None),
             'is_cli_session': getattr(self, 'is_cli_session', None),
-            'is_subagent_session': getattr(self, 'is_subagent_session', None),
+            'is_subagent_session': getattr(self, 'is_subagent_session', None) or getattr(self, 'parent_session_id', None) is not None,
             'source_tag': getattr(self, 'source_tag', None),
             'auto_compress_disabled': getattr(self, 'auto_compress_disabled', False),
             '_has_process_loop': getattr(self, '_process_loop_thread', None) is not None and self._process_loop_thread.is_alive(),
@@ -1533,7 +1535,7 @@ MESSAGING_SOURCE_TAGS = frozenset({
 })
 
 
-def session_source_category(source) -> str:
+def session_source_category(source, parent_session_id=None) -> str:
     """Classify a state.db session `source` into a visibility category.
 
     - 'webui'     → WebUI-native sessions (always shown)
@@ -1542,7 +1544,13 @@ def session_source_category(source) -> str:
     - 'messaging' → IM/gateway platforms (weixin, telegram, discord, ...)
     - 'subagent'  → delegate subagent sessions (never shown in main list,
                      only as delegate children under their parent)
+
+    Subagent detection uses ``parent_session_id`` (not ``source``) because
+    webui-created subagents inherit HERMES_SESSION_SOURCE=webui and their
+    DB source is 'webui', not 'subagent'.
     """
+    if parent_session_id:
+        return 'subagent'
     s = source or 'cli'  # NULL/empty → treat as CLI (matches legacy fallback)
     if s == 'webui':
         return 'webui'
@@ -1550,14 +1558,13 @@ def session_source_category(source) -> str:
         return 'cron'
     if s == 'cli':
         return 'cli'
-    if s == 'subagent':
-        return 'subagent'
     return 'messaging'
 
 
-def session_visible(source, show_cli: bool, show_messaging: bool, show_cron: bool) -> bool:
+def session_visible(source, show_cli: bool, show_messaging: bool, show_cron: bool,
+                    parent_session_id=None) -> bool:
     """Return True if a session with `source` should appear given the toggles."""
-    category = session_source_category(source)
+    category = session_source_category(source, parent_session_id)
     if category == 'webui':
         return True
     if category == 'cli':
@@ -1617,7 +1624,9 @@ def get_cli_sessions(show_cli: bool = True, show_messaging: bool = True,
             profile = _cli_profile  # CLI DB has no profile column; use active profile
 
             _source = row['source'] or 'cli'
-            if not session_visible(_source, show_cli, show_messaging, show_cron):
+            _parent_sid = row.get('parent_session_id')
+            if not session_visible(_source, show_cli, show_messaging, show_cron,
+                                   parent_session_id=_parent_sid):
                 continue
             _title = row['title'] or row.get('first_user_message')
             if not _title and _source == 'cron' and sid.startswith('cron_'):
@@ -1667,9 +1676,9 @@ def get_cli_sessions(show_cli: bool = True, show_messaging: bool = True,
                 'project_id': None,
                 'profile': profile,
                 'source_tag': _source,
-                'is_cli_session': _source != 'subagent',
-                'is_subagent_session': _source == 'subagent',
-                '_readonly': _source != 'subagent',
+                'is_cli_session': not _parent_sid,
+                'is_subagent_session': bool(_parent_sid),
+                '_readonly': not _parent_sid,
                 'user_id': _user_id,
                 'active_stream_id': stream_manager.get_stream_id(sid),
             })

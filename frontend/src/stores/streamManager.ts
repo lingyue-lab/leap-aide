@@ -247,7 +247,7 @@ function _updateToolMessage(messages: Message[], toolCallId: string, updates: Pa
  */
 export async function reconnectStream(
   sessionId: string,
-  _streamId: string,  // Kept for backward compatibility, not used
+  streamId: string,
   pendingUserMsg: string,
   existingMessages: Message[],
   pendingOriginalMsg?: string,
@@ -257,9 +257,6 @@ export async function reconnectStream(
 
   // Close any pre-existing stream/state for this session
   stopBackgroundStream(sessionId);
-
-  // Use session-based stream ID
-  const sessionStreamId = `session-${sessionId}`;
 
   // Build the seed: persisted history + the pending user message (optimistic UI).
   // replay_start will reset this to the same baseline before replaying history events.
@@ -278,7 +275,7 @@ export async function reconnectStream(
 
   _sessionStates.set(sessionId, {
     sessionId,
-    streamId: sessionStreamId,
+    streamId,
     messages: seedMessages,
     toolCalls: [],
     busy: true,
@@ -304,7 +301,7 @@ export async function reconnectStream(
  * @param sessionId The session to start streaming for.
  * @param initialMessages Optional initial messages to seed the state with.
  */
-export async function startSessionStream(sessionId: string): Promise<void> {
+export async function startSessionStream(sessionId: string, streamId?: string): Promise<void> {
   // If already streaming this session, skip
   const existing = _sessionStates.get(sessionId);
   if (existing?.streaming) {
@@ -321,7 +318,8 @@ export async function startSessionStream(sessionId: string): Promise<void> {
     await pendingLoad.promise;
   }
 
-  const streamId = `session-${sessionId}`;
+  // Use real backend stream ID if provided
+  const effectiveStreamId = streamId || `session-${sessionId}`;
   // For the active session, always read from useChatStore — it has the latest
   // messages including the optimistic user message added by send().
   // For background sessions with existing state, preserve existing messages.
@@ -365,7 +363,7 @@ export async function startSessionStream(sessionId: string): Promise<void> {
 
   _sessionStates.set(sessionId, {
     sessionId,
-    streamId,
+    streamId: effectiveStreamId,
     messages: seedMessages,
     toolCalls: [],
     busy: true,

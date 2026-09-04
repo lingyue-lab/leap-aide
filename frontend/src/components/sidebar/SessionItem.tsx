@@ -444,6 +444,7 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
                       className={`sidebar-item-action-opt${!canClearDelegates ? ' disabled' : ''}`}
                       onClick={() => {
                         if (canClearDelegates) {
+                          setMenuOpen(false);
                           setKeepDelegates('0');
                           setShowClearDelegatesModal(true);
                         }

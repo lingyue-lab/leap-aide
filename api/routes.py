@@ -1188,6 +1188,8 @@ def handle_get(handler, parsed) -> bool:
         if not stream_id:
             return bad(handler, "stream_id required")
         cancelled = cancel_stream(stream_id)
+        if not cancelled:
+            return bad(handler, f"Stream not found or already ended: {stream_id}", status=400)
         return j(handler, {"ok": True, "cancelled": cancelled, "stream_id": stream_id})
 
     if parsed.path == "/api/chat/queue":

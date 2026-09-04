@@ -37,6 +37,7 @@ export interface Session {
   compression_anchor_visible_idx?: number | null;
   compression_anchor_message_key?: string | null;
   _readonly?: boolean;
+  is_subagent_session?: boolean;
   // Persistent compressor data — restores ContextUsageIndicator after page refresh
   context_length?: number;
   last_prompt_tokens?: number;
