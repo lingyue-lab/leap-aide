@@ -318,7 +318,7 @@ function AgentGroup({ form, set }: GroupProps) {
   );
 }
 
-function NotificationsGroup({ form, set }: GroupProps) {
+function OtherGroup({ form, set }: GroupProps) {
   const { t } = useTranslation();
   return (
     <>
@@ -335,6 +335,20 @@ function NotificationsGroup({ form, set }: GroupProps) {
             }
             set('notifications_enabled', v);
           }}
+        />
+      </FieldRow>
+      <FieldRow label={t('settings.fields.session_ttl')} hint={t('settings.fields.session_ttl_hint')}>
+        <SelectField
+          value={form.session_ttl ?? '86400'}
+          onChange={(v) => set('session_ttl', v)}
+          options={[
+            { value: '3600',    label: '1 hour' },
+            { value: '14400',   label: '4 hours' },
+            { value: '43200',   label: '12 hours' },
+            { value: '86400',   label: '24 hours' },
+            { value: '604800',  label: '7 days' },
+            { value: '2592000', label: '30 days' },
+          ]}
         />
       </FieldRow>
     </>
@@ -893,7 +907,7 @@ export default function SettingsDetail() {
             {selectedGroup === 'input' && <InputGroup form={form} set={setField} />}
             {selectedGroup === 'sessions' && <SessionsGroup form={form} set={setField} />}
             {selectedGroup === 'agent' && <AgentGroup form={form} set={setField} />}
-            {selectedGroup === 'notifications' && <NotificationsGroup form={form} set={setField} />}
+            {selectedGroup === 'other' && <OtherGroup form={form} set={setField} />}
             {selectedGroup === 'history' && <HistoryGroup form={form} set={setField} />}
             {selectedGroup === 'about' && <AboutGroup />}
             {selectedGroup === 'providers' && <ProvidersGroup />}

@@ -2264,6 +2264,7 @@ _SETTINGS_DEFAULTS = {
     "last_seen_cron_ts_map": {},  # per-job {job_id: epoch_seconds} — drives +N unread badge
     "password_hash": None,  # PBKDF2-HMAC-SHA256 hash; None = auth disabled
     "default_mode": "manual",  # approval mode for new sessions: manual | smart | yolo
+    "session_ttl": "86400",  # login cookie TTL in seconds (default 24h)
 }
 _SETTINGS_LEGACY_DROP_KEYS = {"assistant_language", "bubble_layout", "default_model", "show_token_usage", "sync_to_insights"}
 _SETTINGS_THEME_VALUES = {"light", "dark", "system"}
@@ -2324,15 +2325,19 @@ def _normalize_appearance(theme, skin) -> tuple[str, str]:
     return next_theme, next_skin
 
 
-def load_settings() -> dict:
-    """Load settings from disk, merging with defaults for any missing keys."""
+_settings_cache: dict | None = None
+_settings_cache_lock = threading.Lock()
+_settings_mtime: float = 0.0
+
+
+def _read_settings_from_disk() -> tuple[dict, float]:
+    """Read settings.json from disk and return (merged_dict, mtime)."""
     settings = dict(_SETTINGS_DEFAULTS)
     stored = None
+    mt = 0.0
     try:
         settings_exists = SETTINGS_FILE.exists()
     except OSError:
-        # PermissionError or other OS-level error (e.g. UID mismatch in Docker)
-        # Treat as missing — start with defaults rather than crashing.
         logger.debug("Cannot stat settings file %s (inaccessible?)", SETTINGS_FILE)
         settings_exists = False
     if settings_exists:
@@ -2348,12 +2353,46 @@ def load_settings() -> dict:
                 )
         except Exception:
             logger.debug("Failed to load settings from %s", SETTINGS_FILE)
+        try:
+            mt = SETTINGS_FILE.stat().st_mtime
+        except OSError:
+            mt = 0.0
     settings["theme"], settings["skin"] = _normalize_appearance(
         stored.get("theme") if isinstance(stored, dict) else settings.get("theme"),
         stored.get("skin") if isinstance(stored, dict) else settings.get("skin"),
     )
     settings["default_model"] = get_effective_default_model()
-    return settings
+    return settings, mt
+
+
+def load_settings() -> dict:
+    """Load settings with mtime-based caching (mirrors config.yaml _cfg_cache pattern).
+
+    Fast path: stat the file; if mtime unchanged, return cached copy.
+    Slow path: re-read under lock with double-check.
+    """
+    global _settings_cache, _settings_mtime
+    # Fast path — no lock
+    try:
+        mt = SETTINGS_FILE.stat().st_mtime if SETTINGS_FILE.exists() else 0.0
+    except OSError:
+        mt = 0.0
+    if _settings_cache is not None and mt == _settings_mtime:
+        return dict(_settings_cache)
+
+    # Slow path — acquire lock, double-check
+    with _settings_cache_lock:
+        try:
+            mt = SETTINGS_FILE.stat().st_mtime if SETTINGS_FILE.exists() else 0.0
+        except OSError:
+            mt = 0.0
+        if _settings_cache is not None and mt == _settings_mtime:
+            return dict(_settings_cache)
+
+        settings, mt = _read_settings_from_disk()
+        _settings_cache = settings
+        _settings_mtime = mt
+        return dict(settings)
 
 
 # 默认 idle 时长：60分钟
@@ -2434,6 +2473,15 @@ def save_settings(settings: dict) -> dict:
                 not isinstance(v, str) or not _SETTINGS_LANG_RE.match(v)
             ):
                 continue
+            # Validate session_ttl: positive integer, 300 (5min) to 2592000 (30days)
+            if k == "session_ttl":
+                try:
+                    ttl_int = int(v)
+                    if ttl_int < 300 or ttl_int > 2592000:
+                        continue
+                    v = str(ttl_int)
+                except (ValueError, TypeError):
+                    continue
             # Coerce bool keys
             if k in _SETTINGS_BOOL_KEYS:
                 v = bool(v)
@@ -2460,6 +2508,13 @@ def save_settings(settings: dict) -> dict:
     if "default_workspace" in current:
         DEFAULT_WORKSPACE = resolve_default_workspace(current["default_workspace"])
     current["default_model"] = get_effective_default_model()
+    # Sync in-memory cache so next load_settings() returns fresh data immediately
+    global _settings_cache, _settings_mtime
+    _settings_cache = current
+    try:
+        _settings_mtime = SETTINGS_FILE.stat().st_mtime
+    except OSError:
+        _settings_mtime = 0.0
     return current
 
 

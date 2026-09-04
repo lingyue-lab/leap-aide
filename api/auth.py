@@ -24,9 +24,19 @@ PUBLIC_PATHS = frozenset({
 })
 
 COOKIE_NAME = 'hermes_session'
-SESSION_TTL = 86400  # 24 hours
+_DEFAULT_SESSION_TTL = 86400  # 24 hours fallback
 
 _SESSIONS_FILE = STATE_DIR / '.sessions.json'
+
+
+def _get_session_ttl() -> int:
+    """Return session TTL in seconds from settings, with fallback default."""
+    try:
+        settings = load_settings()
+        ttl = int(settings.get('session_ttl', _DEFAULT_SESSION_TTL))
+        return max(300, min(ttl, 2592000))  # clamp to 5min ~ 30days
+    except Exception:
+        return _DEFAULT_SESSION_TTL
 
 
 def _load_sessions() -> dict[str, float]:
@@ -154,7 +164,7 @@ def verify_password(plain) -> bool:
 def create_session() -> str:
     """Create a new auth session. Returns signed cookie value."""
     token = secrets.token_hex(32)
-    _sessions[token] = time.time() + SESSION_TTL
+    _sessions[token] = time.time() + _get_session_ttl()
     _save_sessions(_sessions)
     sig = hmac.new(_signing_key(), token.encode(), hashlib.sha256).hexdigest()[:32]
     return f"{token}.{sig}"
@@ -243,7 +253,7 @@ def set_auth_cookie(handler, cookie_value) -> None:
     cookie[COOKIE_NAME]['httponly'] = True
     cookie[COOKIE_NAME]['samesite'] = 'Lax'
     cookie[COOKIE_NAME]['path'] = '/'
-    cookie[COOKIE_NAME]['max-age'] = str(SESSION_TTL)
+    cookie[COOKIE_NAME]['max-age'] = str(_get_session_ttl())
     # Set Secure flag when connection is HTTPS
     if getattr(handler.request, 'getpeercert', None) is not None or handler.headers.get('X-Forwarded-Proto', '') == 'https':
         cookie[COOKIE_NAME]['secure'] = True

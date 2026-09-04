@@ -32,6 +32,7 @@ const defaultSettings: Settings = {
   approval_timeout_sec: '60',
   clarify_timeout_sec: '600',
   observer_tab_cleanup: 'session',
+  session_ttl: '86400',
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({

@@ -11,9 +11,9 @@ interface GroupConfig {
 
 const GROUPS: GroupConfig[] = [
   {
-    id: 'appearance',
+    id: 'agent',
     icon: (
-      <Icon name="light_mode" size={18} />
+      <Icon name="smart_toy" size={18} />
     ),
   },
   {
@@ -23,21 +23,15 @@ const GROUPS: GroupConfig[] = [
     ),
   },
   {
+    id: 'providers',
+    icon: (
+      <Icon name="lock" size={18} />
+    ),
+  },
+  {
     id: 'sessions',
     icon: (
       <Icon name="format_list_bulleted" size={18} />
-    ),
-  },
-  {
-    id: 'agent',
-    icon: (
-      <Icon name="smart_toy" size={18} />
-    ),
-  },
-  {
-    id: 'notifications',
-    icon: (
-      <Icon name="notifications" size={18} />
     ),
   },
   {
@@ -47,15 +41,21 @@ const GROUPS: GroupConfig[] = [
     ),
   },
   {
-    id: 'providers',
-    icon: (
-      <Icon name="lock" size={18} />
-    ),
-  },
-  {
     id: 'config',
     icon: (
       <Icon name="description" size={18} />
+    ),
+  },
+  {
+    id: 'appearance',
+    icon: (
+      <Icon name="light_mode" size={18} />
+    ),
+  },
+  {
+    id: 'other',
+    icon: (
+      <Icon name="more_horiz" size={18} />
     ),
   },
   {

@@ -232,6 +232,7 @@ export interface Settings {
   approval_timeout_sec?: string;        // Approval card auto-dismiss timeout (backend default: 60s)
   clarify_timeout_sec?: string;         // Clarify card auto-dismiss timeout (backend default: 600s)
   observer_tab_cleanup?: 'session' | 'none';  // Chrome tab cleanup after agent session ends
+  session_ttl?: string;  // login cookie TTL in seconds (default 86400 = 24h)
 }
 
 // types/approval.ts - 审批相关类型定义

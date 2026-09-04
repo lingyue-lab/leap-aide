@@ -173,7 +173,7 @@ export function handleNotifyEvent(event: string, data: any): void {
           _parent_session_id: data.parent_session_id ?? undefined,
           source_tag: (data.source_tag ?? undefined) as string | undefined,
           is_cli_session: data.source_tag === 'cli',
-          is_subagent_session: data.source_tag === 'subagent',
+          is_subagent_session: data.source_tag === 'subagent' || data.parent_session_id != null,
           pinned: false,
           active_stream_id: data.active_stream_id ?? undefined,
           _has_delegate_children: data._has_delegate_children ?? false,
