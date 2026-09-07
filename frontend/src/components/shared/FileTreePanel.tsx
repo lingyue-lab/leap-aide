@@ -12,6 +12,7 @@ import {
   FolderClosedIcon,
   Icon,
 } from '@/components/common/Icons';
+import LoadingSpinner from '@/components/common/LoadingSpinner';
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -200,7 +201,7 @@ function usePanelResize(
 
 function Spinner() {
   return (
-    <Icon name="progress_activity" size={11} className="animate-spin flex-shrink-0" style={{ opacity: 0.6 }} />
+    <LoadingSpinner mode="inline" minimal size={11} />
   );
 }
 

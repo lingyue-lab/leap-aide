@@ -4,6 +4,7 @@ import { cronService } from '@/services/api';
 import { useCronStore } from '@/stores/useCronStore';
 import CustomScrollbar from '@/components/common/CustomScrollbar';
 import { Icon } from '@/components/common/Icons';
+import LoadingSpinner from '@/components/common/LoadingSpinner';
 
 export default function TasksPanel() {
   const { t } = useTranslation('common');
@@ -28,18 +29,14 @@ export default function TasksPanel() {
       setStoreJobs(data.jobs);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load jobs');
+      setError(err instanceof Error ? err.message : t('tasks.failed_to_load'));
     } finally {
       setLoading(false);
     }
   };
 
   if (loading) {
-    return (
-      <div className="p-3 text-center text-[var(--muted)] text-sm">
-        {t('common.loading') || 'Loading...'}
-      </div>
-    );
+    return <LoadingSpinner mode="inline" />;
   }
 
   return (
@@ -53,7 +50,7 @@ export default function TasksPanel() {
           <button
             className="icon-btn"
             onClick={() => setShowNewJobForm(true)}
-            title="New Job"
+            title={t('tasks.new_job_title')}
           >
             <Icon name="add" size={18} />
           </button>

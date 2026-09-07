@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useSkillStore } from '@/stores/useSkillStore';
 import { skillsService } from '@/services/api';
 import { renderMarkdown } from '@/utils/markdown';
@@ -8,8 +9,10 @@ import type { FileType } from '@/components/shared/FileView';
 import EditorView from '@/components/shared/EditorView';
 import CodeCopyButton from '@/components/shared/CodeCopyButton';
 import { FolderClosedIcon } from '@/components/common/Icons';
+import LoadingSpinner from '@/components/common/LoadingSpinner';
 
 export default function SkillDetail() {
+  const { t } = useTranslation('common');
   const selectedSkill = useSkillStore((s) => s.selectedSkill);
   const selectedSkillContent = useSkillStore((s) => s.selectedSkillContent);
   const loadingContent = useSkillStore((s) => s.loadingContent);
@@ -91,7 +94,7 @@ export default function SkillDetail() {
         setFileEditContent(data.content);
       })
       .catch((err) => {
-        setFileError(err instanceof Error ? err.message : 'Failed to load file');
+        setFileError(err instanceof Error ? err.message : t('skills.failed_to_load_file'));
       })
       .finally(() => setFileLoading(false));
   }, [activeFile, skillDirName]);
@@ -279,7 +282,7 @@ export default function SkillDetail() {
             </div>
             <hr className="border-[var(--border)] mb-4" />
             {loadingContent ? (
-              <div className="text-sm text-[var(--muted)] text-center py-8">Loading...</div>
+              <LoadingSpinner mode="inline" />
             ) : renderedContent ? (
               <div className="file-view-code">
                 <CodeCopyButton content={selectedSkillContent || ''} />

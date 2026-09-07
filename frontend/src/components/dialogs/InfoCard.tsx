@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import CustomScrollbar from '@/components/common/CustomScrollbar';
-import { Icon } from '@/components/common/Icons';
+import LoadingSpinner from '@/components/common/LoadingSpinner';
 
 interface InfoCardAction {
   label: string;
@@ -224,7 +224,7 @@ export default function InfoCard() {
         <div className="bg-task-content">
           {cardState.loading ? (
             <div className="bg-task-desc" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <Icon name="progress_activity" size={21} style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }} />
+              <LoadingSpinner mode="inline" minimal size={21} />
               <span>{cardState.content}</span>
             </div>
           ) : (

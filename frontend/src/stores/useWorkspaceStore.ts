@@ -227,7 +227,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   selectWorkspace: async (path) => {
     // Update local state immediately; backend call is best-effort
-    set({ lastWorkspace: path, currentWorkspace: path, currentDir: path, previewPath: null, previewContent: null, previewType: null });
+    set({ lastWorkspace: path, currentWorkspace: path, currentDir: path, previewPath: null, previewContent: null, previewType: null, workspaceInfoLoading: true, workspaceInfo: null });
     try {
       await fetch('/api/workspaces/select', {
         method: 'POST',

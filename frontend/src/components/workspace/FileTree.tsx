@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 import formatSize from '@/utils/formatSize';
 import { Icon } from '@/components/common/Icons';
+import LoadingSpinner from '@/components/common/LoadingSpinner';
 
 export default function FileTree() {
   const { entries, loading, loadDir, setPreview } = useWorkspaceStore();
@@ -29,9 +30,7 @@ export default function FileTree() {
   return (
     <div className="file-tree">
       {loading && (
-        <div className="flex items-center justify-center py-4 text-[var(--muted)]">
-          <Icon name="progress_activity" size={18} className="animate-spin" />
-        </div>
+        <LoadingSpinner mode="inline" minimal />
       )}
       {entries.map((entry) => (
         <div

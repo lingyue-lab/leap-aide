@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { Icon } from '@/components/common/Icons';
+import LoadingSpinner from '@/components/common/LoadingSpinner';
 import { useTodos } from '@/hooks/useTodos';
 import type { TodoItem } from '@/hooks/useTodos';
 
@@ -15,7 +16,7 @@ function IconPending() {
 }
 
 function IconInProgress() {
-  return <Icon name="progress_activity" size={18} style={{ animation: 'spin 1s linear infinite' }} />;
+  return <LoadingSpinner mode="inline" minimal size={18} />;
 }
 
 function IconCompleted() {

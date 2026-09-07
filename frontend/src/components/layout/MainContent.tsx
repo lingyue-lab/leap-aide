@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { flushSync } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
@@ -22,6 +23,7 @@ import { EmptyState, TASKS_ICON, SKILLS_ICON, MEMORY_ICON, WORKSPACE_ICON } from
 import { observerService } from '@/services/api';
 import Tooltip from '@/components/common/Tooltip';
 import { Icon } from '@/components/common/Icons';
+import LoadingSpinner from '@/components/common/LoadingSpinner';
 
 
 interface MainContentProps {
@@ -212,11 +214,7 @@ function NonTerminalContent({
           </div>
           )}
           {children}
-          {sessionLoading && (
-            <div className="session-loading-overlay">
-              <Icon name="progress_activity" size={27} style={{ animation: 'spin 0.8s linear infinite' }} />
-            </div>
-          )}
+          {sessionLoading && <LoadingSpinner mode="overlay" />}
         </div>
         <TodosDrawer isOpen={todosPanelOpen} onClose={() => closeAllPanels()} />
       </div>
@@ -233,27 +231,14 @@ export default function MainContent({ children }: MainContentProps) {
   useWorkspaceStore(); // subscribe for side effects
 
   // Listen for session loading state from ChatInterface.
-  // Use synchronous DOM manipulation to avoid React state update delay
-  // that causes white flash during session switch.
+  // Use flushSync to ensure immediate visual feedback during session switch.
   useEffect(() => {
     const handler = (e: Event) => {
       const loading = (e as CustomEvent).detail as boolean;
-      // Synchronous DOM manipulation — immediate visual effect
-      const chatArea = document.querySelector('.main-chat-area');
-      if (chatArea) {
-        const existingOverlay = chatArea.querySelector(':scope > .session-loading-overlay');
-        if (loading && !existingOverlay) {
-          const div = document.createElement('div');
-          div.className = 'session-loading-overlay';
-          // Match Icon component: <span class="material-symbols-rounded">progress_activity</span>
-          div.innerHTML = '<span class="material-symbols-rounded" style="font-size: 27px; font-variation-settings: \'FILL\' 0, \'wght\' 400, \'GRAD\' 0, \'opsz\' 24; line-height: 1; display: inline-flex; align-items: center; justify-content: center; animation: spin 0.8s linear infinite;">progress_activity</span>';
-          chatArea.appendChild(div);
-        } else if (!loading && existingOverlay) {
-          existingOverlay.remove();
-        }
-      }
-      // Also update React state (for topbar visibility, etc.)
-      setSessionLoading(loading);
+      // flushSync ensures synchronous React state update for immediate overlay
+      flushSync(() => {
+        setSessionLoading(loading);
+      });
     };
     window.addEventListener('hermes:session-loading', handler);
     return () => window.removeEventListener('hermes:session-loading', handler);

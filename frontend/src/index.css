@@ -464,16 +464,48 @@
     position: relative;
   }
 
-  .session-loading-overlay {
+  /* ── Unified Loading Spinner (M3 Circular Progress Indicator) ── */
+  .loading-spinner-overlay {
     position: absolute;
     inset: 0;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(0,0,0,0.15);
+    background: rgba(0, 0, 0, 0.15);
     z-index: 100;
-    color: var(--muted);
     pointer-events: none;
+  }
+
+  .loading-spinner-overlay-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+
+  .loading-spinner-inline {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 16px;
+    color: var(--muted);
+  }
+
+  .loading-spinner-icon {
+    animation: spin 1.5s linear infinite;
+    color: var(--primary);
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .loading-spinner-text {
+    font-size: 0.875rem;
+    color: var(--muted);
   }
 
   /* Right panel */

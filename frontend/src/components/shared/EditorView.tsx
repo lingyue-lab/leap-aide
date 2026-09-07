@@ -1,4 +1,5 @@
 import { useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import Editor from 'react-simple-code-editor';
 import { resolveLanguage, highlightCode } from '@/utils/markdown';
 
@@ -23,6 +24,7 @@ export default function EditorView({
   saving,
   error,
 }: EditorViewProps) {
+  const { t } = useTranslation('common');
   const lang = resolveLanguage(fileName, language);
   const highlight = useCallback(
     (code: string) => highlightCode(code, lang),
@@ -52,7 +54,7 @@ export default function EditorView({
                 onClick={onSave}
                 disabled={saving}
               >
-                {saving ? 'Saving…' : 'Save'}
+                {saving ? t('common.saving') : t('common.save')}
               </button>
             )}
             {onCancel && (
@@ -60,7 +62,7 @@ export default function EditorView({
                 className="cron-btn text-sm"
                 onClick={onCancel}
               >
-                Cancel
+                {t('common.cancel')}
               </button>
             )}
           </div>

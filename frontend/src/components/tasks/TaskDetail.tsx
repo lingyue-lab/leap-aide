@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useCronStore } from '@/stores/useCronStore';
 import { cronService } from '@/services/api';
 import type { CronSchedule } from '@/types';
 import { renderMarkdown } from '@/utils/markdown';
 import { ChevronRightIcon } from '@/components/common/Icons';
+import LoadingSpinner from '@/components/common/LoadingSpinner';
 
 function parseTimestamp(val: string | number | null | undefined): Date | null {
   if (!val) return null;
@@ -81,6 +83,7 @@ function parseFilenameTimestamp(filename: string): string {
 }
 
 export default function TaskDetail() {
+  const { t } = useTranslation('common');
   const selectedJob = useCronStore((s) => s.selectedJob);
   const outputs = useCronStore((s) => s.outputs);
   const loadingOutputs = useCronStore((s) => s.loadingOutputs);
@@ -168,7 +171,7 @@ export default function TaskDetail() {
   };
 
   const handleDelete = async () => {
-    if (!confirm('Delete this job?')) return;
+    if (!confirm(t('tasks.confirm_delete'))) return;
     setActionLoading('delete');
     try {
       await cronService.delete(selectedJob.id);
@@ -198,18 +201,18 @@ export default function TaskDetail() {
               className="cron-btn text-sm"
               onClick={handlePause}
               disabled={!!actionLoading}
-              title="Pause"
+              title={t('tasks.pause')}
             >
-              Pause
+              {t('tasks.pause')}
             </button>
           ) : (
             <button
               className="cron-btn text-sm"
               onClick={handleResume}
               disabled={!!actionLoading}
-              title="Resume"
+              title={t('tasks.resume')}
             >
-              Resume
+              {t('tasks.resume')}
             </button>
           )}
 
@@ -218,9 +221,9 @@ export default function TaskDetail() {
             className="cron-btn text-sm"
             onClick={handleRun}
             disabled={!!actionLoading}
-            title="Run now"
+            title={t('tasks.run_now')}
           >
-            Run Now
+            {t('tasks.run_now')}
           </button>
 
           {/* Edit */}
@@ -228,9 +231,9 @@ export default function TaskDetail() {
             className="cron-btn text-sm"
             onClick={() => setShowEditJobForm(true)}
             disabled={!!actionLoading}
-            title="Edit"
+            title={t('common.edit')}
           >
-            Edit
+            {t('common.edit')}
           </button>
 
           {/* Delete */}
@@ -238,9 +241,9 @@ export default function TaskDetail() {
             className="cron-btn danger text-sm"
             onClick={handleDelete}
             disabled={!!actionLoading}
-            title="Delete"
+            title={t('tasks.delete')}
           >
-            Delete
+            {t('tasks.delete')}
           </button>
         </div>
       </div>
@@ -304,7 +307,7 @@ export default function TaskDetail() {
         </div>
 
         {loadingOutputs && outputs.length === 0 && (
-          <div className="text-sm text-[var(--muted)] text-center py-4">加载中...</div>
+          <LoadingSpinner mode="inline" />
         )}
 
         {!loadingOutputs && outputs.length === 0 && (

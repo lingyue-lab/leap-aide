@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 import { useTheme } from '@/contexts/ThemeContext';
+import LoadingSpinner from '@/components/common/LoadingSpinner';
 import type { Settings, Theme, SendKey } from '@/types';
 
 interface SettingsModalProps {
@@ -75,7 +76,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     return (
       <div className="settings-overlay" onClick={handleOverlayClick}>
         <div className="settings-panel" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 200 }}>
-          <span style={{ color: 'var(--muted)' }}>Loading settings…</span>
+          <LoadingSpinner mode="inline" text="Loading settings…" />
         </div>
       </div>
     );

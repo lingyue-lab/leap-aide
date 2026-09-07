@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback } from 'react';
 import CustomScrollbar from '@/components/common/CustomScrollbar';
 import { Icon } from '@/components/common/Icons';
+import LoadingSpinner from '@/components/common/LoadingSpinner';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -126,7 +127,7 @@ const MultiSelection: React.FC<MultiSelectionProps> = ({
           </div>
           <CustomScrollbar className="ss-scroll">
             {loading ? (
-              <div className="ss-status">Loading…</div>
+              <div className="ss-status"><LoadingSpinner mode="inline" minimal size={16} /></div>
             ) : (options && options.length === 0 && (!optionGroups || optionGroups.length === 0)) ? (
               <div className="ss-status">{emptyText}</div>
             ) : (

@@ -427,51 +427,50 @@ export default function SessionList() {
       {showCleanupModal && (
         <div className="clear-history-overlay" onClick={handleCleanupClose}>
           <div className="clear-history-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="clear-history-modal__title">Clean Up Sessions</div>
+            <div className="clear-history-modal__title">{t('sessions.cleanup_title')}</div>
             <div className="clear-history-modal__desc">
-              Delete ended sessions older than the selected period.
-              Pinned sessions are never deleted.
+              {t('sessions.cleanup_desc')}
             </div>
             <div className="clear-history-modal__field">
-              <label className="clear-history-modal__label">Source</label>
+              <label className="clear-history-modal__label">{t('sessions.cleanup_source')}</label>
               <select
                 className="clear-history-modal__input"
                 value={cleanupSource}
                 onChange={(e) => setCleanupSource(e.target.value)}
               >
-                <option value="">-- Select --</option>
-                <option value="all">All</option>
-                <option value="webui">Web UI</option>
-                <option value="cron">Cron Jobs</option>
-                <option value="cli">CLI</option>
-                <option value="message">Messaging</option>
+                <option value="">{t('sessions.cleanup_source_placeholder')}</option>
+                <option value="all">{t('sessions.cleanup_source_all')}</option>
+                <option value="webui">{t('sessions.cleanup_source_webui')}</option>
+                <option value="cron">{t('sessions.cleanup_source_cron')}</option>
+                <option value="cli">{t('sessions.cleanup_source_cli')}</option>
+                <option value="message">{t('sessions.cleanup_source_message')}</option>
               </select>
             </div>
             <div className="clear-history-modal__field">
-              <label className="clear-history-modal__label">Older Than</label>
+              <label className="clear-history-modal__label">{t('sessions.cleanup_older_than')}</label>
               <select
                 className="clear-history-modal__input"
                 value={cleanupDays}
                 onChange={(e) => setCleanupDays(Number(e.target.value))}
               >
-                <option value={7}>7 days</option>
-                <option value={30}>30 days</option>
-                <option value={90}>90 days</option>
+                <option value={7}>{t('sessions.cleanup_days', { count: 7 })}</option>
+                <option value={30}>{t('sessions.cleanup_days', { count: 30 })}</option>
+                <option value={90}>{t('sessions.cleanup_days', { count: 90 })}</option>
               </select>
             </div>
             {cleanupPreview !== null && (
-              <div className="text-sm text-green-500 mb-2">Deleted {cleanupPreview} session(s).</div>
+              <div className="text-sm text-green-500 mb-2">{t('sessions.cleanup_deleted', { count: cleanupPreview })}</div>
             )}
             <div className="clear-history-modal__actions">
               <button className="clear-history-modal__btn clear-history-modal__btn--cancel" onClick={handleCleanupClose}>
-                Cancel
+                {t('common.cancel')}
               </button>
               <button
                 className="clear-history-modal__btn clear-history-modal__btn--confirm"
                 onClick={handleCleanupConfirm}
                 disabled={!cleanupSource || cleanupRunning}
               >
-                {cleanupRunning ? 'Cleaning...' : 'Clean Up'}
+                {cleanupRunning ? t('sessions.cleanup_cleaning') : t('sessions.cleanup_clean')}
               </button>
             </div>
           </div>

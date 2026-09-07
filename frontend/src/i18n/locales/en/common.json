@@ -16,7 +16,11 @@
     "delete": "Delete",
     "edit": "Edit",
     "create": "Create",
-    "confirm_delete": "Are you sure you want to delete this?"
+    "confirm_delete": "Are you sure you want to delete this?",
+    "failed_to_load": "Failed to load",
+    "no_file_selected": "No file selected",
+    "select_file_hint": "Select a file from the directory tree",
+    "no_matching_commands": "No matching commands"
   },
   "tabs": {
     "chat": "Chat",
@@ -80,7 +84,21 @@
     "subagent_count": "{{count}} subagent(s)",
     "subagent_session": "Subagent session",
     "subagent_title": "Subagent · {{time}}",
-    "clear_delegates_failed": "Clear subagents failed: {{error}}"
+    "clear_delegates_failed": "Clear subagents failed: {{error}}",
+    "cleanup_title": "Clean Up Sessions",
+    "cleanup_desc": "Delete ended sessions older than the selected period. Pinned sessions are never deleted.",
+    "cleanup_source": "Source",
+    "cleanup_source_placeholder": "-- Select --",
+    "cleanup_source_all": "All",
+    "cleanup_source_webui": "Web UI",
+    "cleanup_source_cron": "Cron Jobs",
+    "cleanup_source_cli": "CLI",
+    "cleanup_source_message": "Messaging",
+    "cleanup_older_than": "Older Than",
+    "cleanup_days": "{{count}} days",
+    "cleanup_deleted": "Deleted {{count}} session(s).",
+    "cleanup_cleaning": "Cleaning...",
+    "cleanup_clean": "Clean Up"
   },
   "settings": {
     "preferences": "Settings & Preferences",
@@ -219,7 +237,10 @@
     "placeholder_hint": "Select a job from the sidebar to view its details and run history.",
     "run_now": "Run now",
     "pause": "Pause",
-    "resume": "Resume"
+    "resume": "Resume",
+    "failed_to_load": "Failed to load jobs",
+    "delete": "Delete",
+    "new_job_title": "New Job"
   },
   "skills": {
     "search": "Search skills...",
@@ -230,7 +251,10 @@
     "empty": "No skills",
     "no_results": "No matching skills",
     "placeholder_hint": "Select a skill from the sidebar to view its details and configuration.",
-    "edit": "Edit skill"
+    "edit": "Edit skill",
+    "failed_to_load": "Failed to load skills",
+    "failed_to_load_file": "Failed to load file",
+    "new_skill_title": "New Skill"
   },
   "memory": {
     "user": "Personal Memory",
@@ -248,7 +272,21 @@
     "empty": "No workspaces added",
     "path_placeholder": "Workspace path (e.g. /home/user/project)",
     "name_placeholder": "Display name (optional)",
-    "confirm_remove": "Remove this workspace?"
+    "confirm_remove": "Remove this workspace?",
+    "failed_to_load": "Failed to load workspace info",
+    "created": "Created",
+    "summary": "Summary",
+    "files_and_dirs": "{{fileCount}} files, {{dirCount}} directories",
+    "total_size": "Total size: {{size}}",
+    "git": "Git",
+    "branch": "Branch: {{branch}}",
+    "changed": "{{count}} changed",
+    "modified": "{{count}} modified",
+    "untracked": "{{count}} untracked",
+    "ahead": "{{count}} ahead",
+    "behind": "{{count}} behind",
+    "working_tree_clean": "Working tree clean",
+    "recent_commits": "Recent Commits"
   },
   "todos": {
     "title": "Todo",

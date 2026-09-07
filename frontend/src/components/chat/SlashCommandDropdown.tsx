@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import type { SlashCommand } from '@/types';
 import type { GroupedCommand } from '@/hooks/useSlashCommands';
 
@@ -18,6 +19,7 @@ export default function SlashCommandDropdown({
   onSelect,
   onMouseEnterIndex,
 }: SlashCommandDropdownProps) {
+  const { t } = useTranslation('common');
   let flatIndex = 0;
 
   return (
@@ -109,7 +111,7 @@ export default function SlashCommandDropdown({
       ))}
       {groups.length === 0 && (
         <div style={{ padding: '12px 16px', fontSize: 14, color: 'var(--muted)' }}>
-          No matching commands
+          {t('common.no_matching_commands')}
         </div>
       )}
     </div>

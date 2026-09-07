@@ -16,7 +16,11 @@
     "delete": "删除",
     "edit": "编辑",
     "create": "创建",
-    "confirm_delete": "确定要删除吗？"
+    "confirm_delete": "确定要删除吗？",
+    "failed_to_load": "加载失败",
+    "no_file_selected": "未选择文件",
+    "select_file_hint": "从目录树中选择一个文件",
+    "no_matching_commands": "无匹配命令"
   },
   "tabs": {
     "chat": "对话",
@@ -80,7 +84,21 @@
     "subagent_count": "{{count}} 个子代理",
     "subagent_session": "子代理会话",
     "subagent_title": "子agent · {{time}}",
-    "clear_delegates_failed": "清除子代理失败：{{error}}"
+    "clear_delegates_failed": "清除子代理失败：{{error}}",
+    "cleanup_title": "清理会话",
+    "cleanup_desc": "删除已结束的、超过选定时间的会话。已固定的会话不会被删除。",
+    "cleanup_source": "来源",
+    "cleanup_source_placeholder": "-- 选择 --",
+    "cleanup_source_all": "全部",
+    "cleanup_source_webui": "Web UI",
+    "cleanup_source_cron": "定时任务",
+    "cleanup_source_cli": "CLI",
+    "cleanup_source_message": "消息平台",
+    "cleanup_older_than": "早于",
+    "cleanup_days": "{{count}} 天",
+    "cleanup_deleted": "已删除 {{count}} 个会话。",
+    "cleanup_cleaning": "清理中...",
+    "cleanup_clean": "清理"
   },
   "settings": {
     "preferences": "设置与偏好",
@@ -219,7 +237,10 @@
     "placeholder_hint": "从侧边栏选择一个任务以查看其详情和运行历史。",
     "run_now": "立即运行",
     "pause": "暂停",
-    "resume": "恢复"
+    "resume": "恢复",
+    "failed_to_load": "加载任务失败",
+    "delete": "删除",
+    "new_job_title": "新任务"
   },
   "skills": {
     "search": "搜索技能...",
@@ -230,7 +251,10 @@
     "empty": "暂无技能",
     "no_results": "无匹配技能",
     "placeholder_hint": "从侧边栏选择一个技能以查看其详情和配置。",
-    "edit": "编辑技能"
+    "edit": "编辑技能",
+    "failed_to_load": "加载技能失败",
+    "failed_to_load_file": "加载文件失败",
+    "new_skill_title": "新技能"
   },
   "memory": {
     "user": "个人记忆",
@@ -248,7 +272,21 @@
     "empty": "暂无工作区",
     "path_placeholder": "工作区路径（如 /home/user/project）",
     "name_placeholder": "显示名称（可选）",
-    "confirm_remove": "确定移除此工作区？"
+    "confirm_remove": "确定移除此工作区？",
+    "failed_to_load": "加载工作区信息失败",
+    "created": "创建时间",
+    "summary": "概览",
+    "files_and_dirs": "{{fileCount}} 个文件，{{dirCount}} 个目录",
+    "total_size": "总大小：{{size}}",
+    "git": "Git",
+    "branch": "分支：{{branch}}",
+    "changed": "{{count}} 个已更改",
+    "modified": "{{count}} 个已修改",
+    "untracked": "{{count}} 个未跟踪",
+    "ahead": "{{count}} 个领先",
+    "behind": "{{count}} 个落后",
+    "working_tree_clean": "工作区干净",
+    "recent_commits": "最近提交"
   },
   "todos": {
     "title": "待办事项",

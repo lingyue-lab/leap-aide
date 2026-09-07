@@ -19,7 +19,6 @@ import { onApprovalCardVisibleChange } from '@/components/dialogs/ApprovalCard';
 import { onClarifyCardVisibleChange } from '@/components/dialogs/ClarifyCard';
 import { onBackgroundTaskCardVisibleChange } from '@/components/dialogs/BackgroundTaskCard';
 import { EmptyState, CHAT_ICON } from '@/components/common/Placeholder';
-import { Icon } from '@/components/common/Icons';
 import { markSessionSeen } from '@/utils/sessionSeen';
 
 interface ChatInterfaceProps {
@@ -382,11 +381,6 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
 
   return (
     <div className="chat-interface" onClick={() => sessionId && markSessionSeen(sessionId)}>
-      {sessionLoading && (
-        <div className="session-loading-overlay">
-          <Icon name="progress_activity" size={27} style={{ animation: 'spin 0.8s linear infinite' }} />
-        </div>
-      )}
       <ChatMessages
         ref={scrollContainerRef}
         messages={messages}

@@ -8,6 +8,7 @@ import { useSessionStreaming } from '@/hooks/useSessionStreaming';
 import { markSessionSeen } from '@/utils/sessionSeen';
 import { sessionService } from '@/services/api';
 import { TrashMultiIcon, Icon } from '@/components/common/Icons';
+import LoadingSpinner from '@/components/common/LoadingSpinner';
 
 interface SessionItemProps {
   session: SessionListItem;
@@ -405,7 +406,7 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
                     >
                       <span className="ws-opt-action">
                         {compressing ? (
-                          <Icon name="progress_activity" size={16} className="ws-opt-icon ws-opt-icon--spin" />
+                          <LoadingSpinner mode="inline" minimal size={16} />
                         ) : (
                           <Icon name="compress" size={16} className="ws-opt-icon" />
                         )}
@@ -426,7 +427,7 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
                     >
                       <span className="ws-opt-action">
                         {clearing ? (
-                          <Icon name="progress_activity" size={16} className="ws-opt-icon ws-opt-icon--spin" />
+                          <LoadingSpinner mode="inline" minimal size={16} />
                         ) : (
                           <Icon name="delete" size={16} className="ws-opt-icon" />
                         )}

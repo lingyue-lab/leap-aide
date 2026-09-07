@@ -1,6 +1,6 @@
 import { renderMarkdown, highlightCode, resolveLanguage } from '@/utils/markdown';
 import CodeCopyButton from './CodeCopyButton';
-import { Icon } from '@/components/common/Icons';
+import LoadingSpinner from '@/components/common/LoadingSpinner';
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -140,9 +140,7 @@ export default function FileView({
     return (
       <div className={`flex-1 overflow-y-auto p-4${className ? ` ${className}` : ''}`}>
         <div className="max-w-[768px] mx-auto">
-          <div className="flex items-center justify-center py-8">
-            <Icon name="progress_activity" size={23} className="animate-spin" />
-          </div>
+          <LoadingSpinner mode="inline" minimal />
         </div>
       </div>
     );

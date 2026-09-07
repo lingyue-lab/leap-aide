@@ -1,6 +1,7 @@
 import type { ToolCall } from '@/types';
 import CollapseCard from './CollapseCard';
 import { Icon } from '@/components/common/Icons';
+import LoadingSpinner from '@/components/common/LoadingSpinner';
 
 interface ToolCardProps {
   toolCall: ToolCall;
@@ -19,7 +20,7 @@ export default function ToolCard({ toolCall }: ToolCardProps) {
       );
     }
     return (
-      <Icon name="progress_activity" size={18} className="animate-spin text-[var(--blue)]" />
+      <LoadingSpinner mode="inline" minimal size={18} />
     );
   };
 
@@ -46,7 +47,7 @@ export default function ToolCard({ toolCall }: ToolCardProps) {
       extra={
         <>
           {!toolCall.done && (
-            <Icon name="progress_activity" size={18} className="animate-spin" />
+            <LoadingSpinner mode="inline" minimal size={18} />
           )}
           {toolCall.duration !== undefined && (
             <span className="text-xs text-[var(--muted)]">{toolCall.duration}ms</span>

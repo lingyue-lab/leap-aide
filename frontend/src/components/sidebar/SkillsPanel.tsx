@@ -7,6 +7,7 @@ import type { Skill } from '@/types';
 import CustomScrollbar from '@/components/common/CustomScrollbar';
 import SessionSearchModal from '@/components/common/SessionSearchModal';
 import { TrashMultiIcon, Icon } from '@/components/common/Icons';
+import LoadingSpinner from '@/components/common/LoadingSpinner';
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform || '');
 
@@ -54,7 +55,7 @@ export default function SkillsPanel({ isActive = false }: { isActive?: boolean }
       await loadSkillsFromStore();
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load skills');
+      setError(err instanceof Error ? err.message : t('skills.failed_to_load'));
     } finally {
       setLoading(false);
     }
@@ -187,11 +188,7 @@ export default function SkillsPanel({ isActive = false }: { isActive?: boolean }
   };
 
   if (loading) {
-    return (
-      <div className="p-3 text-center text-[var(--muted)] text-sm">
-        {t('common.loading') || 'Loading...'}
-      </div>
-    );
+    return <LoadingSpinner mode="inline" />;
   }
 
   return (
@@ -245,7 +242,7 @@ export default function SkillsPanel({ isActive = false }: { isActive?: boolean }
           <button
             className="icon-btn"
             onClick={() => { cancelEditing(); clearSelection(); setShowNewSkillForm(true); }}
-            title="New Skill"
+            title={t('skills.new_skill_title')}
           >
             <Icon name="add" size={18} />
           </button>

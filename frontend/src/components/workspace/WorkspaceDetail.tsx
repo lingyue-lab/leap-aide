@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 import FileTreePanel from '@/components/shared/FileTreePanel';
 import FileView from '@/components/shared/FileView';
@@ -23,6 +24,7 @@ interface WorkspaceFileMainProps {
 }
 
 function WorkspaceFileMain({ showFileTree, onToggleFileTree }: WorkspaceFileMainProps) {
+  const { t } = useTranslation('common');
   const {
     previewPath, previewContent, previewType, previewLoading,
     previewEditing, updatePreviewContent,
@@ -57,7 +59,7 @@ function WorkspaceFileMain({ showFileTree, onToggleFileTree }: WorkspaceFileMain
       {!previewEditing && (
       <div className="topbar">
         <span className="topbar-title">
-          {fileName || <span className="italic text-[var(--muted)]">No file selected</span>}
+          {fileName || <span className="italic text-[var(--muted)]">{t('common.no_file_selected')}</span>}
         </span>
         <div className="topbar-chips">
           {/* Files toggle button */}
@@ -84,7 +86,7 @@ function WorkspaceFileMain({ showFileTree, onToggleFileTree }: WorkspaceFileMain
         onSave={handleSave}
         onCancel={() => setPreviewEditing(false)}
         saving={saving}
-        emptyMessage="Select a file from the directory tree"
+        emptyMessage={t('common.select_file_hint')}
       />
     </div>
   );

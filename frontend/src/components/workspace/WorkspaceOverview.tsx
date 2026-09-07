@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 import { ChevronRightIcon, FolderOpenIcon } from '@/components/common/Icons';
+import LoadingSpinner from '@/components/common/LoadingSpinner';
 import type { GitCommit } from '@/types';
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -27,6 +29,7 @@ const SHAPE_MD = 'var(--md-shape-md)';
 // ── Component ────────────────────────────────────────────────────
 
 export default function WorkspaceOverview() {
+  const { t } = useTranslation('common');
   const {
     currentWorkspace,
     workspaceInfo,
@@ -77,12 +80,12 @@ export default function WorkspaceOverview() {
         <div style={{ maxWidth: 672, marginLeft: 'auto', marginRight: 'auto' }}>
 
           {workspaceInfoLoading && (
-            <div className="text-sm text-[var(--muted)] text-center py-8">Loading...</div>
+            <LoadingSpinner mode="inline" />
           )}
 
           {!workspaceInfoLoading && !workspaceInfo && (
             <div className="text-sm text-[var(--muted)] text-center py-8 italic">
-              Failed to load workspace info
+              {t('workspaces.failed_to_load')}
             </div>
           )}
 
@@ -96,7 +99,7 @@ export default function WorkspaceOverview() {
                   className="p-4 border border-[var(--border2)]"
                   style={{ borderRadius: SHAPE_MD, background: 'var(--md-surface-container-low)' }}
                 >
-                  <div className="text-base font-medium text-[var(--muted)] mb-0.5">Created</div>
+                  <div className="text-base font-medium text-[var(--muted)] mb-0.5">{t('workspaces.created')}</div>
                   <div className="text-base text-[var(--text)]">{formatDate(workspaceInfo.created)}</div>
                 </div>
 
@@ -105,12 +108,12 @@ export default function WorkspaceOverview() {
                   className="p-4 border border-[var(--border2)]"
                   style={{ borderRadius: SHAPE_MD, background: 'var(--md-surface-container-low)' }}
                 >
-                  <div className="text-base font-medium text-[var(--muted)] mb-0.5">Summary</div>
+                  <div className="text-base font-medium text-[var(--muted)] mb-0.5">{t('workspaces.summary')}</div>
                   <div className="text-base text-[var(--text)]">
-                    {workspaceInfo.file_count} files, {workspaceInfo.dir_count} directories
+                    {t('workspaces.files_and_dirs', { fileCount: workspaceInfo.file_count, dirCount: workspaceInfo.dir_count })}
                   </div>
                   <div className="text-sm text-[var(--muted)] mt-0.5">
-                    Total size: {formatBytes(workspaceInfo.total_size)}
+                    {t('workspaces.total_size', { size: formatBytes(workspaceInfo.total_size) })}
                   </div>
                 </div>
 
@@ -120,21 +123,21 @@ export default function WorkspaceOverview() {
                     className="p-4 border border-[var(--border2)]"
                     style={{ borderRadius: SHAPE_MD, background: 'var(--md-surface-container-low)' }}
                   >
-                    <div className="text-base font-medium text-[var(--muted)] mb-0.5">Git</div>
+                    <div className="text-base font-medium text-[var(--muted)] mb-0.5">{t('workspaces.git')}</div>
                     <div className="text-base text-[var(--text)]">
-                      Branch: {workspaceInfo.git.branch}
+                      {t('workspaces.branch', { branch: workspaceInfo.git.branch })}
                     </div>
                     <div className="text-sm text-[var(--muted)] mt-0.5">
-                      {workspaceInfo.git.dirty > 0 && `${workspaceInfo.git.dirty} changed · `}
-                      {workspaceInfo.git.modified > 0 && `${workspaceInfo.git.modified} modified · `}
-                      {workspaceInfo.git.untracked > 0 && `${workspaceInfo.git.untracked} untracked · `}
-                      {workspaceInfo.git.ahead > 0 && `${workspaceInfo.git.ahead} ahead · `}
-                      {workspaceInfo.git.behind > 0 && `${workspaceInfo.git.behind} behind · `}
+                      {workspaceInfo.git.dirty > 0 && `${t('workspaces.changed', { count: workspaceInfo.git.dirty })} · `}
+                      {workspaceInfo.git.modified > 0 && `${t('workspaces.modified', { count: workspaceInfo.git.modified })} · `}
+                      {workspaceInfo.git.untracked > 0 && `${t('workspaces.untracked', { count: workspaceInfo.git.untracked })} · `}
+                      {workspaceInfo.git.ahead > 0 && `${t('workspaces.ahead', { count: workspaceInfo.git.ahead })} · `}
+                      {workspaceInfo.git.behind > 0 && `${t('workspaces.behind', { count: workspaceInfo.git.behind })} · `}
                       {workspaceInfo.git.dirty === 0 &&
                        workspaceInfo.git.modified === 0 &&
                        workspaceInfo.git.untracked === 0 &&
                        workspaceInfo.git.ahead === 0 &&
-                       workspaceInfo.git.behind === 0 && 'Working tree clean'}
+                       workspaceInfo.git.behind === 0 && t('workspaces.working_tree_clean')}
                     </div>
                   </div>
                 )}
@@ -144,7 +147,7 @@ export default function WorkspaceOverview() {
               {workspaceInfo.git && workspaceInfo.git.log.length > 0 && (
                 <div>
                   <div className="text-base font-medium text-[var(--muted)] mb-2">
-                    Recent Commits
+                    {t('workspaces.recent_commits')}
                   </div>
 
                   {workspaceInfo.git.log.map((commit: GitCommit) => {
