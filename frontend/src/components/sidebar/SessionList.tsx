@@ -7,6 +7,7 @@ import { resolveWorkspaceDisplay } from '@/hooks/useWorkspaceDisplay';
 import SessionItem from './SessionItem';
 import CustomScrollbar from '@/components/common/CustomScrollbar';
 import SessionSearchModal from '@/components/common/SessionSearchModal';
+import LoadingSpinner from '@/components/common/LoadingSpinner';
 import { Icon } from '@/components/common/Icons';
 import type { DelegateChildSession } from '@/types';
 
@@ -15,7 +16,7 @@ export default function SessionList() {
   const { t } = useTranslation('common');
   const { sessions, currentSessionId, currentSession, loadSessions, createSession, selectSession } = useSessionStore();
   const delegateChildrenVersion = useSessionStore((s) => s.delegateChildrenVersion);
-  const { workspaces } = useWorkspaceStore();
+  const { workspaces, workspacesLoaded } = useWorkspaceStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
   const [searching, setSearching] = useState(false);
@@ -320,6 +321,10 @@ export default function SessionList() {
       setShowCleanupModal(false);
     }
   };
+
+  if (!workspacesLoaded) {
+    return <div className="flex-1 flex items-center justify-center"><LoadingSpinner mode="inline" minimal /></div>;
+  }
 
   return (
     <>

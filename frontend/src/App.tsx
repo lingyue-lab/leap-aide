@@ -6,6 +6,7 @@ import ChatInterface from './components/chat/ChatInterface';
 import ObserverPage from './components/observer/ObserverPage';
 import { useSessionStore } from './stores/useSessionStore';
 import { useSettingsStore } from './stores/useSettingsStore';
+import { useWorkspaceStore } from './stores/useWorkspaceStore';
 import { useTheme } from './contexts/ThemeContext';
 import { ProtectedRoute } from './contexts/AuthContext';
 import { useStreamNotify } from './hooks/useStreamNotify';
@@ -18,12 +19,14 @@ function App() {
   const { i18n } = useTranslation();
   const { currentSessionId } = useSessionStore();
   const { settings, loadSettings } = useSettingsStore();
+  const loadWorkspaces = useWorkspaceStore((s) => s.loadWorkspaces);
   const { setTheme } = useTheme();
   useStreamNotify(currentSessionId);
 
-  // Load settings and init font monitor on mount
+  // Load settings, workspaces, and init font monitor on mount
   React.useEffect(() => {
     loadSettings();
+    loadWorkspaces();
     initFontMonitor();
     checkMaterialSymbolsFont();
   }, []);

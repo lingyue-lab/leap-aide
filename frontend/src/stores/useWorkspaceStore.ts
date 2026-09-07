@@ -14,6 +14,7 @@ interface WorkspaceState {
   previewDirty: boolean;
   previewEditing: boolean;
   workspaces: Workspace[];
+  workspacesLoaded: boolean;
   lastWorkspace: string | null;
   currentWorkspace: string | null;
   workspacesTabActive: boolean;
@@ -55,6 +56,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   previewDirty: false,
   previewEditing: false,
   workspaces: [],
+  workspacesLoaded: false,
   lastWorkspace: null,
   currentWorkspace: null,
   workspacesTabActive: false,
@@ -211,7 +213,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       if (!response.ok) throw new Error('Failed to load workspaces');
       const data = await response.json();
       const lastWs: string | null = data.last_workspace || null;
-      set({ workspaces: data.workspaces || [], lastWorkspace: lastWs, currentWorkspace: lastWs });
+      set({ workspaces: data.workspaces || [], workspacesLoaded: true, lastWorkspace: lastWs, currentWorkspace: lastWs });
       if (lastWs) {
         try {
           await Promise.all([

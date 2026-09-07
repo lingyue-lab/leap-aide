@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { FormField, TextField } from '../components/common/FormField';
+import LoadingSpinner from '../components/common/LoadingSpinner';
 
 interface AuthContextValue {
   isAuthenticated: boolean;
@@ -87,13 +88,7 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
   if (isLoading) {
     return (
       <div className="flex h-screen items-center justify-center bg-[var(--bg)]">
-        <div className="text-center">
-          <div className="thinking">
-            <span className="thinking-dot" />
-            <span className="thinking-dot" />
-            <span className="thinking-dot" />
-          </div>
-        </div>
+        <LoadingSpinner mode="inline" />
       </div>
     );
   }
