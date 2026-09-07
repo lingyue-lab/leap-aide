@@ -120,6 +120,10 @@ FORCE=false
 INSTALL_SERVICE=true
 NPM_REGISTRY=""
 DEBUG_INSTALL=false
+HERMES_COMMIT="${HERMES_COMMIT:-f43eabee5f36e11448086ee8ee17c499958e81bf}"
+HERMES_BRANCH=""
+FORCE_HERMES_COMMIT=false
+_HERMES_VERSION_SPECIFIED=false
 
 # Detect non-interactive mode (e.g. curl | bash)
 if [ -t 0 ]; then
@@ -186,6 +190,20 @@ while [[ $# -gt 0 ]]; do
       DEBUG_INSTALL=true
       shift
       ;;
+    --hermes-commit)
+      HERMES_COMMIT="$2"
+      _HERMES_VERSION_SPECIFIED=true
+      shift 2
+      ;;
+    --hermes-branch)
+      HERMES_BRANCH="$2"
+      _HERMES_VERSION_SPECIFIED=true
+      shift 2
+      ;;
+    --force-hermes-commit)
+      FORCE_HERMES_COMMIT=true
+      shift
+      ;;
     --help|-h)
       echo ""
       echo "┌─────────────────────────────────────────────────────────┐"
@@ -209,6 +227,9 @@ while [[ $# -gt 0 ]]; do
       echo "  --no-service        Skip systemd service installation"
       echo "  --npm-registry URL  npm registry (default: npmjs.org; use https://registry.npmmirror.com for China mirror)"
       echo "  --debug             Enable verbose logging (electron download, npm, etc.)"
+      echo "  --hermes-commit SHA Pin hermes-agent to a specific commit (default: f43eabee5f36)"
+      echo "  --hermes-branch NM  hermes-agent branch to install (overrides --hermes-commit)"
+      echo "  --force-hermes-commit  Force hermes-agent commit even if it rolls back"
       echo "  -h, --help          Show this help"
       echo ""
       echo "Environment variables:"
@@ -501,13 +522,23 @@ if [ "$DEBUG_INSTALL" = true ]; then
   info "Debug logging enabled (electron download details)"
 fi
 
+# Build hermes-agent installer args
+_ha_args=("--skip-browser")
+[ -n "$HERMES_BRANCH" ] && _ha_args+=("--branch" "$HERMES_BRANCH")
+[ -n "$HERMES_COMMIT" ] && _ha_args+=("--commit" "$HERMES_COMMIT")
+[ "$FORCE_HERMES_COMMIT" = true ] && _ha_args+=("--force-commit")
+
 AGENT_DIR=$(_hermes_agent_found || true)
-if [ -n "$AGENT_DIR" ]; then
+if [ -n "$AGENT_DIR" ] && [ "$_HERMES_VERSION_SPECIFIED" = false ]; then
   ok "hermes-agent found at ${B}$AGENT_DIR${R}"
-elif command -v hermes >/dev/null 2>&1; then
+elif command -v hermes >/dev/null 2>&1 && [ "$_HERMES_VERSION_SPECIFIED" = false ]; then
   ok "hermes command found in PATH"
 else
-  warn "hermes-agent not found — installing..."
+  if [ -n "$AGENT_DIR" ] && [ "$_HERMES_VERSION_SPECIFIED" = true ]; then
+    warn "hermes-agent version override requested — reinstalling..."
+  else
+    warn "hermes-agent not found — installing..."
+  fi
   # Use curl or wget whichever is available
   # hermes-agent installer may return non-zero for optional components (e.g. npm)
   # so we don't fail on exit code — we verify the core files instead
@@ -535,9 +566,9 @@ else
   }
   export -f npm
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$HERMES_AGENT_INSTALLER" | bash -s -- --skip-browser || true
+    curl -fsSL "$HERMES_AGENT_INSTALLER" | bash -s -- "${_ha_args[@]}" || true
   elif command -v wget >/dev/null 2>&1; then
-    wget -qO- "$HERMES_AGENT_INSTALLER" | bash -s -- --skip-browser || true
+    wget -qO- "$HERMES_AGENT_INSTALLER" | bash -s -- "${_ha_args[@]}" || true
   else
     die "curl or wget is required to download hermes-agent."
   fi
@@ -548,6 +579,14 @@ else
     ok "hermes command installed"
   else
     die "hermes-agent installation failed. Check the output above for errors."
+  fi
+  # Verify commit if specified
+  if [ -n "$HERMES_COMMIT" ] && [ -n "$AGENT_DIR" ] && [ -d "$AGENT_DIR/.git" ]; then
+    _actual_commit=$(git -C "$AGENT_DIR" rev-parse --short HEAD 2>/dev/null || true)
+    _expected_short="${HERMES_COMMIT:0:12}"
+    if [ -n "$_actual_commit" ] && [ "$_actual_commit" != "${_expected_short}" ]; then
+      warn "hermes-agent commit mismatch: expected ${_expected_short}, got ${_actual_commit}"
+    fi
   fi
 fi
 
