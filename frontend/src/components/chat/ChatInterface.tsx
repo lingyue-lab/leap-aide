@@ -113,8 +113,10 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
     // Ensure WS is alive so stream reconnection and session notifications work.
     import('@/stores/wsManager').then(({ wsManager }) => wsManager.ensureConnected());
 
-    setSessionLoading(true);
+    // Notify MainContent FIRST (synchronous DOM manipulation) to show overlay
+    // before React state updates cause messages to clear.
     window.dispatchEvent(new CustomEvent('hermes:session-loading', { detail: true }));
+    setSessionLoading(true);
 
     // Ensure session store's currentSessionId is in sync. This is critical when
     // sessionId comes from route params (/session/:id) — the store starts with

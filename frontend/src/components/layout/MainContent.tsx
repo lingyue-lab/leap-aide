@@ -138,7 +138,9 @@ function NonTerminalContent({
   }
 
   // ── Default: chat view ──────────────────────────────────────────────────────
-  const title = currentSession?.title || 'Leap Aide';
+  const title = currentSession?.is_subagent_session
+    ? t('sessions.subagent_title', { time: new Date((currentSession.created_at || 0) * 1000).toLocaleString() })
+    : currentSession?.title || 'Leap Aide';
 
   return (
     <>
@@ -230,10 +232,28 @@ export default function MainContent({ children }: MainContentProps) {
   const closeAllPanels = () => { setTodosPanelOpen(false); };
   useWorkspaceStore(); // subscribe for side effects
 
-  // Listen for session loading state from ChatInterface
+  // Listen for session loading state from ChatInterface.
+  // Use synchronous DOM manipulation to avoid React state update delay
+  // that causes white flash during session switch.
   useEffect(() => {
     const handler = (e: Event) => {
-      setSessionLoading((e as CustomEvent).detail as boolean);
+      const loading = (e as CustomEvent).detail as boolean;
+      // Synchronous DOM manipulation — immediate visual effect
+      const chatArea = document.querySelector('.main-chat-area');
+      if (chatArea) {
+        const existingOverlay = chatArea.querySelector(':scope > .session-loading-overlay');
+        if (loading && !existingOverlay) {
+          const div = document.createElement('div');
+          div.className = 'session-loading-overlay';
+          // Match Icon component: <span class="material-symbols-rounded">progress_activity</span>
+          div.innerHTML = '<span class="material-symbols-rounded" style="font-size: 27px; font-variation-settings: \'FILL\' 0, \'wght\' 400, \'GRAD\' 0, \'opsz\' 24; line-height: 1; display: inline-flex; align-items: center; justify-content: center; animation: spin 0.8s linear infinite;">progress_activity</span>';
+          chatArea.appendChild(div);
+        } else if (!loading && existingOverlay) {
+          existingOverlay.remove();
+        }
+      }
+      // Also update React state (for topbar visibility, etc.)
+      setSessionLoading(loading);
     };
     window.addEventListener('hermes:session-loading', handler);
     return () => window.removeEventListener('hermes:session-loading', handler);

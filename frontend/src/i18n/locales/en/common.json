@@ -79,6 +79,7 @@
     "subagent": "Subagent",
     "subagent_count": "{{count}} subagent(s)",
     "subagent_session": "Subagent session",
+    "subagent_title": "Subagent · {{time}}",
     "clear_delegates_failed": "Clear subagents failed: {{error}}"
   },
   "settings": {

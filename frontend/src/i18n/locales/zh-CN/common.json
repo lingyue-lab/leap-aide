@@ -79,6 +79,7 @@
     "subagent": "子代理",
     "subagent_count": "{{count}} 个子代理",
     "subagent_session": "子代理会话",
+    "subagent_title": "子agent · {{time}}",
     "clear_delegates_failed": "清除子代理失败：{{error}}"
   },
   "settings": {
