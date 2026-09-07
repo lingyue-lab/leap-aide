@@ -384,51 +384,6 @@
     flex-direction: column;
   }
 
-  /* Tab bar at the top of terminal main area */
-  .terminal-tab-bar {
-    display: flex;
-    align-items: center;
-    flex-shrink: 0;
-    background: var(--md-surface-container-low);
-    border-bottom: 1px solid var(--md-outline-variant);
-    overflow-x: auto;
-    scrollbar-width: none;
-    gap: 1px;
-    padding: 0 4px;
-  }
-  .terminal-tab-bar::-webkit-scrollbar { display: none; }
-
-  .terminal-tab {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    padding: 5px 12px;
-    color: var(--md-on-surface-variant);
-    background: transparent;
-    border: none;
-    border-bottom: 2px solid transparent;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: color 0.15s, border-color 0.15s, background 0.15s;
-    border-radius: 0;
-    font-family: "MesloLGS NF", "Menlo", "Monaco", monospace;
-    font-size: calc(12.571px * var(--font-scale, 1));
-  }
-  .terminal-tab:hover {
-    color: var(--md-on-surface);
-    background: var(--md-state-hover);
-  }
-  .terminal-tab.active {
-    color: var(--md-on-surface);
-    border-bottom-color: var(--md-primary);
-    background: color-mix(in srgb, var(--md-primary) 12%, transparent);
-  }
-  .terminal-tab-add {
-    padding: 5px 8px;
-    opacity: 0.5;
-  }
-  .terminal-tab-add:hover { opacity: 1; }
-
   /* Container holding all terminal instances */
   .terminal-views-container {
     flex: 1;

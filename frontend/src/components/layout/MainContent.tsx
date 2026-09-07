@@ -264,8 +264,6 @@ export default function MainContent({ children }: MainContentProps) {
   useEffect(() => { if (terminalTabActive) closeAllPanels(); }, [terminalTabActive]);
   const activeTerminalId = useTerminalStore((s) => s.activeTerminalId);
   const terminals = useTerminalStore((s) => s.terminals);
-  const selectTerminal = useTerminalStore((s) => s.selectTerminal);
-  const addTerminal = useTerminalStore((s) => s.addTerminal);
 
   return (
     <>
@@ -278,28 +276,6 @@ export default function MainContent({ children }: MainContentProps) {
         style={{ display: terminalTabActive ? 'flex' : 'none' }}
         aria-hidden={!terminalTabActive}
       >
-        {/* Tab bar */}
-        <div className="terminal-tab-bar">
-          {terminals.map((t) => (
-            <button
-              key={t.id}
-              className={`terminal-tab ${activeTerminalId === t.id ? 'active' : ''}`}
-              onClick={() => selectTerminal(t.id)}
-              title={t.name}
-            >
-              <Icon name="terminal_2" size={14} />
-              <span>{t.name}</span>
-            </button>
-          ))}
-          <button
-            className="terminal-tab terminal-tab-add"
-            onClick={addTerminal}
-            title="New Terminal"
-          >
-            <Icon name="add" size={14} />
-          </button>
-        </div>
-
         {/* All terminal instances kept mounted; CSS toggles visibility */}
         <div className="terminal-views-container">
           {terminals.map((t) => (
