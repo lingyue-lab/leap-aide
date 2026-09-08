@@ -81,6 +81,10 @@ export function ChevronRightIcon({ size = 16, className }: IconProps) {
   return <Icon name="chevron_right" size={size} className={className} />;
 }
 
+export function ChevronDownIcon({ size = 16, className }: IconProps) {
+  return <Icon name="expand_more" size={size} className={className} />;
+}
+
 export function ReasoningIcon({ size = 16, className }: IconProps) {
   return <Icon name="lightbulb" size={size} className={className} />;
 }

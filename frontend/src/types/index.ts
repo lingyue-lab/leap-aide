@@ -389,6 +389,13 @@ export interface CronJob {
   last_output?: string;
   last_status?: string;
   error?: string;
+  // Extended fields
+  workdir?: string;
+  script?: string;
+  no_agent?: boolean;
+  context_from?: string[];
+  enabled_toolsets?: string[];
+  repeat?: { times: number | null; completed: number };
 }
 
 export interface CronCreateRequest {
@@ -398,6 +405,10 @@ export interface CronCreateRequest {
   model?: string;
   deliver: 'local' | 'discord' | 'telegram';
   skills?: string[];
+  workdir?: string;
+  context_from?: string[];
+  enabled_toolsets?: string[];
+  repeat?: number;
 }
 
 export interface CronCompletion {

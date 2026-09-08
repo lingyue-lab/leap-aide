@@ -397,7 +397,7 @@ export const cronService = {
     });
   },
 
-  update: async (jobId: string, updates: Partial<import('@/types').CronJob>) => {
+  update: async (jobId: string, updates: Record<string, unknown>) => {
     return api('/api/crons/update', {
       method: 'POST',
       body: JSON.stringify({ job_id: jobId, ...updates }),
@@ -437,6 +437,13 @@ export const cronService = {
       method: 'POST',
       body: JSON.stringify({ id: jobId }),
     });
+  },
+};
+
+// Toolsets API service
+export const toolsetsService = {
+  list: async () => {
+    return api<{ toolsets: Record<string, Record<string, unknown>> }>('/api/toolsets');
   },
 };
 

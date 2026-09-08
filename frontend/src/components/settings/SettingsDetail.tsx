@@ -6,6 +6,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { configFileService, providersService } from '@/services/api';
 import FileView from '@/components/shared/FileView';
 import { EditIcon, Icon } from '@/components/common/Icons';
+import CustomScrollbar from '@/components/common/CustomScrollbar';
 import type { Settings, Theme, SendKey, FontSize, Provider } from '@/types';
 
 // ─── Reusable field components ────────────────────────────────────────────────
@@ -901,18 +902,20 @@ export default function SettingsDetail() {
           />
         </div>
       ) : (
-        <div style={{ flex: 1, overflowY: 'auto', padding: '8px 24px 24px' }}>
-          <div style={{ maxWidth: 560, margin: '0 auto' }}>
-            {selectedGroup === 'appearance' && <AppearanceGroup form={form} set={setField} />}
-            {selectedGroup === 'input' && <InputGroup form={form} set={setField} />}
-            {selectedGroup === 'sessions' && <SessionsGroup form={form} set={setField} />}
-            {selectedGroup === 'agent' && <AgentGroup form={form} set={setField} />}
-            {selectedGroup === 'other' && <OtherGroup form={form} set={setField} />}
-            {selectedGroup === 'history' && <HistoryGroup form={form} set={setField} />}
-            {selectedGroup === 'about' && <AboutGroup />}
-            {selectedGroup === 'providers' && <ProvidersGroup />}
+        <CustomScrollbar style={{ flex: 1 }}>
+          <div style={{ padding: '8px 24px 24px' }}>
+            <div style={{ maxWidth: 560, margin: '0 auto' }}>
+              {selectedGroup === 'appearance' && <AppearanceGroup form={form} set={setField} />}
+              {selectedGroup === 'input' && <InputGroup form={form} set={setField} />}
+              {selectedGroup === 'sessions' && <SessionsGroup form={form} set={setField} />}
+              {selectedGroup === 'agent' && <AgentGroup form={form} set={setField} />}
+              {selectedGroup === 'other' && <OtherGroup form={form} set={setField} />}
+              {selectedGroup === 'history' && <HistoryGroup form={form} set={setField} />}
+              {selectedGroup === 'about' && <AboutGroup />}
+              {selectedGroup === 'providers' && <ProvidersGroup />}
+            </div>
           </div>
-        </div>
+        </CustomScrollbar>
       )}
     </div>
   );

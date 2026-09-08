@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import type { ReactNode } from 'react';
+import CustomScrollbar from './CustomScrollbar';
 
 interface FormActionsProps {
   onSubmit: () => void;
@@ -62,9 +63,11 @@ export default function FormPage({ title, error, actions, children }: FormPagePr
           {actions}
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-4 max-w-2xl mx-auto w-full">
-        {children}
-      </div>
+      <CustomScrollbar className="flex-1">
+        <div className="p-6 flex flex-col gap-4 max-w-2xl mx-auto w-full">
+          {children}
+        </div>
+      </CustomScrollbar>
     </div>
   );
 }

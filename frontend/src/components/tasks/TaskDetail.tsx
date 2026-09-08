@@ -60,19 +60,19 @@ function extractCronResponse(raw: string): { response: string; error: string | n
 
 // Parse run timestamp from filename like "2026-07-28_11-20-38.md" or "20260728_112038.md"
 function parseFilenameTimestamp(filename: string): string {
-  // Try new format: YYYY-MM-DD_HH-MM-SS
+  // New format: YYYY-MM-DD_HH-MM-SS
   const newMatch = filename.match(/(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})/);
   if (newMatch) {
     const [, y, mo, d, h, mi, s] = newMatch;
     return `${y}-${mo}-${d} ${h}:${mi}:${s}`;
   }
-  // Try legacy format: YYYYMMDD_HHMMSS
+  // Legacy format: YYYYMMDD_HHMMSS
   const legacyMatch = filename.match(/(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/);
   if (legacyMatch) {
     const [, y, mo, d, h, mi, s] = legacyMatch;
     return `${y}-${mo}-${d} ${h}:${mi}:${s}`;
   }
-  // Try unix timestamp
+  // Unix timestamp prefix
   const tsMatch = filename.match(/^(\d{10,13})/);
   if (tsMatch) {
     const ts = parseInt(tsMatch[1]);
@@ -297,6 +297,72 @@ export default function TaskDetail() {
             {selectedJob.prompt}
           </pre>
         </div>
+
+        {/* Model */}
+        {selectedJob.model && (
+          <div className="p-4 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-xl">
+            <div className="text-base font-medium text-[var(--muted)] mb-0.5">Model</div>
+            <div className="text-base text-[var(--fg)]">{selectedJob.model}</div>
+          </div>
+        )}
+
+        {/* Workspace */}
+        {selectedJob.workdir && (
+          <div className="p-4 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-xl">
+            <div className="text-base font-medium text-[var(--muted)] mb-0.5">工作区</div>
+            <div className="text-base text-[var(--fg)] font-mono text-sm">{selectedJob.workdir}</div>
+          </div>
+        )}
+
+        {/* Skills */}
+        {selectedJob.skills && selectedJob.skills.length > 0 && (
+          <div className="p-4 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-xl">
+            <div className="text-base font-medium text-[var(--muted)] mb-1.5">技能</div>
+            <div className="flex flex-wrap gap-1.5">
+              {selectedJob.skills.map((s) => (
+                <span key={s} className="px-2 py-0.5 text-sm rounded-full bg-[var(--hover-bg)] text-[var(--text)] border border-[var(--border)]">{s}</span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Script block removed — webui no longer exposes script/no_agent; SDK still accepts them for CLI users */}
+
+        {/* Context From */}
+        {selectedJob.context_from && selectedJob.context_from.length > 0 && (
+          <div className="p-4 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-xl">
+            <div className="text-base font-medium text-[var(--muted)] mb-1.5">上下文来源</div>
+            <div className="flex flex-wrap gap-1.5">
+              {selectedJob.context_from.map((id) => (
+                <span key={id} className="px-2 py-0.5 text-sm rounded-full bg-[var(--hover-bg)] text-[var(--text)] border border-[var(--border)]">
+                  {id === 'self' ? 'Self' : id}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Enabled Toolsets */}
+        {selectedJob.enabled_toolsets && selectedJob.enabled_toolsets.length > 0 && (
+          <div className="p-4 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-xl">
+            <div className="text-base font-medium text-[var(--muted)] mb-1.5">启用工具集</div>
+            <div className="flex flex-wrap gap-1.5">
+              {selectedJob.enabled_toolsets.map((ts) => (
+                <span key={ts} className="px-2 py-0.5 text-sm rounded-full bg-[var(--hover-bg)] text-[var(--text)] border border-[var(--border)]">{ts}</span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Repeat */}
+        {selectedJob.repeat && selectedJob.repeat.times != null && (
+          <div className="p-4 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-xl">
+            <div className="text-base font-medium text-[var(--muted)] mb-0.5">重复次数</div>
+            <div className="text-base text-[var(--fg)]">
+              {selectedJob.repeat.times === 0 ? '永久' : `${selectedJob.repeat.completed} / ${selectedJob.repeat.times}`}
+            </div>
+          </div>
+        )}
 
       </div>
 

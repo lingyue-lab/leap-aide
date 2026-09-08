@@ -13,6 +13,7 @@ import re as _re
 import sys
 import threading
 import time
+from datetime import datetime
 import uuid
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -1239,6 +1240,10 @@ def handle_get(handler, parsed) -> bool:
 
     if parsed.path == "/api/crons/output":
         return _handle_cron_output(handler, parsed)
+
+    if parsed.path == "/api/toolsets":
+        from model_tools import get_available_toolsets
+        return j(handler, {"toolsets": get_available_toolsets()})
 
     # ── Skills API (GET) ──
     if parsed.path == "/api/skills":
@@ -3488,6 +3493,35 @@ def _handle_live_models(handler, parsed):
         return j(handler, {"error": str(_e), "models": []})
 
 
+_CRON_OUTPUT_TS_PATTERNS = (
+    # New format: 2026-07-28_11-20-38.md
+    _re.compile(r"(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})"),
+    # Legacy format: 20260728_112038.md
+    _re.compile(r"(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})"),
+    # Unix timestamp prefix: 1690500000.md or 1690500000123.md
+    _re.compile(r"^(\d{10,13})"),
+)
+
+
+def _cron_output_timestamp(filename: str):
+    """Best-effort parse of a cron output filename into a (dt, filename_sort_key)
+    pair used for latest-first ordering. Returns None when no pattern matches.
+    """
+    for pat in _CRON_OUTPUT_TS_PATTERNS[:2]:
+        m = pat.search(filename)
+        if m:
+            try:
+                y, mo, d, h, mi, s = (int(g) for g in m.groups())
+                return datetime(y, mo, d, h, mi, s)
+            except ValueError:
+                continue
+    m = _CRON_OUTPUT_TS_PATTERNS[2].match(filename)
+    if m:
+        ts = int(m.group(1))
+        return datetime.fromtimestamp(ts / 1000 if ts > 1e12 else ts)
+    return None
+
+
 def _handle_cron_output(handler, parsed):
     from cron.jobs import OUTPUT_DIR as CRON_OUT
 
@@ -3499,7 +3533,14 @@ def _handle_cron_output(handler, parsed):
     out_dir = CRON_OUT / job_id
     outputs = []
     if out_dir.exists():
-        files = sorted(out_dir.glob("*.md"), reverse=True)[:limit]
+        # Sort by parsed timestamp (latest first) so mixed legacy + new format
+        # filenames interleave correctly. Fall back to filename string order
+        # when neither pattern matches.
+        files = sorted(
+            out_dir.glob("*.md"),
+            key=lambda f: (_cron_output_timestamp(f.name), f.name),
+            reverse=True,
+        )[:limit]
         for f in files:
             try:
                 txt = f.read_text(encoding="utf-8", errors="replace")
@@ -4232,6 +4273,12 @@ def _handle_cron_create(handler, body):
             deliver=body.get("deliver") or "local",
             skills=body.get("skills") or [],
             model=body.get("model") or None,
+            workdir=body.get("workdir") or None,
+            script=body.get("script") or None,
+            no_agent=bool(body.get("no_agent")),
+            context_from=body.get("context_from") or None,
+            enabled_toolsets=body.get("enabled_toolsets") or None,
+            repeat=body.get("repeat"),
         )
         return j(handler, {"ok": True, "job": job})
     except Exception as e:

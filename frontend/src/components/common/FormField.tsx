@@ -5,10 +5,12 @@ import {
   type TextareaHTMLAttributes,
   type SelectHTMLAttributes,
 } from 'react';
+import { useTranslation } from 'react-i18next';
 
 interface FormFieldProps {
   label: ReactNode;
-  /** Renders a red asterisk after the label. */
+  /** Renders the required indicator after the label. M3 default is "*";
+   *  the `common.required` i18n key overrides this per locale (e.g. "必填" in zh-CN). */
   required?: boolean;
   /** Muted inline hint after the label, e.g. "(optional)". */
   hint?: ReactNode;
@@ -23,11 +25,16 @@ interface FormFieldProps {
 
 /** Label + control + helper/error wrapper. */
 export function FormField({ label, required, hint, helper, error, className, children }: FormFieldProps) {
+  const { t } = useTranslation('common');
   return (
     <div className={className}>
       <label className="block text-sm font-medium text-[var(--muted)] mb-1">
         {label}
-        {required && <span className="text-[var(--accent)]"> *</span>}
+        {required && (
+          <span className="text-[var(--accent)] text-xs font-normal ml-1">
+            {t('common.required', '*')}
+          </span>
+        )}
         {hint && <span className="text-[10px] font-normal ml-1">{hint}</span>}
       </label>
       {children}
