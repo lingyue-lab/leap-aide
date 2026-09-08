@@ -1801,6 +1801,7 @@ def _notify_session_event(event_type: str, session, stream_id: str = None):
         'active_stream_id': active_sid,
         'source_tag': getattr(snap, 'source_tag', None),
         'title': snap.title,
+        'workspace': snap.workspace,
         'message_count': len(snap.messages or []),
         'last_seen_msg_count': snap.last_seen_msg_count,
         'ts': time.time(),

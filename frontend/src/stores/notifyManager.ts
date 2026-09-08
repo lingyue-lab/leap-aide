@@ -135,6 +135,7 @@ export function handleNotifyEvent(event: string, data: any): void {
               ? {
                   ...s,
                   title: data.title ?? s.title,
+                  workspace: data.workspace ?? s.workspace,
                   message_count: data.message_count ?? s.message_count,
                   last_seen_msg_count: data.last_seen_msg_count ?? s.last_seen_msg_count,
                   source_tag: data.source_tag ?? s.source_tag,
@@ -166,6 +167,7 @@ export function handleNotifyEvent(event: string, data: any): void {
         const newSession: SessionListItem = {
           session_id: data.session_id,
           title: data.title || 'New Session',
+          workspace: data.workspace ?? undefined,
           message_count: data.message_count ?? 0,
           last_seen_msg_count: data.last_seen_msg_count ?? null,
           created_at: data.ts ?? Date.now() / 1000,

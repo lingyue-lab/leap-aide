@@ -94,20 +94,26 @@ export const useSessionStore = create<SessionState>((set) => ({
       });
       if (!response.ok) throw new Error('Failed to create session');
       const { session } = await response.json();
-      set((state) => ({
-        sessions: [
-          {
-            session_id: session.session_id,
-            title: session.title,
-            created_at: session.created_at,
-            pinned: false,
-            workspace: session.workspace,
-          },
-          ...state.sessions,
-        ],
-        currentSessionId: session.session_id,
-        currentSession: session,
-      }));
+      const sessionItem = {
+        session_id: session.session_id,
+        title: session.title,
+        created_at: session.created_at,
+        pinned: false,
+        workspace: session.workspace,
+      };
+      set((state) => {
+        // Deduplicate: WebSocket upsert_session may have already created a
+        // placeholder for this session.  Update it in-place instead of adding
+        // a second entry.
+        const exists = state.sessions.some((s) => s.session_id === session.session_id);
+        return {
+          sessions: exists
+            ? state.sessions.map((s) => (s.session_id === session.session_id ? { ...s, ...sessionItem } : s))
+            : [sessionItem, ...state.sessions],
+          currentSessionId: session.session_id,
+          currentSession: session,
+        };
+      });
       return session;
     } catch (err) {
       throw err;

@@ -139,11 +139,19 @@ export default function SessionList() {
 
 
 
-  // All sessions (WebUI + gateway/CLI), excluding archived compaction snapshots and subagent sessions
-  const allSessions = useMemo(
-    () => filteredSessions.filter((s) => !(s._readonly && s._parent_session_id) && !s.is_subagent_session),
-    [filteredSessions]
-  );
+  // All sessions (WebUI + gateway/CLI), excluding archived compaction snapshots
+  // and subagent sessions.  Deduplicate by session_id — race conditions between
+  // WebSocket upsert_session and HTTP createSession can produce two entries for
+  // the same session; keep the first (most complete) occurrence.
+  const allSessions = useMemo(() => {
+    const seen = new Set<string>();
+    return filteredSessions.filter((s) => {
+      if ((s._readonly && s._parent_session_id) || s.is_subagent_session) return false;
+      if (seen.has(s.session_id)) return false;
+      seen.add(s.session_id);
+      return true;
+    });
+  }, [filteredSessions]);
 
   // Group sessions by workspace; pinned sessions stay at the top within their workspace group.
   const groupedSessions = useMemo(() => {

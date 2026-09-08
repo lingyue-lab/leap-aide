@@ -32,12 +32,19 @@ else
   B='' DIM='' R='' GRN='' YLW='' RED=''
 fi
 
-# ── Output helpers ──
-say()  { printf '%s\n' "$*"; }
-ok()   { printf "${GRN}✓${R} %s\n" "$*"; }
-warn() { printf "${YLW}!${R} %s\n" "$*"; }
-die()  { printf "${RED}✗${R} %s\n" "$*" >&2; exit 1; }
-info() { printf "${DIM}%s${R}\n" "$*"; }
+# ── Log file ──
+LOG_FILE="/tmp/install-leap-aide-$(date +%Y%m%d-%H%M%S).log"
+_log() { printf '%s\n' "$*" >> "$LOG_FILE"; }
+_log "=== Leap Aide Installer started at $(date) ==="
+_log "Command: $0 $*"
+_log ""
+
+# ── Output helpers (write to both terminal and log file) ──
+say()  { printf '%s\n' "$*"; _log "$*"; }
+ok()   { printf "${GRN}✓${R} %s\n" "$*"; _log "✓ $*"; }
+warn() { printf "${YLW}!${R} %s\n" "$*"; _log "! $*"; }
+die()  { printf "${RED}✗${R} %s\n" "$*" >&2; _log "✗ $*"; exit 1; }
+info() { printf "${DIM}%s${R}\n" "$*"; _log "  $*"; }
 
 # ── prompt_yes_no helper ──
 prompt_yes_no() {
@@ -124,6 +131,7 @@ HERMES_COMMIT="${HERMES_COMMIT:-f43eabee5f36e11448086ee8ee17c499958e81bf}"
 HERMES_BRANCH=""
 FORCE_HERMES_COMMIT=false
 _HERMES_VERSION_SPECIFIED=false
+USE_ALIYUN_MIRROR=false
 
 # Detect non-interactive mode (e.g. curl | bash)
 if [ -t 0 ]; then
@@ -204,6 +212,10 @@ while [[ $# -gt 0 ]]; do
       FORCE_HERMES_COMMIT=true
       shift
       ;;
+    --china-mirror|--aliyun-mirror)
+      USE_ALIYUN_MIRROR=true
+      shift
+      ;;
     --help|-h)
       echo ""
       echo "┌─────────────────────────────────────────────────────────┐"
@@ -230,6 +242,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --hermes-commit SHA Pin hermes-agent to a specific commit (default: f43eabee5f36)"
       echo "  --hermes-branch NM  hermes-agent branch to install (overrides --hermes-commit)"
       echo "  --force-hermes-commit  Force hermes-agent commit even if it rolls back"
+      echo "  --china-mirror      Use Tsinghua apt mirror for faster downloads in China"
       echo "  -h, --help          Show this help"
       echo ""
       echo "Environment variables:"
@@ -272,7 +285,6 @@ install_package() {
   local pkgs=("$@")
   local mgr
   mgr=$(detect_pkg_manager)
-  local log_file="/tmp/install-${pkgs[0]}.log"
 
   # Spinner characters (rotating line)
   local spin_chars='|/-\'
@@ -280,22 +292,25 @@ install_package() {
   local is_tty=false
   [ -t 1 ] && is_tty=true
 
-  # Start install in background
+  _log ""
+  _log "--- Installing ${pkgs[*]} ---"
+
+  # Start install in background, appending to main log
   case $mgr in
     apt)
-      (apt-get update -qq >>"$log_file" 2>&1 && apt-get install -y -qq "${pkgs[@]}" >>"$log_file" 2>&1) &
+      (apt-get update >>"$LOG_FILE" 2>&1 && apt-get install -y "${pkgs[@]}" >>"$LOG_FILE" 2>&1) &
       ;;
     yum)
-      yum install -y -q "${pkgs[@]}" >>"$log_file" 2>&1 &
+      yum install -y "${pkgs[@]}" >>"$LOG_FILE" 2>&1 &
       ;;
     dnf)
-      dnf install -y -q "${pkgs[@]}" >>"$log_file" 2>&1 &
+      dnf install -y "${pkgs[@]}" >>"$LOG_FILE" 2>&1 &
       ;;
     apk)
-      apk add --no-cache "${pkgs[@]}" >>"$log_file" 2>&1 &
+      apk add --no-cache "${pkgs[@]}" >>"$LOG_FILE" 2>&1 &
       ;;
     pacman)
-      pacman -Sy --noconfirm "${pkgs[@]}" >>"$log_file" 2>&1 &
+      pacman -Sy --noconfirm "${pkgs[@]}" >>"$LOG_FILE" 2>&1 &
       ;;
     *)
       return 1
@@ -306,9 +321,14 @@ install_package() {
   # Show spinner while installing (only on TTY, otherwise just wait)
   if [ "$is_tty" = true ]; then
     local i=0
+    # Build a short display name (truncate if too many packages)
+    local _display_pkgs="${pkgs[*]}"
+    if [ ${#_display_pkgs} -gt 50 ]; then
+      _display_pkgs="${pkgs[0]} ... +$(( ${#pkgs[@]} - 1 )) more"
+    fi
     while kill -0 "$spin_pid" 2>/dev/null; do
       local char="${spin_chars:i++%${#spin_chars}:1}"
-      printf "\r  %s Installing %s..." "$char" "${pkgs[*]}"
+      printf "\r\033[K  %s Installing %s..." "$char" "$_display_pkgs"
       sleep 0.1
     done
   else
@@ -326,11 +346,11 @@ install_package() {
     printf "\r\033[K"
   fi
 
-  # Show error log on failure
-  if [ $rc -ne 0 ] && [ -f "$log_file" ]; then
-    warn "Installation failed. Log:"
-    cat "$log_file" >&2
-    rm -f "$log_file"
+  if [ $rc -ne 0 ]; then
+    _log "--- ${pkgs[*]} install FAILED (exit $rc) ---"
+    warn "Installation failed — see $LOG_FILE for details"
+  else
+    _log "--- ${pkgs[*]} install OK ---"
   fi
 
   return $rc
@@ -343,6 +363,8 @@ say "${GRN}${B}│                                                         │${
 say "${GRN}${B}│                 Leap Aide Installer                     │${R}"
 say "${GRN}${B}│                                                         │${R}"
 say "${GRN}${B}└─────────────────────────────────────────────────────────┘${R}"
+say ""
+info "Log file: $LOG_FILE"
 say ""
 
 # Show environment info
@@ -358,6 +380,116 @@ for _var in http_proxy https_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY; do
 done
 if [ -n "${http_proxy:-}" ] || [ -n "${HTTP_PROXY:-}" ]; then
   ok "Proxy detected"
+fi
+
+# ── China mirror switch (before any package installation) ──
+_SOURCES_BACKUP=""
+_restore_sources() {
+  # Restore original apt sources if we backed them up
+  if [ -n "$_SOURCES_BACKUP" ] && [ -f "$_SOURCES_BACKUP" ]; then
+    local target=""
+    if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+      target="/etc/apt/sources.list.d/ubuntu.sources"
+    elif [ -f /etc/apt/sources.list ]; then
+      target="/etc/apt/sources.list"
+    fi
+    if [ -n "$target" ]; then
+      cp "$_SOURCES_BACKUP" "$target"
+      _log "Restored original apt sources from $_SOURCES_BACKUP"
+    fi
+    rm -f "$_SOURCES_BACKUP"
+  fi
+}
+# Ensure sources are restored on script exit (normal or interrupted)
+trap _restore_sources EXIT
+
+if [ "$USE_ALIYUN_MIRROR" = true ]; then
+  # Check if already using a valid China mirror
+  _is_china_mirror() {
+    local file="$1"
+    grep -qE 'mirrors\.(tuna\.tsinghua|aliyun|ustc|163|huaweicloud)\.edu\.cn|mirrors\.(aliyun|ustc|163|huaweicloud)\.com' "$file" 2>/dev/null
+  }
+
+  _needs_mirror_switch=true
+  if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+    _is_china_mirror /etc/apt/sources.list.d/ubuntu.sources && _needs_mirror_switch=false
+  elif [ -f /etc/apt/sources.list ]; then
+    _is_china_mirror /etc/apt/sources.list && _needs_mirror_switch=false
+  fi
+
+  if [ "$_needs_mirror_switch" = false ]; then
+    info "Already using a China apt mirror — skipping mirror switch"
+  else
+    # Detect Ubuntu codename
+    _ubuntu_codename=$(. /etc/os-release 2>/dev/null && echo "$VERSION_CODENAME" || echo "")
+    if [ -z "$_ubuntu_codename" ]; then
+      _ubuntu_codename=$(lsb_release -cs 2>/dev/null || echo "")
+    fi
+
+    if [ -z "$_ubuntu_codename" ]; then
+      warn "Cannot detect Ubuntu codename — skipping mirror switch"
+    else
+      info "Switching to Tsinghua apt mirror (detected: $_ubuntu_codename)..."
+
+      # Backup original sources
+      if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+        _SOURCES_BACKUP="/tmp/ubuntu.sources.backup.$(date +%s)"
+        cp /etc/apt/sources.list.d/ubuntu.sources "$_SOURCES_BACKUP"
+        _log "Backed up original sources to $_SOURCES_BACKUP"
+
+        # Write DEB822 format (Ubuntu 24.04+)
+        # Source: https://mirror.tuna.tsinghua.edu.cn/help/ubuntu/
+        cat > /etc/apt/sources.list.d/ubuntu.sources <<MIRROR_EOF
+# Configured by Leap Aide installer --china-mirror
+# Source: https://mirror.tuna.tsinghua.edu.cn/help/ubuntu/
+Types: deb
+URIs: https://mirrors.tuna.tsinghua.edu.cn/ubuntu
+Suites: $_ubuntu_codename $_ubuntu_codename-updates $_ubuntu_codename-backports
+Components: main restricted universe multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+# 默认注释了源码镜像以提高 apt update 速度，如有需要可自行取消注释
+Types: deb-src
+URIs: https://mirrors.tuna.tsinghua.edu.cn/ubuntu
+Suites: $_ubuntu_codename $_ubuntu_codename-updates $_ubuntu_codename-backports
+Components: main restricted universe multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+# 以下安全更新软件源为镜像站配置
+Types: deb
+URIs: https://mirrors.tuna.tsinghua.edu.cn/ubuntu
+Suites: $_ubuntu_codename-security
+Components: main restricted universe multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+Types: deb-src
+URIs: https://mirrors.tuna.tsinghua.edu.cn/ubuntu
+Suites: $_ubuntu_codename-security
+Components: main restricted universe multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+MIRROR_EOF
+        ok "Tsinghua mirror applied (DEB822 format)"
+      elif [ -f /etc/apt/sources.list ]; then
+        _SOURCES_BACKUP="/tmp/sources.list.backup.$(date +%s)"
+        cp /etc/apt/sources.list "$_SOURCES_BACKUP"
+        _log "Backed up original sources to $_SOURCES_BACKUP"
+
+        # Write legacy format
+        # Source: https://mirror.tuna.tsinghua.edu.cn/help/ubuntu/
+        cat > /etc/apt/sources.list <<MIRROR_EOF
+# Configured by Leap Aide installer --china-mirror
+# Source: https://mirror.tuna.tsinghua.edu.cn/help/ubuntu/
+deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ $_ubuntu_codename main restricted universe multiverse
+deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ $_ubuntu_codename-updates main restricted universe multiverse
+deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ $_ubuntu_codename-backports main restricted universe multiverse
+deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ $_ubuntu_codename-security main restricted universe multiverse
+MIRROR_EOF
+        ok "Tsinghua mirror applied (legacy format)"
+      else
+        warn "No apt sources file found — skipping mirror switch"
+      fi
+    fi
+  fi
 fi
 
 # git — try to install if missing
@@ -442,20 +574,29 @@ if [ "$IN_DOCKER" = true ]; then
   fi
   if [ -n "$_sys_deps_to_install" ]; then
     warn "Installing system dependencies:${_sys_deps_to_install}"
-    # shellcheck disable=SC2086
-    if install_package $_sys_deps_to_install; then
+    # Install packages one by one for resilience — one failure won't block others
+    _deps_failed=0
+    for _pkg in $_sys_deps_to_install; do
+      if ! install_package "$_pkg"; then
+        warn "Failed to install $_pkg (continuing)"
+        _deps_failed=$((_deps_failed + 1))
+      fi
+    done
+    if [ "$_deps_failed" -eq 0 ]; then
       ok "System dependencies installed"
-      # Refresh shell command cache after installing new packages
-      hash -r 2>/dev/null || true
     else
-      warn "Some system deps failed to install"
+      warn "$_deps_failed package(s) failed to install"
     fi
+    # Refresh shell command cache after installing new packages
+    hash -r 2>/dev/null || true
   fi
 
   # Configure Chinese locale
   if ! locale -a 2>/dev/null | grep -q 'zh_CN.UTF-8'; then
     warn "Configuring Chinese locale..."
-    sed -i 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen
+    if [ -f /etc/locale.gen ]; then
+      sed -i 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen
+    fi
     locale-gen zh_CN.UTF-8 2>&1 || warn "Failed to generate zh_CN.UTF-8 locale"
     ok "Chinese locale configured"
   fi
@@ -524,6 +665,7 @@ fi
 
 # Build hermes-agent installer args
 _ha_args=("--skip-browser")
+[ "$NON_INTERACTIVE" = true ] && _ha_args+=("--non-interactive" "--skip-setup")
 [ -n "$HERMES_BRANCH" ] && _ha_args+=("--branch" "$HERMES_BRANCH")
 [ -n "$HERMES_COMMIT" ] && _ha_args+=("--commit" "$HERMES_COMMIT")
 [ "$FORCE_HERMES_COMMIT" = true ] && _ha_args+=("--force-commit")
@@ -594,7 +736,14 @@ fi
 # hermes-agent bundles playwright-core <1.60.0 which hangs on Node.js v26+
 # (nodejs/node#63487, microsoft/playwright#40998).  Upgrade before downloading.
 AGENT_DIR=$(_hermes_agent_found || true)
-if [ -n "$AGENT_DIR" ] && [ -d "$AGENT_DIR/node_modules/playwright-core" ] && command -v node >/dev/null 2>&1; then
+if [ -n "$AGENT_DIR" ] && command -v node >/dev/null 2>&1; then
+  # Install playwright packages if missing (--skip-browser may have skipped them)
+  if [ ! -d "$AGENT_DIR/node_modules/playwright-core" ]; then
+    info "Playwright not found — installing..."
+    npm install --prefix "$AGENT_DIR" \
+      playwright-core@'^1.60.0' playwright@'^1.60.0' @playwright/test@'^1.60.0' \
+      --save --quiet 2>&1 || warn "Playwright install failed"
+  fi
   _pw_ver=$(node -e "try{console.log(require('$AGENT_DIR/node_modules/playwright-core/package.json').version)}catch(e){}" 2>/dev/null || true)
   if [ -n "$_pw_ver" ]; then
     _pw_major=${_pw_ver%%.*}
@@ -792,6 +941,10 @@ if [ -n "$LOCAL_REPO" ]; then
   cd "$DEST"
 elif [ -d "$DEST/.git" ]; then
   # ── Remote repo: update existing clone ──
+  # Auto-accept SSH host keys in non-interactive mode
+  if [[ "$REPO_URL" == ssh://* || "$REPO_URL" == git@* ]] && [ "$NON_INTERACTIVE" = true ]; then
+    export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new"
+  fi
   say "Repository exists, updating..."
   cd "$DEST"
 
@@ -824,6 +977,12 @@ elif [ -d "$DEST" ]; then
   die "$DEST exists but is not a git repository. Remove it or set LEAP_AIDE_DIR to a different path."
 else
   # ── Remote repo: fresh clone ──
+  # Auto-accept SSH host keys in non-interactive mode
+  _git_ssh_extra=""
+  if [[ "$REPO_URL" == ssh://* || "$REPO_URL" == git@* ]] && [ "$NON_INTERACTIVE" = true ]; then
+    _git_ssh_extra="-o StrictHostKeyChecking=accept-new"
+    export GIT_SSH_COMMAND="ssh $_git_ssh_extra"
+  fi
   git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$DEST"
   cd "$DEST"
   ok "Repository cloned (branch: $BRANCH)"
@@ -935,6 +1094,9 @@ elif [ "$IN_DOCKER" = true ]; then
   info "Docker environment — systemd service skipped"
   info "Run with: docker compose up -d"
 fi
+
+# ── Restore apt sources if we switched to China mirror ──
+_restore_sources
 
 # ── Done ──
 say ""
