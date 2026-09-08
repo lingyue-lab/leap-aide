@@ -161,7 +161,7 @@ class Handler(BaseHTTPRequestHandler):
 # ── Startup stage helpers ──
 
 _t0 = 0.0
-_TOTAL_STAGES = 8
+_TOTAL_STAGES = 9
 _current_stage = ''
 
 
@@ -194,6 +194,42 @@ def _warn(msg: str) -> None:
     elapsed = round(time.monotonic() - _t0, 2)
     logger.warning('%s  WARN  %ss  %s', _current_stage, elapsed, msg)
     _current_stage = ''
+
+
+def _prewarm_caches() -> None:
+    """Background pre-warming of expensive caches to avoid first-session latency.
+
+    Spawns daemon threads so startup is not blocked.  Failures are logged
+    but never abort the server — subsequent requests fall back to the normal
+    lazy-init path (identical to the old behaviour).
+    """
+    import threading
+
+    def _warm_models():
+        t0 = time.monotonic()
+        try:
+            from api.config import get_available_models
+            result = get_available_models()
+            n_groups = len(result.get('groups', []))
+            logger.info('Pre-warm: models cache ready (%.1fs, %d groups)',
+                        time.monotonic() - t0, n_groups)
+        except Exception:
+            logger.warning('Pre-warm: models cache failed (%.1fs)',
+                           time.monotonic() - t0, exc_info=True)
+
+    def _warm_mcp():
+        t0 = time.monotonic()
+        try:
+            from tools.mcp_tool import discover_mcp_tools
+            discover_mcp_tools()
+            logger.info('Pre-warm: MCP tools discovered (%.1fs)',
+                        time.monotonic() - t0)
+        except Exception:
+            logger.warning('Pre-warm: MCP discovery failed (%.1fs)',
+                           time.monotonic() - t0, exc_info=True)
+
+    threading.Thread(target=_warm_models, name='prewarm-models', daemon=True).start()
+    threading.Thread(target=_warm_mcp, name='prewarm-mcp', daemon=True).start()
 
 
 def main() -> None:
@@ -328,6 +364,9 @@ def main() -> None:
         _done()
     except BaseException as e:
         _fail(f'{type(e).__name__}: {e}')
+
+    # ── Pre-warm expensive caches in background ──
+    _prewarm_caches()
 
     # ── Signal handlers ──
     # httpd.shutdown() must be called from a different thread than serve_forever()
