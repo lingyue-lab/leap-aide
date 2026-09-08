@@ -44,7 +44,7 @@ export default function TasksPanel() {
       {/* Header */}
       <div className="sidebar-header">
         <span className="sidebar-header-title">
-          {t('tasks.scheduled_jobs') || 'Scheduled Jobs'}
+          {t('tasks.scheduled_jobs', 'Scheduled Jobs')}
         </span>
         <div className="sidebar-header-actions">
           <button
@@ -64,7 +64,7 @@ export default function TasksPanel() {
         )}
         {jobs.length === 0 && !error && (
           <div className="p-3 text-sm text-[var(--muted)] text-center italic">
-            {t('tasks.empty') || 'No scheduled jobs'}
+            {t('tasks.empty', 'No scheduled jobs')}
           </div>
         )}
         {jobs.map((job) => (
@@ -81,12 +81,12 @@ export default function TasksPanel() {
               </div>
               {job.last_run && (
                 <div className="text-sm text-[var(--muted)] mt-0.5">
-                  Last run: {new Date(job.last_run * 1000).toLocaleString()}
+                  {t('tasks.last_run_inline', 'Last run: ')}{new Date(job.last_run * 1000).toLocaleString()}
                 </div>
               )}
               {job.error && (
                 <div className="text-sm text-[var(--accent)] mt-0.5 truncate">
-                  Error: {job.error}
+                  {t('tasks.error_inline', 'Error: ')}{job.error}
                 </div>
               )}
             </div>

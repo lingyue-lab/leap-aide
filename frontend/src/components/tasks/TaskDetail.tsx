@@ -25,17 +25,21 @@ function formatDate(val: string | number | null | undefined): string {
   return d ? d.toLocaleString() : '—';
 }
 
-function getScheduleDisplay(schedule: string | CronSchedule | null | undefined): { kind: string; display: string } {
-  if (!schedule) return { kind: '—', display: '—' };
+type ScheduleKind = 'interval' | 'cron' | 'unknown';
+
+function getScheduleDisplay(schedule: string | CronSchedule | null | undefined): { kind: ScheduleKind; display: string } {
+  if (!schedule) return { kind: 'unknown', display: '—' };
   if (typeof schedule === 'object') {
-    const kind = schedule.kind === 'interval' ? '固定间隔' : schedule.kind === 'cron' ? 'Cron 表达式' : schedule.kind;
-    return { kind, display: schedule.display || JSON.stringify(schedule) };
+    const k: ScheduleKind =
+      schedule.kind === 'interval' ? 'interval' :
+      schedule.kind === 'cron' ? 'cron' : 'unknown';
+    return { kind: k, display: schedule.display || JSON.stringify(schedule) };
   }
   // Try to detect if it's a cron expression or interval
   if (schedule.startsWith('every ') || /^\d/.test(schedule)) {
-    return { kind: '固定间隔', display: schedule };
+    return { kind: 'interval', display: schedule };
   }
-  return { kind: 'Cron 表达式', display: schedule };
+  return { kind: 'cron', display: schedule };
 }
 
 // Extract Response / Error content from raw cron output.
@@ -85,6 +89,7 @@ function parseFilenameTimestamp(filename: string): string {
 export default function TaskDetail() {
   const { t } = useTranslation('common');
   const selectedJob = useCronStore((s) => s.selectedJob);
+  const allJobs = useCronStore((s) => s.jobs);
   const outputs = useCronStore((s) => s.outputs);
   const loadingOutputs = useCronStore((s) => s.loadingOutputs);
   const loadOutputs = useCronStore((s) => s.loadOutputs);
@@ -115,6 +120,18 @@ export default function TaskDetail() {
   if (!selectedJob) return null;
 
   const scheduleInfo = getScheduleDisplay(selectedJob.schedule);
+
+  const KIND_LABEL: Record<ScheduleKind, string> = {
+    interval: t('tasks.schedule_intervals', 'Intervals'),
+    cron: t('tasks.schedule_cron', 'Cron'),
+    unknown: '—',
+  };
+
+  const renderLastStatus = (s: string | null | undefined): string => {
+    if (s === 'ok') return t('tasks.status_ok', 'OK');
+    if (s === 'error') return t('tasks.status_error', 'Failed');
+    return s ?? '';
+  };
 
   const toggleOutput = (filename: string) => {
     setExpandedOutputs((prev) => {
@@ -171,7 +188,7 @@ export default function TaskDetail() {
   };
 
   const handleDelete = async () => {
-    if (!confirm(t('tasks.confirm_delete'))) return;
+    if (!confirm(t('tasks.confirm_delete', 'Delete this job?'))) return;
     setActionLoading('delete');
     try {
       await cronService.delete(selectedJob.id);
@@ -191,7 +208,7 @@ export default function TaskDetail() {
           <div className="topbar-title">
             {selectedJob.name || selectedJob.prompt.slice(0, 40) + (selectedJob.prompt.length > 40 ? '...' : '')}
           </div>
-          <div className="topbar-meta">ID: {selectedJob.id}</div>
+          <div className="topbar-meta">{t('tasks.job_id', 'ID: ')}{selectedJob.id}</div>
         </div>
 
         <div className="topbar-chips">
@@ -201,18 +218,18 @@ export default function TaskDetail() {
               className="cron-btn text-sm"
               onClick={handlePause}
               disabled={!!actionLoading}
-              title={t('tasks.pause')}
+              title={t('tasks.pause', 'Pause')}
             >
-              {t('tasks.pause')}
+              {t('tasks.pause', 'Pause')}
             </button>
           ) : (
             <button
               className="cron-btn text-sm"
               onClick={handleResume}
               disabled={!!actionLoading}
-              title={t('tasks.resume')}
+              title={t('tasks.resume', 'Resume')}
             >
-              {t('tasks.resume')}
+              {t('tasks.resume', 'Resume')}
             </button>
           )}
 
@@ -221,9 +238,9 @@ export default function TaskDetail() {
             className="cron-btn text-sm"
             onClick={handleRun}
             disabled={!!actionLoading}
-            title={t('tasks.run_now')}
+            title={t('tasks.run_now', 'Run now')}
           >
-            {t('tasks.run_now')}
+            {t('tasks.run_now', 'Run now')}
           </button>
 
           {/* Edit */}
@@ -231,9 +248,9 @@ export default function TaskDetail() {
             className="cron-btn text-sm"
             onClick={() => setShowEditJobForm(true)}
             disabled={!!actionLoading}
-            title={t('common.edit')}
+            title={t('common.edit', 'Edit')}
           >
-            {t('common.edit')}
+            {t('common.edit', 'Edit')}
           </button>
 
           {/* Delete */}
@@ -241,9 +258,9 @@ export default function TaskDetail() {
             className="cron-btn danger text-sm"
             onClick={handleDelete}
             disabled={!!actionLoading}
-            title={t('tasks.delete')}
+            title={t('tasks.delete', 'Delete')}
           >
-            {t('tasks.delete')}
+            {t('tasks.delete', 'Delete')}
           </button>
         </div>
       </div>
@@ -256,43 +273,43 @@ export default function TaskDetail() {
 
         {/* Schedule */}
         <div className="p-4 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-xl">
-          <div className="text-base font-medium text-[var(--muted)] mb-0.5">定时计划</div>
+          <div className="text-base font-medium text-[var(--muted)] mb-0.5">{t('tasks.schedule', 'Schedule')}</div>
           <div className="text-base text-[var(--fg)]">{scheduleInfo.display}</div>
-          <div className="text-sm text-[var(--muted)] mt-0.5">{scheduleInfo.kind}</div>
+          <div className="text-sm text-[var(--muted)] mt-0.5">{KIND_LABEL[scheduleInfo.kind]}</div>
         </div>
 
         {/* Last run */}
         <div className="p-4 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-xl">
-          <div className="text-base font-medium text-[var(--muted)] mb-0.5">上次执行时间</div>
+          <div className="text-base font-medium text-[var(--muted)] mb-0.5">{t('tasks.last_run', 'Last run')}</div>
           <div className="text-base text-[var(--fg)]">
             {formatDate(selectedJob.last_run_at || selectedJob.last_run)}
           </div>
           {selectedJob.last_status && (
             <div className={`text-sm mt-0.5 ${selectedJob.last_status === 'error' ? 'text-[var(--accent)]' : 'text-[var(--muted)]'}`}>
-              状态: {selectedJob.last_status}
+              {t('tasks.last_status_label', 'Status: ')}{renderLastStatus(selectedJob.last_status)}
             </div>
           )}
         </div>
 
         {/* Next run */}
         <div className="p-4 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-xl">
-          <div className="text-base font-medium text-[var(--muted)] mb-0.5">下次预计执行时间</div>
+          <div className="text-base font-medium text-[var(--muted)] mb-0.5">{t('tasks.next_run', 'Next run')}</div>
           <div className="text-base text-[var(--fg)]">
-            {selectedJob.next_run_at ? formatDate(selectedJob.next_run_at) : (selectedJob.enabled ? '待计算' : '已暂停')}
+            {selectedJob.next_run_at ? formatDate(selectedJob.next_run_at) : (selectedJob.enabled ? t('tasks.next_pending', 'Pending') : t('tasks.next_paused', 'Paused'))}
           </div>
         </div>
 
         {/* Deliver / output channel */}
         <div className="p-4 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-xl">
-          <div className="text-base font-medium text-[var(--muted)] mb-0.5">输出通道</div>
+          <div className="text-base font-medium text-[var(--muted)] mb-0.5">{t('tasks.output_channel', 'Output Channel')}</div>
           <div className="text-base text-[var(--fg)] capitalize">
-            {selectedJob.deliver === 'local' ? '本地 (仅保存输出)' : selectedJob.deliver}
+            {selectedJob.deliver === 'local' ? t('tasks.deliver_local', 'Local (save output only)') : selectedJob.deliver}
           </div>
         </div>
 
         {/* Prompt */}
         <div className="p-4 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-xl">
-          <div className="text-base font-medium text-[var(--muted)] mb-1.5">Prompt</div>
+          <div className="text-base font-medium text-[var(--muted)] mb-1.5">{t('tasks.prompt', 'Prompt')}</div>
           <pre className="text-base text-[var(--fg)] whitespace-pre-wrap break-words font-sans leading-relaxed">
             {selectedJob.prompt}
           </pre>
@@ -301,7 +318,7 @@ export default function TaskDetail() {
         {/* Model */}
         {selectedJob.model && (
           <div className="p-4 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-xl">
-            <div className="text-base font-medium text-[var(--muted)] mb-0.5">Model</div>
+            <div className="text-base font-medium text-[var(--muted)] mb-0.5">{t('tasks.model', 'Model')}</div>
             <div className="text-base text-[var(--fg)]">{selectedJob.model}</div>
           </div>
         )}
@@ -309,7 +326,7 @@ export default function TaskDetail() {
         {/* Workspace */}
         {selectedJob.workdir && (
           <div className="p-4 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-xl">
-            <div className="text-base font-medium text-[var(--muted)] mb-0.5">工作区</div>
+            <div className="text-base font-medium text-[var(--muted)] mb-0.5">{t('tasks.workspace', 'Workspace')}</div>
             <div className="text-base text-[var(--fg)] font-mono text-sm">{selectedJob.workdir}</div>
           </div>
         )}
@@ -317,7 +334,7 @@ export default function TaskDetail() {
         {/* Skills */}
         {selectedJob.skills && selectedJob.skills.length > 0 && (
           <div className="p-4 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-xl">
-            <div className="text-base font-medium text-[var(--muted)] mb-1.5">技能</div>
+            <div className="text-base font-medium text-[var(--muted)] mb-1.5">{t('tasks.skills', 'Skills')}</div>
             <div className="flex flex-wrap gap-1.5">
               {selectedJob.skills.map((s) => (
                 <span key={s} className="px-2 py-0.5 text-sm rounded-full bg-[var(--hover-bg)] text-[var(--text)] border border-[var(--border)]">{s}</span>
@@ -331,13 +348,18 @@ export default function TaskDetail() {
         {/* Context From */}
         {selectedJob.context_from && selectedJob.context_from.length > 0 && (
           <div className="p-4 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-xl">
-            <div className="text-base font-medium text-[var(--muted)] mb-1.5">上下文来源</div>
+            <div className="text-base font-medium text-[var(--muted)] mb-1.5">{t('tasks.context_from', 'Context From')}</div>
             <div className="flex flex-wrap gap-1.5">
-              {selectedJob.context_from.map((id) => (
-                <span key={id} className="px-2 py-0.5 text-sm rounded-full bg-[var(--hover-bg)] text-[var(--text)] border border-[var(--border)]">
-                  {id === 'self' ? 'Self' : id}
-                </span>
-              ))}
+              {selectedJob.context_from.map((id) => {
+                const label = id === 'self'
+                  ? t('tasks.context_self', 'Self')
+                  : allJobs.find((j) => j.id === id)?.name || id;
+                return (
+                  <span key={id} className="px-2 py-0.5 text-sm rounded-full bg-[var(--hover-bg)] text-[var(--text)] border border-[var(--border)]">
+                    {label}
+                  </span>
+                );
+              })}
             </div>
           </div>
         )}
@@ -345,7 +367,7 @@ export default function TaskDetail() {
         {/* Enabled Toolsets */}
         {selectedJob.enabled_toolsets && selectedJob.enabled_toolsets.length > 0 && (
           <div className="p-4 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-xl">
-            <div className="text-base font-medium text-[var(--muted)] mb-1.5">启用工具集</div>
+            <div className="text-base font-medium text-[var(--muted)] mb-1.5">{t('tasks.enabled_toolsets', 'Enabled Toolsets')}</div>
             <div className="flex flex-wrap gap-1.5">
               {selectedJob.enabled_toolsets.map((ts) => (
                 <span key={ts} className="px-2 py-0.5 text-sm rounded-full bg-[var(--hover-bg)] text-[var(--text)] border border-[var(--border)]">{ts}</span>
@@ -357,9 +379,9 @@ export default function TaskDetail() {
         {/* Repeat */}
         {selectedJob.repeat && selectedJob.repeat.times != null && (
           <div className="p-4 bg-[rgba(255,255,255,0.03)] border border-[var(--border2)] rounded-xl">
-            <div className="text-base font-medium text-[var(--muted)] mb-0.5">重复次数</div>
+            <div className="text-base font-medium text-[var(--muted)] mb-0.5">{t('tasks.repeat', 'Repeat')}</div>
             <div className="text-base text-[var(--fg)]">
-              {selectedJob.repeat.times === 0 ? '永久' : `${selectedJob.repeat.completed} / ${selectedJob.repeat.times}`}
+              {selectedJob.repeat.times === 0 ? t('tasks.repeat_forever', 'Forever') : `${selectedJob.repeat.completed} / ${selectedJob.repeat.times}`}
             </div>
           </div>
         )}
@@ -369,7 +391,7 @@ export default function TaskDetail() {
       {/* Execution History */}
       <div>
         <div className="text-base font-medium text-[var(--muted)] mb-2">
-          历次执行记录
+          {t('tasks.execution_history', 'Execution History')}
         </div>
 
         {loadingOutputs && outputs.length === 0 && (
@@ -377,7 +399,7 @@ export default function TaskDetail() {
         )}
 
         {!loadingOutputs && outputs.length === 0 && (
-          <div className="text-sm text-[var(--muted)] text-center py-4 italic">暂无执行记录</div>
+          <div className="text-sm text-[var(--muted)] text-center py-4 italic">{t('tasks.no_history', 'No execution records')}</div>
         )}
 
         {outputs.map((output) => {
@@ -417,14 +439,14 @@ export default function TaskDetail() {
                           {/* Response label — muted, distinct from AI content */}
                           {response && (
                             <>
-                              <div className="px-4 pt-3 pb-2 mb-2 border-b border-[var(--border2)] text-[var(--muted)] text-base font-medium">Response</div>
+                              <div className="px-4 pt-3 pb-2 mb-2 border-b border-[var(--border2)] text-[var(--muted)] text-base font-medium">{t('tasks.response_section', 'Response')}</div>
                               <div className="px-4" dangerouslySetInnerHTML={{ __html: renderMarkdown(response) }} />
                             </>
                           )}
                           {/* Error section */}
                           {error && (
                             <>
-                              <div className="px-4 pt-3 pb-2 text-[var(--accent)] text-base font-medium">Error</div>
+                              <div className="px-4 pt-3 pb-2 text-[var(--accent)] text-base font-medium">{t('tasks.error_section', 'Error')}</div>
                               <div className="px-4" dangerouslySetInnerHTML={{ __html: renderMarkdown(error) }} />
                             </>
                           )}
