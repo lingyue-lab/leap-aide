@@ -215,11 +215,15 @@ def _get_session_db():
             logger.warning("hermes_state unavailable — falling back to JSON storage")
             return None
         db_path = _resolve_state_db_path()
-        if not db_path.exists():
-            # state.db doesn't exist yet (fresh install).  The first save()
-            # will create it; loads will return None.
-            return None
         try:
+            # Always try to open: SessionDB.__init__ creates the file (with
+            # schema) if it doesn't exist, so webui's first sync_webui_metadata
+            # on a fresh server (or after the test-suite nuke) lands somewhere
+            # visible to subsequent reads.  This also keeps /api/sessions from
+            # silently dropping webui sessions that exist in the SESSIONS dict
+            # but were never persisted because state.db was missing at write
+            # time — the list_sessions_rich(source='webui') filter would
+            # otherwise exclude them even though they exist in memory.
             _session_db = SessionDB(db_path)
             # Trigger column reconciliation so any newly-added SCHEMA_SQL
             # columns are added to the live DB before we read/write.
@@ -702,6 +706,19 @@ class Session:
                 # cwd can be NULL in state.db — pass empty string so Session
                 # does not fall back to DEFAULT_WORKSPACE
                 kwargs[session_attr] = ''
+            elif db_col == 'last_activity_at' and row.get('last_activity_at') is None:
+                # last_activity_at is NULL for sessions that have never had a
+                # message appended through the SDK (e.g. freshly imported CLI
+                # sessions before the SDK bumps it on the next append). Falling
+                # back to time.time() in Session.__init__ (the default for a
+                # missing updated_at kwarg) would make a Session.load() reload
+                # of a freshly-imported gateway session sort above newer webui
+                # sessions in the sidebar. Mirror _all_sessions_from_db's
+                # `last_activity_at or started_at` projection so the in-memory
+                # view matches what the DB read returns.
+                _started = row.get('started_at')
+                if _started is not None:
+                    kwargs['updated_at'] = _started
 
         # Deserialize JSON columns
         for col in ('skills__webui', 'session_approved__webui', 'compression_anchor_message_key__webui'):

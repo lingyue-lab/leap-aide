@@ -7,7 +7,8 @@ on:
     branches: [master]
 
 jobs:
-  test:
+  backend:
+    name: Backend pytest
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -26,5 +27,38 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyyaml>=6.0 pytest pytest-timeout
 
-      - name: Run tests
+      # CI does not have access to hermes-agent SDK (it lives only on the
+      # testbox at /usr/local/lib/hermes-agent), so agent-dependent tests
+      # will be auto-skipped via conftest.py's pytest_collection_modifyitems.
+      # Full coverage (including agent-dependent cases) runs via
+      # `./scripts/run_test.sh full` on the testbox before release.
+      - name: Run backend tests
         run: pytest tests/ -v --timeout=60
+
+  frontend:
+    name: Frontend vitest
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --silent
+
+      # Install vitest + testing-library explicitly so the test script can
+      # find them even if package.json has not yet been updated to declare
+      # them as devDependencies. `npm install --save-dev` makes the change
+      # permanent; `npm ci` here would otherwise fail to resolve them.
+      - name: Install vitest toolchain
+        working-directory: frontend
+        run: npm install --save-dev --silent vitest @testing-library/react @testing-library/jest-dom jsdom
+
+      - name: Run frontend tests
+        working-directory: frontend
+        run: npm test

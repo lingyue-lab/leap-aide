@@ -53,3 +53,10 @@ graphify-out/
 
 .venv
 .lingyue-lab
+
+# Regression test runner artifacts (junit XML, logs)
+tests/.results/
+
+# Frontend test artifacts
+frontend/tests/.results/
+frontend/node_modules/.vite/

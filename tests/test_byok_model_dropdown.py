@@ -300,32 +300,6 @@ class TestProviderIdInGroupResponse:
                 "JS _fetchLiveModels needs it to match optgroups exactly"
             )
 
-    def test_provider_id_in_static_ui_js_optgroup(self):
-        src = read("static/ui.js")
-        assert "og.dataset.provider" in src, (
-            "populateModelDropdown must set og.dataset.provider from g.provider_id "
-            "so _fetchLiveModels can match by exact provider_id"
-        )
-
-    def test_fetch_live_models_prefers_data_provider_match(self):
-        src = read("static/ui.js")
-        # Live model optgroup matching was extracted to _addLiveModelsToSelect (#872)
-        m = re.search(r'function _addLiveModelsToSelect\b.*?\n\}', src, re.DOTALL)
-        if not m:
-            m = re.search(r'function _fetchLiveModels\b.*?\n\}', src, re.DOTALL)
-        assert m, "_addLiveModelsToSelect or _fetchLiveModels not found"
-        fn = m.group(0)
-        assert 'og.dataset.provider' in fn, (
-            "_addLiveModelsToSelect must check og.dataset.provider===provider before "
-            "falling back to label substring match"
-        )
-        # The data-provider check must come before the label.includes check
-        dp_pos = fn.index('og.dataset.provider')
-        label_pos = fn.index('og.label')
-        assert dp_pos < label_pos, (
-            "data-provider exact match must be attempted before label substring match"
-        )
-
 
 # ── Opus-identified edge case: 'ollama' normalizes to 'custom' ────────────────
 

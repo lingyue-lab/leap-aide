@@ -6,14 +6,14 @@ User Story 1: Gateway Session badge fix
 Tests validate:
 - get_cli_sessions() includes last_seen_msg_count in output dict
 - Read-time clamping logic: last_seen_msg_count must be ≤ message_count
-- gateway_watcher SSE sessions_changed includes last_seen_msg_count
+- session_watcher SSE sessions_changed includes last_seen_msg_count
 """
 import pathlib
 
 REPO_ROOT = pathlib.Path(__file__).parent.parent.resolve()
 
 MODELS_SRC = (REPO_ROOT / "api" / "models.py").read_text(encoding="utf-8")
-GATEWAY_WATCHER_SRC = (REPO_ROOT / "api" / "gateway_watcher.py").read_text(encoding="utf-8")
+SESSION_WATCHER_SRC = (REPO_ROOT / "api" / "session_watcher.py").read_text(encoding="utf-8")
 FRONTEND_STORE_SRC = (REPO_ROOT / "frontend" / "src" / "stores" / "useSessionStore.ts").read_text(encoding="utf-8")
 
 
@@ -54,23 +54,23 @@ def test_sessions_api_response_includes_last_seen():
 
 
 # ---------------------------------------------------------------------------
-# Gateway watcher SSE event contract
+# Session watcher SSE event contract
 # ---------------------------------------------------------------------------
 
-def test_gateway_watcher_sessions_changed_includes_last_seen():
-    """T005: gateway_watcher _get_agent_sessions_from_db() must include
+def test_session_watcher_sessions_changed_includes_last_seen():
+    """T005: session_watcher _get_agent_sessions_from_db() must include
     last_seen_msg_count in the sessions_changed SSE event dict."""
-    assert "'last_seen_msg_count'" in GATEWAY_WATCHER_SRC or \
-           '"last_seen_msg_count"' in GATEWAY_WATCHER_SRC, \
-        "gateway_watcher _get_agent_sessions_from_db() must output last_seen_msg_count field"
+    assert "'last_seen_msg_count'" in SESSION_WATCHER_SRC or \
+           '"last_seen_msg_count"' in SESSION_WATCHER_SRC, \
+        "session_watcher _get_agent_sessions_from_db() must output last_seen_msg_count field"
 
 
-def test_gateway_watcher_read_time_clamp():
-    """gateway_watcher must also clamp last_seen_msg_count to ≤ message_count."""
+def test_session_watcher_read_time_clamp():
+    """session_watcher must also clamp last_seen_msg_count to ≤ message_count."""
     # Should reference last_seen in the watcher, or delegate to models.py
-    # The clamp pattern should exist either in models.py or gateway_watcher.py
-    assert "last_seen" in GATEWAY_WATCHER_SRC.lower(), \
-        "gateway_watcher must reference last_seen_msg_count"
+    # The clamp pattern should exist either in models.py or session_watcher.py
+    assert "last_seen" in SESSION_WATCHER_SRC.lower(), \
+        "session_watcher must reference last_seen_msg_count"
 
 
 # ---------------------------------------------------------------------------

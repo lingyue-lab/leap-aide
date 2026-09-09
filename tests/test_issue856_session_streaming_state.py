@@ -47,7 +47,8 @@ def _make_session(session_id, stream_id=None, message_count=1):
 def test_all_sessions_marks_indexed_and_in_memory_streaming_sessions():
     """Session records from both index and in-memory cache should expose is_streaming."""
     s_disk = _make_session("disk_session", stream_id="stream-1")
-    s_disk.save()
+    models.SESSIONS[s_disk.session_id] = s_disk
+    s_disk.sync_webui_metadata()
 
     s_memory = _make_session("memory_session", stream_id="stream-2")
     with models.LOCK:
@@ -67,7 +68,8 @@ def test_all_sessions_marks_indexed_and_in_memory_streaming_sessions():
 def test_all_sessions_marks_streaming_false_when_stream_is_not_active():
     """Stale active_stream_id should not imply streaming without active STREAMS entry."""
     s = _make_session("stalesession", stream_id="stale-stream")
-    s.save()
+    models.SESSIONS[s.session_id] = s
+    s.sync_webui_metadata()
 
     assert all_sessions()[0]["is_streaming"] is False
 
@@ -81,7 +83,8 @@ def test_all_sessions_marks_streaming_false_when_stream_is_not_active():
 def test_all_sessions_does_not_report_streaming_after_restart_without_active_registry():
     """Server restarts should not resurrect sidebar streaming state from disk alone."""
     s = _make_session("restart_session", stream_id="old-stream")
-    s.save()
+    models.SESSIONS[s.session_id] = s
+    s.sync_webui_metadata()
 
     models.SESSIONS.clear()
     reloaded = Session.load("restart_session")

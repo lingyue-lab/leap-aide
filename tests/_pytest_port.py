@@ -43,4 +43,7 @@ TEST_STATE_DIR = pathlib.Path(os.environ.get(
 
 # Default model injected by conftest — tests that mutate the default model
 # must restore to this value so later tests see a consistent baseline.
-TEST_DEFAULT_MODEL = os.environ.get('HERMES_WEBUI_DEFAULT_MODEL', 'openai/gpt-5.4-mini')
+# DeepSeek V4 Flash is the smoke default because it's cheap/fast; CI/local
+# runs that need a different model set HERMES_WEBUI_DEFAULT_MODEL before
+# invoking pytest.
+TEST_DEFAULT_MODEL = os.environ.get('HERMES_WEBUI_DEFAULT_MODEL', 'deepseek/deepseek-v4-flash')

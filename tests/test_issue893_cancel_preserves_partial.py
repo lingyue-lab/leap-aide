@@ -88,7 +88,6 @@ class TestCancelStreamPreservesPartial:
         s = Session(session_id='sess_partial', title='Test')
         s.messages.append({'role': 'user', 'content': 'Tell me about Python'})
         s.active_stream_id = 'stream_partial'
-        s.save()
         config.SESSIONS['sess_partial'] = s
 
         q = queue.Queue()
@@ -108,9 +107,11 @@ class TestCancelStreamPreservesPartial:
 
         assert result is True
 
-        # Reload the session and check messages
-        from api.models import Session
-        saved = Session.load('sess_partial')
+        # cancel_stream mutates the Session object in-place via _cs.messages.append
+        # so we can verify by reading straight from the in-memory SESSIONS dict
+        # instead of round-tripping through Session.load (which would need state.db
+        # and a saved JSON file that this fixture does not provide).
+        saved = config.SESSIONS['sess_partial']
         assert saved is not None
 
         msg_contents = [m.get('content', '') for m in saved.messages]
@@ -149,7 +150,6 @@ class TestCancelStreamPreservesPartial:
         s = Session(session_id='sess_nopartial', title='Test')
         s.messages.append({'role': 'user', 'content': 'Hello'})
         s.active_stream_id = 'stream_nopartial'
-        s.save()
         config.SESSIONS['sess_nopartial'] = s
 
         q = queue.Queue()
@@ -166,7 +166,7 @@ class TestCancelStreamPreservesPartial:
 
         cancel_stream('stream_nopartial')
 
-        saved = Session.load('sess_nopartial')
+        saved = config.SESSIONS['sess_nopartial']
         msg_contents = [m.get('content', '') for m in saved.messages]
         assert any('*Task cancelled.*' in c for c in msg_contents)
         # No extra partial message when there was nothing streamed
@@ -193,7 +193,6 @@ class TestCancelStreamPreservesPartial:
         s = Session(session_id='sess_thinking', title='Test')
         s.messages.append({'role': 'user', 'content': 'Think about this'})
         s.active_stream_id = 'stream_thinking'
-        s.save()
         config.SESSIONS['sess_thinking'] = s
 
         q = queue.Queue()
@@ -212,7 +211,7 @@ class TestCancelStreamPreservesPartial:
 
         cancel_stream('stream_thinking')
 
-        saved = Session.load('sess_thinking')
+        saved = config.SESSIONS['sess_thinking']
         partial_msg = next(
             (m for m in saved.messages if m.get('_partial')), None
         )
@@ -239,7 +238,6 @@ class TestCancelStreamPreservesPartial:
         s = Session(session_id='sess_unclosed', title='Test')
         s.messages.append({'role': 'user', 'content': 'Please reason step by step'})
         s.active_stream_id = 'stream_unclosed'
-        s.save()
         config.SESSIONS['sess_unclosed'] = s
 
         q = queue.Queue()
@@ -259,7 +257,7 @@ class TestCancelStreamPreservesPartial:
 
         cancel_stream('stream_unclosed')
 
-        saved = Session.load('sess_unclosed')
+        saved = config.SESSIONS['sess_unclosed']
         # The entire content was inside an unclosed <think> block — nothing visible
         # remains after stripping, so no _partial message should be saved
         partial_msg = next((m for m in saved.messages if m.get('_partial')), None)

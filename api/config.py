@@ -544,7 +544,7 @@ _PROVIDER_DISPLAY = {
     "deepseek": "DeepSeek",
     "minimax": "MiniMax",
     "google": "Google",
-    "gemini": "Google Gemini",
+    "gemini": "Gemini",
     "meta-llama": "Meta Llama",
     "huggingface": "HuggingFace",
     "alibaba": "Qwen",
@@ -686,11 +686,11 @@ _PROVIDER_MODELS = {
         {"id": "@kimi-coding:kimi-k2.5", "label": "Kimi K2.5"},
     ],
     "minimax": [
-        {"id": "@minimax:MiniMax-M2.7", "label": "MiniMax M2.7"},
-        {"id": "@minimax:MiniMax-M2.7-highspeed", "label": "MiniMax M2.7 Highspeed"},
-        {"id": "@minimax:MiniMax-M2.5", "label": "MiniMax M2.5"},
-        {"id": "@minimax:MiniMax-M2.5-highspeed", "label": "MiniMax M2.5 Highspeed"},
-        {"id": "@minimax:MiniMax-M2.1", "label": "MiniMax M2.1"},
+        {"id": "MiniMax-M2.7", "label": "MiniMax M2.7"},
+        {"id": "MiniMax-M2.7-highspeed", "label": "MiniMax M2.7 Highspeed"},
+        {"id": "MiniMax-M2.5", "label": "MiniMax M2.5"},
+        {"id": "MiniMax-M2.5-highspeed", "label": "MiniMax M2.5 Highspeed"},
+        {"id": "MiniMax-M2.1", "label": "MiniMax M2.1"},
     ],
     # GitHub Copilot — model IDs served via the Copilot API
     "copilot": [
@@ -753,11 +753,11 @@ _PROVIDER_MODELS = {
     ],
     # 'gemini' is the hermes_cli provider ID for Google AI Studio
     "gemini": [
-        {"id": "@gemini:gemini-3.1-pro-preview",            "label": "Gemini 3.1 Pro Preview"},
-        {"id": "@gemini:gemini-3-flash-preview",            "label": "Gemini 3 Flash Preview"},
-        {"id": "@gemini:gemini-3.1-flash-lite-preview",     "label": "Gemini 3.1 Flash Lite Preview"},
-        {"id": "@gemini:gemini-2.5-pro",                    "label": "Gemini 2.5 Pro"},
-        {"id": "@gemini:gemini-2.5-flash",                  "label": "Gemini 2.5 Flash"},
+        {"id": "gemini-3.1-pro-preview",            "label": "Gemini 3.1 Pro Preview"},
+        {"id": "gemini-3-flash-preview",            "label": "Gemini 3 Flash Preview"},
+        {"id": "gemini-3.1-flash-lite-preview",     "label": "Gemini 3.1 Flash Lite Preview"},
+        {"id": "gemini-2.5-pro",                    "label": "Gemini 2.5 Pro"},
+        {"id": "gemini-2.5-flash",                  "label": "Gemini 2.5 Flash"},
     ],
     # Mistral — prefix used in OpenRouter model IDs (mistralai/mistral-large-latest)
     "mistralai": [
@@ -853,17 +853,21 @@ def _apply_provider_prefix(
     provider_id: str,
     active_provider: str | None,
 ) -> list[dict]:
-    """Return *raw_models* with @provider: prefixes applied.
+    """Return *raw_models* with @provider: prefixes applied where needed.
 
-    All model IDs are normalized to ``@provider:model`` format so that
-    downstream paths (session storage, drain, resolve_model_provider) can
-    always extract the provider hint.  Models that already carry ``@`` or
-    ``/`` are passed through unchanged.
+    All non-active-provider model IDs are normalized to ``@provider:model``
+    so downstream paths (session storage, drain, resolve_model_provider)
+    can always extract the provider hint.  When *provider_id* equals
+    *active_provider* the bare ID is preserved — the active provider is
+    the default route, so prefixing is redundant and breaks dropdown UX
+    (the bare name is what `resolve_model_provider` returns).  Models that
+    already carry ``@`` or ``/`` are passed through unchanged.
     """
     result = []
+    is_active = bool(active_provider) and provider_id == active_provider
     for m in raw_models:
         mid = m["id"]
-        if mid.startswith("@") or "/" in mid:
+        if mid.startswith("@") or "/" in mid or is_active:
             result.append({"id": mid, "label": m["label"]})
         else:
             result.append({"id": f"@{provider_id}:{mid}", "label": m["label"]})
@@ -1444,6 +1448,11 @@ def get_available_models() -> dict:
 
         # 3. Detect available providers.
         detected_providers = set()
+        # Providers added via an explicit credential_pool entry. These have
+        # no env var or config.yaml key, so _provider_has_key() returns False
+        # even though the credential is valid. Track them so the post-filter
+        # below does not drop them.
+        _pool_explicit_providers: set[str] = set()
         if active_provider:
             detected_providers.add(active_provider)
 
@@ -1482,6 +1491,7 @@ def get_available_models() -> dict:
                             ]
                             if _explicit:
                                 detected_providers.add(_canonical_pid)
+                                _pool_explicit_providers.add(_canonical_pid)
                         except Exception:
                             logger.debug("credential_pool.load_pool(%s) failed", _pid)
                 except ImportError:
@@ -1498,7 +1508,9 @@ def get_available_models() -> dict:
                             for _entry in _entries
                         )
                         if _has_explicit_cred:
-                            detected_providers.add(_resolve_provider_alias(str(_pid)))
+                            _canonical = _resolve_provider_alias(str(_pid))
+                            detected_providers.add(_canonical)
+                            _pool_explicit_providers.add(_canonical)
         except Exception:
             logger.debug("Failed to inspect credential_pool from auth store")
 
@@ -1611,6 +1623,11 @@ def get_available_models() -> dict:
             _filtered = set()
             for _pid in detected_providers:
                 if _pid == active_provider:
+                    _filtered.add(_pid)
+                elif _pid in _pool_explicit_providers:
+                    # Provider has at least one explicit credential_pool entry.
+                    # _provider_has_key() only checks env vars + config.yaml, so
+                    # it returns False here even though the credential is valid.
                     _filtered.add(_pid)
                 elif _provider_is_oauth(_pid):
                     _filtered.add(_pid)

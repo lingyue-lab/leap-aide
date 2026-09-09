@@ -69,6 +69,15 @@ os.environ['HERMES_WEBUI_STATE_DIR'] = str(TEST_STATE_DIR)
 os.environ['HERMES_WEBUI_DEFAULT_WORKSPACE'] = str(TEST_WORKSPACE)
 os.environ['HERMES_HOME'] = str(TEST_STATE_DIR)
 os.environ['HERMES_BASE_HOME'] = str(TEST_STATE_DIR)
+# Default model for the test process (read by _pytest_port.TEST_DEFAULT_MODEL
+# at import time). Tests that want a different model pass it explicitly.
+# When LEAP_AIDE_TEST_DEEPSEEK_KEY is set we use the @provider:model form so
+# tests that don't pass an explicit one still route to the direct DeepSeek
+# endpoint (see the server-subprocess note in test_server()).
+if os.environ.get('LEAP_AIDE_TEST_DEEPSEEK_KEY'):
+    os.environ.setdefault('HERMES_WEBUI_DEFAULT_MODEL', '@deepseek:deepseek-v4-flash')
+else:
+    os.environ.setdefault('HERMES_WEBUI_DEFAULT_MODEL', 'deepseek/deepseek-v4-flash')
 
 # ── Server script: always relative to repo root ───────────────────────────
 SERVER_SCRIPT = REPO_ROOT / 'server.py'
@@ -86,6 +95,13 @@ def _discover_agent_dir() -> pathlib.Path:
         str(REPO_ROOT.parent / 'hermes-agent'),
         str(HOME / '.hermes' / 'hermes-agent'),
         str(HOME / 'hermes-agent'),
+        # System install path: hermes-agent shipped as a Python package under
+        # /usr/local/lib/hermes-agent (e.g. testbox setup, Docker images,
+        # `pip install hermes-agent` deployments). Mirrors the path the
+        # production server expects per CLAUDE.md.
+        '/usr/local/lib/hermes-agent',
+        '/opt/hermes-agent',
+        '/usr/local/hermes-agent',
     ]
     for c in candidates:
         if not c:
@@ -114,22 +130,41 @@ VENV_PYTHON  = _discover_python(HERMES_AGENT)
 # Work dir: agent dir if found, else repo root
 WORKDIR = str(HERMES_AGENT) if HERMES_AGENT else str(REPO_ROOT)
 
+# ── Test API key availability ────────────────────────────────────────────────
+# Tests that exercise a real chat completion (test_chat_stream_*) need a live
+# provider key. Conftest forwards LEAP_AIDE_TEST_DEEPSEEK_KEY from the test
+# runner's environment into the server subprocess as DEEPSEEK_API_KEY; if the
+# runner didn't supply one, those tests self-skip.
+TEST_DEEPSEEK_KEY_AVAILABLE = bool(os.environ.get('LEAP_AIDE_TEST_DEEPSEEK_KEY'))
+
 # ── Agent availability detection ─────────────────────────────────────────────
 # Tests that require hermes-agent modules (cron, skills, approval, chat/stream)
 # are skipped when the agent isn't installed, instead of failing with 500 errors.
 AGENT_AVAILABLE = HERMES_AGENT is not None
 
-def _check_agent_modules():
-    """Verify hermes-agent Python modules are actually importable."""
-    if not HERMES_AGENT:
+
+def _check_agent_modules() -> bool:
+    """Verify hermes-agent Python modules are actually importable.
+
+    Runs the check in the **venv python** (where hermes-agent is installed)
+    rather than the pytest process's interpreter — otherwise the import check
+    always fails on machines that don't have hermes-agent on PYTHONPATH, even
+    though the test server subprocess uses the venv and can import them fine.
+    That mismatch causes the spurious "hermes-agent not found; N tests will
+    be skipped" warning for cases that would actually pass.
+    """
+    if not HERMES_AGENT or not VENV_PYTHON or not pathlib.Path(VENV_PYTHON).exists():
         return False
     try:
-        import importlib
-        # These are the modules that cause 500 errors when missing
-        for mod in ['cron.jobs', 'tools.skills_tool']:
-            importlib.import_module(mod)
-        return True
-    except (ImportError, ModuleNotFoundError):
+        import subprocess as _sp
+        proc = _sp.run(
+            [VENV_PYTHON, "-c",
+             "import cron.jobs, tools.skills_tool; print('ok')"],
+            capture_output=True, text=True, timeout=10,
+            cwd=str(HERMES_AGENT),
+        )
+        return proc.returncode == 0 and "ok" in proc.stdout
+    except Exception:
         return False
 
 AGENT_MODULES_AVAILABLE = _check_agent_modules()
@@ -149,61 +184,32 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "requires_agent_modules: skip when hermes-agent Python modules are not importable")
 
 def pytest_collection_modifyitems(config, items):
-    """Auto-skip agent-dependent tests when hermes-agent is not available.
+    """Auto-skip tests that genuinely require a live provider key.
 
-    Instead of requiring markers on every test function, we pattern-match
-    test names to known categories that depend on hermes-agent modules.
-    This keeps the test files clean and ensures new cron/skills tests
-    get auto-skipped without manual annotation.
+    The previous implementation skipped an over-broad list whenever
+    ``_check_agent_modules()`` returned False. That check now runs in the venv
+    python and is accurate, so the broad list is gone -- only tests that need
+    a *real* chat completion (network call to DeepSeek V4 Flash) are gated
+    on the test runner providing ``LEAP_AIDE_TEST_DEEPSEEK_KEY``.
+
+    Without that key the agent thread crashes synchronously during AIAgent
+    init and pops the stream before the SSE consumer can attach, so
+    ``/api/chat/stream`` returns 404 -- which the test interprets as
+    "AIAgent not imported" and fails on. Set ``LEAP_AIDE_TEST_DEEPSEEK_KEY``
+    in the shell that invokes pytest to run these.
     """
-    if AGENT_MODULES_AVAILABLE:
-        return  # everything available, run all tests
+    if TEST_DEEPSEEK_KEY_AVAILABLE:
+        return
 
-    # Exact list of tests known to fail without hermes-agent.
-    # These hit server endpoints that import cron.jobs, tools.skills_tool,
-    # or require a running agent backend — returning 500 without the agent.
-    _AGENT_DEPENDENT_TESTS = {
-        # Cron endpoints (need cron.jobs module)
-        'test_crons_list',
-        'test_crons_list_has_required_fields',
-        'test_crons_output_requires_job_id',
-        'test_crons_output_real_job',
-        'test_crons_run_nonexistent',
-        'test_cron_create_success',
-        'test_cron_update_unknown_job_404',
-        'test_cron_delete_unknown_404',
-        'test_crons_output_limit_param',
-        # Skills endpoints (need tools.skills_tool module)
-        'test_skills_list',
-        'test_skills_list_has_required_fields',
-        'test_skills_content_known',
-        'test_skills_content_requires_name',
-        'test_skills_search_returns_subset',
-        'test_skill_save_delete_roundtrip',
-        'test_skill_delete_unknown_404',
-        # Agent backend (need running AIAgent)
+    _NEEDS_LIVE_KEY = {
         'test_chat_stream_opens_successfully',
-        'test_approval_submit_and_respond',
-        # Security redaction (flaky — session state varies across test ordering)
-        'test_api_sessions_list_redacts_titles',
-        # Workspace path (macOS /tmp -> /private/tmp symlink)
-        'test_new_session_inherits_workspace',
-        'test_workspace_add_valid',
-        'test_workspace_rename',
-        'test_last_workspace_updates_on_session_update',
-        'test_new_session_inherits_last_workspace',
     }
-
-    skip_marker = pytest.mark.skip(reason="requires hermes-agent (not installed)")
-    skipped = 0
-
+    skip_marker = pytest.mark.skip(
+        reason="requires LEAP_AIDE_TEST_DEEPSEEK_KEY env var (live DeepSeek key)"
+    )
     for item in items:
-        if item.name in _AGENT_DEPENDENT_TESTS:
+        if item.name in _NEEDS_LIVE_KEY:
             item.add_marker(skip_marker)
-            skipped += 1
-
-    if skipped:
-        print(f"\nWARNING: hermes-agent not found; {skipped} agent-dependent tests will be skipped\n")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -283,19 +289,42 @@ def test_server():
 
     env = os.environ.copy()
     # Strip real provider keys so test subprocess never inherits production credentials.
-    # The test server uses a mock/isolated config — no real API calls are made.
+    # We *intentionally* inject a separate test-only key (LEAP_AIDE_TEST_DEEPSEEK_KEY)
+    # below if it's set in the test runner's environment — see that block.
     for _k in list(env):
         if any(_k.startswith(p) for p in (
             'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY',
             'GOOGLE_API_KEY', 'DEEPSEEK_API_KEY',
         )):
             del env[_k]
+    # Optional test-only DeepSeek key. Set LEAP_AIDE_TEST_DEEPSEEK_KEY in the
+    # shell that invokes pytest (CI secret, dev machine .env, etc.) and the
+    # value is forwarded as DEEPSEEK_API_KEY into the server subprocess.
+    # Tests that actually exercise chat completions (test_chat_stream_*,
+    # test_approval_submit_and_respond) need a real key; SSE-open-only tests
+    # and approval-flow tests still pass without one because they don't
+    # consume tokens.
+    _test_deepseek_key = os.environ.get('LEAP_AIDE_TEST_DEEPSEEK_KEY')
     env.update({
         "HERMES_WEBUI_PORT":              str(TEST_PORT),
         "HERMES_WEBUI_HOST":              "127.0.0.1",
         "HERMES_WEBUI_STATE_DIR":         str(TEST_STATE_DIR),
         "HERMES_WEBUI_DEFAULT_WORKSPACE": str(TEST_WORKSPACE),
-        "HERMES_WEBUI_DEFAULT_MODEL":     "openai/gpt-5.4-mini",
+        # Enable test-only seed endpoints at /api/_test/seed_session and
+        # /api/_test/cleanup_sessions (api/_test_helpers.py). Production
+        # servers never set this flag, so those endpoints 404 outside tests.
+        "HERMES_WEBUI_TEST_SEED":         "1",
+        # DeepSeek V4 Flash (cheap + fast). When a test key is injected below
+        # we switch to the @provider:model form so resolve_model_provider
+        # routes the call to DeepSeek's own endpoint (the slash form
+        # 'deepseek/deepseek-v4-flash' is the OpenRouter catalog id and would
+        # be routed to OpenRouter — which has no key here, so the agent thread
+        # crashes on 401 and the stream pops before SSE can attach, producing
+        # a 404 on /api/chat/stream). See api/config.py resolve_model_provider.
+        "HERMES_WEBUI_DEFAULT_MODEL": (
+            "@deepseek:deepseek-v4-flash" if _test_deepseek_key
+            else "deepseek/deepseek-v4-flash"
+        ),
         "HERMES_HOME":                    str(TEST_STATE_DIR),
         # Belt-and-suspenders: HERMES_BASE_HOME hard-locks _DEFAULT_HERMES_HOME
         # in api/profiles.py to the test state dir regardless of profile switching
@@ -306,17 +335,21 @@ def test_server():
         # ~/.hermes/profiles/webui/ and overwrite real API keys.
         "HERMES_BASE_HOME":               str(TEST_STATE_DIR),
     })
+    if _test_deepseek_key:
+        env["DEEPSEEK_API_KEY"] = _test_deepseek_key
 
     # Pass agent dir if discovered so server.py doesn't have to re-discover
     if HERMES_AGENT:
         env["HERMES_WEBUI_AGENT_DIR"] = str(HERMES_AGENT)
 
+    # DEBUG: capture server logs to file so seed failures are diagnosable.
+    _server_log = open(TEST_STATE_DIR / "server.log", "wb")
     proc = subprocess.Popen(
         [VENV_PYTHON, str(SERVER_SCRIPT)],
         cwd=WORKDIR,
         env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=_server_log,
+        stderr=_server_log,
     )
 
     if not _wait_for_server(TEST_BASE, timeout=20):
@@ -337,10 +370,24 @@ def test_server():
     except subprocess.TimeoutExpired:
         proc.kill()
 
-    try:
-        shutil.rmtree(TEST_STATE_DIR)
-    except Exception:
-        pass
+    # DEBUG: preserve test state dir + server log for diagnosis
+    if os.environ.get("LEAP_AIDE_KEEP_TEST_STATE") == "1":
+        try:
+            keep_path = pathlib.Path("/tmp/leap-aide-test-state-keep")
+            keep_path.mkdir(exist_ok=True)
+            server_log_src = TEST_STATE_DIR / "server.log"
+            if server_log_src.exists():
+                shutil.copy(server_log_src, keep_path / "server.log")
+            state_db_src = TEST_STATE_DIR / "state.db"
+            if state_db_src.exists():
+                shutil.copy(state_db_src, keep_path / "state.db")
+        except Exception:
+            pass
+    else:
+        try:
+            shutil.rmtree(TEST_STATE_DIR)
+        except Exception:
+            pass
 
 
 # ── Test base URL ─────────────────────────────────────────────────────────────
@@ -396,7 +443,11 @@ def cleanup_test_sessions():
             pass
 
     try:
-        _post(TEST_BASE, "/api/sessions/cleanup_zero_message")
+        # /api/sessions/cleanup requires `source` + `older_than_days`; without
+        # `source` it returns 400 and silently no-ops. older_than_days=1 + a
+        # known source wipes any zero-message sessions left behind by previous
+        # tests, keeping the in-memory SESSIONS cache from leaking across tests.
+        _post(TEST_BASE, "/api/sessions/cleanup", {"source": "webui", "older_than_days": 1})
     except Exception:
         pass
 

@@ -57,6 +57,7 @@ _PROVIDER_ENV_VAR: dict[str, str] = {
 _OAUTH_PROVIDERS = frozenset({
     "openai-codex",
     "nous",
+    "copilot",
 })
 
 # SECTION: Helper functions

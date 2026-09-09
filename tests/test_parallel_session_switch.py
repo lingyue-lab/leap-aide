@@ -1,11 +1,18 @@
 """Tests for session-switch performance optimizations.
 
-Four optimizations to reduce session-switch latency:
+Python-side optimizations covered here:
 
-1. loadDir expanded-dir pre-fetch uses Promise.all (workspace.js)
-2. loadSession idle path overlaps loadDir with highlightCode (sessions.js)
-3. git_info_for_workspace runs git subprocesses in parallel (workspace.py)
-4. Message pagination: msg_limit tail-window + msg_before index cursor (routes.py + sessions.js)
+1. git_info_for_workspace runs git subprocesses in parallel (api/workspace.py)
+2. Message pagination: msg_limit tail-window + msg_before index cursor (api/routes.py)
+
+The original file also asserted against legacy frontend JS files
+(static/sessions.js, static/workspace.js, static/ui.js) to verify that
+loadDir's expanded-dir pre-fetch was parallelized and that loadSession's
+idle path overlapped loadDir with highlightCode. Those files were deleted
+when the frontend was migrated to Vite + React; the equivalent logic now
+lives in frontend/src/stores/useSessionStore.ts and has its own vitest
+coverage in frontend/tests/stores/. Those structural assertions have been
+removed from this file as a result.
 """
 
 import pathlib
@@ -14,96 +21,10 @@ import time
 from unittest.mock import patch, MagicMock
 
 REPO = pathlib.Path(__file__).parent.parent
-SESSIONS_JS = (REPO / "static" / "sessions.js").read_text(encoding="utf-8")
-WORKSPACE_JS = (REPO / "static" / "workspace.js").read_text(encoding="utf-8")
 ROUTES_PY = (REPO / "api" / "routes.py").read_text(encoding="utf-8")
 
 
-# ── 1. workspace.js: expanded-dir pre-fetch is parallelized ─────────────────
-
-
-class TestLoadDirParallelPrefetch:
-    """The expanded-dir pre-fetch inside loadDir() must use Promise.all()
-    instead of a serial for-await loop to avoid N sequential roundtrips."""
-
-    def test_loaddir_uses_promise_all_for_expanded_dirs(self):
-        marker = "Pre-fetch contents of restored expanded dirs"
-        idx = WORKSPACE_JS.find(marker)
-        assert idx >= 0, "Expanded-dir pre-fetch comment not found in workspace.js"
-
-        block = WORKSPACE_JS[idx : idx + 800]
-        assert "Promise.all" in block, (
-            "loadDir expanded-dir pre-fetch should use Promise.all() for "
-            "parallel fetching, not a serial for-await loop."
-        )
-
-    def test_loaddir_no_serial_for_await_in_prefetch(self):
-        marker = "Pre-fetch contents of restored expanded dirs"
-        idx = WORKSPACE_JS.find(marker)
-        assert idx >= 0
-        block = WORKSPACE_JS[idx : idx + 800]
-        assert "for(const dirPath of (S._expandedDirs" not in block, (
-            "loadDir still has a serial for-await loop for expanded dirs — "
-            "should use Promise.all with .map() instead."
-        )
-
-    def test_expanded_dirs_fallback_is_set(self):
-        """S._expandedDirs||fallback must produce a Set, not an Array."""
-        marker = "Pre-fetch contents of restored expanded dirs"
-        idx = WORKSPACE_JS.find(marker)
-        assert idx >= 0
-        block = WORKSPACE_JS[idx : idx + 800]
-        assert "S._expandedDirs||new Set()" in block, (
-            "Expanded dirs fallback must be 'new Set()' not '[]' — "
-            "arrays have no .size property."
-        )
-
-
-# ── 2. sessions.js: loadSession idle path overlaps loadDir and highlightCode ─
-
-
-class TestLoadSessionIdleOverlap:
-    """The idle path in loadSession() must start loadDir() before running
-    highlightCode() so the network request is in-flight during the CPU-bound
-    Prism.js pass."""
-
-    def test_idle_path_starts_loaddir_before_highlightcode(self):
-        idle_marker = "S.busy=false"
-        positions = []
-        start = 0
-        while True:
-            idx = SESSIONS_JS.find(idle_marker, start)
-            if idx < 0:
-                break
-            positions.append(idx)
-            start = idx + 1
-
-        found = False
-        for pos in positions:
-            block = SESSIONS_JS[pos : pos + 600]
-            has_highlight = "highlightCode()" in block
-            has_loaddir = "loadDir('.')" in block
-            if has_highlight and has_loaddir:
-                found = True
-                loaddir_idx = block.find("loadDir(")
-                highlight_idx = block.find("highlightCode()")
-                assert loaddir_idx < highlight_idx, (
-                    "In the idle path, loadDir() should be started before "
-                    "highlightCode() so the network request is dispatched first."
-                )
-                assert "await" in block and "_dirP" in block, (
-                    "loadDir() result should be stored and awaited after "
-                    "highlightCode() completes."
-                )
-                break
-
-        assert found, (
-            "Could not find the idle path in loadSession that calls both "
-            "loadDir and highlightCode."
-        )
-
-
-# ── 3. workspace.py: git_info_for_workspace is parallelized ────────────────
+# ── 1. workspace.py: git_info_for_workspace is parallelized ────────────────
 
 
 class TestGitInfoParallel:
@@ -190,7 +111,7 @@ class TestGitInfoParallel:
         )
 
 
-# ── 4. Message pagination (msg_limit + msg_before) ─────────────────────────
+# ── 2. Message pagination (msg_limit + msg_before) ─────────────────────────
 
 
 class TestMessagePaginationBackend:
@@ -375,185 +296,3 @@ class TestMessagePaginationBackend:
         # msg_before = -5 → clamped to 0
         _before_idx = max(0, min(-5, len(all_msgs)))
         assert _before_idx == 0
-
-
-class TestMessagePaginationFrontend:
-    """Frontend sessions.js must use msg_limit for initial load and expose
-    _loadOlderMessages for scroll-to-top lazy loading."""
-
-    def test_ensure_messages_uses_msg_limit(self):
-        """_ensureMessagesLoaded must send msg_limit parameter."""
-        fn_start = SESSIONS_JS.find("async function _ensureMessagesLoaded")
-        fn_end = SESSIONS_JS.find("\n}", fn_start) + 2
-        fn_body = SESSIONS_JS[fn_start:fn_end]
-
-        assert "msg_limit=" in fn_body, (
-            "_ensureMessagesLoaded should include msg_limit parameter in the API call"
-        )
-        assert "_INITIAL_MSG_LIMIT" in fn_body, (
-            "_ensureMessagesLoaded should use _INITIAL_MSG_LIMIT constant"
-        )
-
-    def test_truncation_tracking(self):
-        """_messagesTruncated must be set from the server response."""
-        assert "_messagesTruncated" in SESSIONS_JS
-        assert "_messages_truncated" in SESSIONS_JS
-
-    def test_oldest_idx_tracking(self):
-        """_oldestIdx must be tracked for index-based cursor paging."""
-        assert "_oldestIdx" in SESSIONS_JS, (
-            "sessions.js must track _oldestIdx for index-based cursor paging"
-        )
-        assert "_messages_offset" in SESSIONS_JS, (
-            "sessions.js must read _messages_offset from server response"
-        )
-
-    def test_load_older_messages_function_exists(self):
-        """_loadOlderMessages must be defined for scroll-to-top loading."""
-        assert "async function _loadOlderMessages" in SESSIONS_JS
-
-    def test_load_older_uses_index_cursor(self):
-        """_loadOlderMessages must pass msg_before as integer index, not timestamp."""
-        fn_start = SESSIONS_JS.find("async function _loadOlderMessages")
-        fn_end = SESSIONS_JS.find("\n}", fn_start) + 2
-        fn_body = SESSIONS_JS[fn_start:fn_end]
-
-        assert "msg_before=${_oldestIdx}" in fn_body, (
-            "_loadOlderMessages should use _oldestIdx (integer) as msg_before cursor"
-        )
-
-    def test_ensure_all_messages_function_exists(self):
-        """_ensureAllMessagesLoaded must exist for operations needing full history."""
-        assert "async function _ensureAllMessagesLoaded" in SESSIONS_JS
-
-    def test_scroll_to_top_triggers_loading(self):
-        """Scroll event handler must trigger _loadOlderMessages near top."""
-        UI_JS = (REPO / "static" / "ui.js").read_text(encoding="utf-8")
-
-        assert "el.scrollTop<80" in UI_JS
-        assert "_loadOlderMessages" in UI_JS
-
-    def test_load_older_indicator_in_render(self):
-        """renderMessages must show a 'load older' indicator when truncated."""
-        UI_JS = (REPO / "static" / "ui.js").read_text(encoding="utf-8")
-
-        assert "loadOlderIndicator" in UI_JS
-
-    def test_oldest_idx_reset_on_session_switch(self):
-        """_oldestIdx must be reset to 0 on session switch."""
-        # Find the loadSession reset block
-        idx = SESSIONS_JS.find("_messagesTruncated = false;\n    _oldestIdx = 0;")
-        assert idx >= 0, (
-            "_oldestIdx must be reset to 0 alongside _messagesTruncated on session switch"
-        )
-
-
-# ── 5. Session-switch cancellation safety ───────────────────────────────────
-
-
-class TestSessionSwitchCancellation:
-    """When the user switches sessions while _loadOlderMessages is in-flight,
-    the stale response must NOT land on the new session's message array.
-
-    Guarards in place:
-    - _loadOlderMessages captures `sid` at entry, checks _loadingSessionId
-      after await (line ~373)
-    - loadSession resets _loadingOlder, _messagesTruncated, _oldestIdx
-      on session switch (line ~120-122)
-    """
-
-    def test_load_older_checks_loading_session_id(self):
-        """_loadOlderMessages must check _loadingSessionId after await."""
-        fn_start = SESSIONS_JS.find("async function _loadOlderMessages")
-        fn_end = SESSIONS_JS.find("\n}", fn_start) + 2
-        fn_body = SESSIONS_JS[fn_start:fn_end]
-
-        assert "_loadingSessionId" in fn_body, (
-            "_loadOlderMessages must check _loadingSessionId after the API "
-            "call returns to detect session-switch race conditions."
-        )
-        # The guard should be: if _loadingSessionId !== null && _loadingSessionId !== sid
-        assert "_loadingSessionId !== null" in fn_body or "_loadingSessionId!==null" in fn_body, (
-            "_loadOlderMessages should bail out if a new session load started "
-            "while the older-messages request was in flight."
-        )
-
-    def test_loading_older_reset_on_session_switch(self):
-        """loadSession must reset _loadingOlder when switching sessions."""
-        # Find the reset block in loadSession
-        marker = "_messagesTruncated = false;\n    _oldestIdx = 0;\n    _loadingOlder = false;"
-        idx = SESSIONS_JS.find(marker)
-        assert idx >= 0, (
-            "loadSession must reset _loadingOlder=false on session switch "
-            "to prevent a stale _loadOlderMessages lock from blocking the "
-            "new session's scroll-to-top loading."
-        )
-
-    def test_stale_cannot_mutate_messages(self):
-        """Verify the guard prevents S.messages mutation.
-
-        The guard `if (_loadingSessionId !== null && _loadingSessionId !== sid) return`
-        runs BEFORE `S.messages = [...olderMsgs, ...S.messages]`.
-        If the session changed, we return early — no mutation.
-        """
-        fn_start = SESSIONS_JS.find("async function _loadOlderMessages")
-        fn_end = SESSIONS_JS.find("\n}", fn_start) + 2
-        fn_body = SESSIONS_JS[fn_start:fn_end]
-
-        # Guard must appear before S.messages mutation
-        guard_idx = fn_body.find("_loadingSessionId")
-        mutation_idx = fn_body.find("S.messages = [...olderMsgs")
-        assert guard_idx >= 0 and mutation_idx >= 0 and guard_idx < mutation_idx, (
-            "The _loadingSessionId guard must appear BEFORE the S.messages "
-            "mutation to prevent stale data from landing on the wrong session."
-        )
-
-    def test_messages_truncated_reset_on_switch(self):
-        """loadSession must reset _messagesTruncated on session switch."""
-        marker = "_messagesTruncated = false;\n    _oldestIdx = 0;\n    _loadingOlder = false;"
-        idx = SESSIONS_JS.find(marker)
-        assert idx >= 0, (
-            "_messagesTruncated must be reset to false on session switch "
-            "to prevent the scroll-to-top handler from trying to load "
-            "older messages from the previous session."
-        )
-
-    def test_oldest_idx_reset_prevents_wrong_cursor(self):
-        """_oldestIdx=0 after switch prevents passing stale cursor to API."""
-        # If _oldestIdx carried over from session A (e.g. _oldestIdx=70),
-        # and session B only has 10 messages, msg_before=70 would return empty.
-        # Resetting to 0 ensures session B starts fresh.
-        fn_start = SESSIONS_JS.find("async function _loadOlderMessages")
-        fn_end = SESSIONS_JS.find("\n}", fn_start) + 2
-        fn_body = SESSIONS_JS[fn_start:fn_end]
-
-        # _loadOlderMessages checks _oldestIdx <= 0 early and exits
-        assert "_oldestIdx <= 0" in fn_body, (
-            "_loadOlderMessages should bail out if _oldestIdx <= 0, "
-            "which is the reset value after session switch."
-        )
-
-    def test_load_older_compares_against_active_session_id(self):
-        """_loadOlderMessages must verify S.session.session_id === sid after await.
-
-        _loadingSessionId alone is insufficient: it is null between session
-        loads, so a stale older-messages response that lands AFTER a
-        completed session switch would otherwise pass the guard and prepend
-        onto the new session's S.messages. The S.session.session_id check
-        closes that window.
-        """
-        fn_start = SESSIONS_JS.find("async function _loadOlderMessages")
-        fn_end = SESSIONS_JS.find("\n}", fn_start) + 2
-        fn_body = SESSIONS_JS[fn_start:fn_end]
-
-        assert "S.session.session_id !== sid" in fn_body, (
-            "_loadOlderMessages must compare S.session.session_id against "
-            "the captured sid after await — _loadingSessionId is null "
-            "between sessions and would let a stale response through."
-        )
-        # The S.session check must appear BEFORE the S.messages mutation.
-        active_check_idx = fn_body.find("S.session.session_id !== sid")
-        mutation_idx = fn_body.find("S.messages = [...olderMsgs")
-        assert active_check_idx >= 0 and mutation_idx >= 0 and active_check_idx < mutation_idx, (
-            "Active-session guard must run before S.messages mutation."
-        )

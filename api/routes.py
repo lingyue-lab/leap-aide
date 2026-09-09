@@ -313,6 +313,8 @@ def _resolve_compatible_session_model(model_id: str | None) -> tuple[str, bool]:
 
         if _model_matches_active_provider_family(bare_model, active_provider):
             return bare_model, True
+        if default_model:
+            return default_model, True
         # If the @provider hint is not a known/normalized provider name it is
         # likely a user-configured custom gateway (e.g. @kat_v1_anthropic_gateway:…).
         # Preserve the original model ID so the displayed value matches the
@@ -320,8 +322,6 @@ def _resolve_compatible_session_model(model_id: str | None) -> tuple[str, bool]:
         # will surface at inference time.
         if not provider_normalized:
             return model, False
-        if default_model:
-            return default_model, True
         return model, False
 
     slash = model.find("/")
@@ -1190,7 +1190,10 @@ def handle_get(handler, parsed) -> bool:
             return bad(handler, "stream_id required")
         cancelled = cancel_stream(stream_id)
         if not cancelled:
-            return bad(handler, f"Stream not found or already ended: {stream_id}", status=400)
+            # Idempotent no-op: cancelling an unknown or already-ended stream is
+            # not an error from the caller's perspective. Returning cancelled=false
+            # lets the frontend treat this as a settled state without surfacing a 400.
+            return j(handler, {"ok": True, "cancelled": False, "stream_id": stream_id, "reason": "no_such_stream"})
         return j(handler, {"ok": True, "cancelled": cancelled, "stream_id": stream_id})
 
     if parsed.path == "/api/chat/queue":
@@ -2556,6 +2559,55 @@ def handle_post(handler, parsed) -> bool:
     # ── Session cleanup (POST) ──
     if parsed.path in ("/api/sessions/cleanup", "/api/sessions/gateway/cleanup"):
         return _handle_session_cleanup(handler, body)
+
+    # ── Test-only seed helpers (POST) ──
+    # Gated by HERMES_WEBUI_TEST_SEED=1 in the server's environment; the helper
+    # module also raises if the flag is missing. Production servers never set
+    # the flag, so these endpoints 404 in prod. See api/_test_helpers.py.
+    if parsed.path == "/api/_test/seed_session":
+        if os.environ.get("HERMES_WEBUI_TEST_SEED") != "1":
+            return j(handler, {"error": "test seed disabled"}, status=404)
+        try:
+            from api._test_helpers import seed_test_session
+            result = seed_test_session(
+                session_id=body["session_id"],
+                source=body["source"],
+                title=body.get("title"),
+                model=body.get("model"),
+                started_at=body.get("started_at"),
+                parent_session_id=body.get("parent_session_id"),
+                ended_at=body.get("ended_at"),
+                end_reason=body.get("end_reason"),
+                messages=body.get("messages"),
+            )
+            return j(handler, result)
+        except KeyError as e:
+            return j(handler, {"error": f"missing field: {e}"}, status=400)
+        except Exception as e:
+            logger.exception("test seed failed")
+            return j(handler, {"error": str(e)}, status=500)
+
+    if parsed.path == "/api/_test/cleanup_sessions":
+        if os.environ.get("HERMES_WEBUI_TEST_SEED") != "1":
+            return j(handler, {"error": "test seed disabled"}, status=404)
+        try:
+            from api._test_helpers import cleanup_test_sessions
+            result = cleanup_test_sessions(body.get("session_ids") or [])
+            return j(handler, result)
+        except Exception as e:
+            logger.exception("test seed cleanup failed")
+            return j(handler, {"error": str(e)}, status=500)
+
+    if parsed.path == "/api/_test/nuke_state_db":
+        if os.environ.get("HERMES_WEBUI_TEST_SEED") != "1":
+            return j(handler, {"error": "test seed disabled"}, status=404)
+        try:
+            from api._test_helpers import nuke_test_state_db
+            nuke_test_state_db()
+            return j(handler, {"ok": True})
+        except Exception as e:
+            logger.exception("test nuke state.db failed")
+            return j(handler, {"error": str(e)}, status=500)
 
     return False  # 404
 

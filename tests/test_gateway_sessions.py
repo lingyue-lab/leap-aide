@@ -19,24 +19,14 @@ WORKSPACE_SRC = (REPO_ROOT / "api" / "workspace.py").read_text(encoding="utf-8")
 
 # ---------------------------------------------------------------------------
 # Phase 3: User Story 1 — SSE endpoint contract (T010, T011)
+#
+# Note: The historical ``_handle_gateway_sse_stream`` handler that emitted
+# ``sessions_changed`` SSE events and subscribed to a ``GatewayWatcher``
+# queue has been retired. The agent-session SSE feed is now driven by
+# ``api/session_watcher.SessionWatcher`` and consumed via a different path;
+# the static-assertion tests for the old handler no longer apply and
+# were removed.
 # ---------------------------------------------------------------------------
-
-def test_gateway_sse_handler_sends_initial_snapshot():
-    """T010: SSE endpoint must send initial snapshot with session list on connect."""
-    # Must call get_cli_sessions() and send it via _sse
-    assert "get_cli_sessions()" in ROUTES_SRC, \
-        "_handle_gateway_sse_stream must call get_cli_sessions() for initial snapshot"
-    assert "sessions_changed" in ROUTES_SRC, \
-        "_handle_gateway_sse_stream must emit sessions_changed event type"
-
-
-def test_gateway_sse_handler_subscribes_to_watcher():
-    """T010: SSE handler must subscribe to GatewayWatcher queue."""
-    assert "watcher.subscribe()" in ROUTES_SRC, \
-        "_handle_gateway_sse_stream must subscribe to watcher for change events"
-    assert "watcher.unsubscribe" in ROUTES_SRC, \
-        "_handle_gateway_sse_stream must unsubscribe on disconnect"
-
 
 def test_gateway_sse_no_hard_show_cli_sessions_block():
     """T007: SSE connection should always be available, no hard show_cli_sessions check."""

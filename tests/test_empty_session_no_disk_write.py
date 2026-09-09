@@ -4,29 +4,30 @@ Regression tests for the "no disk write for empty sessions" follow-up to #1171.
 Lifecycle contract:
   1. ``new_session()`` adds the session to the in-memory ``SESSIONS`` dict but
      does NOT write a JSON file to disk.
-  2. The first ``s.save()`` happens when the session has real state to persist
-     (a user message via ``/api/chat/start``, or a populated title/messages
-     for btw / background agents).
-  3. ``get_session(sid)`` is unchanged: it checks ``SESSIONS`` first, so an
+  2. ``get_session(sid)`` is unchanged: it checks ``SESSIONS`` first, so an
      unsaved session is still findable by ID for the brief window between
      create and first message.
-  4. ``all_sessions()`` already filters Untitled + 0-message sessions (#1171),
+  3. ``all_sessions()`` already filters Untitled + 0-message sessions (#1171),
      so an unsaved in-memory session does not surface in the sidebar even
      though it lives in the SESSIONS dict.
 
 Crash-safety: if the process exits between create and first message, the
 session is lost. There were no messages to lose, so this is an explicit
 trade-off documented in ``new_session``'s docstring.
+
+Note: The historical tests ``test_save_writes_to_disk_when_first_invoked`` and
+``test_btw_background_pattern_still_persists`` exercised ``Session.save()``,
+which was retired when session storage moved to state.db. Persistence is now
+via ``Session.sync_webui_metadata()`` (webui-only columns) and the SDK's
+``append_message`` (message rows). The session JSON file is no longer the
+source of truth, so those tests were removed.
 """
-import json
-import time
 
 import pytest
 
 import api.models as models
 from api.models import (
     SESSIONS,
-    Session,
     all_sessions,
     get_session,
     new_session,
@@ -86,36 +87,7 @@ def test_unsaved_empty_session_hidden_from_sidebar(_isolate):
     )
 
 
-# ── 3. save() materialises the file when state is real ─────────────────────
-
-
-def test_save_writes_to_disk_when_first_invoked(_isolate):
-    """The first save() (typically from _handle_chat_start after appending a
-    user message) creates the JSON file."""
-    s = new_session()
-    assert not s.path.exists()
-    s.messages.append({"role": "user", "content": "hello"})
-    s.save()
-    assert s.path.exists(), "save() must create the file once it's called"
-    content = json.loads(s.path.read_text(encoding="utf-8"))
-    assert content["session_id"] == s.session_id
-    assert content["messages"] and content["messages"][0]["role"] == "user"
-
-
-def test_btw_background_pattern_still_persists(_isolate):
-    """btw / background agents at api/routes.py call save() right after
-    populating title/messages — that path must continue to write to disk
-    even though new_session itself no longer saves."""
-    s = new_session()
-    s.title = "btw: question"
-    s.messages = [{"role": "user", "content": "hi"}]
-    s.save()  # mirrors api/routes.py:_handle_btw / _handle_background
-    assert s.path.exists()
-    on_disk = json.loads(s.path.read_text(encoding="utf-8"))
-    assert on_disk["title"] == "btw: question"
-
-
-# ── 4. crash-safety semantics: no orphan files accumulate on the new path ──
+# ── 3. crash-safety semantics: no orphan files accumulate on the new path ─────
 
 
 def test_repeated_new_session_creates_no_disk_files(_isolate, tmp_path):

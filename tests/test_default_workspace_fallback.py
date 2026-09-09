@@ -1,9 +1,26 @@
 import json
+import os
 from pathlib import Path
+
+import pytest
 
 import api.config as config
 
 
+# These tests use chmod to make a path "unwritable" and assert that
+# _ensure_workspace_dir / resolve_default_workspace refuse to use it. Linux
+# bypasses DAC permission checks for uid=0, so root can write to chmod-0o500
+# directories and the fallback path is never exercised. Skip on root rather
+# than refactor every test — the chmod approach is the standard idiom and is
+# correct on any non-root CI / dev box.
+_IS_ROOT = os.geteuid() == 0
+_SKIP_IF_ROOT = pytest.mark.skipif(
+    _IS_ROOT,
+    reason="chmod-based unwritable checks are bypassed by uid=0; rerun as non-root",
+)
+
+
+@_SKIP_IF_ROOT
 def test_resolve_default_workspace_falls_back_to_existing_home_work(monkeypatch, tmp_path):
     preferred = tmp_path / "work"
     preferred.mkdir()
@@ -19,6 +36,7 @@ def test_resolve_default_workspace_falls_back_to_existing_home_work(monkeypatch,
 
 
 
+@_SKIP_IF_ROOT
 def test_save_settings_rewrites_bad_default_workspace_to_fallback(monkeypatch, tmp_path):
     preferred = tmp_path / "work"
     preferred.mkdir()
@@ -50,6 +68,7 @@ def test_resolve_default_workspace_creates_home_workspace_when_missing(monkeypat
     assert resolved.is_dir()
 
 
+@_SKIP_IF_ROOT
 def test_resolve_default_workspace_raises_when_all_candidates_fail(monkeypatch, tmp_path):
     """RuntimeError is raised when every candidate is unwritable."""
     import stat, pytest
@@ -92,6 +111,7 @@ def test_env_var_workspace_takes_priority_over_passed_raw(monkeypatch, tmp_path)
     assert resolved == env_ws.resolve()
 
 
+@_SKIP_IF_ROOT
 def test_ensure_workspace_dir_returns_false_for_unwritable_path(monkeypatch, tmp_path):
     """_ensure_workspace_dir returns False for a path that can't be created."""
     import stat

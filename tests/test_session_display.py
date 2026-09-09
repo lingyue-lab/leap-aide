@@ -19,7 +19,7 @@ from api.session_display import (
     _find_free_display_and_ports,
     _DISPLAYS,
     SESSIONS_DISPLAY_DIR,
-    purge_stale_configs,
+    purge_orphaned_configs,
 )
 
 
@@ -73,7 +73,7 @@ def test_start_stop():
     sd.stop(remove_json=True)
     time.sleep(1)
 
-    assert sd.xvfb_proc.poll() is not None  # process terminated
+    assert sd.xvfb_proc is None  # process handle cleared after stop
     assert not sd.is_running()
     assert not json_path.exists()  # JSON cleaned up
 
@@ -141,14 +141,14 @@ def test_wrapper_fallback_no_session_key():
 
 # ── Purge Stale Configs ─────────────────────────────────────────────────────
 
-def test_purge_stale_configs():
-    """purge_stale_configs() removes old JSON files."""
+def test_purge_orphaned_configs():
+    """purge_orphaned_configs() removes old JSON files."""
     # Create a dummy JSON file
     dummy_path = SESSIONS_DISPLAY_DIR / "stale-test.json"
     dummy_path.write_text(json.dumps({"display": 99, "vnc_port": 5900}))
 
     assert dummy_path.exists()
-    count = purge_stale_configs()
+    count = purge_orphaned_configs()
     assert count >= 1
     assert not dummy_path.exists()
 

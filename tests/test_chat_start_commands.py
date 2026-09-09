@@ -1,136 +1,238 @@
-"""Contract tests for extended POST /api/chat/start with command dispatch (T006b)."""
-from pathlib import Path
-import json
-import urllib.request
-import urllib.error
+"""Contract tests for slash command dispatch + chat/start.
 
-ROOT = Path(__file__).parent.parent
+Sprint 49 split slash command handling into two endpoints:
+
+- ``POST /api/chat/dispatch`` — inspects the message and returns either:
+    * ``{"action": "direct", "content": ..., "session_update": ...}``
+      for commands like ``/help``, ``/model``, ``/clear``, ``/new`` and unknown
+      skill names (the response itself carries the user-facing message).
+    * ``{"action": "proceed", "message": ...}`` (with optional ``mode`` /
+      ``original_msg``) when the message should fall through to the agent.
+- ``POST /api/chat/start`` — always starts a stream (no longer does inline
+  slash command dispatch). Returns ``{stream_id, session_id}`` and (for queued
+  / steered turns) ``queued`` / ``steered`` flags.
+
+These tests probe the actual server (which runs in the hermes-agent venv
+where ``hermes_cli.commands`` is importable), so they exercise the real
+contract rather than skipping when the test process can't import the SDK.
+"""
+import json
+import urllib.error
+import urllib.request
+
+from tests._pytest_port import BASE, TEST_DEFAULT_MODEL
 
 
 def _post(url: str, payload: dict) -> dict:
-    """POST JSON and return parsed response."""
+    """POST JSON and return parsed response. Raises HTTPError on non-2xx."""
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
     resp = urllib.request.urlopen(req)
     return json.loads(resp.read())
 
 
-def _create_session(test_server) -> str:
-    """Create a fresh session and return its session_id."""
-    url = f"http://127.0.0.1:{test_server}/api/sessions"
-    req = urllib.request.Request(url, method="POST")
-    resp = json.loads(urllib.request.urlopen(req).read())
-    return resp["session_id"]
+def _post_soft(url: str, payload: dict) -> dict:
+    """POST JSON and return parsed response; never raises — returns {} on error."""
+    try:
+        return _post(url, payload)
+    except urllib.error.HTTPError:
+        return {}
 
 
-class TestChatStartDirectResponse:
-    """Verify direct-response commands return {direct: true, ...} immediately."""
+def _create_session() -> str:
+    """Create a fresh session via /api/session/new and return its id."""
+    result = _post(f"{BASE}/api/session/new", {})
+    return result["session"]["session_id"]
 
-    def test_help_returns_direct_response(self, test_server):
-        """POST /api/chat/start with /help returns direct response, no stream_id."""
-        sid = _create_session(test_server)
+
+class TestChatDispatchDirectResponse:
+    """Verify direct-response commands return {action: 'direct', ...} from
+    /api/chat/dispatch."""
+
+    def test_help_returns_direct_response(self, cleanup_test_sessions):
+        """POST /api/chat/dispatch with /help returns direct action, no proceed."""
+        sid = _create_session()
+        cleanup_test_sessions.append(sid)
         payload = {
             "session_id": sid,
             "message": "/help",
-            "model": "anthropic/claude-sonnet-4-6",
+            "model": TEST_DEFAULT_MODEL,
         }
-        result = _post(f"http://127.0.0.1:{test_server}/api/chat/start", payload)
-        assert result.get("direct") is True, f"Expected direct=True, got keys: {list(result.keys())}"
+        result = _post(f"{BASE}/api/chat/dispatch", payload)
+        assert result.get("action") == "direct", (
+            f"Expected action=direct, got: {list(result.keys())}"
+        )
         assert "content" in result, "direct response must have content"
-        assert "stream_id" not in result, "direct response must NOT have stream_id"
+        assert "session_id" in result
+        assert result.get("message") is None, "direct response must NOT echo message"
         assert len(result["content"]) > 0
 
-    def test_help_content_includes_commands(self, test_server):
+    def test_help_content_includes_commands(self, cleanup_test_sessions):
         """Help output mentions built-in commands."""
-        sid = _create_session(test_server)
-        payload = {"session_id": sid, "message": "/help", "model": "anthropic/claude-sonnet-4-6"}
-        result = _post(f"http://127.0.0.1:{test_server}/api/chat/start", payload)
-        content = result["content"]
+        sid = _create_session()
+        cleanup_test_sessions.append(sid)
+        payload = {"session_id": sid, "message": "/help", "model": TEST_DEFAULT_MODEL}
+        result = _post(f"{BASE}/api/chat/dispatch", payload)
+        assert result.get("action") == "direct"
+        content = result.get("content", "")
         assert "/help" in content or "help" in content.lower()
 
-    def test_model_returns_session_update(self, test_server):
-        """/model should return session_update.model."""
-        sid = _create_session(test_server)
-        payload = {"session_id": sid, "message": "/model anthropic/claude-sonnet-4-6", "model": "anthropic/claude-sonnet-4-6"}
-        result = _post(f"http://127.0.0.1:{test_server}/api/chat/start", payload)
-        assert result.get("direct") is True
+    def test_model_returns_session_update(self, cleanup_test_sessions):
+        """/model should set session_update.model."""
+        sid = _create_session()
+        cleanup_test_sessions.append(sid)
+        payload = {
+            "session_id": sid,
+            "message": f"/model {TEST_DEFAULT_MODEL}",
+            "model": TEST_DEFAULT_MODEL,
+        }
+        result = _post(f"{BASE}/api/chat/dispatch", payload)
+        assert result.get("action") == "direct", f"Expected action=direct, got: {result}"
         update = result.get("session_update", {})
-        assert "model" in update, f"session_update should contain model, got {update}"
+        assert "model" in update, f"session_update should contain model, got: {update}"
 
-    def test_clear_returns_session_update_cleared(self, test_server):
-        """/clear should return session_update.cleared=True."""
-        sid = _create_session(test_server)
-        # Send a regular message first to populate history
-        try:
-            _post(f"http://127.0.0.1:{test_server}/api/chat/start", {
-                "session_id": sid, "message": "Hello", "model": "anthropic/claude-sonnet-4-6"
-            })
-        except Exception:
-            pass  # May fail in test env without real agent; ignore
-        payload = {"session_id": sid, "message": "/clear", "model": "anthropic/claude-sonnet-4-6"}
-        result = _post(f"http://127.0.0.1:{test_server}/api/chat/start", payload)
-        assert result.get("direct") is True
+    def test_clear_returns_session_update_cleared(self, cleanup_test_sessions):
+        """/clear should set session_update.cleared=True."""
+        sid = _create_session()
+        cleanup_test_sessions.append(sid)
+        # Populate history with a regular message first
+        _post_soft(f"{BASE}/api/chat/dispatch", {
+            "session_id": sid, "message": "Hello", "model": TEST_DEFAULT_MODEL,
+        })
+        payload = {"session_id": sid, "message": "/clear", "model": TEST_DEFAULT_MODEL}
+        result = _post(f"{BASE}/api/chat/dispatch", payload)
+        assert result.get("action") == "direct"
         update = result.get("session_update", {})
         assert update.get("cleared") is True
 
-    def test_new_returns_new_session_id(self, test_server):
-        """/new should return session_update.new_session_id."""
-        sid = _create_session(test_server)
-        payload = {"session_id": sid, "message": "/new Test Session", "model": "anthropic/claude-sonnet-4-6"}
-        result = _post(f"http://127.0.0.1:{test_server}/api/chat/start", payload)
-        assert result.get("direct") is True
+    def test_new_returns_new_session_id(self, cleanup_test_sessions):
+        """/new should set session_update.new_session_id."""
+        sid = _create_session()
+        cleanup_test_sessions.append(sid)
+        payload = {
+            "session_id": sid,
+            "message": "/new Test Session",
+            "model": TEST_DEFAULT_MODEL,
+        }
+        result = _post(f"{BASE}/api/chat/dispatch", payload)
+        assert result.get("action") == "direct"
         update = result.get("session_update", {})
-        assert "new_session_id" in update
+        assert "new_session_id" in update, (
+            f"session_update should contain new_session_id, got: {update}"
+        )
 
 
-class TestChatStartSkillCommand:
-    """Verify skill commands transform message and route to agent."""
+class TestChatDispatchSkillCommand:
+    """Verify skill dispatch routes through /api/chat/dispatch."""
 
-    def test_nonexistent_skill_returns_error(self, test_server):
-        """Non-existent skill returns direct error response."""
-        sid = _create_session(test_server)
-        payload = {"session_id": sid, "message": "/nonexistent-skill-xyz", "model": "anthropic/claude-sonnet-4-6"}
-        result = _post(f"http://127.0.0.1:{test_server}/api/chat/start", payload)
-        assert result.get("direct") is True
-        assert "Skill not found" in result.get("content", "") or "Failed to load skill" in result.get("content", "")
+    def test_unknown_skill_falls_through_to_agent(self, cleanup_test_sessions):
+        """Unknown skill names are not built-in commands; they fall through to
+        the agent so the user can still chat about them. The agent (not the
+        dispatcher) is responsible for surfacing any "skill not found" guidance.
+        """
+        sid = _create_session()
+        cleanup_test_sessions.append(sid)
+        payload = {
+            "session_id": sid,
+            "message": "/nonexistent-skill-xyz",
+            "model": TEST_DEFAULT_MODEL,
+        }
+        result = _post(f"{BASE}/api/chat/dispatch", payload)
+        assert result.get("action") == "proceed", (
+            f"unknown skill must fall through to proceed, got: {result}"
+        )
+        assert result.get("message") == "/nonexistent-skill-xyz"
 
-    def test_valid_skill_returns_stream_id(self, test_server):
-        """A known skill command should return stream_id (agent path)."""
-        sid = _create_session(test_server)
-        # Use a skill that likely exists in the test environment
-        payload = {"session_id": sid, "message": "/simplify-code test.py", "model": "anthropic/claude-sonnet-4-6"}
+    def test_valid_skill_returns_proceed_or_direct(self, cleanup_test_sessions):
+        """A known skill should be either dispatched (proceed) or error (direct)."""
+        sid = _create_session()
+        cleanup_test_sessions.append(sid)
+        payload = {
+            "session_id": sid,
+            "message": "/simplify-code test.py",
+            "model": TEST_DEFAULT_MODEL,
+        }
+        result = _post_soft(f"{BASE}/api/chat/dispatch", payload)
+        # Either action=direct (skill error/missing) or action=proceed (skill OK)
+        assert result.get("action") in ("direct", "proceed"), (
+            f"Expected action=direct|proceed, got: {list(result.keys())}"
+        )
+
+
+class TestChatDispatchPassthrough:
+    """Verify non-slash messages and unknown slash commands fall through."""
+
+    def test_non_slash_message_returns_proceed(self, cleanup_test_sessions):
+        """Regular messages should return action=proceed so chat/start takes over."""
+        sid = _create_session()
+        cleanup_test_sessions.append(sid)
+        payload = {
+            "session_id": sid,
+            "message": "Hello, how are you?",
+            "model": TEST_DEFAULT_MODEL,
+        }
+        result = _post(f"{BASE}/api/chat/dispatch", payload)
+        assert result.get("action") == "proceed", (
+            f"regular message should proceed, got: {result}"
+        )
+        assert result.get("message") == "Hello, how are you?"
+
+    def test_unknown_slash_returns_proceed(self, cleanup_test_sessions):
+        """Unknown /command should return action=proceed (passthrough to agent)."""
+        sid = _create_session()
+        cleanup_test_sessions.append(sid)
+        payload = {
+            "session_id": sid,
+            "message": "/arbitrary-text-12345",
+            "model": TEST_DEFAULT_MODEL,
+        }
+        result = _post(f"{BASE}/api/chat/dispatch", payload)
+        assert result.get("action") == "proceed", (
+            f"unknown slash should proceed, got: {result}"
+        )
+
+
+class TestChatStartStreamContract:
+    """Verify /api/chat/start always returns a stream_id and never inlines
+    slash command handling (that is /api/chat/dispatch's job)."""
+
+    def test_start_returns_stream_id_for_regular_message(self, cleanup_test_sessions):
+        """Regular message: chat/start must return stream_id."""
+        sid = _create_session()
+        cleanup_test_sessions.append(sid)
+        payload = {
+            "session_id": sid,
+            "message": "ping",
+            "model": TEST_DEFAULT_MODEL,
+        }
+        result = _post(f"{BASE}/api/chat/start", payload)
+        assert "stream_id" in result, (
+            f"chat/start must return stream_id, got: {list(result.keys())}"
+        )
+        assert result["session_id"] == sid
+        assert len(result["stream_id"]) > 8
+
+    def test_start_with_slash_message_still_returns_stream_id(self, cleanup_test_sessions):
+        """After dispatch returns action=proceed, chat/start must yield a stream.
+
+        Regression: the historical chat/start handler inlined slash command
+        handling and returned ``{direct: true}`` for /help etc. The current
+        architecture splits dispatch from streaming, so chat/start always
+        returns ``{stream_id}`` regardless of message content. Tests that need
+        to verify slash command behaviour should call /api/chat/dispatch first.
+        """
+        sid = _create_session()
+        cleanup_test_sessions.append(sid)
+        payload = {
+            "session_id": sid,
+            "message": "/help",  # would historically return {direct: true}
+            "model": TEST_DEFAULT_MODEL,
+        }
         try:
-            result = _post(f"http://127.0.0.1:{test_server}/api/chat/start", payload)
-            # Either direct error (skill not found) or stream_id (skill dispatched)
-            assert result.get("direct") is True or "stream_id" in result, (
-                f"Expected direct error or stream_id, got: {list(result.keys())}"
+            result = _post(f"{BASE}/api/chat/start", payload)
+            assert "stream_id" in result, (
+                f"chat/start must return stream_id, got: {list(result.keys())}"
             )
         except urllib.error.HTTPError:
-            # In test env without real agent, this may fail - acceptable
+            # Acceptable in test env without real agent.
             pass
-
-
-class TestChatStartPassthrough:
-    """Verify unknown / commands pass through to agent."""
-
-    def test_unknown_slash_returns_stream_id(self, test_server):
-        """Unknown /command should return stream_id (passthrough to agent)."""
-        sid = _create_session(test_server)
-        payload = {"session_id": sid, "message": "/arbitrary-text-12345", "model": "anthropic/claude-sonnet-4-6"}
-        try:
-            result = _post(f"http://127.0.0.1:{test_server}/api/chat/start", payload)
-            # Should be agent path: stream_id present, no direct flag
-            assert "stream_id" in result, f"Expected stream_id for passthrough, got: {list(result.keys())}"
-            assert result.get("direct") is not True
-        except urllib.error.HTTPError:
-            pass  # Acceptable in test env without real agent
-
-    def test_non_slash_message_unchanged(self, test_server):
-        """Regular message (no /) returns stream_id as before."""
-        sid = _create_session(test_server)
-        payload = {"session_id": sid, "message": "Hello, how are you?", "model": "anthropic/claude-sonnet-4-6"}
-        try:
-            result = _post(f"http://127.0.0.1:{test_server}/api/chat/start", payload)
-            assert "stream_id" in result, "Normal messages must still return stream_id"
-        except urllib.error.HTTPError:
-            pass  # Acceptable in test env without real agent
