@@ -213,6 +213,13 @@ export const useSessionStore = create<SessionState>((set) => ({
         sessions: state.sessions.map((s) =>
           s.session_id === id ? { ...s, pinned } : s
         ),
+        // Mirror pinned into currentSession so consumers reading
+        // currentSession.pinned (e.g. MainContent's observe button) re-render
+        // immediately, without requiring a session switch round-trip.
+        currentSession:
+          state.currentSession?.session_id === id
+            ? { ...state.currentSession, pinned }
+            : state.currentSession,
       }));
     } catch (err) {
       throw err;
@@ -250,6 +257,13 @@ export const useSessionStore = create<SessionState>((set) => ({
       sessions: state.sessions.map((s) =>
         s.session_id === sessionId ? { ...s, title } : s
       ),
+      // Mirror title into currentSession so topbar (which reads
+      // currentSession.title directly) reflects streaming-generated titles
+      // without requiring a session switch round-trip.
+      currentSession:
+        state.currentSession?.session_id === sessionId
+          ? { ...state.currentSession, title }
+          : state.currentSession,
     }));
   },
 
