@@ -182,6 +182,7 @@ requires_agent_modules = pytest.mark.skipif(
 def pytest_configure(config):
     config.addinivalue_line("markers", "requires_agent: skip when hermes-agent dir is not found")
     config.addinivalue_line("markers", "requires_agent_modules: skip when hermes-agent Python modules are not importable")
+    config.addinivalue_line("markers", "integration: tests that require a live test server")
 
 def pytest_collection_modifyitems(config, items):
     """Auto-skip tests that genuinely require a live provider key.

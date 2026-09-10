@@ -18,6 +18,15 @@ def _make_state_db(path, sessions):
     """Create a state.db with the schema get_cli_sessions() expects.
 
     `sessions` is a list of (id, title, source) tuples.
+
+    The schema mirrors the columns referenced by
+    ``read_importable_agent_session_rows`` (api/agent_sessions.py) and
+    ``get_cli_sessions`` (api/models.py): user_id and cwd on sessions;
+    content and role on messages (the messages subquery selects
+    m2.content / m2.role to derive first_user_message). Optional columns
+    such as parent_session_id / ended_at / end_reason /
+    last_seen_msg_count__webui are read via ``_optional_col`` and
+    tolerated when absent, so they are omitted here.
     """
     conn = sqlite3.connect(str(path))
     conn.execute("""
@@ -27,25 +36,29 @@ def _make_state_db(path, sessions):
             model TEXT,
             message_count INTEGER,
             started_at REAL,
-            source TEXT
+            source TEXT,
+            user_id TEXT,
+            cwd TEXT
         )
     """)
     conn.execute("""
         CREATE TABLE messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id TEXT,
-            timestamp REAL
+            timestamp REAL,
+            content TEXT,
+            role TEXT
         )
     """)
     for sid, title, source in sessions:
         conn.execute(
-            "INSERT INTO sessions (id, title, model, message_count, started_at, source) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (sid, title, "gpt-x", 1, 1700000000.0, source),
+            "INSERT INTO sessions (id, title, model, message_count, started_at, source, user_id, cwd) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (sid, title, "gpt-x", 1, 1700000000.0, source, "default", "/tmp"),
         )
         conn.execute(
-            "INSERT INTO messages (session_id, timestamp) VALUES (?, ?)",
-            (sid, 1700000001.0),
+            "INSERT INTO messages (session_id, timestamp, content, role) VALUES (?, ?, ?, ?)",
+            (sid, 1700000001.0, "", "user"),
         )
     conn.commit()
     conn.close()
@@ -85,7 +98,7 @@ def test_cron_session_uses_job_name_when_title_missing(fake_hermes_home):
         ("cron_cd65df6fc1a8_20260417_191049", None, "cron"),
     ])
 
-    sessions = models.get_cli_sessions()
+    sessions = models.get_cli_sessions(show_cron=True)
 
     assert len(sessions) == 1
     assert sessions[0]["title"] == "wiki-auto-ingest"
@@ -97,7 +110,7 @@ def test_cron_session_falls_back_when_jobs_json_missing(fake_hermes_home):
         ("cron_abc123_20260417_191049", None, "cron"),
     ])
 
-    sessions = models.get_cli_sessions()
+    sessions = models.get_cli_sessions(show_cron=True)
 
     assert sessions[0]["title"] == "Cron Session"
 
@@ -111,7 +124,7 @@ def test_cron_session_falls_back_when_job_id_not_in_jobs_json(fake_hermes_home):
         ("cron_orphan_20260417_191049", None, "cron"),
     ])
 
-    sessions = models.get_cli_sessions()
+    sessions = models.get_cli_sessions(show_cron=True)
 
     assert sessions[0]["title"] == "Cron Session"
 
@@ -126,7 +139,7 @@ def test_explicit_title_is_preserved(fake_hermes_home):
         ("cron_cd65df6fc1a8_20260417_191049", "User-edited title", "cron"),
     ])
 
-    sessions = models.get_cli_sessions()
+    sessions = models.get_cli_sessions(show_cron=True)
 
     assert sessions[0]["title"] == "User-edited title"
 
@@ -143,6 +156,6 @@ def test_non_cron_sessions_unaffected(fake_hermes_home):
         ("cron_cd65df6fc1a8_xx", None, "cli"),
     ])
 
-    sessions = models.get_cli_sessions()
+    sessions = models.get_cli_sessions(show_cron=True)
 
     assert sessions[0]["title"] == "Cli Session"

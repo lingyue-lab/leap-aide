@@ -94,14 +94,14 @@ class TestSessionPruning(unittest.TestCase):
         auth._sessions.clear()
         token_hex = auth.create_session().split(".")[0]
         # The _sessions dict stores token -> expiry_time
-        # We can check the expiry is approximately SESSION_TTL seconds from now
+        # We can check the expiry is approximately _DEFAULT_SESSION_TTL seconds from now
         # by looking up the raw entry via the token
-        from api.auth import _sessions, SESSION_TTL
+        from api.auth import _sessions, _DEFAULT_SESSION_TTL
         # find our entry
         for t, exp in _sessions.items():
             if t == token_hex:
-                # expiry should be within 5 seconds of now + SESSION_TTL
-                expected = time.time() + SESSION_TTL
+                # expiry should be within 5 seconds of now + _DEFAULT_SESSION_TTL
+                expected = time.time() + _DEFAULT_SESSION_TTL
                 self.assertAlmostEqual(exp, expected, delta=5)
                 break
         else:

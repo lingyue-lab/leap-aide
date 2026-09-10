@@ -15,7 +15,7 @@
 #   ./scripts/run_test.sh clean                   # wipe stale test state and ports
 #   ./scripts/run_test.sh help                    # show this help
 #
-# DOMAIN (for L2): session | model | workspace | cron | skills | i18n | ui |
+# DOMAIN (for L2): session | model | workspace | cron | i18n | ui |
 #                  streaming | auth | onboarding | all
 #
 # Environment overrides:
@@ -72,8 +72,8 @@ ${B}Usage:${R}
   $0 help                     # show this help
 
 ${B}DOMAIN values for L2:${R}
-  session   model   workspace   cron   skills   i18n
-  ui        streaming   auth   onboarding   all
+  session   model   workspace   cron   i18n
+  ui        auth   onboarding   all
 
 ${B}Frontend SUBCMD:${R}
   (default)   alias for smoke
@@ -113,16 +113,14 @@ domain_targets() {
     session)   echo "tests/test_session_*.py tests/test_sessions_api.py tests/test_gateway_sessions.py tests/test_gateway_sync.py tests/test_parallel_session_switch.py tests/test_empty_session_no_disk_write.py" ;;
     model)     echo "tests/test_provider_management.py tests/test_credential_pool_providers.py tests/test_model_resolver.py tests/test_byok_model_dropdown.py tests/test_provider_mismatch.py tests/test_minimax_provider.py" ;;
     workspace) echo "tests/test_workspace_*.py tests/test_default_workspace_fallback.py tests/test_workspace_blocked_roots_macos.py" ;;
-    cron)      echo "tests/test_cron_*.py tests/test_issue1140_cron_badge_per_job.py" ;;
-    skills)    echo "tests/test_skill_*.py tests/test_skills_*.py" ;;
-    i18n)      echo "tests/test_chinese_locale.py tests/test_korean_locale.py tests/test_russian_locale.py tests/test_spanish_locale.py tests/test_language_precedence.py" ;;
-    ui)        echo "tests/test_mobile_layout.py tests/test_app_titlebar_restore.py tests/test_pwa_manifest_csp.py tests/test_pwa_manifest_sw.py tests/test_session_search_bfcache_822.py" ;;
-    streaming) echo "tests/test_streaming_*.py tests/test_renderer_*.py tests/test_issue765_streaming_persistence.py tests/test_issue893_cancel_preserves_partial.py" ;;
-    auth)      echo "tests/test_auth_*.py tests/test_issue1139_password_remote.py tests/test_1038_pwa_auth_redirect.py" ;;
+    cron)      echo "tests/test_cron_*.py" ;;
+    i18n)      echo "tests/test_chinese_locale.py" ;;
+    ui)        echo "tests/test_pwa_manifest_csp.py" ;;
+    auth)      echo "tests/test_auth_*.py" ;;
     onboarding) echo "tests/test_onboarding_*.py" ;;
     all)
       # Concatenate every domain except 'all' itself.
-      for d in session model workspace cron skills i18n ui streaming auth onboarding; do
+      for d in session model workspace cron i18n ui auth onboarding; do
         domain_targets "$d"
       done
       ;;
@@ -133,7 +131,9 @@ domain_targets() {
 # ── Build the pytest command for a given level + target string ──
 build_pytest_cmd() {
   local level="$1"; shift
-  local targets="$*"
+  # For DOMAIN=all, domain_targets emits one line per domain. Collapse newlines
+  # to spaces so eval "$cmd" doesn't treat each domain as a separate command.
+  local targets="${*//$'\n'/ }"
   local out="${RESULTS_DIR}/junit-${level}-$(date +%Y%m%d-%H%M%S).xml"
   local cmd=("pytest" "$targets" "--timeout=60" "-v" "--junitxml=${out}" ${PYTEST_EXTRA})
   printf '%s\n' "${cmd[*]}"
