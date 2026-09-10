@@ -32,7 +32,7 @@ export function FormField({ label, required, hint, helper, error, className, chi
         {label}
         {required && (
           <span className="text-[var(--accent)] text-xs font-normal ml-1">
-            {t('common.required', '*')}
+            {t('required', '*')}
           </span>
         )}
         {hint && <span className="text-[10px] font-normal ml-1">{hint}</span>}

@@ -111,7 +111,7 @@ export default function SlashCommandDropdown({
       ))}
       {groups.length === 0 && (
         <div style={{ padding: '12px 16px', fontSize: 14, color: 'var(--muted)' }}>
-          {t('common.no_matching_commands')}
+          {t('no_matching_commands')}
         </div>
       )}
     </div>

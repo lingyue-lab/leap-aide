@@ -54,7 +54,7 @@ export default function EditorView({
                 onClick={onSave}
                 disabled={saving}
               >
-                {saving ? t('common.saving') : t('common.save')}
+                {saving ? t('saving') : t('save')}
               </button>
             )}
             {onCancel && (
@@ -62,7 +62,7 @@ export default function EditorView({
                 className="cron-btn text-sm"
                 onClick={onCancel}
               >
-                {t('common.cancel')}
+                {t('cancel')}
               </button>
             )}
           </div>

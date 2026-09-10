@@ -653,7 +653,7 @@ function ProvidersGroup() {
   if (loading) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 120, color: 'var(--md-on-surface-variant)', fontSize: 16 }}>
-        {t('common.loading')}
+        {t('loading')}
       </div>
     );
   }
@@ -855,7 +855,7 @@ export default function SettingsDetail() {
               <button
                 className="icon-btn"
                 onClick={handleConfigEdit}
-                title={t('common.edit')}
+                title={t('edit')}
               >
                 <EditIcon />
               </button>

@@ -17,6 +17,8 @@ void i18n
   .init({
     lng: 'en',
     fallbackLng: 'en',
+    defaultNS: 'common',
+    ns: ['common'],
     interpolation: { escapeValue: false },
     resources: {
       en: {
@@ -31,6 +33,7 @@ void i18n
           close: 'Close',
         },
         common: {
+          no_matching_commands: 'No matching commands',
           sessions: {
             subagent: 'Subagent',
             actions: 'Actions',

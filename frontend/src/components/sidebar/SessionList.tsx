@@ -476,7 +476,7 @@ export default function SessionList() {
             )}
             <div className="clear-history-modal__actions">
               <button className="clear-history-modal__btn clear-history-modal__btn--cancel" onClick={handleCleanupClose}>
-                {t('common.cancel')}
+                {t('cancel')}
               </button>
               <button
                 className="clear-history-modal__btn clear-history-modal__btn--confirm"

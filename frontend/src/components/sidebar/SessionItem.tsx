@@ -557,10 +557,10 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
             </div>
             <div className="clear-history-modal__actions">
               <button className="clear-history-modal__btn clear-history-modal__btn--cancel" onClick={() => setShowClearModal(false)}>
-                {t('common.cancel')}
+                {t('cancel')}
               </button>
               <button className="clear-history-modal__btn clear-history-modal__btn--confirm" onClick={handleClearConfirm}>
-                {t('common.confirm')}
+                {t('confirm')}
               </button>
             </div>
           </div>
@@ -590,10 +590,10 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
             </div>
             <div className="clear-history-modal__actions">
               <button className="clear-history-modal__btn clear-history-modal__btn--cancel" onClick={() => setShowClearDelegatesModal(false)}>
-                {t('common.cancel')}
+                {t('cancel')}
               </button>
               <button className="clear-history-modal__btn clear-history-modal__btn--confirm" onClick={handleClearDelegatesConfirm}>
-                {t('common.confirm')}
+                {t('confirm')}
               </button>
             </div>
           </div>

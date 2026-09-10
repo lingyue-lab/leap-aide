@@ -23,8 +23,8 @@ export function FormActions({
   busyLabel,
 }: FormActionsProps) {
   const { t } = useTranslation('common');
-  const addLabel = submitLabel ?? t('common.add');
-  const addingLabel = busyLabel ?? t('common.adding');
+  const addLabel = submitLabel ?? t('add');
+  const addingLabel = busyLabel ?? t('adding');
   return (
     <>
       <button
@@ -35,7 +35,7 @@ export function FormActions({
         {busy ? addingLabel : addLabel}
       </button>
       <button className="cron-btn text-sm" onClick={onCancel} disabled={busy}>
-        {t('common.cancel')}
+        {t('cancel')}
       </button>
     </>
   );

@@ -192,8 +192,8 @@ export default function TaskForm({ editJob, onSuccess, onCancel }: TaskFormProps
           onSubmit={handleSubmit}
           onCancel={onCancel}
           busy={submitting}
-          submitLabel={isEdit ? t('common.save') : undefined}
-          busyLabel={isEdit ? t('common.saving') : undefined}
+          submitLabel={isEdit ? t('save') : undefined}
+          busyLabel={isEdit ? t('saving') : undefined}
         />
       }
     >

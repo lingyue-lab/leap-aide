@@ -248,9 +248,9 @@ export default function TaskDetail() {
             className="cron-btn text-sm"
             onClick={() => setShowEditJobForm(true)}
             disabled={!!actionLoading}
-            title={t('common.edit', 'Edit')}
+            title={t('edit', 'Edit')}
           >
-            {t('common.edit', 'Edit')}
+            {t('edit', 'Edit')}
           </button>
 
           {/* Delete */}

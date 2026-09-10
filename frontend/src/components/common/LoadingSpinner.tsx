@@ -23,7 +23,7 @@ export default function LoadingSpinner({
 }: LoadingSpinnerProps) {
   const { t } = useTranslation('common');
   const spinnerSize = size ?? (mode === 'overlay' ? 27 : 20);
-  const displayText = text ?? (t('common.loading') || 'Loading...');
+  const displayText = text ?? (t('loading') || 'Loading...');
 
   if (mode === 'overlay') {
     return (

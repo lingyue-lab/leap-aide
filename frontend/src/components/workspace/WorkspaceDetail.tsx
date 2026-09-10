@@ -59,7 +59,7 @@ function WorkspaceFileMain({ showFileTree, onToggleFileTree }: WorkspaceFileMain
       {!previewEditing && (
       <div className="topbar">
         <span className="topbar-title">
-          {fileName || <span className="italic text-[var(--muted)]">{t('common.no_file_selected')}</span>}
+          {fileName || <span className="italic text-[var(--muted)]">{t('no_file_selected')}</span>}
         </span>
         <div className="topbar-chips">
           {/* Files toggle button */}
@@ -86,7 +86,7 @@ function WorkspaceFileMain({ showFileTree, onToggleFileTree }: WorkspaceFileMain
         onSave={handleSave}
         onCancel={() => setPreviewEditing(false)}
         saving={saving}
-        emptyMessage={t('common.select_file_hint')}
+        emptyMessage={t('select_file_hint')}
       />
     </div>
   );
