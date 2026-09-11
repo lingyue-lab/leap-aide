@@ -13,57 +13,32 @@ After this fix:
 - _sanitize_messages_for_api() does NOT strip _partial messages, so the model
   sees the partial content as prior context on the next turn
 - The cancel marker itself keeps _error=True so the model does not see it
+
+After STREAMS was deleted, these tests register streams via
+stream_manager._streams (the new authoritative source).
 """
 import threading
-import time
 
 import pytest
 
 import api.config as config
 import api.streaming as streaming
-from api.config import STREAM_PARTIAL_TEXT, STREAMS_LOCK
+from api.config import STREAM_PARTIAL_TEXT
+from api.stream_manager import stream_manager
 
 
 @pytest.fixture(autouse=True)
 def _isolate_stream_state():
     """Isolate shared stream state between tests."""
     STREAM_PARTIAL_TEXT.clear()
-    config.STREAMS.clear()
+    stream_manager._streams.clear()
     config.CANCEL_FLAGS.clear()
     config.AGENT_INSTANCES.clear()
     yield
     STREAM_PARTIAL_TEXT.clear()
-    config.STREAMS.clear()
+    stream_manager._streams.clear()
     config.CANCEL_FLAGS.clear()
     config.AGENT_INSTANCES.clear()
-
-
-class TestStreamPartialTextAccumulation:
-
-    def test_stream_partial_text_initialized_on_stream_creation(self, tmp_path, monkeypatch):
-        """STREAM_PARTIAL_TEXT[stream_id] starts empty when a stream is registered."""
-        import queue
-        sid = 'test_init_stream'
-        q = queue.Queue()
-        cancel_event = threading.Event()
-        with STREAMS_LOCK:
-            config.STREAMS[sid] = q
-            config.CANCEL_FLAGS[sid] = cancel_event
-            STREAM_PARTIAL_TEXT[sid] = ''
-        assert STREAM_PARTIAL_TEXT.get(sid) == ''
-
-    def test_stream_partial_text_cleaned_up_on_stream_end(self):
-        """STREAM_PARTIAL_TEXT[stream_id] is removed when the stream dict is cleaned up."""
-        import queue
-        sid = 'test_cleanup_stream'
-        q = queue.Queue()
-        with STREAMS_LOCK:
-            config.STREAMS[sid] = q
-            STREAM_PARTIAL_TEXT[sid] = 'some partial text'
-        with STREAMS_LOCK:
-            config.STREAMS.pop(sid, None)
-            STREAM_PARTIAL_TEXT.pop(sid, None)
-        assert sid not in STREAM_PARTIAL_TEXT
 
 
 class TestCancelStreamPreservesPartial:
@@ -92,10 +67,9 @@ class TestCancelStreamPreservesPartial:
 
         q = queue.Queue()
         cancel_event = threading.Event()
-        with STREAMS_LOCK:
-            config.STREAMS['stream_partial'] = q
-            config.CANCEL_FLAGS['stream_partial'] = cancel_event
-            STREAM_PARTIAL_TEXT['stream_partial'] = 'Python is a high-level programming language'
+        stream_manager._streams['stream_partial'] = q
+        config.CANCEL_FLAGS['stream_partial'] = cancel_event
+        STREAM_PARTIAL_TEXT['stream_partial'] = 'Python is a high-level programming language'
 
         # Fake agent with session_id attribute
         class FakeAgent:
@@ -106,6 +80,8 @@ class TestCancelStreamPreservesPartial:
         result = cancel_stream('stream_partial')
 
         assert result is True
+        assert stream_manager.get_stream_by_id('stream_partial') is None, \
+            "cancel_stream should transitively clean stream_manager"
 
         # cancel_stream mutates the Session object in-place via _cs.messages.append
         # so we can verify by reading straight from the in-memory SESSIONS dict
@@ -154,10 +130,9 @@ class TestCancelStreamPreservesPartial:
 
         q = queue.Queue()
         cancel_event = threading.Event()
-        with STREAMS_LOCK:
-            config.STREAMS['stream_nopartial'] = q
-            config.CANCEL_FLAGS['stream_nopartial'] = cancel_event
-            STREAM_PARTIAL_TEXT['stream_nopartial'] = ''  # empty — cancel before any tokens
+        stream_manager._streams['stream_nopartial'] = q
+        config.CANCEL_FLAGS['stream_nopartial'] = cancel_event
+        STREAM_PARTIAL_TEXT['stream_nopartial'] = ''  # empty — cancel before any tokens
 
         class FakeAgent:
             session_id = 'sess_nopartial'
@@ -197,12 +172,11 @@ class TestCancelStreamPreservesPartial:
 
         q = queue.Queue()
         cancel_event = threading.Event()
-        with STREAMS_LOCK:
-            config.STREAMS['stream_thinking'] = q
-            config.CANCEL_FLAGS['stream_thinking'] = cancel_event
-            STREAM_PARTIAL_TEXT['stream_thinking'] = (
-                '<think>internal reasoning here</think>\nThe answer is 42'
-            )
+        stream_manager._streams['stream_thinking'] = q
+        config.CANCEL_FLAGS['stream_thinking'] = cancel_event
+        STREAM_PARTIAL_TEXT['stream_thinking'] = (
+            '<think>internal reasoning here</think>\nThe answer is 42'
+        )
 
         class FakeAgent:
             session_id = 'sess_thinking'
@@ -242,13 +216,12 @@ class TestCancelStreamPreservesPartial:
 
         q = queue.Queue()
         cancel_event = threading.Event()
-        with STREAMS_LOCK:
-            config.STREAMS['stream_unclosed'] = q
-            config.CANCEL_FLAGS['stream_unclosed'] = cancel_event
-            # Simulates user hitting Stop mid-reasoning — <think> never closed
-            STREAM_PARTIAL_TEXT['stream_unclosed'] = (
-                '<think>\nStep 1: consider the problem...\nStep 2: the user wants'
-            )
+        stream_manager._streams['stream_unclosed'] = q
+        config.CANCEL_FLAGS['stream_unclosed'] = cancel_event
+        # Simulates user hitting Stop mid-reasoning — <think> never closed
+        STREAM_PARTIAL_TEXT['stream_unclosed'] = (
+            '<think>\nStep 1: consider the problem...\nStep 2: the user wants'
+        )
 
         class FakeAgent:
             session_id = 'sess_unclosed'

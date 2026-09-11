@@ -110,8 +110,10 @@ def _discover_agent_dir() -> Path:
     xdg_data = Path(os.getenv("XDG_DATA_HOME", str(HOME / ".local" / "share")))
     candidates.append(xdg_data.expanduser() / "hermes-agent")
 
-    # 8. System-wide install paths (e.g. /opt/hermes-agent, /usr/local/hermes-agent)
-    for sys_prefix in ("/opt", "/usr/local", "/usr/local/share"):
+    # 8. System-wide install paths (e.g. /opt/hermes-agent, /usr/local/hermes-agent,
+    #    /usr/local/lib/hermes-agent for testbox / pip-installed layouts — see
+    #    tests/conftest.py:_discover_agent_dir for the same set).
+    for sys_prefix in ("/opt", "/usr/local", "/usr/local/share", "/usr/local/lib"):
         candidates.append(Path(sys_prefix) / "hermes-agent")
 
     for path in candidates:
@@ -2034,7 +2036,7 @@ CHAT_LOCK = threading.Lock()
 class ReplayableStream:
     """Fan-out SSE stream with full event history for page-refresh replay.
 
-    Replaces the plain queue.Queue in STREAMS so that:
+    Replaces the plain queue.Queue used previously so that:
     - Multiple SSE consumers (tabs) can subscribe without stealing each other's events.
     - A reconnecting client can retrieve all past events via replay() and then
       join the live feed seamlessly.

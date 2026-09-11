@@ -19,7 +19,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 from api.config import (
-    STREAMS, STREAMS_LOCK, CANCEL_FLAGS, AGENT_INSTANCES, STREAM_PARTIAL_TEXT,
+    STREAMS_LOCK, CANCEL_FLAGS, AGENT_INSTANCES, STREAM_PARTIAL_TEXT,
     LOCK, SESSIONS, SESSION_DIR,
     _get_session_agent_lock, _set_thread_env, _clear_thread_env,
     SESSION_AGENT_LOCKS, SESSION_AGENT_LOCKS_LOCK,
@@ -3378,7 +3378,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
         except Exception:
             pass
         # Check for queued messages before cleanup so the dequeued stream
-        # can register itself in STREAMS before the current stream is popped.
+        # can register itself in stream_manager before the current stream is popped.
         # Skip if we lost ownership — the active stream's exit handler will dequeue.
         if _owned:
             _dequeue_next(session_id)
@@ -3549,8 +3549,8 @@ def cancel_stream(stream_id: str) -> bool:
         deadline = time.time() + 5.0
         while time.time() < deadline:
             time.sleep(0.05)
-            with streams_lock:
-                agent = agent_instances.get(stream_id)
+            with STREAMS_LOCK:
+                agent = AGENT_INSTANCES.get(stream_id)
             if agent is not None:
                 break
 
@@ -3600,6 +3600,17 @@ def cancel_stream(stream_id: str) -> bool:
             q.put('cancel', {'message': 'Cancelled by user'})
         except Exception:
             pass
+    # Defensive: ensure stream_manager is fully cleaned regardless of
+    # whether the agent thread's finally has run. In normal flow the
+    # thread's finally already called end_stream() before popping
+    # AGENT_INSTANCES, so this is idempotent. In edge cases (hung
+    # thread, no thread at all) this is what cleans stream_manager.
+    # Must run AFTER the sentinel put above so the cancel event
+    # reaches the queue before the queue is closed.
+    try:
+        stream_manager.cleanup_by_stream_id(stream_id)
+    except Exception:
+        logger.debug("stream_manager cleanup failed for %s", stream_id)
     # Find session_id for this stream to end it properly
     with STREAMS_LOCK:
         CANCEL_FLAGS.pop(stream_id, None)
@@ -3648,7 +3659,14 @@ def cancel_stream(stream_id: str) -> bool:
                         _db = _get_session_db()
                         if _db is not None:
                             _db_messages = _db.get_messages(_cs.session_id)
-                            _cs.messages = _db_messages
+                            # Only overwrite in-memory messages if state.db
+                            # actually has a record for this session. An empty
+                            # result means the SDK hasn't flushed any turns yet
+                            # (or this session was never persisted — e.g. cancel
+                            # arrived before the first message) and overwriting
+                            # would silently drop user / partial content.
+                            if _db_messages:
+                                _cs.messages = _db_messages
                     except Exception:
                         pass
 

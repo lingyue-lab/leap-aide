@@ -71,7 +71,8 @@ def test_get_session_finds_unsaved_session_by_id(_isolate):
     found = get_session(s.session_id)
     assert found is s, (
         "get_session must return the in-memory unsaved session — _handle_chat_start "
-        "depends on this for the very first message in a fresh session."
+        "now auto-creates sessions if missing; this in-memory lookup remains a "
+        "defensive layer for any callers that race ahead of sync_webui_metadata."
     )
 
 

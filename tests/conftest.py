@@ -183,6 +183,15 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "requires_agent: skip when hermes-agent dir is not found")
     config.addinivalue_line("markers", "requires_agent_modules: skip when hermes-agent Python modules are not importable")
     config.addinivalue_line("markers", "integration: tests that require a live test server")
+    # Per-test timeout marker (pytest-timeout). No global --timeout flag is
+    # passed by run_test.sh because pytest-timeout's os._exit(1) on a slow
+    # test tears down the session-scoped test_server fixture mid-run. Use
+    # this marker only on individual tests that have a known hang risk.
+    config.addinivalue_line(
+        "markers",
+        "timeout(N): per-test timeout in seconds (pytest-timeout). "
+        "Use sparingly — only on tests with a known hang risk.",
+    )
 
 def pytest_collection_modifyitems(config, items):
     """Auto-skip tests that genuinely require a live provider key.
@@ -254,13 +263,11 @@ def test_server():
     # Stale servers from QA harness runs or prior test sessions cause
     # conftest to think the server is already up, producing false failures.
     try:
-        import subprocess as _sp
-        _sp.run(['fuser', '-k', f'{TEST_PORT}/tcp'],
-                capture_output=True, timeout=5)
+        subprocess.run(['fuser', '-k', f'{TEST_PORT}/tcp'],
+                        capture_output=True, timeout=5)
     except Exception:
         pass
-    import time as _time
-    _time.sleep(0.5)  # brief pause to let the port release
+    time.sleep(0.5)  # brief pause to let the port release
 
     # Clean slate
     if TEST_STATE_DIR.exists():
@@ -370,6 +377,7 @@ def test_server():
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
         proc.kill()
+        proc.wait(timeout=5)
 
     # DEBUG: preserve test state dir + server log for diagnosis
     if os.environ.get("LEAP_AIDE_KEEP_TEST_STATE") == "1":

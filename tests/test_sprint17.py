@@ -72,18 +72,6 @@ def test_settings_unknown_key_ignored():
     assert "unknown_key" not in data
 
 
-# ── Static file: commands.js ────────────────────────────────────────────────
-
-def test_static_commands_js_served():
-    """GET /static/commands.js returns 200 and contains COMMANDS registry."""
-    req = urllib.request.Request(BASE + "/static/commands.js")
-    with urllib.request.urlopen(req, timeout=10) as r:
-        body = r.read().decode()
-        assert r.status == 200
-        assert "COMMANDS" in body
-        assert "executeCommand" in body
-
-
 # ── Workspace: subdir listing ───────────────────────────────────────────────
 
 def test_list_workspace_root():

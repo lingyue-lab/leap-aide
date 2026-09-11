@@ -246,11 +246,12 @@ def switch_profile(name: str, *, process_wide: bool = True) -> dict:
     global _active_profile
 
     # Import here to avoid circular import at module load
-    from api.config import STREAMS, STREAMS_LOCK, reload_config
+    from api.config import STREAMS_LOCK, reload_config
+    from api.stream_manager import stream_manager
 
     # Block if agent is running
     with STREAMS_LOCK:
-        if len(STREAMS) > 0:
+        if stream_manager.active_count() > 0:
             raise RuntimeError(
                 'Cannot switch profiles while an agent is running. '
                 'Cancel or wait for it to finish.'

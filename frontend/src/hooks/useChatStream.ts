@@ -453,11 +453,43 @@ export function useChatStream() {
     }
 
     try {
-      // Start the chat on the backend (pure HTTP, no state changes)
+      // Start the chat on the backend (pure HTTP, no state changes).
+      // In welcome-state first send, the placeholder sessionId is not in SESSIONS,
+      // so the backend's _handle_chat_start auto-creates a real session and
+      // returns its real session_id.  We promote before continuing so the rest
+      // of the stream lifecycle (cache keys, sidebar row, cancel button) all
+      // reference the real id, not the placeholder.
       const result = await StreamManager.submitStreamRequest(
         sessionId, message, model, workspace, attachments, mode,
         abortController?.signal, originalMsg,
       );
+
+      const realSid = result.session_id ?? sessionId;
+      if (realSid !== sessionId) {
+        // Welcome-state promotion: fetch the real Session and replace the
+        // placeholder in the store.  Mirrors currentSession per CLAUDE.md rule #8.
+        //
+        // We cannot route this through `loadSession(realSid)` directly because
+        // its stale-guard (`state.currentSessionId === id`) blocks the update:
+        // currentSessionId is still the placeholder sid at this moment.
+        // Manually fetch + set state + promote keeps the placeholder swap
+        // atomic without re-using the guard.
+        try {
+          const resp = await fetch(
+            `/api/session?session_id=${encodeURIComponent(realSid)}`,
+            { credentials: 'include' }
+          );
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const { session: realSession } = await resp.json();
+          if (realSession && realSession.session_id === realSid) {
+            useSessionStore.getState().promotePendingToReal(realSession);
+          }
+        } catch {
+          // Promote failure shouldn't break the stream; the backend will
+          // continue streaming under the real sid and the StreamManager
+          // subscribe path will eventually reconcile.
+        }
+      }
 
       // Handle queued/steered responses (no stream_id)
       if (result.queued || result.steered) {

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { flushSync } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useSessionStore } from '@/stores/useSessionStore';
@@ -8,6 +8,7 @@ import { useCronStore } from '@/stores/useCronStore';
 import { useMemoryStore } from '@/stores/useMemoryStore';
 import { useTerminalStore } from '@/stores/useTerminalStore';
 import { useSettingsTabStore } from '@/stores/useSettingsTabStore';
+import { modelsService } from '@/services/api';
 import SkillDetail from '@/components/skills/SkillDetail';
 import SkillForm from '@/components/skills/SkillForm';
 import TaskDetail from '@/components/tasks/TaskDetail';
@@ -24,12 +25,88 @@ import { observerService } from '@/services/api';
 import Tooltip from '@/components/common/Tooltip';
 import { Icon } from '@/components/common/Icons';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
+import ChatComposer from '@/components/chat/ChatComposer';
+import { useChatStream } from '@/hooks/useChatStream';
 
 
 interface MainContentProps {
   children: React.ReactNode;
   sidebarWidth?: number;
   rightPanelOpen?: boolean;
+}
+
+/**
+ * Welcome state — placeholder Session created client-side by
+ * `enterPendingNewSession`. The composer is centered above a greeting;
+ * no topbar, no chips, no TodosDrawer. First send flows through
+ * `startStream` which triggers backend auto-create (api/routes.py:
+ * _handle_chat_start) and then `promotePendingToReal` swaps the
+ * placeholder for the real session.
+ *
+ * Lives in its own component so `useChatStream` is mounted only while
+ * welcome state is active — keeping the unconditional hooks of
+ * NonTerminalContent stable for all other views (chat, cron jobs,
+ * skills, memory, workspaces, settings).
+ */
+function WelcomeState() {
+  const { t } = useTranslation(['common', 'chat']);
+  const { currentSession, pendingNewSession } = useSessionStore();
+  const { startStream } = useChatStream();
+
+  // Eagerly fetch the model catalog so the picker shows a default selection
+  // on first render.  Without this, settings.model can point at an
+  // unconfigured provider (e.g. user only has DeepSeek configured but
+  // settings.default_model is anthropic/...) and the menu opens with
+  // nothing preselected.
+  const [firstAvailableModelId, setFirstAvailableModelId] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    modelsService.getModels()
+      .then((resp) => {
+        if (cancelled) return;
+        const first = resp.groups?.[0]?.models?.[0]?.id;
+        if (first) setFirstAvailableModelId(first);
+      })
+      .catch(() => { /* leave undefined — picker shows placeholder */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleWelcomeSend = useCallback(async (text: string, attachments?: string[], mode?: string) => {
+    const placeholderSid = pendingNewSession?.session_id;
+    if (!placeholderSid || !text.trim()) return;
+    // Prefer the eagerly-loaded first available model: it is guaranteed to
+    // be in the provider catalog (the user has keys for it).  settings.model
+    // is unreliable when settings.default_model points at an unconfigured
+    // provider — e.g. user only has DeepSeek but default_model is
+    // anthropic/claude-opus-4.6 — and the backend would 401 mid-stream.
+    // currentSession?.model is the placeholder's model, which inherits
+    // settings.model and has the same problem; skip it here.
+    const model = firstAvailableModelId ?? 'anthropic/claude-sonnet-4-5';
+    await startStream(placeholderSid, text, model, currentSession?.workspace, attachments, mode);
+  }, [pendingNewSession, currentSession, startStream, firstAvailableModelId]);
+
+  const handleWelcomeCancel = useCallback(() => {
+    // Welcome is a single-way door (per design decision): Escape/cancel is no-op.
+  }, []);
+
+  return (
+    <div className="main-chat-area welcome-state">
+      <div className="welcome-stack">
+        <div className="welcome-header">
+          <Icon name="support_agent" size={64} />
+          <h1 className="welcome-greeting">{t('welcome.greeting', { ns: 'chat' })}</h1>
+        </div>
+        <ChatComposer
+          onSend={handleWelcomeSend}
+          onCancel={handleWelcomeCancel}
+          cardVisible={false}
+          className="composer-wrap--centered"
+          placeholderText={t('composer.placeholder', { ns: 'chat' })}
+          defaultModelId={firstAvailableModelId}
+        />
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -49,8 +126,8 @@ function NonTerminalContent({
   toggleTodos: () => void;
   closeAllPanels: () => void;
 }) {
-  const { t } = useTranslation('common');
-  const { currentSession } = useSessionStore();
+  const { t } = useTranslation(['common', 'chat']);
+  const { currentSession, currentSessionId, pendingNewSession } = useSessionStore();
 
   const selectedSkill = useSkillStore((s) => s.selectedSkill);
   const showNewSkillForm = useSkillStore((s) => s.showNewSkillForm);
@@ -137,6 +214,22 @@ function NonTerminalContent({
   }
   if (workspacesTabActive) {
     return <EmptyState hintsKey="empty.workspaces_hints">{WORKSPACE_ICON}</EmptyState>;
+  }
+
+  // ── Welcome state: pendingNewSession is a local-only placeholder; no topbar,
+  // no chips, no TodosDrawer. The composer is centered and a greeting is shown
+  // above it. First send goes through startStream which triggers the backend
+  // auto-create (api/routes.py:_handle_chat_start), then promotePendingToReal
+  // swaps the placeholder for the real session and re-renders the chat view.
+  // The actual rendering lives in <WelcomeState/> so useChatStream is mounted
+  // only while welcome state is active.
+  //
+  // Also covers the no-session-at-all case (currentSessionId === null on first
+  // load / after a delete).  Previously ChatInterface rendered its own
+  // EmptyState icon for this; now WelcomeState owns the entire "no active
+  // session" presentation, so the chat panel never has a separate empty view.
+  if (pendingNewSession || !currentSessionId) {
+    return <WelcomeState />;
   }
 
   // ── Default: chat view ──────────────────────────────────────────────────────

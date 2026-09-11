@@ -284,8 +284,8 @@ def _cmd_status(session, args: str) -> dict[str, Any]:
     from api.stream_manager import stream_manager
     active_stream_id = stream_manager.get_stream_id(session.session_id)
     pending_user_message = getattr(session, 'pending_user_message', None)
-    from api.models import _is_streaming_session, _active_stream_ids
-    is_streaming = _is_streaming_session(active_stream_id, _active_stream_ids())
+    from api.models import _is_streaming_session, _active_session_ids
+    is_streaming = _is_streaming_session(session.session_id, _active_session_ids())
     lines = [
         "Session Status",
         f"Session ID: {session.session_id}",

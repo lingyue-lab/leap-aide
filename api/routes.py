@@ -4090,7 +4090,14 @@ def _handle_chat_start(handler, body):
     try:
         s = get_session(body["session_id"])
     except KeyError:
-        return bad(handler, "Session not found", 404)
+        # Welcome-state first send: client uses a local placeholder session_id.
+        # Backend mints its own session_id here so state.db and SESSIONS stay
+        # consistent (no in-memory rename after the row is written).
+        s = new_session(
+            workspace=(str(body.get("workspace")) if body.get("workspace") else None),
+            model=body.get("model"),
+            profile=body.get("profile") or None,
+        )
     msg = str(body.get("message", "")).strip()
     if not msg:
         return bad(handler, "message is required")

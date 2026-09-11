@@ -7,6 +7,9 @@
     "plan": "创建执行计划",
     "plan_msg": "将以下任务分解为步骤"
   },
+  "welcome": {
+    "greeting": "您好，我能帮您什么忙么"
+  },
   "working": "工作中...",
   "composer": {
     "placeholder": "向 Leap Aide 发送消息...",

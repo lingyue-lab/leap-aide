@@ -32,8 +32,12 @@ jobs:
       # will be auto-skipped via conftest.py's pytest_collection_modifyitems.
       # Full coverage (including agent-dependent cases) runs via
       # `./scripts/run_test.sh full` on the testbox before release.
+      #
+      # No global --timeout flag: pytest-timeout's os._exit(1) on slow tests
+      # would tear down the session-scoped test_server fixture mid-run.
+      # Hung tests should be opted into per-test via `@pytest.mark.timeout(N)`.
       - name: Run backend tests
-        run: pytest tests/ -v --timeout=60
+        run: pytest tests/ -v
 
   frontend:
     name: Frontend vitest

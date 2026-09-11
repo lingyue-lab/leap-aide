@@ -18,7 +18,6 @@ import InfoCard, { setInfoCardCurrentSessionId, onInfoCardVisibleChange } from '
 import { onApprovalCardVisibleChange } from '@/components/dialogs/ApprovalCard';
 import { onClarifyCardVisibleChange } from '@/components/dialogs/ClarifyCard';
 import { onBackgroundTaskCardVisibleChange } from '@/components/dialogs/BackgroundTaskCard';
-import { EmptyState, CHAT_ICON } from '@/components/common/Placeholder';
 import { markSessionSeen } from '@/utils/sessionSeen';
 
 interface ChatInterfaceProps {
@@ -371,12 +370,11 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
   }, [sessionId, sessionsLoading]);
 
   if (!sessionId) {
-    if (sessionsLoading) {
-      // MainContent covers the whole area with session-loading-overlay;
-      // render nothing here to avoid duplicate spinners.
-      return null;
-    }
-    return <EmptyState>{CHAT_ICON}</EmptyState>;
+    // No active session: MainContent owns the empty presentation via
+    // <WelcomeState/>.  Returning null here keeps ChatInterface from
+    // drawing a duplicate empty icon — welcome state replaces the old
+    // chat-panel EmptyState entirely.
+    return null;
   }
 
   return (

@@ -1160,6 +1160,46 @@
     margin-right: auto;
   }
 
+  /* Welcome state (placeholder session, before first send) */
+  .welcome-state {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+
+  .welcome-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 28px;
+    width: 100%;
+    max-width: 768px;
+  }
+
+  .welcome-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .welcome-greeting {
+    font-size: 28px;
+    font-weight: 500;
+    color: var(--md-on-surface, var(--text));
+    letter-spacing: 0.2px;
+    text-align: center;
+    margin: 0;
+  }
+
+  .composer-wrap--centered {
+    padding: 0;
+    max-width: 100%;
+    width: 100%;
+    margin: 0;
+  }
+
   .composer-box {
     max-width: 100%;
     margin: 0 auto;

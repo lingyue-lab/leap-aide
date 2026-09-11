@@ -25,9 +25,17 @@ interface ChatComposerProps {
   onSend: (text: string, attachments?: string[], mode?: string) => void;
   onCancel: () => void;
   cardVisible?: boolean;
+  /** Extra CSS class appended to the outer wrap (e.g. 'composer-wrap--centered'). */
+  className?: string;
+  /** Override the textarea placeholder text (defaults to t('composer.placeholder')). */
+  placeholderText?: string;
+  /** When session/settings model is empty or not in the catalog, fall back to
+   *  this id (used by welcome state so the user always has a model preselected
+   *  even if settings.model is for an unconfigured provider). */
+  defaultModelId?: string;
 }
 
-export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibleProp }: ChatComposerProps) {
+export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibleProp, className, placeholderText, defaultModelId }: ChatComposerProps) {
   const busy = useIsBusy();
   const { t } = useTranslation('chat');
   const { messages, pendingFiles, lastUsage } = useChatStore();
@@ -299,9 +307,30 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
     return latest > 0 ? latest : null;
   }, [currentSession?.last_compression_time, messages]);
 
-  // Resolve displayed model: session model → settings default → 'Model'
+  // Resolve displayed model: session model → settings default → 'Model'.
+  // When the resolved value is not in the loaded catalog, treat it as unset
+  // so the picker shows the placeholder instead of silently highlighting an
+  // unrelated provider (e.g. settings.model defaults to "anthropic/..." but
+  // the user only has DeepSeek configured).
+  const allModelIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const g of modelGroups) {
+      for (const m of g.models) {
+        if (m.id) ids.add(m.id);
+      }
+    }
+    return ids;
+  }, [modelGroups]);
   const sessionModel = currentSession?.model ?? '';
-  const effectiveModel = sessionModel || settings?.model || '';
+  const settingsModel = settings?.model ?? '';
+  const resolvedModel = sessionModel || settingsModel;
+  const effectiveModel =
+    resolvedModel && (allModelIds.size === 0 || allModelIds.has(resolvedModel))
+      ? resolvedModel
+      // Fall back to defaultModelId (welcome state) when session/settings model
+      // is empty or points at an unconfigured provider. Keeps the picker
+      // pre-selected instead of showing "Model" as the trigger label.
+      : (defaultModelId && allModelIds.has(defaultModelId) ? defaultModelId : '');
   const displayModel = effectiveModel
     ? effectiveModel.split('/').pop() ?? effectiveModel
     : 'Model';
@@ -492,7 +521,7 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
 
   return (
     <div
-      className={`composer-wrap ${isDragOver ? 'drag-over' : ''}`}
+      className={`composer-wrap ${className ?? ''} ${isDragOver ? 'drag-over' : ''}`.trim()}
       onDrop={handleDrop}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -560,7 +589,7 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
             ref={textareaRef}
             className="composer-textarea no-focus-ring"
           rows={1}
-          placeholder={t('composer.placeholder')}
+          placeholder={placeholderText ?? t('composer.placeholder')}
           value={input}
           onFocus={() => {
             const sid = currentSession?.session_id;

@@ -85,12 +85,18 @@ def _write_session_index(updates=None):
     """No-op: state.db is the single source of truth for session listings."""
 
 
-def _active_stream_ids():
+def _active_session_ids():
     return set(stream_manager.get_active_session_ids())
 
 
-def _is_streaming_session(active_stream_id, active_stream_ids):
-    return bool(active_stream_id and active_stream_id in active_stream_ids)
+def _is_streaming_session(session_id, active_session_ids):
+    """True iff this session_id currently has an active stream registered.
+
+    `active_session_ids` is the set of session_ids with non-ended streams
+    (see stream_manager.get_active_session_ids). Membership check is by
+    session_id, not by stream_id.
+    """
+    return bool(session_id and session_id in active_session_ids)
 
 def _session_sort_timestamp(session):
     if isinstance(session, dict):
@@ -871,8 +877,8 @@ class Session:
         except Exception:
             return cls.load(sid)
 
-    def compact(self, include_runtime=False, active_stream_ids=None, active_stream_id=None) -> dict:
-        active_stream_ids = active_stream_ids if active_stream_ids is not None else set()
+    def compact(self, include_runtime=False, active_session_ids=None, active_stream_id=None) -> dict:
+        active_session_ids = active_session_ids if active_session_ids is not None else set()
         # Clamp last_seen_msg_count: it should never exceed message_count.
         # When last_seen > message_count, it means history was cleared or
         # compressed. Clamp to message_count (= "seen all current messages").
@@ -918,7 +924,7 @@ class Session:
             'last_compression_time': getattr(self, 'last_compression_time', 0) or 0,
             'active_stream_id': active_stream_id,
             'is_streaming': _is_streaming_session(
-                active_stream_id, active_stream_ids
+                self.session_id, active_session_ids
             ) if include_runtime else False,
             # Gateway/CLI session markers (set by _from_db_row for non-webui sessions)
             '_readonly': getattr(self, '_readonly', None),
@@ -1100,6 +1106,28 @@ def _hide_from_default_sidebar(session: dict) -> bool:
     return source == 'cron' or sid.startswith('cron_')
 
 
+def _hide_empty_untitled(title, message_count, input_tokens, created_at, updated_at) -> bool:
+    """Sidebar visibility predicate for #1171.
+
+    Hide Untitled + 0-message sessions that have never had any activity
+    (no input_tokens, created_at == updated_at). Applied in both the
+    state.db path and the JSON-fallback path so the sidebar stays consistent
+    regardless of which storage backend answered the read.
+
+    `title` is matched via prefix because ``set_session_title`` auto-suffixes
+    ``Untitled #2``, ``Untitled #3`` etc. on collisions (#1171) — those
+    variants are also "untouched empty scratch-pad sessions" from the
+    user's perspective and must be hidden the same way.
+    """
+    title_str = title or ''
+    return (
+        (title_str == 'Untitled' or title_str.startswith('Untitled #'))
+        and (message_count or 0) == 0
+        and (input_tokens or 0) == 0
+        and abs((updated_at or 0) - (created_at or 0)) < 5
+    )
+
+
 def _append_archived_sessions(result):
     """Append archived (read-only compaction snapshots) for sessions whose
     ``archived`` flag is set, avoiding filesystem scans for all other sessions.
@@ -1144,23 +1172,23 @@ def all_sessions():
     Primary: query state.db via list_sessions_rich for O(1) indexed access.
     Fallback: JSON index file or directory scan when state.db is unavailable.
     """
-    active_stream_ids = _active_stream_ids()
+    active_session_ids = _active_session_ids()
 
     # ── Primary: state.db query ────────────────────────────────────────
     db = _get_session_db()
     if db is not None:
         try:
-            result = _all_sessions_from_db(db, active_stream_ids)
+            result = _all_sessions_from_db(db, active_session_ids)
             if result is not None:
                 return result
         except Exception:
             logger.debug("state.db session list failed, falling back to JSON index")
 
     # ── Fallback: JSON index or directory scan ─────────────────────────
-    return _all_sessions_from_json(active_stream_ids)
+    return _all_sessions_from_json(active_session_ids)
 
 
-def _all_sessions_from_db(db, active_stream_ids):
+def _all_sessions_from_db(db, active_session_ids):
     """Build session list from state.db."""
     try:
         rows = db.list_sessions_rich(source='webui', order_by_last_active=True)
@@ -1230,7 +1258,7 @@ def _all_sessions_from_db(db, active_stream_ids):
                 if c['session_id'] == _sid:
                     db_title = c.get('title', '')
                     c.update(s.compact(include_runtime=True,
-                                       active_stream_ids=active_stream_ids,
+                                       active_session_ids=active_session_ids,
                                        active_stream_id=_stream_id))
                     if db_title:
                         c['title'] = db_title
@@ -1238,10 +1266,20 @@ def _all_sessions_from_db(db, active_stream_ids):
                     break
             if not found:
                 compact_list.append(s.compact(include_runtime=True,
-                                               active_stream_ids=active_stream_ids,
+                                               active_session_ids=active_session_ids,
                                                active_stream_id=_stream_id))
 
-    result = [s for s in compact_list if not _hide_from_default_sidebar(s)]
+    # Hide empty Untitled sessions (#1171) — applied AFTER the overlay so it
+    # covers both DB rows and SESSIONS-only entries (e.g. a brand-new
+    # session that's never been persisted).
+    result = [s for s in compact_list if not _hide_empty_untitled(
+        s.get('title', 'Untitled'),
+        s.get('message_count', 0),
+        s.get('input_tokens', 0),
+        s.get('created_at', 0),
+        s.get('updated_at', 0),
+    )]
+    result = [s for s in result if not _hide_from_default_sidebar(s)]
     result = _append_archived_sessions(result)
     return result
 
@@ -1256,7 +1294,7 @@ def _deserialize_json_field(val):
     return val
 
 
-def _all_sessions_from_index(active_stream_ids):
+def _all_sessions_from_index(active_session_ids):
     """Build session list from _index.json (legacy fast path)."""
     index = json.loads(SESSION_INDEX_FILE.read_text(encoding='utf-8'))
     index = [
@@ -1280,8 +1318,8 @@ def _all_sessions_from_index(active_stream_ids):
         _stream_id = stream_manager.get_stream_id(_sid) if _sid else None
         s['active_stream_id'] = _stream_id
         s['is_streaming'] = _is_streaming_session(
-            _stream_id,
-            active_stream_ids,
+            _sid,
+            active_session_ids,
         )
     # Overlay any in-memory sessions that may be newer than the index
     index_map = {s['session_id']: s for s in index}
@@ -1291,15 +1329,16 @@ def _all_sessions_from_index(active_stream_ids):
             _stream_id = stream_manager.get_stream_id(_sid)
             index_map[_sid] = s.compact(
                 include_runtime=True,
-                active_stream_ids=active_stream_ids,
+                active_session_ids=active_session_ids,
                 active_stream_id=_stream_id,
             )
     result = sorted(index_map.values(), key=lambda s: (s.get('pinned', False), _session_sort_timestamp(s)), reverse=True)
-    result = [s for s in result if not (
-        s.get('title', 'Untitled') == 'Untitled'
-        and s.get('message_count', 0) == 0
-        and (s.get('input_tokens') or 0) == 0
-        and abs((s.get('updated_at') or 0) - (s.get('created_at') or 0)) < 5
+    result = [s for s in result if not _hide_empty_untitled(
+        s.get('title', 'Untitled'),
+        s.get('message_count', 0),
+        s.get('input_tokens', 0),
+        s.get('created_at', 0),
+        s.get('updated_at', 0),
     )]
     result = [s for s in result if not _hide_from_default_sidebar(s)]
     for s in result:
@@ -1309,12 +1348,12 @@ def _all_sessions_from_index(active_stream_ids):
     return result
 
 
-def _all_sessions_from_json(active_stream_ids):
+def _all_sessions_from_json(active_session_ids):
     """Legacy fallback: build session list from JSON index or directory scan."""
     # Phase C: try index first for O(1) read; fall back to full scan
     if SESSION_INDEX_FILE.exists():
         try:
-            return _all_sessions_from_index(active_stream_ids)
+            return _all_sessions_from_index(active_session_ids)
         except Exception:
             logger.debug("Failed to load session index, falling back to full scan")
     # Full scan fallback
@@ -1330,16 +1369,12 @@ def _all_sessions_from_json(active_stream_ids):
         if all(s.session_id != x.session_id for x in out): out.append(s)
     out.sort(key=lambda s: (getattr(s, 'pinned', False), _session_sort_timestamp(s)), reverse=True)
     # Hide empty Untitled sessions from the UI entirely — kept consistent with the
-    # index-path filter above. No grace window: a 0-message Untitled session is
+    # DB-path filter above. No grace window: a 0-message Untitled session is
     # never shown regardless of age (#1171).
-    # Exception: sessions that have had prior activity are NOT hidden.
-    result = [s.compact(include_runtime=True, active_stream_ids=active_stream_ids,
+    result = [s.compact(include_runtime=True, active_session_ids=active_session_ids,
                         active_stream_id=stream_manager.get_stream_id(s.session_id))
-              for s in out if not (
-        s.title == 'Untitled'
-        and len(s.messages) == 0
-        and (s.input_tokens or 0) == 0
-        and abs((s.updated_at or 0) - (s.created_at or 0)) < 5
+              for s in out if not _hide_empty_untitled(
+        s.title, len(s.messages), s.input_tokens, s.created_at, s.updated_at,
     )]
     result = [s for s in result if not _hide_from_default_sidebar(s)]
     for s in result:
@@ -1839,6 +1874,80 @@ def _update_parent_delegate_count(parent_session_id: str):
         return
     _compute_delegate_info(parent)
     _notify_session_event('upsert_session', parent)
+
+
+def _compute_compression_lineage(
+    session_id: str,
+    *,
+    parent_session_id: str | None,
+    end_reason: str | None,
+) -> tuple[int, str, str]:
+    """Walk the parent_session_id chain in the session index, returning
+    (count, root, tip) for the lineage containing session_id.
+
+    - count: total sessions in the same lineage (sharing the same root).
+    - root:  the lineage's root session_id (the one with no parent).
+    - tip:   the session_id passed in (the most recent segment).
+
+    parent_session_id and end_reason are accepted for API stability and
+    future use (e.g., cross-check the caller's claimed parent, or filter
+    by end_reason once persisted). They are intentionally not used by
+    the current implementation, which derives everything from the index.
+
+    The index path is resolved at call time via the module-level
+    SESSION_DIR (which tests reassign to a tmpdir) — NOT the import-time
+    SESSION_INDEX_FILE constant — so tests can swap the path without
+    polluting the production index. Without this, SESSION_INDEX_FILE is
+    bound at import time and would keep pointing at the production
+    path even after a test reassigns SESSION_DIR.
+    """
+    # Resolve the index path at call time (not import time) so tests
+    # that swap api.models.SESSION_DIR take effect.
+    _index_path = SESSION_DIR / "_index.json"
+    try:
+        with open(_index_path) as _f:
+            _index = json.load(_f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        # Missing / corrupt / mid-rebuild index → treat as a single-
+        # session lineage (no chain visible from current state).
+        return (1, session_id, session_id)
+
+    parents: dict[str, str | None] = {
+        entry['session_id']: entry.get('_parent_session_id')
+        for entry in _index
+        if isinstance(entry, dict) and 'session_id' in entry
+    }
+
+    # Walk back from session_id to find the lineage root (a session with
+    # no parent_session_id). Memoized to keep total work O(n).
+    _root_cache: dict[str, str | None] = {}
+
+    def resolve_root(sid: str) -> str | None:
+        if sid in _root_cache:
+            return _root_cache[sid]
+        seen: set[str] = set()
+        cur = sid
+        result: str | None = None
+        while cur and cur not in seen:
+            seen.add(cur)
+            if cur not in parents:
+                result = None
+                break
+            parent = parents[cur]
+            if not parent:
+                result = cur
+                break
+            cur = parent
+        _root_cache[sid] = result
+        return result
+
+    root = resolve_root(session_id)
+    if root is None:
+        # session_id not in index → treat as a single-session lineage.
+        return (1, session_id, session_id)
+
+    count = sum(1 for sid in parents if resolve_root(sid) == root)
+    return (count, root, session_id)
 
 
 def _compute_delegate_info(session):

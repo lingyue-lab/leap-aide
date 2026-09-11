@@ -8,7 +8,8 @@ import threading
 from unittest.mock import Mock
 
 from api.streaming import cancel_stream
-from api.config import AGENT_INSTANCES, STREAMS, CANCEL_FLAGS
+from api.config import AGENT_INSTANCES, CANCEL_FLAGS, ReplayableStream
+from api.stream_manager import stream_manager
 
 
 class TestCancelInterrupt:
@@ -17,13 +18,13 @@ class TestCancelInterrupt:
     def setup_method(self):
         """Clean up before each test"""
         AGENT_INSTANCES.clear()
-        STREAMS.clear()
+        stream_manager._streams.clear()
         CANCEL_FLAGS.clear()
 
     def teardown_method(self):
         """Clean up after each test"""
         AGENT_INSTANCES.clear()
-        STREAMS.clear()
+        stream_manager._streams.clear()
         CANCEL_FLAGS.clear()
 
     def test_cancel_calls_agent_interrupt(self):
@@ -33,7 +34,7 @@ class TestCancelInterrupt:
         mock_agent = Mock()
         mock_agent.interrupt = Mock()
 
-        STREAMS[stream_id] = queue.Queue()
+        stream_manager._streams[stream_id] = queue.Queue()
         CANCEL_FLAGS[stream_id] = threading.Event()
         AGENT_INSTANCES[stream_id] = mock_agent
 
@@ -47,6 +48,11 @@ class TestCancelInterrupt:
         # is no longer in the dict — verify the pop happened instead
         assert stream_id not in CANCEL_FLAGS, \
             "cancel_stream() should eagerly pop CANCEL_FLAGS after signalling"
+        # cancel_stream transitively cleans stream_manager._streams via the
+        # agent thread's finally (which calls end_stream). Justify deletion
+        # of the legacy STREAMS dict.
+        assert stream_manager.get_stream_by_id(stream_id) is None, \
+            "cancel_stream should transitively clean stream_manager"
 
     def test_cancel_handles_interrupt_exception(self):
         """Verify that cancel_stream() handles interrupt() exceptions gracefully"""
@@ -54,7 +60,7 @@ class TestCancelInterrupt:
         mock_agent = Mock()
         mock_agent.interrupt = Mock(side_effect=RuntimeError("Agent error"))
 
-        STREAMS[stream_id] = queue.Queue()
+        stream_manager._streams[stream_id] = queue.Queue()
         CANCEL_FLAGS[stream_id] = threading.Event()
         AGENT_INSTANCES[stream_id] = mock_agent
 
@@ -66,12 +72,14 @@ class TestCancelInterrupt:
         mock_agent.interrupt.assert_called_once()
         assert stream_id not in CANCEL_FLAGS, \
             "cancel_stream() should eagerly pop CANCEL_FLAGS even on interrupt exception"
+        assert stream_manager.get_stream_by_id(stream_id) is None, \
+            "cancel_stream should transitively clean stream_manager"
 
     def test_cancel_before_agent_ready(self):
         """Test cancel when agent not yet stored in AGENT_INSTANCES (race condition)"""
         stream_id = "test_stream_789"
 
-        STREAMS[stream_id] = queue.Queue()
+        stream_manager._streams[stream_id] = queue.Queue()
         CANCEL_FLAGS[stream_id] = threading.Event()
         # Note: AGENT_INSTANCES[stream_id] not set (simulating race condition)
 
@@ -85,6 +93,8 @@ class TestCancelInterrupt:
         assert stream_id not in CANCEL_FLAGS, \
             "cancel_stream() should eagerly pop CANCEL_FLAGS even without an agent"
         # Agent will check this flag (it holds a reference to the event object)
+        assert stream_manager.get_stream_by_id(stream_id) is None, \
+            "cancel_stream should transitively clean stream_manager even without an agent"
 
     def test_cancel_nonexistent_stream(self):
         """Test cancel for a stream that doesn't exist"""
@@ -95,7 +105,7 @@ class TestCancelInterrupt:
         """Verify that cancel_stream() sets the cancel_event flag"""
         stream_id = "test_stream_event"
 
-        STREAMS[stream_id] = queue.Queue()
+        stream_manager._streams[stream_id] = queue.Queue()
         cancel_event = threading.Event()
         CANCEL_FLAGS[stream_id] = cancel_event
 
@@ -103,20 +113,33 @@ class TestCancelInterrupt:
 
         assert result is True
         assert cancel_event.is_set()
+        assert stream_manager.get_stream_by_id(stream_id) is None, \
+            "cancel_stream should transitively clean stream_manager"
 
     def test_cancel_puts_sentinel_in_queue(self):
         """Verify that cancel_stream() puts cancel sentinel in queue"""
         stream_id = "test_stream_queue"
-        q = queue.Queue()
+        # Use ReplayableStream (not raw queue.Queue) because cancel_stream
+        # calls `q.put('cancel', {message: ...})` — a 2-arg signature that
+        # only ReplayableStream implements. queue.Queue.put silently drops
+        # the second arg.
+        q = ReplayableStream()
 
-        STREAMS[stream_id] = q
+        stream_manager._streams[stream_id] = q
         CANCEL_FLAGS[stream_id] = threading.Event()
+        # Subscribe BEFORE cancel_stream so we receive the sentinel
+        # before stream.close() (triggered by cleanup_by_stream_id)
+        # flushes subscribers.
+        sub = q.subscribe()
 
         result = cancel_stream(stream_id)
 
         assert result is True
         # Check that cancel message was queued
-        assert not q.empty()
-        event_type, data = q.get_nowait()
+        event_type, data = sub.get_nowait()
         assert event_type == 'cancel'
         assert data['message'] == 'Cancelled by user'
+        assert stream_manager.get_stream_by_id(stream_id) is None, \
+            "cancel_stream should transitively clean stream_manager"
+        assert stream_manager.get_stream_by_id(stream_id) is None, \
+            "cancel_stream should transitively clean stream_manager"

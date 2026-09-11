@@ -119,5 +119,34 @@ class StreamManager:
                 except Exception:
                     pass
 
+    def cleanup_by_stream_id(self, stream_id: str) -> None:
+        """Idempotent cleanup of all internal state for *stream_id*.
+
+        Used by cancel_stream() as a defensive measure to ensure
+        stream_manager is fully cleaned even when the agent thread's
+        finally block never ran (thread hung, missing agent, test
+        setup without a thread). Safe to call multiple times —
+        already-removed entries are no-ops.
+
+        Deliberately does NOT fire _on_end_callbacks: those are tied
+        to end_stream() which has the session context. Defensive
+        cleanup from cancel_stream shouldn't trigger downstream
+        notification cascades.
+        """
+        with self._lock:
+            stream = self._streams.pop(stream_id, None)
+            # Reverse lookup: find any session_id whose stream_id
+            # matches. Normal flow has at most one; the loop handles
+            # any edge cases.
+            for sid, mapped in list(self._session_streams.items()):
+                if mapped == stream_id:
+                    del self._session_streams[sid]
+                    break
+        if stream is not None:
+            try:
+                stream.close()
+            except Exception:
+                pass
+
 
 stream_manager = StreamManager()

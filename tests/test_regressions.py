@@ -493,3 +493,33 @@ def test_status_from_runtime_marks_openai_codex_ready_from_credential_pool(
     assert result["provider_configured"] is True
     assert result["provider_ready"] is True
     assert result["setup_state"] == "ready"
+
+
+# ── R19: /api/session always returns `model` field (frontend picker bug) ─────
+#
+# Bug: when a session has no resolvable effective model, the backend used to
+# omit the `model` key from the response entirely (api/routes.py:803-804
+# `if effective_model: raw["model"] = effective_model`). Frontend then fell
+# back to the hardcoded default `anthropic/claude-sonnet-4-5`, which is not
+# in a user-only-DeepSeek catalog — dropdown appeared empty ("model
+# selection shows empty" on testbox).
+#
+# Fix: always include `model` in the response; use empty string to signal
+# "unset". Frontend treats empty as the placeholder, not as a selection.
+
+
+def test_get_session_always_includes_model_field(cleanup_test_sessions):
+    """R19: GET /api/session must always include `model`, even when empty."""
+    sid = make_session(cleanup_test_sessions)
+    data, status = get(f"/api/session?session_id={sid}&messages=0")
+    assert status == 200
+    assert "session" in data
+    # The field MUST be present (string, possibly empty). Missing key is the
+    # regression — it caused the frontend picker to fall back to a hardcoded
+    # Claude default that didn't exist in the user's deepseek-only catalog.
+    assert "model" in data["session"], (
+        f"/api/session response missing 'model' field: {list(data['session'].keys())}"
+    )
+    assert isinstance(data["session"]["model"], str), (
+        f"'model' must be a string, got {type(data['session']['model']).__name__}"
+    )

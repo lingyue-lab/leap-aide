@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { Session, SessionListItem } from '@/types';
+import { useSettingsStore } from '@/stores/useSettingsStore';
 
 interface SessionState {
   sessions: SessionListItem[];
@@ -13,6 +14,12 @@ interface SessionState {
   /** Bumped on every delegate_children_changed SSE event so the sidebar can
    *  refresh its cached delegate-children list (dropping stale child IDs). */
   delegateChildrenVersion: number;
+  /** Placeholder Session shown when the user clicked `+` but hasn't sent the
+   *  first message yet. Lives only in the frontend store — no backend call
+   *  happens until the user actually sends a message, at which point the
+   *  backend creates the real session and `promotePendingToReal` swaps it in.
+   *  Drives the welcome-state rendering branch in MainContent. */
+  pendingNewSession: Session | null;
 
   // Actions
   loadSessions: () => Promise<void>;
@@ -40,9 +47,19 @@ interface SessionState {
   updateSessionPersonality: (id: string, personality: string | null) => Promise<void>;
   /** Bump delegateChildrenVersion to trigger sidebar refresh of delegate children cache */
   bumpDelegateChildrenVersion: () => void;
+  /** Enter welcome state: build a local placeholder Session, set as active,
+   *  but do NOT touch `sessions[]` (sidebar stays empty of this row). */
+  enterPendingNewSession: (workspace?: string) => void;
+  /** Exit welcome state without replacing currentSession — used when canceling
+   *  or when an external navigation clears the placeholder. */
+  exitPendingNewSession: () => void;
+  /** Welcome → active swap: backend has materialized the real session; insert
+   *  it at the top of `sessions[]`, replace the placeholder currentSession,
+   *  clear pendingNewSession. Mirrors currentSession per CLAUDE.md rule #8. */
+  promotePendingToReal: (realSession: Session) => void;
 }
 
-export const useSessionStore = create<SessionState>((set) => ({
+export const useSessionStore = create<SessionState>((set, get) => ({
   sessions: [],
   currentSessionId: null,
   currentSession: null,
@@ -51,6 +68,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   gatewayOnline: false,
   matchMessageId: null,
   delegateChildrenVersion: 0,
+  pendingNewSession: null,
 
   loadSessions: async () => {
     set({ loading: true, error: null });
@@ -85,43 +103,98 @@ export const useSessionStore = create<SessionState>((set) => ({
   },
 
   createSession: async (workspace?: string) => {
-    try {
-      const response = await fetch('/api/session/new', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(workspace ? { workspace } : {}),
-        credentials: 'include',
-      });
-      if (!response.ok) throw new Error('Failed to create session');
-      const { session } = await response.json();
-      const sessionItem = {
-        session_id: session.session_id,
-        title: session.title,
-        created_at: session.created_at,
-        pinned: false,
-        workspace: session.workspace,
+    // Legacy entry point kept for backward compat (SessionList.handleNewChat
+    // already awaits this).  The new flow goes through enterPendingNewSession
+    // directly — no backend call until the user sends the first message.
+    get().enterPendingNewSession(workspace);
+    // Return a synthetic placeholder so callers awaiting the original Session
+    // shape don't NPE.  It is replaced by the real session via
+    // promotePendingToReal on first send.
+    return get().currentSession as Session;
+  },
+
+  enterPendingNewSession: (workspace?: string) => {
+    const state = get();
+    // no-op: user already in welcome state (matches the no-op-on-+-again decision).
+    if (state.pendingNewSession) return;
+
+    // Placeholder sid is just a local handle — backend will mint its own real
+    // session_id on first send (see api/routes.py:_handle_chat_start auto-create
+    // branch).  Format is arbitrary; the `new-local-` prefix only helps log triage.
+    const placeholderSid = `new-local-${crypto.randomUUID()}`;
+    // Default the placeholder's model to the user's settings (loadSettings
+    // runs once at app boot, so settings?.model is reliably populated by the
+    // time any + click happens).  Fallback matches defaultSettings.model in
+    // useSettingsStore.ts.  Without this the composer footer shows no
+    // selected model in welcome state.
+    const defaultModel = useSettingsStore.getState().settings?.model;
+    const placeholder: Session = {
+      session_id: placeholderSid,
+      title: 'Untitled',
+      workspace: workspace || state.currentSession?.workspace || undefined,
+      model: state.currentSession?.model ?? defaultModel ?? 'anthropic/claude-sonnet-4-5',
+      reasoning_effort: null,
+      personality: null,
+      pinned: false,
+      messages: [],
+      created_at: Date.now() / 1000,
+    } as Session;
+
+    set({
+      currentSessionId: placeholderSid,
+      currentSession: placeholder,
+      pendingNewSession: placeholder,
+    });
+    // Note: sessions[] intentionally NOT touched (per requirement "sidebar不动").
+  },
+
+  exitPendingNewSession: () => {
+    set({ pendingNewSession: null });
+  },
+
+  promotePendingToReal: (realSession: Session) => {
+    set((state) => {
+      const item: SessionListItem = {
+        session_id: realSession.session_id,
+        title: realSession.title,
+        created_at: realSession.created_at,
+        pinned: realSession.pinned ?? false,
+        workspace: realSession.workspace,
       };
-      set((state) => {
-        // Deduplicate: WebSocket upsert_session may have already created a
-        // placeholder for this session.  Update it in-place instead of adding
-        // a second entry.
-        const exists = state.sessions.some((s) => s.session_id === session.session_id);
-        return {
-          sessions: exists
-            ? state.sessions.map((s) => (s.session_id === session.session_id ? { ...s, ...sessionItem } : s))
-            : [sessionItem, ...state.sessions],
-          currentSessionId: session.session_id,
-          currentSession: session,
-        };
-      });
-      return session;
-    } catch (err) {
-      throw err;
-    }
+      // Dedupe: same as createSession path — the WebSocket upsert_session
+      // event for the freshly-created session may have already pre-inserted
+      // a placeholder before our HTTP response arrived.
+      const exists = state.sessions.some((s) => s.session_id === realSession.session_id);
+      return {
+        sessions: exists
+          ? state.sessions.map((s) => (s.session_id === realSession.session_id ? { ...s, ...item } : s))
+          : [item, ...state.sessions],
+        pendingNewSession: null,
+        currentSessionId: realSession.session_id,
+        currentSession: realSession,
+      };
+    });
   },
 
   selectSession: (id, matchMessageId = null) => {
-    set({ currentSessionId: id, matchMessageId });
+    // If we're in welcome state (placeholder Session with no real session yet)
+    // and the user clicks a sidebar session, exit welcome so the chat view
+    // actually switches.  Without this guard, NonTerminalContent short-circuits
+    // on pendingNewSession and the chat view never updates — looks like the
+    // click had no response.
+    set((state) => {
+      if (state.pendingNewSession) {
+        return {
+          currentSessionId: id,
+          matchMessageId,
+          pendingNewSession: null,
+          // currentSession is left as the placeholder — ChatInterface's
+          // session switch useEffect will call loadSession(id) which
+          // replaces it with the real one via the stale-guard.
+        };
+      }
+      return { currentSessionId: id, matchMessageId };
+    });
   },
 
   loadSession: async (id) => {

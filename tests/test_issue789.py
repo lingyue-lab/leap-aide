@@ -13,7 +13,6 @@ from the sidebar **regardless of age** — no grace window. The button guard
 out of typing into a fresh session, but the sidebar list never surfaces empty
 ones. These tests reflect the new contract.
 """
-import json
 import time
 
 import pytest
@@ -24,50 +23,57 @@ from api.models import Session, all_sessions
 
 @pytest.fixture(autouse=True)
 def _isolate(tmp_path, monkeypatch):
-    """Redirect SESSION_DIR and SESSION_INDEX_FILE to a temp dir."""
+    """Redirect SESSION_DIR / SESSION_INDEX_FILE and force the JSON fallback path.
+
+    The empty-Untitled filter under test only lives in _all_sessions_from_json;
+    the DB path uses a different (cron-only) predicate. Force the JSON path so
+    we exercise the filter under test.
+    """
     session_dir = tmp_path / "sessions"
     session_dir.mkdir()
-    index_file = session_dir / "_index.json"
 
     monkeypatch.setattr(models, "SESSION_DIR", session_dir)
-    monkeypatch.setattr(models, "SESSION_INDEX_FILE", index_file)
+    monkeypatch.setattr(models, "SESSION_INDEX_FILE", session_dir / "_index.json")
+    monkeypatch.setattr(models, "_get_session_db", lambda: None)
 
     models.SESSIONS.clear()
     yield
     models.SESSIONS.clear()
 
 
+def _register(s: Session) -> Session:
+    """Insert session into the in-memory SESSIONS overlay.
+
+    _all_sessions_from_json picks these up at api/models.py:1329-1330 before
+    applying the empty-Untitled filter, which is exactly what we want to test.
+    """
+    with models.LOCK:
+        models.SESSIONS[s.session_id] = s
+    return s
+
+
 def _make_untitled_session(age_seconds, messages=None, session_id=None):
     """Create a Session with title='Untitled', updated_at set to age_seconds ago."""
     now = time.time()
-    s = Session(
+    return _register(Session(
         session_id=session_id or None,
         title="Untitled",
         messages=messages or [],
         updated_at=now - age_seconds,
         created_at=now - age_seconds,
-    )
-    # Persist to disk so the full-scan fallback can also find it
-    s.path.write_text(
-        json.dumps(s.__dict__, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    return s
+    ))
 
 
 def _make_titled_session(age_seconds, session_id=None):
     """Create a Session with a real title and one message."""
     now = time.time()
-    s = Session(
+    return _register(Session(
         session_id=session_id or None,
         title="My conversation",
         messages=[{"role": "user", "content": "hello"}],
         updated_at=now - age_seconds,
         created_at=now - age_seconds,
-    )
-    s.path.write_text(
-        json.dumps(s.__dict__, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    return s
+    ))
 
 
 # ── Test 1: Untitled 0-message sessions are hidden regardless of age (#1171) ─
@@ -130,13 +136,10 @@ def test_session_exactly_at_boundary_is_filtered():
 
 def test_session_with_messages_always_visible_new():
     """A session with messages (even Untitled) is always visible when new."""
-    s = Session(
+    s = _register(Session(
         title="Untitled",
         messages=[{"role": "user", "content": "hello"}],
-    )
-    s.path.write_text(
-        json.dumps(s.__dict__, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    ))
 
     result = all_sessions()
     ids = {r["session_id"] for r in result}
@@ -146,15 +149,12 @@ def test_session_with_messages_always_visible_new():
 def test_session_with_messages_always_visible_old():
     """An old session with messages is always visible."""
     now = time.time()
-    s = Session(
+    s = _register(Session(
         title="Untitled",
         messages=[{"role": "user", "content": "hello"}],
         updated_at=now - 3600,
         created_at=now - 3600,
-    )
-    s.path.write_text(
-        json.dumps(s.__dict__, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    ))
 
     result = all_sessions()
     ids = {r["session_id"] for r in result}
@@ -167,15 +167,12 @@ def test_titled_session_with_no_messages_old_is_visible():
     """A titled session with 0 messages (old) should not be filtered — filter
     only targets Untitled sessions."""
     now = time.time()
-    s = Session(
+    s = _register(Session(
         title="Project Alpha",
         messages=[],
         updated_at=now - 3600,
         created_at=now - 3600,
-    )
-    s.path.write_text(
-        json.dumps(s.__dict__, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    ))
 
     result = all_sessions()
     ids = {r["session_id"] for r in result}

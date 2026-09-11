@@ -197,8 +197,6 @@ def _ws_events_loop(sock: socket.socket) -> None:
     - Replay stream events
     - Heartbeat
     """
-    from api.config import STREAMS, STREAMS_LOCK
-
     # Auto-subscribe to notify stream
     notify_q = None
     try:

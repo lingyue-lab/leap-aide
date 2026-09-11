@@ -7,6 +7,9 @@
     "plan": "Create an execution plan",
     "plan_msg": "Break down the following task into steps"
   },
+  "welcome": {
+    "greeting": "Hello, how can I help you?"
+  },
   "working": "Working...",
   "composer": {
     "placeholder": "Message Leap Aide...",

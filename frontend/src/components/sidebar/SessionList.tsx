@@ -219,6 +219,9 @@ export default function SessionList() {
   }, []);
 
   const handleNewChat = async () => {
+    // no-op: user already in welcome state (welcome is a single-way door —
+    // clicking + again does nothing; they must type or refresh).
+    if (useSessionStore.getState().pendingNewSession) return;
     // Inherit workspace from the current active session; fallback to Home (undefined → backend default)
     const activeWs = sessions.find((s) => s.session_id === currentSessionId)?.workspace
       || currentSession?.workspace;

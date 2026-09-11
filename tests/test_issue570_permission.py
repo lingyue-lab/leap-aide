@@ -7,11 +7,26 @@ Docker setups), Path.exists() raises PermissionError instead of returning False.
 load_settings() must treat that as "file not accessible = use defaults" rather
 than propagating the exception up to crash the request handler.
 """
+import os
 import stat
 import pytest
 import api.config as config
 
 
+# These tests use chmod to make the settings file "unreadable" and assert that
+# load_settings() refuses to surface the corrupt value. Linux bypasses DAC
+# permission checks for uid=0, so root can still read a chmod-0o200 directory and
+# the inaccessible-state assertion is never exercised. Skip on root rather than
+# refactor the test — the chmod approach is the standard idiom and is correct on
+# any non-root CI / dev box. Mirrors the pattern in tests/test_default_workspace_fallback.py.
+_IS_ROOT = os.geteuid() == 0
+_SKIP_IF_ROOT = pytest.mark.skipif(
+    _IS_ROOT,
+    reason="chmod-based unwritable checks are bypassed by uid=0; rerun as non-root",
+)
+
+
+@_SKIP_IF_ROOT
 def test_load_settings_returns_defaults_when_settings_file_unreadable(monkeypatch, tmp_path):
     """PermissionError from SETTINGS_FILE.exists() must not propagate — return defaults instead.
 
