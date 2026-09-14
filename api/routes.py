@@ -455,6 +455,10 @@ from api.onboarding import (
 )
 
 # Approval system (optional -- graceful fallback if agent not available)
+# Split into two try blocks so a missing optional name (e.g. get_session_approved,
+# which the current SDK does not export) does not silently turn the critical
+# yolo/session helpers into no-op lambdas. When block B fails only the names
+# it lists fall back; block A still wires up the real SDK functions.
 try:
     from tools.approval import (
         submit_pending as _submit_pending_raw,
@@ -469,9 +473,6 @@ try:
         enable_session_yolo,
         disable_session_yolo,
         is_session_yolo_enabled,
-        get_session_approved,
-        revoke_session_approval,
-        restore_session_approvals,
     )
 except ImportError:
     _submit_pending_raw = lambda *a, **k: None
@@ -483,10 +484,22 @@ except ImportError:
     enable_session_yolo = lambda *a, **k: None
     disable_session_yolo = lambda *a, **k: None
     is_session_yolo_enabled = lambda *a, **k: False
+    _pending = {}
+
+# Optional approval helpers — newer SDK exposes get_session_approved /
+# revoke_session_approval / restore_session_approvals. If they are absent
+# (older hermes-agent) the routes that reference them fall back to no-ops
+# rather than dragging the yolo helpers into the fallback path.
+try:
+    from tools.approval import (
+        get_session_approved,
+        revoke_session_approval,
+        restore_session_approvals,
+    )
+except ImportError:
     get_session_approved = lambda *a, **k: set()
     revoke_session_approval = lambda *a, **k: False
     restore_session_approvals = lambda *a, **k: None
-    _pending = {}
     _lock = threading.Lock()
     _permanent_approved = set()
 
