@@ -543,6 +543,100 @@ except ImportError:
     resolve_clarify = lambda *a, **k: 0
 
 
+# ── Login locale injection ──────────────────────────────────────────────────
+# When serving the SPA shell we inject `language`, `lang_attr`, and a `login`
+# translation dict into window.__HERMES_INJECTED__ so the React AuthContext can
+# render the password form in the user's language before i18next mounts.
+# `lang_attr` is the BCP-47 HTML attribute value (e.g. `zh-TW` for `zh-Hant`,
+# `ru-RU` for `ru`) which differs from the internal language identifier.
+
+_LOGIN_LANG_ATTR = {
+    "en":      "en",
+    "zh-CN":   "zh-CN",
+    "zh-Hant": "zh-TW",
+    "ru":      "ru-RU",
+}
+
+_LOGIN_STRINGS = {
+    "en": {
+        "password_label":       "Password",
+        "password_placeholder": "Enter password to continue",
+        "login_button":         "Login",
+        "logging_in":           "Logging in...",
+        "invalid_password":     "Invalid password",
+    },
+    "zh-CN": {
+        "password_label":       "密码",
+        "password_placeholder": "输入密码继续使用",
+        "login_button":         "登录",
+        "logging_in":           "登录中...",
+        "invalid_password":     "密码错误",
+    },
+    "zh-Hant": {
+        "password_label":       "密碼",
+        "password_placeholder": "輸入密碼繼續使用",
+        "login_button":         "登入",
+        "logging_in":           "登入中...",
+        "invalid_password":     "密碼錯誤",
+    },
+    "ru": {
+        "password_label":       "Пароль",
+        "password_placeholder": "Введите пароль, чтобы продолжить",
+        "login_button":         "Войти",
+        "logging_in":           "Вход...",
+        "invalid_password":     "Неверный пароль",
+    },
+}
+
+
+def _build_injected_script(settings: dict) -> str:
+    """Build the <script>...</script> string that populates __HERMES_INJECTED__.
+
+    Centralizes all values injected before React mounts so the `/login`
+    handler and the SPA fallback stay in lockstep. The login translation
+    strings are serialized with ensure_ascii=False so tests grepping for the
+    raw CJK / Cyrillic substrings find them in the HTML response.
+    """
+    font_size = settings.get("font_size", "medium")
+    theme = settings.get("theme", "dark")
+    language = settings.get("language", "en") or "en"
+    lang_attr = _LOGIN_LANG_ATTR.get(language, "en")
+    login_strings = _LOGIN_STRINGS.get(language, _LOGIN_STRINGS["en"])
+
+    payload = {
+        "font_size": font_size,
+        "theme": theme,
+        "language": language,
+        "lang_attr": lang_attr,
+        "login": login_strings,
+    }
+    return (
+        "<script>window.__HERMES_INJECTED__="
+        + json.dumps(payload, ensure_ascii=False)
+        + ";</script>\n</head>"
+    )
+
+
+def _serve_index_html(handler, parsed) -> bool:
+    """Serve static/index.html with language/theme/font_size injected.
+
+    Rewrites the hardcoded `<html lang="en">` in static/index.html to match
+    the user's language setting so screen readers and CSS `:lang(...)` rules
+    see the correct attribute on the very first byte.
+    """
+    html = _INDEX_HTML_PATH.read_text(encoding="utf-8")
+    try:
+        settings = load_settings()
+    except Exception:
+        settings = {}
+    language = settings.get("language", "en") or "en"
+    lang_attr = _LOGIN_LANG_ATTR.get(language, "en")
+    html = html.replace('<html lang="en">', f'<html lang="{lang_attr}">', 1)
+    injected = _build_injected_script(settings)
+    html = html.replace("</head>", injected, 1)
+    return t(handler, html, content_type="text/html; charset=utf-8")
+
+
 # ── GET routes ────────────────────────────────────────────────────────────────
 
 
@@ -550,27 +644,7 @@ def handle_get(handler, parsed) -> bool:
     """Handle all GET routes. Returns True if handled, False for 404."""
 
     if parsed.path in ("/", "/index.html", "/login"):
-        html = _INDEX_HTML_PATH.read_text(encoding="utf-8")
-        # Inject font_size and theme from server settings so the inline script
-        # can use them before React mounts, avoiding a flash of wrong size/theme
-        # on first load or after clearing browser data.
-        try:
-            settings = load_settings()
-            font_size = settings.get("font_size", "medium")
-            theme = settings.get("theme", "dark")
-        except Exception:
-            font_size = "medium"
-            theme = "dark"
-        injected = (
-            '<script>window.__HERMES_INJECTED__={font_size:"' + font_size
-            + '",theme:"' + theme + '"};</script>\n</head>'
-        )
-        html = html.replace("</head>", injected)
-        return t(
-            handler,
-            html,
-            content_type="text/html; charset=utf-8",
-        )
+        return _serve_index_html(handler, parsed)
 
     if parsed.path == "/api/auth/status":
         from api.auth import is_auth_enabled, parse_cookie, verify_session
@@ -1397,20 +1471,7 @@ def handle_get(handler, parsed) -> bool:
     # Serve index.html so the SPA can handle them client-side.
     if not parsed.path.startswith("/api/") and not parsed.path.startswith("/static/"):
         try:
-            html = _INDEX_HTML_PATH.read_text(encoding="utf-8")
-            try:
-                settings = load_settings()
-                font_size = settings.get("font_size", "medium")
-                theme = settings.get("theme", "dark")
-            except Exception:
-                font_size = "medium"
-                theme = "dark"
-            injected = (
-                '<script>window.__HERMES_INJECTED__={font_size:"' + font_size
-                + '",theme:"' + theme + '"};</script>\n</head>'
-            )
-            html = html.replace("</head>", injected)
-            return t(handler, html, content_type="text/html; charset=utf-8")
+            return _serve_index_html(handler, parsed)
         except Exception:
             pass
 
