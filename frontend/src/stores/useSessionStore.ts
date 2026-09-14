@@ -20,6 +20,10 @@ interface SessionState {
    *  backend creates the real session and `promotePendingToReal` swaps it in.
    *  Drives the welcome-state rendering branch in MainContent. */
   pendingNewSession: Session | null;
+  /** B.6 — true while the welcome-state placeholder is being promoted to a
+   *  real session (POST /api/chat/start round-trip + StreamManager reconnect).
+   *  Drives the Loading Spinner in WelcomeState. */
+  pendingNewSessionPromoting: boolean;
 
   // Actions
   loadSessions: () => Promise<void>;
@@ -57,6 +61,8 @@ interface SessionState {
    *  it at the top of `sessions[]`, replace the placeholder currentSession,
    *  clear pendingNewSession. Mirrors currentSession per CLAUDE.md rule #8. */
   promotePendingToReal: (realSession: Session) => void;
+  /** B.6 — flip the promoting flag; WelcomeState spinner shows while true. */
+  setPendingNewSessionPromoting: (v: boolean) => void;
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
@@ -69,6 +75,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   matchMessageId: null,
   delegateChildrenVersion: 0,
   pendingNewSession: null,
+  pendingNewSessionPromoting: false,
 
   loadSessions: async () => {
     set({ loading: true, error: null });
@@ -149,7 +156,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   exitPendingNewSession: () => {
-    set({ pendingNewSession: null });
+    set({ pendingNewSession: null, pendingNewSessionPromoting: false });
   },
 
   promotePendingToReal: (realSession: Session) => {
@@ -160,6 +167,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         created_at: realSession.created_at,
         pinned: realSession.pinned ?? false,
         workspace: realSession.workspace,
+        // Carry active_stream_id from the POST /api/chat/start response
+        // (api/routes.py:4213). The backend fires `begin_stream` notify
+        // synchronously before the HTTP response, so the notify handler in
+        // notifyManager.ts arrives BEFORE this promotion runs and finds no
+        // session to update in `sessions[]` (placeholder hasn't promoted
+        // yet) — leaving active_stream_id undefined on the sidebar row.
+        // Without it, the breathing pulse only shows while the new session
+        // is the active one (chatStore.activeStreamId set); selecting any
+        // other session hides it for the rest of the stream. Copying the
+        // field here restores the intended behavior: pulse shows whenever
+        // the session is streaming, regardless of selection.
+        active_stream_id: realSession.active_stream_id ?? undefined,
       };
       // Dedupe: same as createSession path — the WebSocket upsert_session
       // event for the freshly-created session may have already pre-inserted
@@ -170,10 +189,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           ? state.sessions.map((s) => (s.session_id === realSession.session_id ? { ...s, ...item } : s))
           : [item, ...state.sessions],
         pendingNewSession: null,
+        pendingNewSessionPromoting: false,
         currentSessionId: realSession.session_id,
         currentSession: realSession,
       };
     });
+  },
+
+  setPendingNewSessionPromoting: (v: boolean) => {
+    set({ pendingNewSessionPromoting: v });
   },
 
   selectSession: (id, matchMessageId = null) => {

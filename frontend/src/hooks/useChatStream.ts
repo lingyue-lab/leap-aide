@@ -465,29 +465,44 @@ export function useChatStream() {
       );
 
       const realSid = result.session_id ?? sessionId;
-      if (realSid !== sessionId) {
-        // Welcome-state promotion: fetch the real Session and replace the
-        // placeholder in the store.  Mirrors currentSession per CLAUDE.md rule #8.
-        //
-        // We cannot route this through `loadSession(realSid)` directly because
-        // its stale-guard (`state.currentSessionId === id`) blocks the update:
-        // currentSessionId is still the placeholder sid at this moment.
-        // Manually fetch + set state + promote keeps the placeholder swap
-        // atomic without re-using the guard.
-        try {
-          const resp = await fetch(
-            `/api/session?session_id=${encodeURIComponent(realSid)}`,
-            { credentials: 'include' }
-          );
-          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-          const { session: realSession } = await resp.json();
-          if (realSession && realSession.session_id === realSid) {
-            useSessionStore.getState().promotePendingToReal(realSession);
+      // Mark promoting state so WelcomeState can show a spinner (B.6).
+      // Set true for any path where a placeholder is being swapped, then
+      // cleared in the finally block below.
+      const _willPromote = realSid !== sessionId;
+      if (_willPromote) {
+        useSessionStore.getState().setPendingNewSessionPromoting?.(true);
+      }
+      try {
+        if (_willPromote) {
+          // Welcome-state promotion: prefer the session embedded in the
+          // /api/chat/start response (B.1/B.2 — saves one HTTP round trip
+          // and cuts the perceived latency of the placeholder → real swap).
+          // Fall back to GET /api/session when the embedded session is
+          // missing (older backend builds).
+          const embedded = result.session;
+          if (embedded && embedded.session_id === realSid) {
+            useSessionStore.getState().promotePendingToReal(embedded);
+          } else {
+            try {
+              const resp = await fetch(
+                `/api/session?session_id=${encodeURIComponent(realSid)}`,
+                { credentials: 'include' }
+              );
+              if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+              const { session: realSession } = await resp.json();
+              if (realSession && realSession.session_id === realSid) {
+                useSessionStore.getState().promotePendingToReal(realSession);
+              }
+            } catch {
+              // Promote failure shouldn't break the stream; the backend
+              // will continue streaming under the real sid and the
+              // StreamManager subscribe path will eventually reconcile.
+            }
           }
-        } catch {
-          // Promote failure shouldn't break the stream; the backend will
-          // continue streaming under the real sid and the StreamManager
-          // subscribe path will eventually reconcile.
+        }
+      } finally {
+        if (_willPromote) {
+          useSessionStore.getState().setPendingNewSessionPromoting?.(false);
         }
       }
 

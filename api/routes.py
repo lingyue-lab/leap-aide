@@ -416,7 +416,6 @@ from api.models import (
     get_session,
     new_session,
     all_sessions,
-    title_from,
     _write_session_index,
     SESSION_INDEX_FILE,
     load_projects,
@@ -1548,8 +1547,24 @@ def handle_post(handler, parsed) -> bool:
         except KeyError:
             return bad(handler, "Session not found", 404)
         with _get_session_agent_lock(body["session_id"]):
-            s.title = str(body["title"]).strip()[:80] or "Untitled"
+            new_title = str(body["title"]).strip()[:80] or "Untitled"
+            s.title = new_title
             s.sync_webui_metadata()
+            # Persist title via SDK high-level API (user-source rank=2 —
+            # blocks future auto-titling, matching CLI semantics). WebUI
+            # must not write the title column directly; this SDK call
+            # handles UNIQUE-constraint suffixes ('Untitled #2', etc.)
+            # correctly.
+            try:
+                from api.models import _get_session_db
+                db = _get_session_db()
+                if db is not None:
+                    db.set_session_title(body["session_id"], new_title)
+            except Exception:
+                logger.warning(
+                    "Failed to persist renamed title for %s",
+                    body["session_id"], exc_info=True,
+                )
         return j(handler, {"session": s.compact()})
 
     if parsed.path == "/api/personality/set":
@@ -4093,10 +4108,14 @@ def _handle_chat_start(handler, body):
         # Welcome-state first send: client uses a local placeholder session_id.
         # Backend mints its own session_id here so state.db and SESSIONS stay
         # consistent (no in-memory rename after the row is written).
+        # defer_notify=True — skip the upsert_session notify here because
+        # begin_stream() below fires its own closely-related notify. Saves
+        # one notify IPC round-trip on the welcome-state critical path.
         s = new_session(
             workspace=(str(body.get("workspace")) if body.get("workspace") else None),
             model=body.get("model"),
             profile=body.get("profile") or None,
+            defer_notify=True,
         )
     msg = str(body.get("message", "")).strip()
     if not msg:
@@ -4120,13 +4139,11 @@ def _handle_chat_start(handler, body):
     model, normalized_model = _resolve_compatible_session_model(requested_model)
     # Normalize bare model names to @provider:model for unique identification
     model = Session._normalize_model(model)
-    # Persist normalized model so drain/replay paths resolve the provider correctly.
+    # Persist normalized model so drain/replay paths resolve the provider
+    # correctly. The full sync at the end of this handler (line ~4175)
+    # persists model + pending state together, so no extra sync here.
     if model and s.model != model:
         s.model = model
-        try:
-            s.sync_webui_metadata(touch_updated_at=False)
-        except Exception:
-            pass
 
     # ── Busy input mode ──
     _valid_modes = frozenset({"interrupt", "queue", "steer", "reject"})
@@ -4186,6 +4203,20 @@ def _handle_chat_start(handler, body):
     response = {"stream_id": stream_id, "session_id": s.session_id}
     if normalized_model:
         response["effective_model"] = model
+    # B.1 — Embed the new (or existing) session in the response so the
+    # frontend can promote its placeholder in a single round-trip instead
+    # of GETting /api/session after this POST.  Matches the payload shape
+    # of GET /api/session so the frontend reuses promotePendingToReal.
+    _raw_session = s.compact() | {
+        "messages": s.messages or [],
+        "tool_calls": getattr(s, "tool_calls", []) or [],
+        "active_stream_id": stream_id,
+        "pending_user_message": msg,
+        "pending_original_message": getattr(s, "_pending_original_message", None),
+        "pending_attachments": attachments,
+        "pending_started_at": s.pending_started_at,
+    }
+    response["session"] = redact_session_data(_raw_session)
     return j(handler, response)
 
 
@@ -4298,13 +4329,9 @@ def _handle_chat_sync(handler, body):
             _previous_messages,
             result.get("messages") or s.messages,
         )
-        # Only auto-generate title when still default; preserves user renames
-        # Auto-title: matches bare "Untitled" and uniqueness-suffixed
-        # variants like "Untitled #3" (from state.db's UNIQUE title index)
-        if s.title == "Untitled" or (
-            s.title.startswith("Untitled #") and s.title[9:].isdigit()
-        ):
-            s.title = title_from(s.messages, s.title)
+        # Title column is owned by the hermes-agent SDK — webui must not
+        # write it (CLAUDE.md). The SDK auto-titles via maybe_auto_title()
+        # in agent/turn_context.py on every turn completion.
         s.sync_webui_metadata()
     return j(
         handler,
@@ -5870,8 +5897,9 @@ def _handle_session_import_cli(handler, body):
             cli_title = cs.get("title")
             break
 
-    # Use the CLI session title if available (e.g., cron job name), otherwise derive from messages
-    title = cli_title or title_from(msgs, "CLI Session")
+    # Use the CLI session title if available (e.g., cron job name). Title
+    # is owned by the hermes-agent SDK — webui must not derive its own.
+    title = cli_title or ""
 
     s = import_cli_session(
         sid,

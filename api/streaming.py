@@ -93,7 +93,7 @@ def _get_ai_agent():
         except ImportError:
             pass
     return AIAgent
-from api.models import get_session, title_from
+from api.models import get_session
 from api.workspace import set_last_workspace
 
 # Fields that are safe to send to LLM provider APIs.
@@ -162,756 +162,8 @@ def _strip_xml_tool_calls(text: str) -> str:
     return s.strip()
 
 
-def _sanitize_generated_title(text: str) -> str:
-    """Sanitize LLM-generated title text before persisting to session."""
-    s = _strip_thinking_markup(text or '')
-    s = re.sub(
-        r'^\s*(?:[*_`~]+\s*)?(?:session\s+title|title)\s*:\s*(?:[*_`~]+\s*)?',
-        '',
-        s,
-        flags=re.IGNORECASE,
-    )
-    s = re.sub(r'^\s*title\s*:\s*', '', s, flags=re.IGNORECASE)
-    s = s.strip(" \t\r\n\"'`*_~")
-    s = re.sub(r'\s+', ' ', s).strip()
-    # Guard against chain-of-thought leakage and meta-reasoning patterns.
-    if _looks_invalid_generated_title(s):
-        return ''
-    return s[:80]
 
 
-def _looks_invalid_generated_title(text: str) -> bool:
-    s = str(text or '')
-    if not s.strip():
-        return True
-    return bool(
-        re.search(r'<think>|<\|channel\|>thought|<\|turn\|>thinking', s, flags=re.IGNORECASE)
-        or re.search(r'^\s*(the|ther)\s+user\s+', s, flags=re.IGNORECASE)
-        or re.search(r'^\s*user\s+\w+\s+', s, flags=re.IGNORECASE)
-        or re.search(r'\b(they|user)\s+want(s)?\s+me\s+to\b', s, flags=re.IGNORECASE)
-        or re.search(r'^\s*(i|we)\s+(should|need to|will|can)\b', s, flags=re.IGNORECASE)
-        or re.search(r'^\s*let me\b', s, flags=re.IGNORECASE)
-        or re.search(r"^\s*here(?:'s| is) (?:a |my )?(?:thinking|thought)", s, flags=re.IGNORECASE)
-        or re.search(r'^\s*(ok|okay|done|all set|complete|completed|finished)\b[\s.!?]*$', s, flags=re.IGNORECASE)
-    )
-
-
-def _message_text(value) -> str:
-    """Extract plain text from mixed message content payloads."""
-    if isinstance(value, list):
-        parts = []
-        for p in value:
-            if not isinstance(p, dict):
-                continue
-            ptype = str(p.get('type') or '').lower()
-            if ptype in ('', 'text', 'input_text', 'output_text'):
-                parts.append(str(p.get('text') or p.get('content') or ''))
-        return _strip_thinking_markup('\n'.join(parts).strip())
-    return _strip_thinking_markup(str(value or '').strip())
-
-
-def _first_exchange_snippets(messages):
-    """Return (first_user_text, first_assistant_text) snippets for title generation.
-
-    Prefer the first substantive assistant answer in the opening exchange,
-    skipping empty placeholders and assistant tool-call preambles.
-    """
-    user_text = ''
-    asst_text = ''
-    for m in messages or []:
-        if not isinstance(m, dict):
-            continue
-        role = m.get('role')
-        if role == 'user':
-            candidate = _message_text(m.get('content'))
-            if not user_text and candidate:
-                user_text = candidate
-                continue
-            if user_text and candidate:
-                break
-        elif role == 'assistant' and user_text:
-            candidate = _message_text(m.get('content'))
-            # Skip tool-call preambles *only* when content is empty or looks
-            # like meta-reasoning ("Let me check my memory first.", "The user
-            # is asking...", etc.). Assistant rows that carry tool_calls but
-            # also contain a substantive answer text are kept — those are
-            # agentic first-turn plans that are legitimate title candidates.
-            if m.get('tool_calls') and (not candidate or _looks_invalid_generated_title(candidate)):
-                continue
-            if candidate:
-                asst_text = candidate
-        if user_text and asst_text:
-            break
-    return user_text[:500], asst_text[:500]
-
-
-def _latest_exchange_snippets(messages):
-    """Return (last_user_text, last_assistant_text) snippets for title refresh.
-
-    Walks the message list backwards to find the last user+assistant pair,
-    skipping empty or tool-call-only assistant messages.
-    """
-    user_text = ''
-    asst_text = ''
-    for m in reversed(messages or []):
-        if not isinstance(m, dict):
-            continue
-        role = m.get('role')
-        if role == 'assistant' and not asst_text:
-            candidate = _message_text(m.get('content'))
-            # Skip tool-call-only preambles
-            if m.get('tool_calls') and (not candidate or _looks_invalid_generated_title(candidate)):
-                continue
-            if candidate:
-                asst_text = candidate
-        elif role == 'user' and not user_text:
-            candidate = _message_text(m.get('content'))
-            if candidate:
-                user_text = candidate
-        if user_text and asst_text:
-            break
-    return user_text[:500], asst_text[:500]
-
-
-def _count_exchanges(messages):
-    """Count the number of user messages (rough exchange count)."""
-    count = 0
-    for m in messages or []:
-        if isinstance(m, dict) and m.get('role') == 'user':
-            content = m.get('content', '')
-            if isinstance(content, list):
-                content = ' '.join(p.get('text', '') for p in content if isinstance(p, dict) and p.get('type') == 'text')
-            if str(content).strip():
-                count += 1
-    return count
-
-
-def _get_title_refresh_interval() -> int:
-    """Read the auto_title_refresh_every setting (0 = disabled)."""
-    try:
-        from api.config import load_settings
-        settings = load_settings()
-        val = settings.get('auto_title_refresh_every', '0')
-        return int(val) if str(val).strip().isdigit() and int(val) > 0 else 0
-    except Exception:
-        return 0
-
-
-def _is_provisional_title(current_title: str, messages) -> bool:
-    """Heuristic: title equals first-message substring placeholder."""
-    derived = title_from(messages, '') or ''
-    if not derived:
-        return False
-    current = re.sub(r'\s+', ' ', str(current_title or '')).strip()
-    candidate = re.sub(r'\s+', ' ', str(derived[:64] or '')).strip()
-    if not current or not candidate:
-        return False
-    return current == candidate or candidate.startswith(current)
-
-
-def _title_prompts(user_text: str, assistant_text: str) -> tuple[str, list[str]]:
-    qa = f"User question:\n{user_text[:500]}\n\nAssistant answer:\n{assistant_text[:500]}"
-    prompts = [
-        (
-            "Generate a short session title from this conversation start.\n"
-            "Use BOTH the user's question and the assistant's visible answer.\n"
-            "Return only the title text, 3-8 words, as a topic label.\n"
-            "Do not use markdown, bullets, labels, or prefixes like Session Title:.\n"
-            "Do not output a full sentence.\n"
-            "Do not output acknowledgements or completion phrases like OK, done, or all set.\n"
-            "Do not describe internal reasoning.\n"
-            "Bad: The user is asking..., OK, all set.\n"
-            "Good: Title Generation Test, Clarify Dialog Layout, GitHub Issue Triage"
-        ),
-        (
-            "Rewrite this conversation start as a concise noun-phrase title.\n"
-            "Use the actual topic, not the task outcome.\n"
-            "Return title text only.\n"
-            "Do not use markdown, bullets, labels, or prefixes like Session Title:.\n"
-            "Never output acknowledgements, completion status, or meta commentary."
-        ),
-    ]
-    return qa, prompts
-
-
-def _is_minimax_route(provider: str = '', model: str = '', base_url: str = '') -> bool:
-    text = ' '.join([
-        str(provider or '').lower(),
-        str(model or '').lower(),
-        str(base_url or '').lower(),
-    ])
-    return 'minimax' in text or 'minimaxi.com' in text
-
-
-def _aux_title_configured() -> bool:
-    """Return True when any auxiliary title_generation config field is meaningfully set."""
-    try:
-        from agent.auxiliary_client import _get_auxiliary_task_config
-        tg = _get_auxiliary_task_config('title_generation')
-        provider = tg.get('provider', '') or ''
-        model = tg.get('model', '') or ''
-        base_url = tg.get('base_url', '') or ''
-        return bool(model or base_url or (provider and provider.lower() != 'auto'))
-    except Exception:
-        return False
-
-def _aux_title_timeout(default: float = 15.0) -> float:
-    """Return the configured timeout (seconds) for auxiliary title generation.
-
-    Only accepts positive numeric values.  Falls back to *default* when the
-    value is ``None``, non-numeric, zero, or negative, and emits a debug log
-    so mis-configurations are visible in server output.
-    """
-    try:
-        from agent.auxiliary_client import _get_auxiliary_task_config
-        tg = _get_auxiliary_task_config('title_generation')
-        raw = tg.get('timeout')
-        if raw is None:
-            return default
-        try:
-            value = float(raw)
-        except (ValueError, TypeError):
-            logger.debug("aux title timeout: non-numeric value %r, falling back to %s", raw, default)
-            return default
-        if value > 0:
-            return value
-        logger.debug("aux title timeout: non-positive value %s, falling back to %s", value, default)
-        return default
-    except Exception:
-        return default
-
-def _title_completion_budget(provider: str = '', model: str = '', base_url: str = '') -> int:
-    # Title generation is a small auxiliary task, but reasoning models may
-    # spend a surprising amount of the completion budget before emitting final
-    # content.  Keep the budget high enough for MiniMax/Kimi-style reasoning
-    # responses without making title generation depend on provider-specific
-    # one-off branches.
-    return 512
-
-
-def _title_retry_completion_budget(provider: str = '', model: str = '', base_url: str = '') -> int:
-    return max(1024, _title_completion_budget(provider, model, base_url) * 2)
-
-
-def _title_retry_status(status: str) -> bool:
-    return status in {
-        'llm_length',
-        'llm_length_aux',
-        'llm_empty_reasoning',
-        'llm_empty_reasoning_aux',
-    }
-
-
-def _safe_obj_value(obj, key: str):
-    if obj is None:
-        return None
-    if isinstance(obj, dict):
-        return obj.get(key)
-    value = getattr(obj, key, None)
-    # Missing MagicMock attrs stringify as mock reprs and look truthy.  Treat
-    # them as absent so tests model real provider objects accurately.
-    if value.__class__.__module__.startswith('unittest.mock'):
-        return None
-    return value
-
-
-def _safe_text_value(value) -> str:
-    if value is None:
-        return ''
-    if value.__class__.__module__.startswith('unittest.mock'):
-        return ''
-    return str(value or '').strip()
-
-
-def _extract_title_response(resp, *, aux: bool = False) -> tuple[str, str]:
-    """Return (content, empty_status) from an OpenAI-compatible response."""
-    suffix = '_aux' if aux else ''
-    try:
-        choices = _safe_obj_value(resp, 'choices') or []
-        choice = choices[0] if choices else None
-        message = _safe_obj_value(choice, 'message')
-        content = _safe_text_value(_safe_obj_value(message, 'content'))
-        if content:
-            return content, ''
-        finish_reason = _safe_text_value(_safe_obj_value(choice, 'finish_reason')).lower()
-        reasoning = (
-            _safe_text_value(_safe_obj_value(message, 'reasoning'))
-            or _safe_text_value(_safe_obj_value(message, 'reasoning_content'))
-            or _safe_text_value(_safe_obj_value(message, 'thinking'))
-        )
-        if finish_reason == 'length':
-            return '', f'llm_length{suffix}'
-        if reasoning:
-            return '', f'llm_empty_reasoning{suffix}'
-        return '', f'llm_empty{suffix}'
-    except Exception:
-        return '', f'llm_empty{suffix}'
-
-
-def generate_title_raw_via_aux(
-    user_text: str,
-    assistant_text: str,
-    provider: str = '',
-    model: str = '',
-    base_url: str = '',
-) -> tuple[Optional[str], str]:
-    """Return (raw_text, status) via auxiliary LLM route."""
-    if not user_text or not assistant_text:
-        return None, 'missing_exchange'
-    qa, prompts = _title_prompts(user_text, assistant_text)
-    base_max_tokens = _title_completion_budget(provider, model, base_url)
-    reasoning_extra = {"reasoning": {"enabled": False}}
-    if _is_minimax_route(provider, model, base_url):
-        reasoning_extra["reasoning_split"] = True
-    try:
-        _timeout = _aux_title_timeout()
-        from agent.auxiliary_client import call_llm
-        last_status = 'llm_error_aux'
-        for idx, prompt in enumerate(prompts):
-            messages = [
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": qa},
-            ]
-            budgets = [base_max_tokens]
-            try:
-                for budget_idx, max_tokens in enumerate(budgets):
-                    resp = call_llm(
-                        task='title_generation',
-                        provider=provider or None,
-                        model=model or None,
-                        base_url=base_url or None,
-                        messages=messages,
-                        max_tokens=max_tokens,
-                        temperature=0.2,
-                        timeout=_timeout,
-                        extra_body=reasoning_extra,
-                    )
-                    raw, empty_status = _extract_title_response(resp, aux=True)
-                    if raw:
-                        return raw, ('llm_aux' if idx == 0 and budget_idx == 0 else 'llm_aux_retry')
-                    last_status = empty_status or 'llm_empty_aux'
-                    if budget_idx == 0 and _title_retry_status(last_status):
-                        budgets.append(_title_retry_completion_budget(provider, model, base_url))
-            except Exception as e:
-                last_status = 'llm_error_aux'
-                logger.debug("Aux title generation attempt %s failed: %s", idx + 1, e)
-        return None, last_status
-    except Exception as e:
-        logger.debug("Aux title generation failed: %s", e)
-        return None, 'llm_error_aux'
-
-
-def generate_title_raw_via_agent(agent, user_text: str, assistant_text: str) -> tuple[Optional[str], str]:
-    """Return (raw_text, status) via active-agent route."""
-    if not user_text or not assistant_text:
-        return None, 'missing_exchange'
-    if agent is None:
-        return None, 'missing_agent'
-
-    qa, prompts = _title_prompts(user_text, assistant_text)
-    base_max_tokens = _title_completion_budget(
-        getattr(agent, 'provider', ''),
-        getattr(agent, 'model', ''),
-        getattr(agent, 'base_url', ''),
-    )
-    disabled_reasoning = {"enabled": False}
-    prev_reasoning = getattr(agent, 'reasoning_config', None)
-    try:
-        agent.reasoning_config = disabled_reasoning
-        for idx, prompt in enumerate(prompts):
-            api_messages = [
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": qa},
-            ]
-            budgets = [base_max_tokens]
-            try:
-                last_status = 'llm_empty'
-                for budget_idx, max_tokens in enumerate(budgets):
-                    raw = ""
-                    empty_status = ''
-                    if getattr(agent, 'api_mode', '') == 'codex_responses':
-                        codex_kwargs = agent._build_api_kwargs(api_messages)
-                        codex_kwargs.pop('tools', None)
-                        if 'max_output_tokens' in codex_kwargs:
-                            codex_kwargs['max_output_tokens'] = max_tokens
-                        resp = agent._run_codex_stream(codex_kwargs)
-                        assistant_message, _ = agent._normalize_codex_response(resp)
-                        raw = (assistant_message.content or '') if assistant_message else ''
-                        if not raw:
-                            empty_status = 'llm_empty'
-                    elif getattr(agent, 'api_mode', '') == 'anthropic_messages':
-                        from agent.anthropic_adapter import build_anthropic_kwargs, normalize_anthropic_response
-                        ant_kwargs = build_anthropic_kwargs(
-                            model=agent.model,
-                            messages=api_messages,
-                            tools=None,
-                            max_tokens=max_tokens,
-                            reasoning_config=disabled_reasoning,
-                            is_oauth=getattr(agent, '_is_anthropic_oauth', False),
-                            preserve_dots=agent._anthropic_preserve_dots(),
-                            base_url=getattr(agent, '_anthropic_base_url', None),
-                        )
-                        resp = agent._anthropic_messages_create(ant_kwargs)
-                        assistant_message, _ = normalize_anthropic_response(
-                            resp, strip_tool_prefix=getattr(agent, '_is_anthropic_oauth', False)
-                        )
-                        raw = (assistant_message.content or '') if assistant_message else ''
-                        if not raw:
-                            empty_status = 'llm_empty'
-                    else:
-                        api_kwargs = agent._build_api_kwargs(api_messages)
-                        api_kwargs.pop('tools', None)
-                        api_kwargs['temperature'] = 0.1
-                        api_kwargs['timeout'] = 15.0
-                        if _is_minimax_route(getattr(agent, 'provider', ''), getattr(agent, 'model', ''), getattr(agent, 'base_url', '')):
-                            extra_body = dict(api_kwargs.get('extra_body') or {})
-                            extra_body['reasoning_split'] = True
-                            api_kwargs['extra_body'] = extra_body
-                        if 'max_completion_tokens' in api_kwargs:
-                            api_kwargs['max_completion_tokens'] = max_tokens
-                        else:
-                            api_kwargs['max_tokens'] = max_tokens
-                        resp = agent._ensure_primary_openai_client(reason='title_generation').chat.completions.create(
-                            **api_kwargs,
-                        )
-                        raw, empty_status = _extract_title_response(resp)
-                    raw = str(raw or '').strip()
-                    if raw:
-                        return raw, ('llm' if idx == 0 and budget_idx == 0 else 'llm_retry')
-                    last_status = empty_status or 'llm_empty'
-                    if budget_idx == 0 and _title_retry_status(last_status):
-                        budgets.append(_title_retry_completion_budget(
-                            getattr(agent, 'provider', ''),
-                            getattr(agent, 'model', ''),
-                            getattr(agent, 'base_url', ''),
-                        ))
-            except Exception as e:
-                last_status = 'llm_error'
-                logger.debug(
-                    "Agent title generation attempt %s failed: provider=%s model=%s error=%s",
-                    idx + 1,
-                    getattr(agent, 'provider', None),
-                    getattr(agent, 'model', None),
-                    e,
-                )
-        return None, last_status
-    except Exception as e:
-        logger.debug("Agent title generation failed: %s", e)
-        return None, 'llm_error'
-    finally:
-        agent.reasoning_config = prev_reasoning
-
-
-def _generate_llm_session_title_for_agent(agent, user_text: str, assistant_text: str) -> tuple[Optional[str], str, str]:
-    """Generate a title via active-agent route, then sanitize/validate result."""
-    raw, status = generate_title_raw_via_agent(agent, user_text, assistant_text)
-    if not raw:
-        return None, status, ''
-    title = _sanitize_generated_title(raw)
-    if title:
-        return title, status, ''
-    return None, 'llm_invalid', str(raw)[:120]
-
-
-def _generate_llm_session_title_via_aux(user_text: str, assistant_text: str, agent=None, *, use_agent_model: bool = False) -> tuple[Optional[str], str, str]:
-    """Generate a title via dedicated auxiliary LLM route, then sanitize/validate result.
-
-    When use_agent_model is False (default), the auxiliary client resolves
-    provider/model/base_url from config.yaml auxiliary.title_generation, which
-    prevents the session's chat model (e.g. a Chinese model) from overriding
-    the dedicated title model.  When True, the agent's attrs are passed through
-    (legacy fallback behaviour).
-    """
-    if use_agent_model and agent:
-        provider = getattr(agent, 'provider', '')
-        model = getattr(agent, 'model', '')
-        base_url = getattr(agent, 'base_url', '')
-    else:
-        provider = ''
-        model = ''
-        base_url = ''
-    raw, status = generate_title_raw_via_aux(
-        user_text,
-        assistant_text,
-        provider=provider,
-        model=model,
-        base_url=base_url,
-    )
-    if not raw:
-        return None, status, ''
-    title = _sanitize_generated_title(raw)
-    if title:
-        return title, status, ''
-    return None, 'llm_invalid_aux', str(raw)[:120]
-
-
-def _put_title_status(put_event, session_id: str, status: str, reason: str = '', title: str = '', raw_preview: str = '') -> None:
-    payload = {'session_id': session_id, 'status': status}
-    if reason:
-        payload['reason'] = reason
-    if title:
-        payload['title'] = title
-    if raw_preview:
-        payload['raw_preview'] = raw_preview
-    put_event('title_status', payload)
-    logger.info(
-        "title_status session=%s status=%s reason=%s title=%r raw_preview=%r",
-        session_id,
-        status,
-        reason or '-',
-        title or '',
-        (raw_preview or '')[:120],
-    )
-
-
-def _fallback_title_from_exchange(user_text: str, assistant_text: str) -> Optional[str]:
-    """Generate a readable local fallback title when LLM title generation fails."""
-    user_text = (user_text or '').strip()
-    assistant_text = _strip_thinking_markup(assistant_text or '').strip()
-    if not user_text:
-        return None
-    user_text = re.sub(r'^\[Workspace:[^\]]+\]\s*', '', user_text)
-    user_text = re.sub(r'\s+', ' ', user_text).strip()
-    assistant_text = re.sub(r'\s+', ' ', assistant_text).strip()
-    combined = f"{user_text} {assistant_text}".strip().lower()
-    combined_raw = f"{user_text} {assistant_text}".strip()
-
-    def _contains_latin(text: str) -> bool:
-        return bool(re.search(r'[A-Za-z]', text or ''))
-
-    def _extract_named_topic(text: str) -> str:
-        m = re.search(r'"([^"\n]{2,24})"', text)
-        if m:
-            return (m.group(1) or '').strip()
-        m = re.search(r'“([^”\n]{2,24})”', text)
-        if m:
-            return (m.group(1) or '').strip()
-        return ''
-
-    topic_name = _extract_named_topic(combined_raw)
-    if topic_name:
-        if not _contains_latin(topic_name):
-            if any(k in combined for k in ('time', 'schedule', 'efficiency', 'manage', 'fitness', 'singing', 'calligraphy')):
-                return 'Time management discussion'
-            if any(k in combined for k in ('hermes', 'codex', 'ai')):
-                return 'AI productivity discussion'
-            return 'Conversation topic'
-        if any(k in combined for k in ('time', 'schedule', 'efficiency', 'manage', 'fitness', 'singing', 'calligraphy')):
-            return f'{topic_name} time management'
-        if any(k in combined for k in ('hermes', 'codex', 'ai')):
-            return f'{topic_name} AI productivity'
-        return f'{topic_name} discussion'
-
-    if any(k in combined for k in ('title', 'session title')) and any(k in combined for k in ('summary', 'summar', 'short title')):
-        if any(k in combined for k in ('test', 'ok', 'reply ok')):
-            return 'Session title auto-summary test'
-        return 'Session title auto-summary'
-    if any(k in combined for k in ('clarify', 'clarification')) and any(k in combined for k in ('dialog', 'card')):
-        return 'Clarify dialog card'
-    if any(k in combined for k in ('issue', 'github', 'pr')) and any(k in combined for k in ('triage', 'bug', 'review')):
-        return 'GitHub Issue Triage'
-
-    head = re.split(r'[.!?\n]', user_text)[0].strip()
-    if not head:
-        return None
-
-    stop_en = {
-        'the', 'this', 'that', 'with', 'from', 'into', 'just', 'reply', 'please',
-        'need', 'needs', 'want', 'wants', 'user', 'assistant', 'could', 'would',
-        'should', 'about', 'there', 'here', 'test', 'testing', 'title', 'summary',
-    }
-    tokens = re.findall(r'[A-Za-z0-9][A-Za-z0-9_./+-]*', head)
-    if not tokens:
-        return 'Conversation topic'
-
-    picked = []
-    for tok in tokens:
-        lower_tok = tok.lower()
-        if lower_tok in stop_en or len(lower_tok) < 3:
-            continue
-        if tok not in picked:
-            picked.append(tok)
-        if len(picked) >= 4:
-            break
-
-    if picked:
-        return ' '.join(picked)[:60]
-    return 'Conversation topic'
-
-
-def _is_generic_fallback_title(title: str) -> bool:
-    """Return True for low-information fallback labels that should not be persisted."""
-    return str(title or '').strip().lower() in {'conversation topic'}
-
-
-def _run_title_update(session_id: str, user_text: str, assistant_text: str, placeholder_title: str, put_event, agent=None):
-    """Generate and publish a better title synchronously.
-
-    Called before ``done`` so the frontend sees the final title when it
-    reloads the session list on the done event.
-    """
-    print(f'[title-sync-backend] title update START: session={session_id[:8]} placeholder={placeholder_title!r}', flush=True)
-    try:
-        try:
-            s = get_session(session_id)
-        except KeyError:
-            print(f'[title-sync-backend] title SKIP: session={session_id[:8]} reason=missing_session', flush=True)
-            _put_title_status(put_event, session_id, 'skipped', 'missing_session')
-            return
-        # Allow self-heal when a previously generated title leaked thinking text.
-        _invalid_existing = _looks_invalid_generated_title(s.title)
-        if getattr(s, 'llm_title_generated', False) and not _invalid_existing:
-            print(f'[title-sync-backend] title SKIP: session={session_id[:8]} reason=already_generated llm_title={getattr(s, "llm_title_generated", False)!r}', flush=True)
-            _put_title_status(put_event, session_id, 'skipped', 'already_generated', str(s.title or ''))
-            return
-        current = str(s.title or '').strip()
-        still_auto = (
-            current == placeholder_title
-            or current in ('Untitled', 'New Chat', '')
-            or _is_provisional_title(current, s.messages)
-            or _invalid_existing
-        )
-        if not still_auto:
-            _put_title_status(put_event, session_id, 'skipped', 'manual_title', current)
-            return
-        aux_title_configured = _aux_title_configured()
-        if agent and not aux_title_configured:
-            next_title, llm_status, raw_preview = _generate_llm_session_title_for_agent(agent, user_text, assistant_text)
-            if not next_title and llm_status in ('llm_error', 'llm_invalid'):
-                next_title, llm_status, raw_preview = _generate_llm_session_title_via_aux(user_text, assistant_text, agent=agent, use_agent_model=True)
-        else:
-            next_title, llm_status, raw_preview = _generate_llm_session_title_via_aux(user_text, assistant_text)
-            if not next_title and agent and llm_status in ('llm_error_aux', 'llm_invalid_aux'):
-                next_title, llm_status, raw_preview = _generate_llm_session_title_for_agent(agent, user_text, assistant_text)
-        source = llm_status
-        if not next_title:
-            fallback_title = _fallback_title_from_exchange(user_text, assistant_text)
-            if fallback_title and not _is_generic_fallback_title(fallback_title):
-                logger.debug("Using local fallback for session title generation")
-                next_title = fallback_title
-                source = 'fallback'
-            elif fallback_title:
-                logger.debug("Skipping generic local fallback for session title generation: %r", fallback_title)
-        fallback_reason = (
-            f'local_summary:{llm_status}'
-            if source == 'fallback' and llm_status
-            else 'local_summary'
-        )
-        wrote_title = False
-        effective_title = current
-        if next_title:
-            with _get_session_agent_lock(session_id):
-                with LOCK:
-                    s = SESSIONS.get(session_id, s)
-                    effective_title = str(s.title or '').strip()
-                    invalid_existing_now = _looks_invalid_generated_title(s.title)
-                    still_auto = (
-                        effective_title == placeholder_title
-                        or effective_title in ('Untitled', 'New Chat', '')
-                        or _is_provisional_title(effective_title, s.messages)
-                        or invalid_existing_now
-                    )
-                if not still_auto:
-                    _put_title_status(put_event, session_id, 'skipped', 'manual_title', effective_title)
-                    return
-                if next_title != effective_title:
-                    s.title = next_title
-                    s.llm_title_generated = True
-                    # Keep chronological ordering stable in the sidebar.
-                    s.sync_webui_metadata(touch_updated_at=False)
-                    effective_title = s.title
-                    wrote_title = True
-
-        if wrote_title:
-            if source == 'fallback':
-                _put_title_status(put_event, session_id, source, fallback_reason, effective_title, raw_preview)
-            else:
-                _put_title_status(put_event, session_id, source, llm_status, effective_title, raw_preview)
-            put_event('title', {'session_id': session_id, 'title': effective_title})
-            print(f'[title-sync-backend] title event SENT: session={session_id[:8]} title={effective_title!r}', flush=True)
-        else:
-            _put_title_status(put_event, session_id, 'skipped', source or 'unchanged', effective_title, raw_preview)
-    except Exception:
-        logger.warning("title update failed for %s", session_id, exc_info=True)
-
-
-def _run_background_title_refresh(session_id: str, user_text: str, assistant_text: str, current_title: str, put_event, agent=None):
-    """Refresh an existing LLM-generated title using the latest exchange text.
-
-    Unlike _run_title_update, this does NOT guard on
-    llm_title_generated — it assumes the title was already LLM-generated
-    and the session has progressed enough to warrant a refresh.
-    It does NOT emit stream_end (the caller already did).
-    """
-    try:
-        try:
-            s = get_session(session_id)
-        except KeyError:
-            return
-        # Safety: skip if user manually renamed since the check
-        effective = str(s.title or '').strip()
-        if effective != current_title:
-            _put_title_status(put_event, session_id, 'skipped', 'manual_title', effective)
-            return
-        if not effective or effective in ('Untitled', 'New Chat'):
-            return
-        aux_title_configured = _aux_title_configured()
-        if agent and not aux_title_configured:
-            next_title, llm_status, raw_preview = _generate_llm_session_title_for_agent(agent, user_text, assistant_text)
-            if not next_title and llm_status in ('llm_error', 'llm_invalid'):
-                next_title, llm_status, raw_preview = _generate_llm_session_title_via_aux(user_text, assistant_text, agent=agent, use_agent_model=True)
-        else:
-            next_title, llm_status, raw_preview = _generate_llm_session_title_via_aux(user_text, assistant_text)
-            if not next_title and agent and llm_status in ('llm_error_aux', 'llm_invalid_aux'):
-                next_title, llm_status, raw_preview = _generate_llm_session_title_for_agent(agent, user_text, assistant_text)
-        if not next_title:
-            _put_title_status(put_event, session_id, 'refresh_skipped', llm_status or 'empty', effective, raw_preview)
-            return
-        # Skip if the new title is essentially the same (after normalization)
-        normalized_current = re.sub(r'\s+', ' ', effective).strip().lower()
-        normalized_new = re.sub(r'\s+', ' ', next_title).strip().lower()
-        if normalized_current == normalized_new:
-            _put_title_status(put_event, session_id, 'refresh_skipped', 'same_title', effective, raw_preview)
-            return
-        with _get_session_agent_lock(session_id):
-            with LOCK:
-                s = SESSIONS.get(session_id, s)
-                # Re-check: user may have renamed while we were generating
-                if str(s.title or '').strip() != current_title:
-                    _put_title_status(put_event, session_id, 'skipped', 'manual_title', str(s.title or '').strip())
-                    return
-                s.title = next_title
-                s.llm_title_generated = True
-                s.sync_webui_metadata(touch_updated_at=False)
-                effective_title = s.title
-        _put_title_status(put_event, session_id, 'refreshed', llm_status, effective_title, raw_preview)
-        put_event('title', {'session_id': session_id, 'title': effective_title})
-        logger.info("Adaptive title refresh: session=%s new_title=%r", session_id, effective_title)
-    except Exception:
-        logger.debug("Background title refresh failed for session %s", session_id, exc_info=True)
-
-
-def _maybe_schedule_title_refresh(session, put_event, agent):
-    """Check if the session is due for an adaptive title refresh and schedule it."""
-    refresh_interval = _get_title_refresh_interval()
-    if refresh_interval <= 0:
-        return
-    current_title = str(session.title or '').strip()
-    if not current_title or current_title in ('Untitled', 'New Chat'):
-        return
-    if not getattr(session, 'llm_title_generated', False):
-        return
-    exchange_count = _count_exchanges(session.messages)
-    if exchange_count <= 0 or exchange_count % refresh_interval != 0:
-        return
-    last_u, last_a = _latest_exchange_snippets(session.messages)
-    if not last_u and not last_a:
-        return
-    threading.Thread(
-        target=_run_background_title_refresh,
-        args=(session.session_id, last_u, last_a, current_title, put_event, agent),
-        daemon=True,
-    ).start()
 
 
 def _sanitize_messages_for_api(messages):
@@ -2307,6 +1559,85 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             import inspect as _inspect
             _agent_params = set(_inspect.signature(_AIAgent.__init__).parameters)
 
+            # ── Title callback (SDK → WebUI push) ─────────────────────
+            # The SDK's maybe_auto_title() in agent/turn_context.py writes
+            # titles to state.db via set_auto_title(source='derived'|'llm')
+            # and then invokes this callback so the live frontend can mirror
+            # the change immediately. The SDK reads it via
+            # ``getattr(agent, "_on_session_title", None)`` — see
+            # /usr/local/lib/hermes-agent/agent/turn_context.py.  WebUI must
+            # not write the title column itself (CLAUDE.md), so this callback
+            # is the only path through which SDK-generated titles reach the
+            # frontend in real time.
+            #
+            # The SDK signature is ``Callable[[str, str], None]`` — args are
+            # (title, source). Source is ``"derived"`` for the synchronous
+            # instant title (stage 1, deterministic from user message) and
+            # ``"llm"`` for the background LLM upgrade (stage 2). We forward
+            # both stages to the frontend so the sidebar renames instantly
+            # and refines a moment later.
+            def _on_session_title(new_title: str, source: str = 'llm') -> None:
+                try:
+                    title_str = str(new_title or '').strip()
+                    if not title_str:
+                        return
+                    # Stage 1 'derived' (synchronous, deterministic from user
+                    # message) is still persisted to db by the SDK as a
+                    # useful fallback if the LLM upgrade never fires, but
+                    # we don't push it to the frontend and we don't update
+                    # the in-memory `Session.title` either — the derived
+                    # title is often a noisy heuristic (e.g. when webui
+                    # prefixes the user message with `[Workspace: ...]`,
+                    # the SDK's derive_title() picks that prefix as the
+                    # title). Mutating `_s.title` here leaks the noisy
+                    # derived value into the `done` event payload and the
+                    # subsequent GET /api/session reload, causing the
+                    # sidebar to flicker Untitled → "[Workspace: ...]"
+                    # → final LLM title. Leave the in-memory title at its
+                    # 'Untitled' placeholder so the done-event reload sees
+                    # Untitled, and let stage 2's llm push be the single
+                    # rename the user observes.
+                    if source == 'derived':
+                        logger.debug(
+                            '[title-callback] stage1 derived (suppressed for UX); '
+                            'session=%s title=%r',
+                            session_id[:12], title_str,
+                        )
+                        return
+                    # Stage 2 'llm' (or any other source): push to frontend.
+                    _s = SESSIONS.get(session_id)
+                    if _s is not None:
+                        _s.title = title_str
+                    try:
+                        put('title', {
+                            'session_id': session_id,
+                            'title': title_str,
+                            'source': source,
+                        })
+                    except Exception:
+                        # The SDK invokes this from its auto-title daemon
+                        # thread, which can outlive the agent thread that
+                        # created the put() closure. If the SSE queue has
+                        # already been GC'd, the put() call may raise; log
+                        # and continue — the title has already been
+                        # persisted to db by the SDK at this point.
+                        logger.debug(
+                            '[title-callback] put() failed (queue closed?); '
+                            'session=%s title=%r source=%s',
+                            session_id[:12], title_str, source,
+                            exc_info=True,
+                        )
+                        return
+                    logger.debug(
+                        '[title-callback] session=%s title=%r source=%s',
+                        session_id[:12], title_str, source,
+                    )
+                except Exception:
+                    logger.warning(
+                        'Failed to emit title callback for session %s',
+                        session_id, exc_info=True,
+                    )
+
             # Per-session reasoning effort: read from session first (new behaviour),
             # fall back to global config.yaml for backward compatibility.
             # When both are absent, pass None → agent uses its default.
@@ -2400,6 +1731,8 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             if ephemeral:
                 agent = _AIAgent(**_agent_kwargs)
                 agent.compression_enabled = False  # WebUI manages compression
+                # Wire the SDK title callback (see agent/turn_context.py).
+                agent._on_session_title = _on_session_title
                 logger.debug('[webui] Created ephemeral agent for session %s', session_id)
             else:
                 import hashlib as _hashlib
@@ -2434,6 +1767,10 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         agent.reasoning_callback = _agent_kwargs.get('reasoning_callback')
                     if hasattr(agent, 'clarify_callback'):
                         agent.clarify_callback = _agent_kwargs.get('clarify_callback')
+                    # Refresh the SDK title callback — same closure as fresh
+                    # construction below; required because the closure captures
+                    # the request-scoped put() and session_id.
+                    agent._on_session_title = _on_session_title
                     # Refresh reasoning_config — may have changed per-session between turns
                     if hasattr(agent, 'reasoning_config') and 'reasoning_config' in _agent_kwargs:
                         agent.reasoning_config = _agent_kwargs['reasoning_config']
@@ -2456,6 +1793,11 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 else:
                     agent = _AIAgent(**_agent_kwargs)
                     agent.compression_enabled = False  # WebUI manages compression
+                    # Wire the SDK title callback. The SDK reads
+                    # ``agent._on_session_title`` via getattr() inside
+                    # maybe_auto_title() — see agent/turn_context.py.  Without
+                    # this, SDK-generated titles never reach the frontend.
+                    agent._on_session_title = _on_session_title
                     with SESSION_AGENT_CACHE_LOCK:
                         SESSION_AGENT_CACHE[session_id] = (agent, _agent_sig)
                     logger.debug('[webui] Created new agent for session %s', session_id)
@@ -3017,20 +2359,12 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 # same Lock the streaming thread is already holding.  We then pop
                 # the old-id entry to prevent a leak.  This is safe because we
                 # already hold _agent_lock (the Lock object itself), so the
-                # Only auto-generate title when still default; preserves user renames
-                if s.title == 'Untitled' or s.title == 'New Chat' or not s.title:
-                    s.title = title_from(s.messages, s.title)
-                _looks_default = (s.title == 'Untitled' or s.title == 'New Chat' or not s.title)
-                _looks_provisional = _is_provisional_title(s.title, s.messages)
-                _invalid_existing_title = _looks_invalid_generated_title(s.title)
-                _should_bg_title = (
-                    (_looks_default or _looks_provisional or _invalid_existing_title)
-                    and (not getattr(s, 'llm_title_generated', False) or _invalid_existing_title)
-                )
-                _u0 = ''
-                _a0 = ''
-                if _should_bg_title:
-                    _u0, _a0 = _first_exchange_snippets(s.messages)
+                # Note: session title generation is fully delegated to the SDK
+                # via maybe_auto_title() in agent/turn_context.py — WebUI does
+                # not write the title column directly (CLAUDE.md: webui only
+                # writes __webui-suffixed columns). SDK emits a `title` SSE
+                # event via the _on_session_title callback wired in
+                # _on_session_title().
                 # Read token/cost usage from the agent object (if available)
                 input_tokens = getattr(agent, 'session_prompt_tokens', 0) or 0
                 output_tokens = getattr(agent, 'session_completion_tokens', 0) or 0
@@ -3108,13 +2442,12 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 logger.debug("Failed to drain pending steer for session %s", session_id)
             raw_session = s.compact() | {'messages': s.messages, 'tool_calls': tool_calls}
 
-            if _should_bg_title and _u0 and _a0:
-                print(f'[title-sync-backend] running title update: session={s.session_id[:8]} title={s.title!r}', flush=True)
-                _run_title_update(s.session_id, _u0, _a0, str(s.title or '').strip(), put, agent)
-            else:
-                print(f'[title-sync-backend] title NOT run: should={_should_bg_title} u0={bool(_u0)} a0={bool(_a0)} session={session_id[:8]}', flush=True)
-            # done is emitted AFTER title generation so the frontend sees the
-            # final title when it reloads sessions on the done event.
+            # Note: session title is generated by the SDK (maybe_auto_title in
+            # agent/turn_context.py) and pushed to the frontend via the
+            # _on_session_title callback registered on the agent — WebUI does
+            # not write the title column itself. The done event below triggers
+            # the frontend to reload sessions from the backend, which then
+            # picks up whatever title the SDK has persisted.
             logger.info(
                 "[done] session=%s stream=%s subscribers=%d",
                 session_id[:12], stream_id[:8],
@@ -3128,10 +2461,6 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             meter_stats = meter().get_stats()
             meter_stats['session_id'] = session_id
             put('metering', meter_stats)
-            # Adaptive title refresh: re-generate title from latest exchange
-            # every N exchanges (when enabled in settings). Runs asynchronously
-            # so it doesn't block the stream.
-            _maybe_schedule_title_refresh(s, put, agent)
         finally:
             # Stop the live metering ticker
             _metering_stop.set()

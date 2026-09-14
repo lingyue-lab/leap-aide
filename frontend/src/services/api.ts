@@ -53,7 +53,19 @@ export const chatService = {
   },
 
   startChat: async (sessionId: string, message: string, model: string, workspace?: string, attachments?: string[], mode?: string, signal?: AbortSignal, originalMsg?: string) => {
-    return api<{ stream_id?: string; queued?: boolean; steered?: boolean; steer_fallback?: string; queue_position?: number; queue_length?: number }>('/api/chat/start', {
+    // B.1 — backend may return the freshly created session inline so the
+    // frontend can promote its welcome-state placeholder in a single
+    // round-trip instead of GETting /api/session.  Optional for backwards
+    // compatibility with older backend builds.
+    return api<{
+      stream_id?: string;
+      queued?: boolean;
+      steered?: boolean;
+      steer_fallback?: string;
+      queue_position?: number;
+      queue_length?: number;
+      session?: import('@/types').Session;
+    }>('/api/chat/start', {
       method: 'POST',
       body: JSON.stringify({
         session_id: sessionId,

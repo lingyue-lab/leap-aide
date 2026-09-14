@@ -50,8 +50,21 @@ interface MainContentProps {
  */
 function WelcomeState() {
   const { t } = useTranslation(['common', 'chat']);
-  const { currentSession, pendingNewSession } = useSessionStore();
+  const { currentSession, pendingNewSession, pendingNewSessionPromoting, enterPendingNewSession } = useSessionStore();
   const { startStream } = useChatStream();
+
+  // Ensure a placeholder Session exists while welcome state is rendered.
+  // NonTerminalContent routes here when EITHER `pendingNewSession` is set OR
+  // `currentSessionId` is null (no session at all). The latter covers:
+  //   • first load with zero sessions in db
+  //   • user deleted the last session
+  //   • a background session-loading path left currentSessionId=null
+  // Without this guard, `pendingNewSession` stays null, handleWelcomeSend
+  // reads `undefined` for `placeholderSid`, returns early, and the send
+  // button is silently dead — clicking it fires no POST /api/chat/start.
+  useEffect(() => {
+    if (!pendingNewSession) enterPendingNewSession();
+  }, [pendingNewSession, enterPendingNewSession]);
 
   // Eagerly fetch the model catalog so the picker shows a default selection
   // on first render.  Without this, settings.model can point at an
@@ -71,19 +84,36 @@ function WelcomeState() {
     return () => { cancelled = true; };
   }, []);
 
+  // Track the user's explicit model pick from the picker. The composer
+  // can't POST /api/session/update for the placeholder session (it would
+  // 404 — there's no backend row yet), so we capture the pick here and
+  // forward it to startStream. After the first send, the real session is
+  // created with this model and we sync it into the sessionStore so
+  // subsequent renders reflect the choice.
+  const [welcomeModelId, setWelcomeModelId] = useState<string | undefined>(undefined);
+  const handleWelcomeModelChange = useCallback((modelId: string) => {
+    setWelcomeModelId(modelId);
+  }, []);
+
   const handleWelcomeSend = useCallback(async (text: string, attachments?: string[], mode?: string) => {
-    const placeholderSid = pendingNewSession?.session_id;
+    // Re-read the store — the mount-time useEffect above may have just
+    // populated pendingNewSession, so a stale closure from a render where
+    // pendingNewSession was null would otherwise bail here.
+    const placeholderSid = useSessionStore.getState().pendingNewSession?.session_id;
     if (!placeholderSid || !text.trim()) return;
-    // Prefer the eagerly-loaded first available model: it is guaranteed to
-    // be in the provider catalog (the user has keys for it).  settings.model
-    // is unreliable when settings.default_model points at an unconfigured
-    // provider — e.g. user only has DeepSeek but default_model is
-    // anthropic/claude-opus-4.6 — and the backend would 401 mid-stream.
-    // currentSession?.model is the placeholder's model, which inherits
-    // settings.model and has the same problem; skip it here.
-    const model = firstAvailableModelId ?? 'anthropic/claude-sonnet-4-5';
+    // Resolve the model to use for this turn.  Order:
+    //   1. welcomeModelId — user's explicit pick in the picker (highest
+    //      priority; honors what they actually clicked)
+    //   2. firstAvailableModelId — the eager-load fallback that is
+    //      guaranteed to be in the provider catalog (the user has keys
+    //      for it).  settings.model is unreliable when settings.default_model
+    //      points at an unconfigured provider — e.g. user only has
+    //      DeepSeek but default_model is anthropic/claude-opus-4.6 — and
+    //      the backend would 401 mid-stream.
+    //   3. hard-coded fallback
+    const model = welcomeModelId ?? firstAvailableModelId ?? 'anthropic/claude-sonnet-4-5';
     await startStream(placeholderSid, text, model, currentSession?.workspace, attachments, mode);
-  }, [pendingNewSession, currentSession, startStream, firstAvailableModelId]);
+  }, [pendingNewSession, currentSession, startStream, firstAvailableModelId, welcomeModelId]);
 
   const handleWelcomeCancel = useCallback(() => {
     // Welcome is a single-way door (per design decision): Escape/cancel is no-op.
@@ -96,6 +126,21 @@ function WelcomeState() {
           <Icon name="support_agent" size={64} />
           <h1 className="welcome-greeting">{t('welcome.greeting', { ns: 'chat' })}</h1>
         </div>
+        {/* B.6 — show a spinner while the placeholder is being promoted to a
+            real session.  Window is POST /api/chat/start + StreamManager
+            reconnect (with B.1/B.2 it's now ~50-100ms LAN), but a spinner
+            gives instant feedback so the user doesn't think their click
+            was lost.  Sits above the composer per M3 guidance so the
+            greeting above stays visible and reassuring. */}
+        {pendingNewSessionPromoting && (
+          <div className="welcome-state__promoting" aria-live="polite">
+            <LoadingSpinner
+              mode="inline"
+              size={36}
+              text={t('welcome.creating', { ns: 'chat' }) || t('loading')}
+            />
+          </div>
+        )}
         <ChatComposer
           onSend={handleWelcomeSend}
           onCancel={handleWelcomeCancel}
@@ -103,6 +148,7 @@ function WelcomeState() {
           className="composer-wrap--centered"
           placeholderText={t('composer.placeholder', { ns: 'chat' })}
           defaultModelId={firstAvailableModelId}
+          onModelChange={handleWelcomeModelChange}
         />
       </div>
     </div>

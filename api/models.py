@@ -618,23 +618,12 @@ class Session:
 
         db._execute_write(_do_write)
 
-        # ── Title: set via set_session_title() which handles the UNIQUE
-        # constraint (appends " #2", " #3", etc. on duplicates)
-        final_title = self.title
-        try:
-            db.set_session_title(sid, final_title)
-        except ValueError:
-            base = self.title
-            for n in range(2, 100):
-                candidate = f"{base} #{n}"
-                try:
-                    db.set_session_title(sid, candidate)
-                    final_title = candidate
-                    break
-                except ValueError:
-                    continue
-        if final_title != self.title:
-            self.title = final_title
+        # NOTE: title column is owned by the hermes-agent SDK
+        # (agent.title_generator + hermes_state.set_auto_title). WebUI must
+        # not write the title column directly — CLAUDE.md forbids writing
+        # non-__webui columns. The SDK's maybe_auto_title() fires on every
+        # turn completion and writes a derived title, then upgrades it to an
+        # LLM-generated title via background thread.
 
         # ── Backfill __webui columns ──────────────────────────────────
         # The SDK's append_message does not write webui-only columns.
@@ -1015,7 +1004,7 @@ def _fix_stale_last_seen_msg_count(s):
             )
 
 
-def new_session(workspace=None, model=None, profile=None):
+def new_session(workspace=None, model=None, profile=None, defer_notify=False):
     """Create a new session with sensible defaults and persist to state.db.
 
     Defaults are resolved as follows (caller-supplied values take precedence):
@@ -1033,6 +1022,10 @@ def new_session(workspace=None, model=None, profile=None):
     by the active browser tab), it is used directly so that concurrent clients
     on different profiles don't fight over a shared process-global.  If not
     supplied, we fall back to the process-level active profile.
+
+    *defer_notify* — when True, skip the upsert_session notify.  Use this
+    when the caller is about to emit a closely-related notify (e.g.
+    begin_stream) so we don't pay for two notify IPCs in a row.
     """
     if profile is None:
         try:
@@ -1062,7 +1055,8 @@ def new_session(workspace=None, model=None, profile=None):
         SESSIONS.move_to_end(s.session_id)
         while len(SESSIONS) > SESSIONS_MAX:
             SESSIONS.popitem(last=False)
-    _notify_session_event('upsert_session', s)
+    if not defer_notify:
+        _notify_session_event('upsert_session', s)
     # Persist defaults to state.db immediately so the composer footer
     # reflects the selected workspace / model / reasoning / etc.
     try:
@@ -1089,13 +1083,24 @@ def new_session(workspace=None, model=None, profile=None):
     #   sync_webui_metadata() to persist the workspace to the cwd column.
     #   This is the SDK's high-level API — not a direct DB write.
     if s.workspace:
-        try:
-            db = _get_session_db()
-            if db is not None:
-                db.update_session_cwd(s.session_id, s.workspace)
-        except Exception:
-            logger.debug("Failed to persist cwd for new session %s",
-                         s.session_id, exc_info=True)
+        # B.4 — cwd write runs on a daemon thread so we don't block the
+        # caller on a separate IPC/SQL write.  cwd is only used by the
+        # sidebar for workspace grouping, so a brief async window (a few
+        # ms) is invisible to the user.  Capture locals by alias to avoid
+        # late-binding the loop variable.
+        _sid_for_cwd = s.session_id
+        _workspace_for_cwd = s.workspace
+
+        def _defer_cwd_write():
+            try:
+                db = _get_session_db()
+                if db is not None:
+                    db.update_session_cwd(_sid_for_cwd, _workspace_for_cwd)
+            except Exception:
+                logger.debug("Failed to persist cwd for new session %s",
+                             _sid_for_cwd, exc_info=True)
+
+        threading.Thread(target=_defer_cwd_write, daemon=True).start()
 
     return s
 
@@ -1382,19 +1387,6 @@ def _all_sessions_from_json(active_session_ids):
             s['profile'] = 'default'
     result = _append_archived_sessions(result)
     return result
-
-
-def title_from(messages, fallback: str='Untitled'):
-    """Derive a session title from the first user message."""
-    for m in messages:
-        if m.get('role') == 'user':
-            c = m.get('content', '')
-            if isinstance(c, list):
-                c = ' '.join(p.get('text', '') for p in c if isinstance(p, dict) and p.get('type') == 'text')
-            text = str(c).strip()
-            if text:
-                return text[:64]
-    return fallback
 
 
 def _get_all_delegate_children_map(db) -> dict[str, list[dict]]:

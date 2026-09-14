@@ -33,9 +33,16 @@ interface ChatComposerProps {
    *  this id (used by welcome state so the user always has a model preselected
    *  even if settings.model is for an unconfigured provider). */
   defaultModelId?: string;
+  /** Notify parent when the user picks a different model from the picker.
+   *  Welcome state uses this so the user's selection is honored on first
+   *  send (the placeholder session has no backend row yet, so we can't
+   *  POST /api/session/update until the first message creates the real
+   *  session).  Not calling updateSessionModel for placeholder sessions
+   *  avoids the 404 spam in the console. */
+  onModelChange?: (modelId: string) => void;
 }
 
-export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibleProp, className, placeholderText, defaultModelId }: ChatComposerProps) {
+export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibleProp, className, placeholderText, defaultModelId, onModelChange }: ChatComposerProps) {
   const busy = useIsBusy();
   const { t } = useTranslation('chat');
   const { messages, pendingFiles, lastUsage } = useChatStore();
@@ -335,6 +342,15 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
     ? effectiveModel.split('/').pop() ?? effectiveModel
     : 'Model';
 
+  // User's explicit pick (overrides effectiveModel for display + onSend).
+  // The picker calls handleModelSelect → setSelectedModelId(...) so the
+  // trigger label updates immediately even when the underlying session
+  // can't persist the change yet (placeholder sessions in welcome state
+  // have no backend row → POST /api/session/update would 404). Parent is
+  // notified via onModelChange so the selection survives the first send.
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+  const activeDisplayModelId = selectedModelId ?? effectiveModel;
+
   // Load models data
   const [modelDataLoaded, setModelDataLoaded] = useState(false);
   const loadModels = useCallback(() => {
@@ -348,13 +364,23 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
 
   const handleModelSelect = useCallback(async (modelId: string | null) => {
     if (!modelId) return;
-    if (!currentSession?.session_id) return;
+    // Always reflect the user's pick in the trigger label immediately
+    // (selectedModelId overrides effectiveModel in display), and notify the
+    // parent so the choice is honored on first send in welcome state.
+    setSelectedModelId(modelId);
+    onModelChange?.(modelId);
+    // Persist via SDK API only when we have a real backend session.
+    // Welcome-state placeholder sessions have no backend row yet — POSTing
+    // /api/session/update returns 404 and spams the console. The pick will
+    // land on the real session after the first send + promotePendingToReal.
+    const sid = currentSession?.session_id;
+    if (!sid || sid.startsWith('new-local-')) return;
     try {
-      await updateSessionModel(currentSession.session_id, modelId);
+      await updateSessionModel(sid, modelId);
     } catch {
       // silently ignore
     }
-  }, [currentSession, updateSessionModel]);
+  }, [currentSession, updateSessionModel, onModelChange]);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -661,7 +687,7 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
 
             {/* Model */}
             <SingleSelection
-              value={effectiveModel}
+              value={activeDisplayModelId}
               trigger={
                 <Icon name="monitor" size={18} />
               }
