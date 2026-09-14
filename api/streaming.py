@@ -122,6 +122,26 @@ def _strip_thinking_markup(text: str) -> str:
     return s
 
 
+def _strip_partial_for_cancel(text: str) -> str:
+    """Strip thinking markup from partial streamed text on cancel (#893).
+
+    Cancellation almost always happens mid-reasoning, so the partial
+    buffer frequently contains an unclosed `` block.  Delegates to
+    ``_strip_thinking_markup`` for the closed-block cases, then strips
+    any unclosed opener to end-of-text.  An empty result here means
+    "no visible content survived — caller should not persist a
+    partial message".
+    """
+    if not text:
+        return ''
+    s = _strip_thinking_markup(text)
+    s = re.sub(r'<think(?:ing)?\b[^>]*>.*$', ' ', s, flags=re.IGNORECASE | re.DOTALL)
+    s = re.sub(r'<\|channel\|>thought.*$', ' ', s, flags=re.IGNORECASE | re.DOTALL)
+    s = re.sub(r'<\|turn\|>thinking\n.*$', ' ', s, flags=re.IGNORECASE | re.DOTALL)
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
+
 def _strip_xml_tool_calls(text: str) -> str:
     """Strip XML-style function_calls blocks that DeepSeek and similar models
     emit in their raw response text.  These blocks are processed separately as
@@ -2868,6 +2888,14 @@ def cancel_stream(stream_id: str) -> bool:
         if flag:
             flag.set()
         agent = AGENT_INSTANCES.get(stream_id)
+        # Capture partial text snapshot here so we don't lose it when the
+        # agent thread's finally block pops STREAM_PARTIAL_TEXT (#893).
+        # Setting cancel flag above causes on_token to accumulate a few
+        # more in-flight tokens before the SDK sees interrupt — those
+        # tokens are not visible to the user (put() drops them after
+        # cancel), so missing them in the saved partial is consistent
+        # with what the user saw streaming.
+        _cancel_partial_text = STREAM_PARTIAL_TEXT.get(stream_id, '') or ''
 
     # ── Step 2: wait for agent to be initialised ─────────────────────────
     # The agent thread registers itself in AGENT_INSTANCES partway through
@@ -2999,26 +3027,58 @@ def cancel_stream(stream_id: str) -> bool:
                     except Exception:
                         pass
 
-                    # ── Insert cancel separator unconditionally ────────────
-                    # Always append [User interrupted] on cancel so the DB
+                    # ── Persist partial streamed text as a _partial message ──
+                    # cancel_stream captured the in-memory STREAM_PARTIAL_TEXT
+                    # buffer (accumulated by on_token during streaming) at Step 1
+                    # so we can persist it as an assistant message tagged
+                    # _partial=True.  The model sees this content as prior context
+                    # on the next user turn, letting it continue from where the
+                    # user cut it off.  _partial=True (NOT _error=True) is
+                    # deliberate — _sanitize_messages_for_api() keeps partial
+                    # messages in the conversation history sent to the LLM (#893).
+                    _now = time.time()
+                    _stripped_partial = _strip_partial_for_cancel(_cancel_partial_text)
+                    if _stripped_partial:
+                        _cs.messages.append({
+                            'role': 'assistant',
+                            'content': _stripped_partial,
+                            '_partial': True,
+                            'timestamp': int(_now),
+                            'timestamp__webui': _now,
+                        })
+
+                    # ── Insert cancel marker unconditionally ────────────────
+                    # Always append *Task cancelled.* on cancel so the DB
                     # carries a durable record that a turn was interrupted.
                     # This also ensures role alternation — without it a
                     # dangling user message would produce consecutive users
                     # on the next turn, causing the SDK to merge them and
                     # break _persist_user_message_idx tracking.
-                    _now = time.time()
+                    # _error=True keeps _sanitize_messages_for_api() from
+                    # forwarding this to the model as a prior assistant turn.
                     _sep = {
                         'role': 'assistant',
-                        'content': '[User interrupted]',
+                        'content': '*Task cancelled.*',
+                        '_error': True,
                         'timestamp': int(_now),
                         'timestamp__webui': _now,
                     }
                     _cs.messages.append(_sep)
-                    # NOTE: sole exception to the webui-no-message-writes rule.
+                    # NOTE: sole (extended) exception to the webui-no-message-writes rule.
+                    # We may write up to two messages: the _partial text above
+                    # (only when STREAM_PARTIAL_TEXT had visible content), and
+                    # always this marker.  Both are needed for role alternation
+                    # on the next turn — see the comment block above.
+                    if _stripped_partial:
+                        _db.append_message(
+                            session_id=_cs.session_id,
+                            role='assistant',
+                            content=_stripped_partial,
+                        )
                     _db.append_message(
                         session_id=_cs.session_id,
                         role='assistant',
-                        content='[User interrupted]',
+                        content='*Task cancelled.*',
                     )
 
                     # ── Restore original_content__webui ─────────────────

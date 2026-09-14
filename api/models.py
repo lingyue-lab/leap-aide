@@ -538,12 +538,15 @@ class Session:
         ``replace_messages`` directly.
 
         The sole exception to the webui-no-message-writes rule is
-        ``cancel_stream`` in ``api/streaming.py``, which appends a
-        ``[User interrupted]`` separator via ``_db.append_message``.
-        This maintains the user/assistant role alternation invariant
-        so the SDK's ``repair_message_sequence`` does not merge
-        consecutive users and break ``_persist_user_message_idx``
-        tracking.  Every other message-row write is owned by the SDK.
+        ``cancel_stream`` in ``api/streaming.py``, which may append a
+        ``_partial`` assistant message (when the user cancelled
+        mid-stream) and always appends a ``*Task cancelled.*``
+        marker, both via ``_db.append_message``.  This maintains the
+        user/assistant role alternation invariant so the SDK's
+        ``repair_message_sequence`` does not merge consecutive users
+        and break ``_persist_user_message_idx`` tracking, and lets
+        the model see the partial content as prior context on the
+        next turn.  Every other message-row write is owned by the SDK.
         """
         sid = self.session_id
 
