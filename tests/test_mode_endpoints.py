@@ -53,7 +53,7 @@ def _post(path, body=None, expect_ok=True):
 def _make_test_session():
     """Create a fresh session and return its session_id."""
     data = _post("/api/session/new")
-    return data["session_id"]
+    return data["session"]["session_id"]
 
 
 # ── GET /api/session/mode ──────────────────────────────────────────────────
