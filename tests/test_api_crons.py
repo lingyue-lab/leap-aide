@@ -1,30 +1,10 @@
-"""Sprint 3 tests: cron API, skills API, memory API, input validation."""
+"""
+Tests: cron API (list/output/pause/resume/run), skills API,
+memory API, session/workspace input validation.
+"""
 import json, uuid, urllib.request, urllib.error
 
-from tests._pytest_port import BASE
-
-def get(path):
-    with urllib.request.urlopen(BASE + path, timeout=10) as r:
-        return json.loads(r.read()), r.status
-
-def post(path, body=None):
-    data = json.dumps(body or {}).encode()
-    req = urllib.request.Request(BASE + path, data=data, headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            return json.loads(r.read()), r.status
-    except urllib.error.HTTPError as e:
-        return json.loads(e.read()), e.code
-
-def make_session_tracked(created_list, ws=None):
-    """Create a session and register it with the cleanup fixture."""
-    import pathlib as _pathlib
-    body = {}
-    if ws: body["workspace"] = str(ws)
-    d, _ = post("/api/session/new", body)
-    sid = d["session"]["session_id"]
-    created_list.append(sid)
-    return sid, _pathlib.Path(d["session"]["workspace"])
+from tests._test_helpers import get, post, make_session_tracked
 
 
 def test_crons_list():

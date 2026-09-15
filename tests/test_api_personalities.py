@@ -1,5 +1,5 @@
 """
-Sprint 28 Tests: /personality slash command — backend API coverage.
+Tests: /personality slash command — backend API coverage.
 Tests: GET /api/personalities, POST /api/personality/set, Session.compact(),
 path traversal defence, size cap, clear personality.
 """
@@ -14,23 +14,7 @@ import urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from conftest import TEST_STATE_DIR
 
-from tests._pytest_port import BASE
-
-
-def get(path):
-    with urllib.request.urlopen(BASE + path, timeout=10) as r:
-        return json.loads(r.read()), r.status
-
-
-def post(path, body=None):
-    data = json.dumps(body or {}).encode()
-    req = urllib.request.Request(BASE + path, data=data,
-                                 headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            return json.loads(r.read()), r.status
-    except urllib.error.HTTPError as e:
-        return json.loads(e.read()), e.code
+from tests._test_helpers import get, post
 
 
 def _personalities_dir():

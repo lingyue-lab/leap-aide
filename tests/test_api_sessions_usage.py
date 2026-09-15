@@ -1,33 +1,10 @@
 """
-Sprint 23 Tests: agentic transparency — token/cost display, session usage fields,
+Tests: agentic transparency — token/cost display, session usage fields,
 subagent card names, skill picker in cron, skill linked files.
 """
 import json, urllib.error, urllib.request
 
-from tests._pytest_port import BASE
-
-
-def get(path):
-    with urllib.request.urlopen(BASE + path, timeout=10) as r:
-        return json.loads(r.read()), r.status
-
-
-def post(path, body=None):
-    data = json.dumps(body or {}).encode()
-    req = urllib.request.Request(BASE + path, data=data,
-                                headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            return json.loads(r.read()), r.status
-    except urllib.error.HTTPError as e:
-        return json.loads(e.read()), e.code
-
-
-def make_session(created_list):
-    d, _ = post("/api/session/new", {})
-    sid = d["session"]["session_id"]
-    created_list.append(sid)
-    return sid, d["session"]
+from tests._test_helpers import get, post, make_session
 
 
 # ── Session usage fields ─────────────────────────────────────────────────

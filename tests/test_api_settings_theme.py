@@ -1,34 +1,18 @@
 """
-Sprint 26 Tests: canonical appearance settings persist and legacy theme names
+Tests: canonical appearance settings persist and legacy theme names
 map onto the new theme + skin system.
 """
 import json, urllib.error, urllib.request
 import pathlib
 import sys
 
-from tests._pytest_port import BASE
+from tests._test_helpers import get, post
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from api import config
-
-
-def get(path):
-    with urllib.request.urlopen(BASE + path, timeout=10) as r:
-        return json.loads(r.read()), r.status
-
-
-def post(path, body=None):
-    data = json.dumps(body or {}).encode()
-    req = urllib.request.Request(BASE + path, data=data,
-                                headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            return json.loads(r.read()), r.status
-    except urllib.error.HTTPError as e:
-        return json.loads(e.read()), e.code
 
 
 # ── Theme settings ───────────────────────────────────────────────────────

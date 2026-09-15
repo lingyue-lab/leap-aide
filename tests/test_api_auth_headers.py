@@ -1,10 +1,15 @@
 """
-Sprint 19 Tests: auth/login, security headers, request size limit.
+Tests: auth/login, security headers, request size limit.
 """
 import json, urllib.error, urllib.request
 
 from tests._pytest_port import BASE
 
+
+# Local 3-tuple variants: callers here unpack (body, status, headers)
+# because several tests assert on response headers (X-Content-Type-Options,
+# Permissions-Policy, Cache-Control, etc.). The shared 2-tuple helpers in
+# tests/_test_helpers.py do not preserve the headers, so keep these local.
 
 def get(path, headers=None):
     req = urllib.request.Request(BASE + path)

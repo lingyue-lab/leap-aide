@@ -1,34 +1,8 @@
-"""Sprint 2 tests: image preview, file types, markdown. Uses cleanup_test_sessions fixture."""
+"""Tests: image preview, file types, markdown. Uses cleanup_test_sessions fixture."""
 import io, json, uuid, urllib.request, urllib.error, pathlib
 
+from tests._test_helpers import get, get_raw, post, make_session_tracked
 from tests._pytest_port import BASE
-
-def get(path):
-    with urllib.request.urlopen(BASE + path, timeout=10) as r:
-        return json.loads(r.read()), r.status
-
-def get_raw(path):
-    with urllib.request.urlopen(BASE + path, timeout=10) as r:
-        return r.read(), r.headers.get('Content-Type', ''), r.status
-
-def post(path, body=None):
-    data = json.dumps(body or {}).encode()
-    req = urllib.request.Request(BASE + path, data=data, headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            return json.loads(r.read()), r.status
-    except urllib.error.HTTPError as e:
-        return json.loads(e.read()), e.code
-
-def make_session_tracked(created_list, ws=None):
-    """Create a session and register it with the cleanup fixture."""
-    import pathlib as _pathlib
-    body = {}
-    if ws: body["workspace"] = str(ws)
-    d, _ = post("/api/session/new", body)
-    sid = d["session"]["session_id"]
-    created_list.append(sid)
-    return sid, _pathlib.Path(d["session"]["workspace"])
 
 
 

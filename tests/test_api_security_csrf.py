@@ -27,35 +27,7 @@ import urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from conftest import TEST_STATE_DIR
 
-from tests._pytest_port import BASE
-
-
-def get(path, headers=None):
-    req = urllib.request.Request(BASE + path, headers=headers or {})
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            return json.loads(r.read()), r.status
-    except urllib.error.HTTPError as e:
-        return json.loads(e.read()), e.code
-
-
-def post(path, body=None, headers=None):
-    data = json.dumps(body or {}).encode()
-    h = {"Content-Type": "application/json"}
-    if headers:
-        h.update(headers)
-    req = urllib.request.Request(BASE + path, data=data, headers=h)
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            return json.loads(r.read()), r.status
-    except urllib.error.HTTPError as e:
-        return json.loads(e.read()), e.code
-
-
-def get_raw_with_headers(path):
-    req = urllib.request.Request(BASE + path)
-    with urllib.request.urlopen(req, timeout=10) as r:
-        return r.read(), dict(r.headers.items()), r.status
+from tests._test_helpers import get, post, get_raw_with_headers
 
 
 # ── 1. CSRF Protection ─────────────────────────────────────────────────────

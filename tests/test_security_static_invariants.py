@@ -1,9 +1,9 @@
 """
-Sprint 43 (extracted): Security hardening pass.
+Security hardening pass — source-text regression checks.
 
-Carved out of the original tests/test_sprint43.py — that file mixed backend
-source-level checks (this file) with frontend DOM checks that crash in the
-headless backend-test environment.
+Originally carved out of tests/test_sprint43.py because that file mixed
+backend source-level checks (this file) with frontend DOM checks that crash
+in the headless backend-test environment.
 
 Four backend guarantees remain:
 

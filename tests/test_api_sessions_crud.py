@@ -1,12 +1,9 @@
 """
-Sprint 1 test suite for the Hermes Web UI.
+Tests: session CRUD, multipart upload parser, /api/upload, /api/approval/*,
+/api/chat/stream/status, /api/list path-traversal defence.
 
 Tests use the ISOLATED test server. Port is auto-derived per worktree (see conftest.py).
 Production server (port 8787) and your real conversations are never touched.
-Start the server before running:
-    <repo>/start.sh
-    # wait 2 seconds
-    pytest webui-mvp/tests/test_sprint1.py -v
 
 All tests are HTTP-level: they call real API endpoints and verify responses.
 No mocking required for session CRUD, upload parser, or approval API.
@@ -27,62 +24,7 @@ import pathlib
 # Allow importing server modules directly for unit tests
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.parent))
 
-from tests._pytest_port import BASE
-
-
-# ──────────────────────────────────────────────
-# HTTP helpers
-# ──────────────────────────────────────────────
-
-def get(path):
-    url = BASE + path
-    with urllib.request.urlopen(url, timeout=10) as r:
-        return json.loads(r.read())
-
-
-def post(path, body=None):
-    url = BASE + path
-    data = json.dumps(body or {}).encode()
-    req = urllib.request.Request(url, data=data,
-          headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            return json.loads(r.read()), r.status
-    except urllib.error.HTTPError as e:
-        return json.loads(e.read()), e.code
-
-
-def post_multipart(path, fields, files):
-    """Post a multipart/form-data request. files: {name: (filename, bytes)}"""
-    boundary = uuid.uuid4().hex.encode()
-    body = b""
-    for name, value in fields.items():
-        body += b"--" + boundary + b"\r\n"
-        body += f"Content-Disposition: form-data; name=\"{name}\"\r\n\r\n".encode()
-        body += value.encode() + b"\r\n"
-    for name, (filename, data) in files.items():
-        body += b"--" + boundary + b"\r\n"
-        body += f"Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n".encode()
-        body += b"Content-Type: application/octet-stream\r\n\r\n"
-        body += data + b"\r\n"
-    body += b"--" + boundary + b"--\r\n"
-    req = urllib.request.Request(BASE + path, data=body,
-          headers={"Content-Type": f"multipart/form-data; boundary={boundary.decode()}"})
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            return json.loads(r.read()), r.status
-    except urllib.error.HTTPError as e:
-        return json.loads(e.read()), e.code
-
-
-def make_session_tracked(created_list, ws=None):
-    """Create a session and register it with the cleanup fixture."""
-    body = {}
-    if ws: body["workspace"] = str(ws)
-    d, _ = post("/api/session/new", body)
-    sid = d["session"]["session_id"]
-    created_list.append(sid)
-    return sid, pathlib.Path(d["session"]["workspace"])
+from tests._test_helpers import get_body, post, post_multipart, make_session_tracked
 
 
 

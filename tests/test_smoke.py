@@ -5,7 +5,7 @@ This file is the entry point for L1 in `scripts/run_test.sh smoke`.
 It contains a small, fast set of checks that verify the test server is up
 and core API surfaces respond. The full L1 set additionally pulls in:
 
-    tests/test_sprint1.py
+    tests/test_api_sessions_crud.py
     tests/test_chat_start_commands.py
     tests/test_regressions.py
     tests/test_pytest_state_isolation.py

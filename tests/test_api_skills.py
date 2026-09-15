@@ -1,30 +1,9 @@
 """
-Sprint 7 Tests: Cron CRUD, Skill CRUD, Memory Write, Session Content Search, Health
+Tests: Cron CRUD, Skill CRUD, Memory Write, Session Content Search, Health.
 """
 import json, pathlib, urllib.error, urllib.parse, urllib.request
 
-from tests._pytest_port import BASE
-
-def get(path):
-    with urllib.request.urlopen(BASE + path, timeout=10) as r:
-        return json.loads(r.read())
-
-def post(path, body=None):
-    data = json.dumps(body or {}).encode()
-    req = urllib.request.Request(BASE + path, data=data, headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            return json.loads(r.read()), r.status
-    except urllib.error.HTTPError as e:
-        return json.loads(e.read()), e.code
-
-def make_session_tracked(created_list, ws=None):
-    body = {}
-    if ws: body["workspace"] = str(ws)
-    d, _ = post("/api/session/new", body)
-    sid = d["session"]["session_id"]
-    created_list.append(sid)
-    return sid, pathlib.Path(d["session"]["workspace"])
+from tests._test_helpers import get_body, post, make_session_tracked
 
 # ── Health (Phase G) ──────────────────────────────────────────────
 
