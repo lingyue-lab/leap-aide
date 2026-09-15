@@ -2557,20 +2557,44 @@ def handle_post(handler, parsed) -> bool:
             return bad(handler, "Project not found", 404)
         projects = [p for p in projects if p["project_id"] != body["project_id"]]
         save_projects(projects)
-        # Unassign all sessions that belonged to this project
-        if SESSION_INDEX_FILE.exists():
-            try:
-                index = json.loads(SESSION_INDEX_FILE.read_text(encoding="utf-8"))
-                for entry in index:
-                    if entry.get("project_id") == body["project_id"]:
+        # Unassign all sessions that belonged to this project.
+        # SESSION_INDEX_FILE is no longer written (see api/models.py:
+        # _write_session_index is a no-op since the state.db migration), so
+        # we must consult state.db directly to find affected sessions.
+        # __webui column reads are an explicit exception to the
+        # "no direct state.db access" rule (see CLAUDE.md §数据库设计).
+        from api.models import _get_session_db
+        try:
+            db = _get_session_db()
+            if db is not None:
+                rows = db.list_sessions_rich(source='webui', limit=100000)
+                for row in rows:
+                    if row.get('project_id__webui') == body['project_id']:
+                        affected_sid = row.get('id') or row.get('session_id')
+                        if not affected_sid:
+                            continue
                         try:
-                            s = get_session(entry["session_id"])
-                            s.project_id = None
-                            s.sync_webui_metadata()
+                            with _get_session_agent_lock(affected_sid):
+                                s = get_session(affected_sid)
+                                s.project_id = None
+                                s.sync_webui_metadata()
+                        except KeyError:
+                            # Session was deleted concurrently — safe to skip.
+                            logger.debug(
+                                "Session %s vanished during project unlink",
+                                affected_sid,
+                            )
                         except Exception:
-                            logger.debug("Failed to update session %s", entry.get("session_id"))
-            except Exception:
-                logger.debug("Failed to load session index for project unlink")
+                            logger.warning(
+                                "Failed to unlink session %s from project %s",
+                                affected_sid, body['project_id'],
+                                exc_info=True,
+                            )
+        except Exception:
+            logger.warning(
+                "Failed to enumerate sessions for project %s unlink",
+                body['project_id'], exc_info=True,
+            )
         return j(handler, {"ok": True})
 
     # ── Session import from JSON (POST) ──
