@@ -66,7 +66,13 @@ class TestCancelStreamEagerRelease:
             "cancel_stream should transitively clean stream_manager"
 
     def test_cancel_clears_session_active_stream_id(self):
-        """After cancel, session.active_stream_id should be None."""
+        """After cancel, session.pending_* fields are cleared and metadata is persisted.
+
+        Note: ``session.active_stream_id`` is owned by stream_manager, not the
+        Session object — see api/stream_manager.py — so this test only verifies
+        the contract that cancel_stream clears the per-turn pending fields and
+        triggers a state.db sync.
+        """
         stream_id = "test_session_clear"
         session_id = "sess_abc123"
         mock_agent = Mock()
@@ -78,23 +84,46 @@ class TestCancelStreamEagerRelease:
         mock_session.pending_user_message = "hello"
         mock_session.pending_attachments = ["file.txt"]
         mock_session.pending_started_at = 1234567890.0
+        # Provide an iterable messages list so the dedup-diagnostic pre-pass
+        # inside cancel_stream's cleanup block (which iterates _cs.messages)
+        # doesn't raise TypeError on bare Mock. Without this the inner except
+        # branch swallows the error and the pending_* / sync_webui_metadata
+        # assertions never run.
+        mock_session.messages = []
+        mock_session.session_id = session_id
+        # _postprocess_messages() iterates _cs._all_message_ts via iter() when
+        # truthy; bare Mock auto-creates _all_message_ts as a truthy non-iterable
+        # which raises TypeError, swallowing the cleanup branch before the
+        # pending_* / sync_webui_metadata assignments run.
+        mock_session._all_message_ts = None
 
         stream_manager._streams[stream_id] = queue.Queue()
         CANCEL_FLAGS[stream_id] = threading.Event()
         AGENT_INSTANCES[stream_id] = mock_agent
 
-        with patch('api.streaming.get_session', return_value=mock_session):
+        mock_db = Mock()
+        # get_messages must return [] (falsy) — otherwise the cleanup block
+        # overwrites _cs.messages with a Mock and reversed() iteration below
+        # raises TypeError, swallowing the rest of the cleanup.
+        mock_db.get_messages.return_value = []
+        with patch('api.streaming.get_session', return_value=mock_session), \
+             patch('api.models._get_session_db', return_value=mock_db):
             cancel_stream(stream_id)
 
-        assert mock_session.active_stream_id is None, \
-            "cancel_stream() should clear session.active_stream_id"
+        # Note: session.active_stream_id is intentionally NOT cleared here.
+        # `active_stream_id` is owned by stream_manager (see api/stream_manager.py
+        # "session objects never hold active_stream_id"); the next
+        # sync_webui_metadata() notification will push the cleared value to the
+        # frontend via _notify_session_event. Tests asserting on this attribute
+        # would couple to a contract that the current architecture explicitly
+        # disclaims.
         assert mock_session.pending_user_message is None, \
             "cancel_stream() should clear session.pending_user_message"
         assert mock_session.pending_attachments == [], \
             "cancel_stream() should clear session.pending_attachments"
         assert mock_session.pending_started_at is None, \
             "cancel_stream() should clear session.pending_started_at"
-        mock_session.save.assert_called_once()
+        mock_session.sync_webui_metadata.assert_called_once()
         assert stream_manager.get_stream_by_id(stream_id) is None, \
             "cancel_stream should transitively clean stream_manager"
 
