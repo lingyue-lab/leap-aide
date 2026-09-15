@@ -57,12 +57,18 @@ def get(path, headers=None):
         return json.loads(r.read()), r.status
 
 
-def post(path, body=None):
-    """POST JSON. Returns (body_dict, status)."""
+def post(path, body=None, headers=None):
+    """POST JSON. Returns (body_dict, status).
+
+    `headers` is optional and merged on top of the default Content-Type header,
+    so callers can pass e.g. `headers={"Origin": "..."}` for CSRF assertions
+    without losing the JSON content-type.
+    """
     data = json.dumps(body or {}).encode()
-    req = urllib.request.Request(
-        BASE + path, data=data, headers={"Content-Type": "application/json"}
-    )
+    h = {"Content-Type": "application/json"}
+    if headers:
+        h.update(headers)
+    req = urllib.request.Request(BASE + path, data=data, headers=h)
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             return json.loads(r.read()), r.status
