@@ -34,7 +34,7 @@ from tests._test_helpers import get_body, post, post_multipart, make_session_tra
 
 def test_health():
     """Server must be running and healthy."""
-    data = get("/health")
+    data = get_body("/health")
     assert data["status"] == "ok", f"health not ok: {data}"
 
 
@@ -45,7 +45,7 @@ def test_health():
 def test_session_get_no_id_returns_400():
     """B11: GET /api/session with no session_id must return 400, not silently create."""
     try:
-        data = get("/api/session")
+        data = get_body("/api/session")
         # If we get here, the server returned 200 (old broken behavior)
         assert False, f"Expected 400 but got 200: {data}"
     except urllib.error.HTTPError as e:
@@ -70,12 +70,12 @@ def test_session_create_and_load():
     post("/api/session/rename", {"session_id": sid, "title": "test-create-verify"})
 
     # Verify it appears in /api/sessions list
-    sessions = get("/api/sessions")
+    sessions = get_body("/api/sessions")
     sids = [s["session_id"] for s in sessions["sessions"]]
     assert sid in sids, f"New session {sid} not in sessions list"
 
     # Load it directly
-    loaded = get(f"/api/session?session_id={sid}")
+    loaded = get_body(f"/api/session?session_id={sid}")
     assert loaded["session"]["session_id"] == sid
     assert loaded["session"]["messages"] == []
 
@@ -100,7 +100,7 @@ def test_session_update():
     assert updated["session"]["model"] == "anthropic/claude-sonnet-4.6"
 
     # Reload and verify persistence
-    reloaded = get(f"/api/session?session_id={sid}")
+    reloaded = get_body(f"/api/session?session_id={sid}")
     assert reloaded["session"]["model"] == "anthropic/claude-sonnet-4.6"
 
 
@@ -115,7 +115,7 @@ def test_session_delete():
 
     # Trying to load it should now 404/500 (KeyError -> 500 in current handler)
     try:
-        get(f"/api/session?session_id={sid}")
+        get_body(f"/api/session?session_id={sid}")
         assert False, "Expected error loading deleted session"
     except urllib.error.HTTPError as e:
         assert e.code in (404, 500), f"Expected 404 or 500, got {e.code}"
@@ -140,7 +140,7 @@ def test_sessions_list_sorted():
     time.sleep(0.05)
     post("/api/session/rename", {"session_id": sid_b, "title": "test-sort-b"})
 
-    sessions = get("/api/sessions")
+    sessions = get_body("/api/sessions")
     sids = [s["session_id"] for s in sessions["sessions"]]
 
     # b was updated more recently, should appear before a
@@ -249,7 +249,7 @@ def test_upload_text_file(cleanup_test_sessions):
     assert result["size"] == len(b"sprint1 test content")
 
     # Verify file appears in listing
-    listing = get(f"/api/list?session_id={sid}&path=.")
+    listing = get_body(f"/api/list?session_id={sid}&path=.")
     names = [e["name"] for e in listing["entries"]]
     assert result["filename"] in names, f"{result['filename']} not in {names}"
     # Cleanup the uploaded file
@@ -295,7 +295,7 @@ def test_upload_bad_session():
 
 def test_approval_pending_none():
     """GET /api/approval/pending for a session with no pending entry returns null."""
-    data = get("/api/approval/pending?session_id=no_such_session")
+    data = get_body("/api/approval/pending?session_id=no_such_session")
     assert data["pending"] is None
 
 
@@ -306,11 +306,11 @@ def test_approval_submit_and_respond():
     key = "recursive_delete"
 
     # Inject into server process via test endpoint (shared module state)
-    inject = get(f"/api/approval/inject_test?session_id={urllib.parse.quote(test_sid)}&pattern_key={key}&command={urllib.parse.quote(cmd)}")
+    inject = get_body(f"/api/approval/inject_test?session_id={urllib.parse.quote(test_sid)}&pattern_key={key}&command={urllib.parse.quote(cmd)}")
     assert inject["ok"] is True
 
     # Poll should now show the pending entry
-    data = get(f"/api/approval/pending?session_id={urllib.parse.quote(test_sid)}")
+    data = get_body(f"/api/approval/pending?session_id={urllib.parse.quote(test_sid)}")
     assert data["pending"] is not None, "Pending entry not visible after inject"
     assert data["pending"]["command"] == cmd
 
@@ -324,7 +324,7 @@ def test_approval_submit_and_respond():
     assert result["choice"] == "deny"
 
     # Pending should be gone
-    data2 = get(f"/api/approval/pending?session_id={urllib.parse.quote(test_sid)}")
+    data2 = get_body(f"/api/approval/pending?session_id={urllib.parse.quote(test_sid)}")
     assert data2["pending"] is None, "Pending entry should be cleared after respond"
 
 
@@ -332,7 +332,7 @@ def test_approval_respond_allow_session():
     """Inject pending entry, respond with session choice, verify cleared (approved)."""
     test_sid = f"test-approval-sess-{uuid.uuid4().hex[:6]}"
 
-    inject = get(f"/api/approval/inject_test?session_id={urllib.parse.quote(test_sid)}&pattern_key=force_kill&command=pkill+-9+someproc")
+    inject = get_body(f"/api/approval/inject_test?session_id={urllib.parse.quote(test_sid)}&pattern_key=force_kill&command=pkill+-9+someproc")
     assert inject["ok"] is True
 
     result, status = post("/api/approval/respond", {
@@ -344,7 +344,7 @@ def test_approval_respond_allow_session():
     assert result["choice"] == "session"
 
     # After session approval, pending should be cleared
-    data = get(f"/api/approval/pending?session_id={urllib.parse.quote(test_sid)}")
+    data = get_body(f"/api/approval/pending?session_id={urllib.parse.quote(test_sid)}")
     assert data["pending"] is None, "Pending entry should be cleared after session approval"
 
 
@@ -354,7 +354,7 @@ def test_approval_respond_allow_session():
 
 def test_stream_status_unknown_id():
     """GET /api/chat/stream/status for unknown stream_id returns active:false."""
-    data = get("/api/chat/stream/status?stream_id=doesnotexist")
+    data = get_body("/api/chat/stream/status?stream_id=doesnotexist")
     assert data["active"] is False
 
 
@@ -365,7 +365,7 @@ def test_stream_status_unknown_id():
 def test_list_dir(cleanup_test_sessions):
     """List workspace directory for a session."""
     sid, _ = make_session_tracked(cleanup_test_sessions)
-    listing = get(f"/api/list?session_id={sid}&path=.")
+    listing = get_body(f"/api/list?session_id={sid}&path=.")
     assert "entries" in listing
     assert isinstance(listing["entries"], list)
 
@@ -374,7 +374,7 @@ def test_list_dir_path_traversal(cleanup_test_sessions):
     """Path traversal via ../.. should be blocked (500 or 400)."""
     sid, _ = make_session_tracked(cleanup_test_sessions)
     try:
-        listing = get(f"/api/list?session_id={sid}&path=../../etc")
+        listing = get_body(f"/api/list?session_id={sid}&path=../../etc")
         # If server returns entries outside workspace root, that is a bug
         # (safe_resolve should raise ValueError)
         assert False, f"Expected error for path traversal, got: {listing}"

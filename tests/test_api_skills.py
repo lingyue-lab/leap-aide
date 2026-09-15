@@ -8,27 +8,27 @@ from tests._test_helpers import get_body, post, make_session_tracked
 # ── Health (Phase G) ──────────────────────────────────────────────
 
 def test_health_has_active_streams():
-    data = get("/health")
+    data = get_body("/health")
     assert "active_streams" in data
     assert isinstance(data["active_streams"], int) and data["active_streams"] >= 0
 
 def test_health_has_uptime_seconds():
-    data = get("/health")
+    data = get_body("/health")
     assert "uptime_seconds" in data
     assert isinstance(data["uptime_seconds"], (int, float)) and data["uptime_seconds"] >= 0
 
 # ── Session content search ────────────────────────────────────────
 
 def test_session_search_empty_returns_all(cleanup_test_sessions):
-    data = get("/api/sessions/search?q=")
+    data = get_body("/api/sessions/search?q=")
     assert "sessions" in data
 
 def test_session_search_content_params_accepted(cleanup_test_sessions):
-    data = get("/api/sessions/search?q=hello&content=1&depth=3")
+    data = get_body("/api/sessions/search?q=hello&content=1&depth=3")
     assert "sessions" in data and "query" in data and data["query"] == "hello"
 
 def test_session_search_returns_count(cleanup_test_sessions):
-    data = get("/api/sessions/search?q=nonexistent_xyz_9999&content=1")
+    data = get_body("/api/sessions/search?q=nonexistent_xyz_9999&content=1")
     assert "count" in data and data["count"] == 0
 
 # ── Cron update ───────────────────────────────────────────────────
@@ -99,11 +99,11 @@ def test_memory_write_invalid_section(cleanup_test_sessions):
     assert status == 400
 
 def test_memory_write_read_roundtrip(cleanup_test_sessions):
-    original = get("/api/memory").get("memory", "")
+    original = get_body("/api/memory").get("memory", "")
     test_content = "# Sprint 7 Test\nWritten by test_memory_write_read_roundtrip."
     data, status = post("/api/memory/write", {"section": "memory", "content": test_content})
     assert status == 200 and data.get("ok") is True
-    read_back = get("/api/memory").get("memory")
+    read_back = get_body("/api/memory").get("memory")
     assert read_back == test_content
     # Restore
     post("/api/memory/write", {"section": "memory", "content": original})
