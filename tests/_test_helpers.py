@@ -42,16 +42,19 @@ def get_body(path, headers=None):
 # ── 2-tuple: body + status ──────────────────────────────────────────────────
 
 def get(path, headers=None):
-    """GET. Returns (body_dict, status)."""
+    """GET. Returns (body_dict, status).
+
+    Note: HTTPError is NOT caught — callers that need to assert on
+    error responses should wrap this in `try/except urllib.error.HTTPError`.
+    This matches the original per-file helpers in test_sprint{3,11,...}.py
+    which relied on the exception to surface the status code.
+    """
     req = urllib.request.Request(BASE + path)
     if headers:
         for k, v in headers.items():
             req.add_header(k, v)
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            return json.loads(r.read()), r.status
-    except urllib.error.HTTPError as e:
-        return json.loads(e.read()), e.code
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read()), r.status
 
 
 def post(path, body=None):
