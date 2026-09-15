@@ -189,8 +189,11 @@ def _strip_xml_tool_calls(text: str) -> str:
 def _sanitize_messages_for_api(messages):
     """Return a copy of messages safe for LLM API consumption.
 
-    Keeps all message fields (including webui metadata like oc_webui and
-    timestamp — these are harmless to providers). Only removes:
+    Keeps API-relevant fields (role, content, tool_calls, tool_call_id, name,
+    reasoning, timestamp, attachments).  Strips underscore-prefixed internal
+    keys (_ts, _error, _partial, __webui state.db columns).
+
+    Also removes:
 
     - Error messages (_error=True)
     - Orphaned tool results (tool_call_id not matching any assistant tool_calls)
@@ -223,10 +226,14 @@ def _sanitize_messages_for_api(messages):
             if not tid or tid not in valid_tool_call_ids:
                 # Orphaned tool result — skip to avoid 400 from strict providers.
                 continue
-        # Shallow copy — keep webui fields (oc_webui, timestamp, etc.)
-        # that were unnecessarily stripped by the old _API_SAFE_MSG_KEYS
-        # whitelist.  Only harmful fields (_error) are skipped above.
-        sanitized = dict(msg)
+        # Build a copy that keeps API-relevant fields (role, content, tool_calls,
+        # timestamp, etc.) and strips internal underscore-prefixed keys (_ts,
+        # _error, _partial, __webui state.db columns).  Strictly-conformant
+        # providers (Mercury-2, Inception, newer OpenAI) reject unknown schema
+        # fields with 400, so internal storage metadata must not leak into the
+        # API payload.  `_error` is already skipped above; stripping underscore
+        # keys here is belt-and-suspenders.
+        sanitized = {k: v for k, v in msg.items() if not k.startswith('_')}
         # Strip empty tool_calls — some providers (DeepSeek) reject []
         if isinstance(sanitized.get('tool_calls'), list) and not sanitized['tool_calls']:
             del sanitized['tool_calls']
