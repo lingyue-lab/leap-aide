@@ -1633,7 +1633,7 @@ FAIL: User message gone, blank chat, response lands in wrong session.
 ## Sections Added Post-Sprint 10 (Sprints 11-19)
 
 The following features were added in Sprints 11-19 and need manual browser testing.
-Each has automated API-level tests in `tests/test_sprint{N}.py`.
+Each has automated API-level tests in `tests/test_api_*.py`.
 
 ### Sprint 11: Multi-Provider Models
 - Open model dropdown. Verify models grouped by provider (OpenAI, Anthropic, Google, etc.)

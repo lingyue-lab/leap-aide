@@ -81,7 +81,7 @@ actions. The topbar remains focused on conversation context and the workspace/fi
       boot.js              Event wiring, mobile sidebar/workspace nav, voice input, boot IIFE (~338 lines)
     tests/
       conftest.py          Isolated test server (port 8788, separate HERMES_HOME) (~240 lines)
-      test_sprint{1-20b}.py Feature tests per sprint (21 files, 415 test functions)
+      test_api_*.py        Feature tests organized by API endpoint (renamed 2026-09-15 from legacy test_sprint*.py; see CHANGELOG)
       test_regressions.py  Permanent regression gate (23 tests)
     AGENTS.md              Instruction file for agents working in this directory.
     ROADMAP.md             Feature and product roadmap document.
@@ -1267,7 +1267,7 @@ See Section 11 for the exact code pattern. Short version:
 - POST: add after /api/upload check and after read_body(), before 404 fallback in do_POST
 - Always validate required fields, return 400 for missing/invalid input
 - Always use get_session(sid) with try/except KeyError -> 400 or 404
-- Add a test in test_sprint1.py or a new test file
+- Add a test in `tests/test_api_*.py` (or a new topic-based test file); see the file inventory above for the current naming scheme
 
 ### Updating This Document
 

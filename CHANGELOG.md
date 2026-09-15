@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Chore
+- **Renamed `tests/test_sprint*.py` to topic-based filenames** — the 19
+  sprint-suffixed test files have been renamed to files named after the API or
+  component they cover (e.g. `test_api_models_endpoint.py`,
+  `test_api_security_csrf.py`, `test_streaming_cancel_eager_release.py`).
+  Sprint numbers had drifted from reality (sprint 51 was not a real sprint, just
+  an issue-number label) and the filenames no longer conveyed what was inside.
+  Per-file HTTP helper copies were extracted to a shared `tests/_test_helpers.py`
+  module; test bodies are unchanged. `git log --follow` preserves rename history
+  on every renamed file.
+
 ### Fixed
 - **Auto-title generic fallback** — when the auxiliary title-generation call
   fails and the local fallback can only produce the generic label
