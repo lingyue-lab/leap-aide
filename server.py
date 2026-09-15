@@ -293,7 +293,7 @@ def main() -> None:
         auto_install_agent_deps()
         ok, missing, errors = verify_hermes_imports()
         if not ok:
-            _warn(f'missing: {", ".join(missing.keys())}')
+            _warn(f'missing: {", ".join(missing)}')
         else:
             _done('auto-installed')
     else:
@@ -333,6 +333,7 @@ def main() -> None:
             httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
             _done(f'TLS={TLS_CERT}')
         except Exception as e:
+            logger.warning('TLS setup failed, falling back to HTTP: %s', e)
             _fail(str(e))
             scheme = 'http'
     else:

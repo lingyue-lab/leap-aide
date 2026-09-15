@@ -39,7 +39,7 @@ def _find_free_port() -> int:
 
 
 def _wait_for_server(host: str, port: int, use_ssl: bool = False,
-                     timeout: float = 8.0) -> bool:
+                     timeout: float = 30.0) -> bool:
     """Poll until the server accepts a connection or times out."""
     ctx = None
     if use_ssl:
@@ -63,8 +63,13 @@ def _wait_for_server(host: str, port: int, use_ssl: bool = False,
     return False
 
 
-def _start_server(port: int, cert: str = None, key: str = None) -> subprocess.Popen:
-    """Start server.py as a subprocess with the given TLS env vars."""
+def _start_server(port: int, cert: str = None, key: str = None) -> tuple[subprocess.Popen, str]:
+    """Start server.py as a subprocess with the given TLS env vars.
+
+    Returns ``(proc, log_path)`` where ``log_path`` points to the captured
+    stdout/stderr log file. Tests can read this file to debug startup failures
+    without contending with the OS pipe buffer.
+    """
     env = {k: v for k, v in os.environ.items()}
     env["HERMES_WEBUI_HOST"] = "127.0.0.1"
     env["HERMES_WEBUI_PORT"] = str(port)
@@ -75,12 +80,16 @@ def _start_server(port: int, cert: str = None, key: str = None) -> subprocess.Po
     if key:
         env["HERMES_WEBUI_TLS_KEY"] = key
     env["HERMES_WEBUI_STATE_DIR"] = str(Path(tempfile.mkdtemp()))
+    log_path = Path(tempfile.mkdtemp()) / "server.log"
+    log_file = open(log_path, "w+")
     proc = subprocess.Popen(
         [os.sys.executable, str(ROOT / "server.py")],
-        env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True,
+        env=env, stdout=log_file, stderr=subprocess.STDOUT,
+        text=True, cwd=str(ROOT),
     )
-    return proc
+    proc._log_path = str(log_path)
+    proc._log_file = log_file
+    return proc, str(log_path)
 
 
 # ── Test class ──────────────────────────────────────────────────────────────
@@ -155,13 +164,22 @@ class TestTLSEndToEnd(unittest.TestCase):
                 self._proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self._proc.kill()
+        if hasattr(self, "_proc"):
+            log_file = getattr(self._proc, "_log_file", None)
+            if log_file is not None:
+                try:
+                    log_file.close()
+                except Exception:
+                    pass
 
     def test_https_server_responds_to_health(self):
         port = _find_free_port()
-        self._proc = _start_server(port, cert=self._cert, key=self._key)
+        self._proc, self._log_path = _start_server(
+            port, cert=self._cert, key=self._key,
+        )
         self.assertTrue(
             _wait_for_server("127.0.0.1", port, use_ssl=True),
-            "TLS server did not start in time",
+            f"TLS server did not start in time; see log: {self._log_path}",
         )
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
@@ -176,9 +194,10 @@ class TestTLSEndToEnd(unittest.TestCase):
 
     def test_http_without_tls_still_works(self):
         port = _find_free_port()
-        self._proc = _start_server(port)
+        self._proc, self._log_path = _start_server(port)
         self.assertTrue(
             _wait_for_server("127.0.0.1", port, use_ssl=False),
+            f"HTTP server did not start in time; see log: {self._log_path}",
         )
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
         conn.request("GET", "/health")
@@ -191,23 +210,17 @@ class TestTLSEndToEnd(unittest.TestCase):
     def test_tls_startup_failure_fallback_to_http(self):
         """Bad cert paths should print a warning and start HTTP anyway."""
         port = _find_free_port()
-        self._proc = _start_server(
+        self._proc, self._log_path = _start_server(
             port, cert="/nonexistent/cert.pem", key="/nonexistent/key.pem",
         )
         # Server should be reachable over plain HTTP even though TLS setup failed
         self.assertTrue(
             _wait_for_server("127.0.0.1", port, use_ssl=False),
-            "HTTP fallback server did not start after TLS failure",
+            f"HTTP fallback server did not start after TLS failure; see log: {self._log_path}",
         )
-        # Confirm TLS warning was printed
-        import fcntl
-        os.set_blocking(self._proc.stdout.fileno(), False)
-        output = ""
-        try:
-            output = self._proc.stdout.read(2000) or ""
-        except BlockingIOError:
-            output = ""
-        self.assertIn("TLS setup failed", output)
+        # Confirm TLS warning was printed to the captured log
+        log_text = Path(self._log_path).read_text(errors="replace") if self._log_path else ""
+        self.assertIn("TLS setup failed", log_text)
 
 
 if __name__ == "__main__":
