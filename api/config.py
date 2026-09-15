@@ -2380,7 +2380,12 @@ def _read_settings_from_disk() -> tuple[dict, float]:
         stored.get("theme") if isinstance(stored, dict) else settings.get("theme"),
         stored.get("skin") if isinstance(stored, dict) else settings.get("skin"),
     )
-    settings["default_model"] = get_effective_default_model()
+    # NOTE: do NOT set settings["default_model"] here. The authoritative source for
+    # default_model is config.yaml (mirrored in _cfg_cache and refreshed by
+    # reload_config()). Caching a snapshot of it in _settings_cache caused
+    # /api/settings to keep returning the boot-time default_model after
+    # POST /api/default-model until something else wrote settings.json. The
+    # fresh value is injected by load_settings() on every call instead.
     return settings, mt
 
 
@@ -2389,6 +2394,10 @@ def load_settings() -> dict:
 
     Fast path: stat the file; if mtime unchanged, return cached copy.
     Slow path: re-read under lock with double-check.
+
+    Note: `default_model` is intentionally NOT cached — it is derived from
+    config.yaml via get_effective_default_model() and injected fresh on every
+    call. See the comment in _read_settings_from_disk() for rationale.
     """
     global _settings_cache, _settings_mtime
     # Fast path — no lock
@@ -2397,7 +2406,9 @@ def load_settings() -> dict:
     except OSError:
         mt = 0.0
     if _settings_cache is not None and mt == _settings_mtime:
-        return dict(_settings_cache)
+        cached = dict(_settings_cache)
+        cached["default_model"] = get_effective_default_model()
+        return cached
 
     # Slow path — acquire lock, double-check
     with _settings_cache_lock:
@@ -2406,12 +2417,16 @@ def load_settings() -> dict:
         except OSError:
             mt = 0.0
         if _settings_cache is not None and mt == _settings_mtime:
-            return dict(_settings_cache)
+            cached = dict(_settings_cache)
+            cached["default_model"] = get_effective_default_model()
+            return cached
 
         settings, mt = _read_settings_from_disk()
         _settings_cache = settings
         _settings_mtime = mt
-        return dict(settings)
+        result = dict(settings)
+        result["default_model"] = get_effective_default_model()
+        return result
 
 
 # 默认 idle 时长：60分钟
