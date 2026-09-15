@@ -27,6 +27,7 @@ import urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from conftest import TEST_STATE_DIR
 
+from tests._pytest_port import BASE
 from tests._test_helpers import get, post, get_raw_with_headers
 
 
