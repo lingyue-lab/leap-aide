@@ -13,6 +13,7 @@ import time
 import traceback
 import copy
 import uuid
+from functools import partial
 from pathlib import Path
 from typing import Optional
 
@@ -745,6 +746,80 @@ def _drain_process_notifications_for_session(session, session_id):
         pass
     except Exception as e:
         logger.debug("[drain] error: %s", e)
+
+
+def _on_session_title(
+    new_title: str,
+    source: str = 'llm',
+    *,
+    session_id: str,
+    put,
+    sessions_get,
+) -> None:
+    """SDK -> WebUI title push callback.
+
+    Wired onto AIAgent._on_session_title by _run_agent_streaming() at three
+    sites (ephemeral agent, cache-hit refresh, cache-miss construction). The
+    SDK invokes this from its auto-title daemon thread with signature
+    (title, source); see agent/turn_context.py —
+    ``title_callback=getattr(agent, "_on_session_title", None)``.
+
+    Per-request dependencies (session_id, put, sessions_get) are bound via
+    functools.partial at the wire-up site. This function is module-level so
+    it can be unit-tested without spinning up a full chat stream.
+
+    Source semantics:
+    - ``'derived'`` (stage 1, deterministic from user message): deliberately
+      suppressed. Forwarding it would cause sidebar flicker
+      (Untitled -> noisy derived -> final LLM). The SDK still persists it to
+      state.db as a fallback; we just don't push it to the frontend.
+    - ``'llm'`` or anything else (stage 2+): forwarded to frontend as a
+      'title' SSE event; in-memory Session.title is also updated so the
+      next done-event payload is consistent.
+    """
+    try:
+        title_str = str(new_title or '').strip()
+        if not title_str:
+            return
+        if source == 'derived':
+            logger.debug(
+                '[title-callback] stage1 derived (suppressed for UX); '
+                'session=%s title=%r',
+                session_id[:12], title_str,
+            )
+            return
+        # Stage 2 'llm' (or any other source): push to frontend.
+        _s = sessions_get(session_id)
+        if _s is not None:
+            _s.title = title_str
+        try:
+            put('title', {
+                'session_id': session_id,
+                'title': title_str,
+                'source': source,
+            })
+        except Exception:
+            # The SDK invokes this from its auto-title daemon thread, which
+            # can outlive the agent thread that created the put() closure. If
+            # the SSE queue has already been GC'd, the put() call may raise;
+            # log and continue — the title has already been persisted to db
+            # by the SDK at this point.
+            logger.debug(
+                '[title-callback] put() failed (queue closed?); '
+                'session=%s title=%r source=%s',
+                session_id[:12], title_str, source,
+                exc_info=True,
+            )
+            return
+        logger.debug(
+            '[title-callback] session=%s title=%r source=%s',
+            session_id[:12], title_str, source,
+        )
+    except Exception:
+        logger.warning(
+            'Failed to emit title callback for session %s',
+            session_id, exc_info=True,
+        )
 
 
 def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, attachments=None, drain_message=False, *, ephemeral=False):
@@ -1586,85 +1661,6 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             import inspect as _inspect
             _agent_params = set(_inspect.signature(_AIAgent.__init__).parameters)
 
-            # ── Title callback (SDK → WebUI push) ─────────────────────
-            # The SDK's maybe_auto_title() in agent/turn_context.py writes
-            # titles to state.db via set_auto_title(source='derived'|'llm')
-            # and then invokes this callback so the live frontend can mirror
-            # the change immediately. The SDK reads it via
-            # ``getattr(agent, "_on_session_title", None)`` — see
-            # /usr/local/lib/hermes-agent/agent/turn_context.py.  WebUI must
-            # not write the title column itself (CLAUDE.md), so this callback
-            # is the only path through which SDK-generated titles reach the
-            # frontend in real time.
-            #
-            # The SDK signature is ``Callable[[str, str], None]`` — args are
-            # (title, source). Source is ``"derived"`` for the synchronous
-            # instant title (stage 1, deterministic from user message) and
-            # ``"llm"`` for the background LLM upgrade (stage 2). We forward
-            # both stages to the frontend so the sidebar renames instantly
-            # and refines a moment later.
-            def _on_session_title(new_title: str, source: str = 'llm') -> None:
-                try:
-                    title_str = str(new_title or '').strip()
-                    if not title_str:
-                        return
-                    # Stage 1 'derived' (synchronous, deterministic from user
-                    # message) is still persisted to db by the SDK as a
-                    # useful fallback if the LLM upgrade never fires, but
-                    # we don't push it to the frontend and we don't update
-                    # the in-memory `Session.title` either — the derived
-                    # title is often a noisy heuristic (e.g. when webui
-                    # prefixes the user message with `[Workspace: ...]`,
-                    # the SDK's derive_title() picks that prefix as the
-                    # title). Mutating `_s.title` here leaks the noisy
-                    # derived value into the `done` event payload and the
-                    # subsequent GET /api/session reload, causing the
-                    # sidebar to flicker Untitled → "[Workspace: ...]"
-                    # → final LLM title. Leave the in-memory title at its
-                    # 'Untitled' placeholder so the done-event reload sees
-                    # Untitled, and let stage 2's llm push be the single
-                    # rename the user observes.
-                    if source == 'derived':
-                        logger.debug(
-                            '[title-callback] stage1 derived (suppressed for UX); '
-                            'session=%s title=%r',
-                            session_id[:12], title_str,
-                        )
-                        return
-                    # Stage 2 'llm' (or any other source): push to frontend.
-                    _s = SESSIONS.get(session_id)
-                    if _s is not None:
-                        _s.title = title_str
-                    try:
-                        put('title', {
-                            'session_id': session_id,
-                            'title': title_str,
-                            'source': source,
-                        })
-                    except Exception:
-                        # The SDK invokes this from its auto-title daemon
-                        # thread, which can outlive the agent thread that
-                        # created the put() closure. If the SSE queue has
-                        # already been GC'd, the put() call may raise; log
-                        # and continue — the title has already been
-                        # persisted to db by the SDK at this point.
-                        logger.debug(
-                            '[title-callback] put() failed (queue closed?); '
-                            'session=%s title=%r source=%s',
-                            session_id[:12], title_str, source,
-                            exc_info=True,
-                        )
-                        return
-                    logger.debug(
-                        '[title-callback] session=%s title=%r source=%s',
-                        session_id[:12], title_str, source,
-                    )
-                except Exception:
-                    logger.warning(
-                        'Failed to emit title callback for session %s',
-                        session_id, exc_info=True,
-                    )
-
             # Per-session reasoning effort: read from session first (new behaviour),
             # fall back to global config.yaml for backward compatibility.
             # When both are absent, pass None → agent uses its default.
@@ -1759,7 +1755,14 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 agent = _AIAgent(**_agent_kwargs)
                 agent.compression_enabled = False  # WebUI manages compression
                 # Wire the SDK title callback (see agent/turn_context.py).
-                agent._on_session_title = _on_session_title
+                # Per-request context (session_id, put, sessions_get) is bound
+                # via partial so the SDK can call back with (title, source).
+                agent._on_session_title = partial(
+                    _on_session_title,
+                    session_id=session_id,
+                    put=put,
+                    sessions_get=SESSIONS.get,
+                )
                 logger.debug('[webui] Created ephemeral agent for session %s', session_id)
             else:
                 import hashlib as _hashlib
@@ -1794,10 +1797,15 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         agent.reasoning_callback = _agent_kwargs.get('reasoning_callback')
                     if hasattr(agent, 'clarify_callback'):
                         agent.clarify_callback = _agent_kwargs.get('clarify_callback')
-                    # Refresh the SDK title callback — same closure as fresh
-                    # construction below; required because the closure captures
-                    # the request-scoped put() and session_id.
-                    agent._on_session_title = _on_session_title
+                    # Refresh the SDK title callback — same partial as fresh
+                    # construction below; required because the bound put() and
+                    # session_id are request-scoped (new every turn).
+                    agent._on_session_title = partial(
+                        _on_session_title,
+                        session_id=session_id,
+                        put=put,
+                        sessions_get=SESSIONS.get,
+                    )
                     # Refresh reasoning_config — may have changed per-session between turns
                     if hasattr(agent, 'reasoning_config') and 'reasoning_config' in _agent_kwargs:
                         agent.reasoning_config = _agent_kwargs['reasoning_config']
@@ -1824,7 +1832,12 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                     # ``agent._on_session_title`` via getattr() inside
                     # maybe_auto_title() — see agent/turn_context.py.  Without
                     # this, SDK-generated titles never reach the frontend.
-                    agent._on_session_title = _on_session_title
+                    agent._on_session_title = partial(
+                        _on_session_title,
+                        session_id=session_id,
+                        put=put,
+                        sessions_get=SESSIONS.get,
+                    )
                     with SESSION_AGENT_CACHE_LOCK:
                         SESSION_AGENT_CACHE[session_id] = (agent, _agent_sig)
                     logger.debug('[webui] Created new agent for session %s', session_id)
