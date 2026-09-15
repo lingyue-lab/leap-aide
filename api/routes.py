@@ -1330,6 +1330,9 @@ def handle_get(handler, parsed) -> bool:
     if parsed.path == "/api/crons/output":
         return _handle_cron_output(handler, parsed)
 
+    if parsed.path == "/api/crons/recent":
+        return _handle_cron_recent(handler, parsed)
+
     if parsed.path == "/api/toolsets":
         from model_tools import get_available_toolsets
         return j(handler, {"toolsets": get_available_toolsets()})
@@ -3689,6 +3692,47 @@ def _handle_cron_output(handler, parsed):
             except Exception:
                 logger.debug("Failed to read cron output file %s", f)
     return j(handler, {"job_id": job_id, "outputs": outputs})
+
+
+def _handle_cron_recent(handler, parsed):
+    """Return recent terminal cron executions newer than `since` (Unix seconds).
+
+    `since` is a Unix timestamp (float, seconds). `claimed_at` is stored as
+    ISO-8601 in the SDK; we parse each row to a datetime and compare on
+    `.timestamp()` so the comparison is timezone-safe regardless of the
+    offset embedded in the stored string.
+    """
+    from cron.executions import list_executions
+    from datetime import datetime
+
+    qs = parse_qs(parsed.query)
+    since_raw = qs.get("since", ["0"])[0] or "0"
+    limit_raw = qs.get("limit", ["100"])[0] or "100"
+    try:
+        since = float(since_raw)
+    except ValueError:
+        return bad(handler, "since must be a numeric Unix timestamp")
+    try:
+        limit = int(limit_raw)
+    except ValueError:
+        return bad(handler, "limit must be an integer")
+    # SDK clamps at 500 internally; mirror that ceiling here.
+    if limit < 1 or limit > 500:
+        return bad(handler, "limit must be between 1 and 500")
+
+    # ISO timestamps can carry a +HH:MM offset that breaks lexicographic
+    # compare across DST/profile boundaries; parse per row for safety.
+    terminal = ("completed", "failed", "unknown")
+
+    def _claimed_ts(rec):
+        return datetime.fromisoformat(rec["claimed_at"]).timestamp()
+
+    completions = [
+        r
+        for r in list_executions(limit=limit)
+        if r.get("status") in terminal and _claimed_ts(r) >= since
+    ]
+    return j(handler, {"completions": completions, "since": since})
 
 
 def _handle_memory_read(handler):
