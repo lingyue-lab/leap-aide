@@ -37,6 +37,32 @@ from api.metering import meter
 _ENV_LOCK = threading.Lock()
 _REASONING_SEP_MARK = "<|reasoning_sep|>"
 
+# Cap on the size of a tool's result string carried in the SSE `tool_complete`
+# event.  The full result is still persisted in the session message content by
+# the SDK; this cap only protects the live streaming UI from runaway payload
+# sizes (e.g. read_file on a large file, terminal long stdout) and keeps the
+# DOM-bound collapsed tool card from blowing up in height.
+_MAX_TOOL_OUTPUT_CHARS = 50 * 1024  # 50 KB
+
+
+def _truncate_tool_output(text, max_chars: int = _MAX_TOOL_OUTPUT_CHARS):
+    """Cap a tool result string for the SSE `tool_complete` event payload.
+
+    Returns ``(output, truncated)`` where ``output`` is the string suitable for
+    inclusion in the SSE payload (possibly with a trailing marker) and
+    ``truncated`` is a boolean for callers that want to emit a UI hint.
+    Non-string inputs (None, dicts, etc.) are returned unchanged so callers
+    can pass the raw SDK result without pre-checking the type.
+    """
+    if not isinstance(text, str):
+        return text, False
+    if len(text) <= max_chars:
+        return text, False
+    return (
+        text[:max_chars] + '\n\n[... truncated for streaming display ...]',
+        True,
+    )
+
 # Maps session_id → threading.Event, set when cancel_stream completes.
 # _resolve_busy_handling in routes.py spin-waits on this event so a new
 # /api/chat/start arriving mid-cancel waits for the cancel to finish
@@ -417,7 +443,7 @@ def _extract_tool_calls_from_messages(messages, live_tool_calls=None):
                     seq['resolved'] = True
             tool_msg_sequence.append(seq)
 
-    live = [tc for tc in (live_tool_calls or []) if isinstance(tc, dict) and tc.get('name') and tc.get('name') != 'clarify']
+    live = [tc for tc in (live_tool_calls or []) if isinstance(tc, dict) and tc.get('name')]
     if live:
         for seq_idx, seq in enumerate(tool_msg_sequence):
             if seq.get('resolved'):
@@ -1571,11 +1597,17 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         # Signal the checkpoint thread that new work has completed (Issue #765).
                         # Each completed tool call is a meaningful unit of progress worth persisting.
                         _checkpoint_activity[0] += 1
+                        # The SDK passes the tool's actual result via the
+                        # `result` kwarg (preview is None for completed events
+                        # by SDK design).  Read it so the live tool card's OUT
+                        # region is not blank during streaming.
+                        _tool_result_raw = cb_kwargs.get('result', preview)
+                        _tool_output, _tool_output_truncated = _truncate_tool_output(_tool_result_raw)
                         _tool_complete_payload = {
                             'event_type': event_type,
                             'name': name,
                             'tid': tid_for_event,  # Include tid for frontend to match tool message
-                            'output': preview,  # Tool result output from preview parameter
+                            'output': _tool_output,
                             'preview': preview,
                             'args': args_snap,
                             'duration': cb_kwargs.get('duration'),
@@ -1583,6 +1615,8 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         }
                         if _todos_for_event is not None:
                             _tool_complete_payload['todos'] = _todos_for_event
+                        if _tool_output_truncated:
+                            _tool_complete_payload['output_truncated'] = True
                         put('tool_complete', _tool_complete_payload)
                         # ── CLI tool visualization (non-blocking, try/except) ──
                         try:
