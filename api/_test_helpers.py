@@ -27,6 +27,7 @@ References:
 """
 import logging
 import os
+import sqlite3
 import time as _time
 from pathlib import Path
 
@@ -51,7 +52,7 @@ def _get_session_db():
 
 
 def nuke_test_state_db() -> None:
-    """Delete state.db (+ WAL/SHM/journal sidecars) before a test starts.
+    """Delete state.db (+ WAL/SHM/journal/repair-ledger sidecars) before a test starts.
 
     Tests in this module share one server process and one state.db across the
     whole pytest session. After the first few seeds, the messages_fts shadow
@@ -74,22 +75,40 @@ def nuke_test_state_db() -> None:
     file and writes land on a phantom inode invisible to the test process's
     direct sqlite3 connection.
 
+    Additionally clears ``state.db.repair-attempts.json`` — the SDK's persistent
+    ledger that tracks repair attempts against the current file fingerprint
+    (size + mtime_ns) so the auto-repair cap (``_MAX_PERSISTENT_REPAIR_ATTEMPTS``)
+    cannot carry over from a previous test run and permanently disable repair
+    for a fresh DB that happens to share the same fingerprint slot.
+
+    On OSError (file held open by another fd), the previous implementation
+    truncated in place, which kept the inode alive — and on testbox's overlay2
+    filesystem the truncate can leave stale FTS5 shadow pages that SQLite then
+    misreads on the next open. We now create a fresh empty file and unlink it,
+    forcing the kernel to allocate a brand-new inode for the next open.
+
     No-op when HERMES_WEBUI_TEST_SEED is not set (production safety belt).
     """
     _require_enabled()
     db_path = Path(_active_hermes_home()).expanduser().resolve() / "state.db"
-    for suffix in ("", "-wal", "-shm", "-journal"):
+    # `.repair-attempts.json` is the SDK's persistent repair ledger
+    # (hermes_state.py:1857). Including it in the cleanup guarantees the
+    # auto-repair counter cannot bleed across test runs.
+    for suffix in ("", "-wal", "-shm", "-journal", ".repair-attempts.json"):
         sidecar = db_path.with_name(db_path.name + suffix)
         try:
             if sidecar.exists():
                 sidecar.unlink()
         except OSError:
-            # If we can't unlink (fd held by another process), truncate
-            # instead so SQLite at least sees a zero-length file. The
-            # holder's next read returns EOF and closes cleanly.
+            # unlink failed (file held open by another fd). Force a new inode
+            # by creating a sibling file then deleting it — this invalidates
+            # the upperdir overlay entry and forces SQLite's next open to see
+            # a fresh inode, instead of inheriting stale FTS5 shadow pages
+            # that the previous truncate(0) left behind on overlay2.
             try:
-                with open(sidecar, "wb") as fh:
-                    fh.truncate(0)
+                fresh = sidecar.with_name(sidecar.name + ".nuke-new")
+                fresh.touch()
+                fresh.unlink()
             except OSError:
                 pass
 
@@ -167,6 +186,66 @@ def seed_test_session(
         Small diagnostic dict: session_id, source, db_path, message_count.
     """
     _require_enabled()
+    last_err: sqlite3.DatabaseError | None = None
+    for attempt in range(2):
+        try:
+            return _seed_test_session_impl(
+                session_id=session_id,
+                source=source,
+                title=title,
+                model=model,
+                started_at=started_at,
+                parent_session_id=parent_session_id,
+                ended_at=ended_at,
+                end_reason=end_reason,
+                message_count=message_count,
+                messages=messages,
+            )
+        except sqlite3.DatabaseError as e:
+            last_err = e
+            msg = str(e).lower()
+            if "malformed" not in msg:
+                # Anything that is NOT the known FTS5/overlay-FS corruption
+                # class is treated as a real error and propagated immediately.
+                raise
+            logger.warning(
+                "seed_test_session: state.db corruption detected (%s) — "
+                "re-nuking and retrying once (attempt %d/2).",
+                e, attempt + 1,
+            )
+            # Self-heal: nuke state.db (+ WAL/SHM/journal/repair-ledger) and
+            # reset the api.models singleton so the next _get_session_db()
+            # opens a brand-new SessionDB against a freshly-created inode.
+            nuke_test_state_db()
+            # Brief pause to let the kernel settle (overlay2 page cache).
+            _time.sleep(0.05)
+            continue
+    # Both attempts failed with the same corruption class — propagate so the
+    # route handler surfaces a 500 with a useful diagnostic.
+    assert last_err is not None  # for type checkers
+    raise last_err
+
+
+def _seed_test_session_impl(
+    session_id: str,
+    source: str,
+    *,
+    title: str | None,
+    model: str | None,
+    started_at: float | None,
+    parent_session_id: str | None,
+    ended_at: float | None,
+    end_reason: str | None,
+    message_count: int | None,
+    messages: list | None,
+) -> dict:
+    """Single-attempt seed implementation. See ``seed_test_session`` for the
+    retry wrapper and full argument/return docs.
+
+    Kept separate so the retry logic in ``seed_test_session`` can re-invoke
+    the exact same SQL sequence after a re-nuke without duplicating ~80
+    lines of INSERT/UPDATE/COMMIT bookkeeping.
+    """
     db = _get_session_db()
 
     # Drop any pre-existing session + messages for idempotent re-seeding.

@@ -2,6 +2,7 @@ import json
 import pathlib
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -20,55 +21,47 @@ def _get(path):
         return json.loads(r.read())
 
 
+def _post(path, body):
+    """POST JSON body to the test server, return (data, status)."""
+    data = json.dumps(body).encode()
+    req = urllib.request.Request(BASE + path, data=data,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.loads(r.read()), r.status
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read()), e.code
+        except Exception:
+            return {}, e.code
+
+
 def _write_session_with_secret_title():
-    """Insert a webui session with a sensitive title directly into state.db.
+    """Seed a webui session with a sensitive title via the SDK high-level API.
 
-    state.db is now the single source of truth for session listings and
-    search; the legacy ``TEST_STATE_DIR/sessions/<sid>.json`` path that the
-    earlier version of this helper wrote to is no longer indexed by
-    ``/api/sessions/search``.
-
-    The session needs ``message_count >= 1`` and a corresponding message
-    row so it survives the sidebar's empty-session filter
-    (Untitled+0-message sessions are hidden by ``all_sessions()``).
+    Posts to ``/api/_test/seed_session`` (gated by ``HERMES_WEBUI_TEST_SEED=1``)
+    which runs ``SessionDB.create_session`` + an SDK-owned INSERT into messages
+    on the server side. Inserting directly via raw sqlite3 (the previous
+    implementation) leaves state.db with a minimal ``sessions`` schema, which
+    causes the server's ``_init_schema()`` to fail on ``CREATE INDEX … ON
+    sessions(parent_session_id)`` because the column does not exist in the
+    minimal schema. That failure takes the singleton SessionDB out of service
+    and ``/api/sessions/search`` returns ``sessions: []``.
     """
-    import sqlite3
-    from tests.conftest import TEST_STATE_DIR
-
     sid = "sec_summary_" + uuid.uuid4().hex[:8]
-    db_path = TEST_STATE_DIR / "state.db"
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            id TEXT PRIMARY KEY,
-            source TEXT NOT NULL,
-            user_id TEXT,
-            model TEXT,
-            started_at REAL NOT NULL,
-            message_count INTEGER DEFAULT 0,
-            title TEXT
-        );
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT NOT NULL,
-            role TEXT NOT NULL,
-            content TEXT,
-            timestamp REAL NOT NULL
-        );
-    """)
-    now = time.time()
-    conn.execute(
-        "INSERT OR REPLACE INTO sessions (id, source, title, model, started_at, message_count) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (sid, "webui", f"session with {_FULL_SECRET}", "test", now, 1),
-    )
-    conn.execute(
-        "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
-        (sid, "user", f"hi {_FULL_SECRET}", now),
-    )
-    conn.commit()
-    conn.close()
+    body = {
+        "session_id": sid,
+        "source": "webui",
+        "title": f"session with {_FULL_SECRET}",
+        "model": "test",
+        "message_count": 1,
+        "messages": [
+            {"role": "user", "content": f"hi {_FULL_SECRET}",
+             "timestamp": time.time()},
+        ],
+    }
+    data, status = _post("/api/_test/seed_session", body)
+    assert status == 200, f"seed_session failed: {status} {data}"
     return sid
 
 

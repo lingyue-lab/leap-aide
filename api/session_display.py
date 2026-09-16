@@ -688,6 +688,11 @@ class SessionDisplay:
             "last_activity": time.time(),
         }
         json_path = SESSIONS_DISPLAY_DIR / f"{self.session_id}.json"
+        # Defensive: parent dir may be missing if test isolation or external
+        # tooling rmtree'd SESSIONS_DISPLAY_DIR after api.session_display
+        # module-load. Module-level mkdir at line 47 only covers the import
+        # path; runtime callers should not assume it survives.
+        json_path.parent.mkdir(parents=True, exist_ok=True)
         json_path.write_text(json.dumps(config))
 
     @staticmethod

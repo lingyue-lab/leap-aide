@@ -285,6 +285,14 @@ def test_server():
     # Isolated cron state
     (TEST_STATE_DIR / 'cron').mkdir(parents=True, exist_ok=True)
 
+    # api.session_display creates SESSIONS_DISPLAY_DIR at module-load time
+    # (api/session_display.py:47), but test_server wipes TEST_STATE_DIR
+    # after import. Recreate it here so SessionDisplay tests can write
+    # their <sid>.json config without FileNotFoundError. Mirrors the
+    # cron / test-workspace pattern above.
+    from api.config import SESSIONS_DISPLAY_DIR  # noqa: E402
+    SESSIONS_DISPLAY_DIR.mkdir(parents=True, exist_ok=True)
+
     # Expose TEST_STATE_DIR to the test process itself so that tests which write
     # directly to state.db (e.g. test_gateway_sync.py) always use the same path
     # as the server.  Other test files (test_auth_sessions.py) may override
