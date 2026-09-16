@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+import { Loader2 } from 'lucide-react';
 
 interface LoadingSpinnerProps {
   /** Display mode: overlay covers parent, inline fits in flow */
@@ -13,7 +14,7 @@ interface LoadingSpinnerProps {
 
 /**
  * Unified loading spinner component (M3 Circular Progress Indicator).
- * Uses Material Symbols `progress_activity` icon with spin animation.
+ * Uses lucide-react `Loader2` (rotating circular arrow) with spin animation.
  */
 export default function LoadingSpinner({
   mode = 'inline',
@@ -29,15 +30,11 @@ export default function LoadingSpinner({
     return (
       <div className="loading-spinner-overlay" role="progressbar" aria-label={displayText}>
         <div className="loading-spinner-overlay-content">
-          <span
-            className="material-symbols-rounded loading-spinner-icon"
-            style={{
-              fontSize: spinnerSize,
-              fontVariationSettings: "'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24",
-            }}
-          >
-            progress_activity
-          </span>
+          <Loader2
+            className="loading-spinner-icon"
+            size={spinnerSize}
+            aria-hidden="true"
+          />
           {!minimal && (
             <span className="loading-spinner-text">{displayText}</span>
           )}
@@ -49,15 +46,11 @@ export default function LoadingSpinner({
   // Inline mode
   return (
     <div className="loading-spinner-inline" role="progressbar" aria-label={displayText}>
-      <span
-        className="material-symbols-rounded loading-spinner-icon"
-        style={{
-          fontSize: spinnerSize,
-          fontVariationSettings: "'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24",
-        }}
-      >
-        progress_activity
-      </span>
+      <Loader2
+        className="loading-spinner-icon"
+        size={spinnerSize}
+        aria-hidden="true"
+      />
       {!minimal && (
         <span className="loading-spinner-text">{displayText}</span>
       )}

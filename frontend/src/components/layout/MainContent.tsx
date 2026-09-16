@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { flushSync } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useSessionStore } from '@/stores/useSessionStore';
@@ -17,7 +17,9 @@ import MemoryDetail from '@/components/memory/MemoryDetail';
 import WorkspaceDetail from '@/components/workspace/WorkspaceDetail';
 import WorkspaceForm from '@/components/workspace/WorkspaceForm';
 import TodosDrawer from '@/components/layout/TodosDrawer';
-import TerminalView from '@/components/terminal/TerminalView';
+// Lazy-load TerminalView so xterm (~150-200KB + 30KB CSS) is only fetched
+// when the user actually opens a terminal tab.
+const TerminalView = lazy(() => import('@/components/terminal/TerminalView'));
 
 import SettingsDetail from '@/components/settings/SettingsDetail';
 import { EmptyState, TASKS_ICON, SKILLS_ICON, MEMORY_ICON, WORKSPACE_ICON } from '@/components/common/Placeholder';
@@ -407,7 +409,9 @@ export default function MainContent({ children }: MainContentProps) {
               key={t.id}
               className={`terminal-instance ${activeTerminalId === t.id ? 'active' : ''}`}
             >
-              <TerminalView terminalId={t.id} />
+              <Suspense fallback={<div className="terminal-loading">Loading terminal...</div>}>
+                <TerminalView terminalId={t.id} />
+              </Suspense>
             </div>
           ))}
         </div>

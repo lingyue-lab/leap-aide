@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSkillStore } from '@/stores/useSkillStore';
 import { skillsService } from '@/services/api';
 import { renderMarkdown } from '@/utils/markdown';
-import FileTreePanel from '@/components/shared/FileTreePanel';
+// Lazy-load FileTreePanel so react-arborist + react-dnd (~120KB) is only
+// fetched when the user actually opens a skill detail view.
+const FileTreePanel = lazy(() => import('@/components/shared/FileTreePanel'));
 import FileView, { detectFileType } from '@/components/shared/FileView';
 import type { FileType } from '@/components/shared/FileView';
 import EditorView from '@/components/shared/EditorView';
@@ -208,18 +210,20 @@ export default function SkillDetail() {
           onCancel={handleSkillCancel}
           error={editError}
         />
-        <FileTreePanel
-          visible={showFiles}
-          tree={skillTree}
-          defaultExpanded={true}
-          activePath={activeFile}
-          onFileSelect={handleFileSelect}
-          title="Files"
-          showRefresh={true}
-          onRefresh={loadSkillFiles}
-          onClose={() => setShowFiles(false)}
-          {...treeCallbacks}
-        />
+        <Suspense fallback={<div className="file-tree-loading">Loading files...</div>}>
+          <FileTreePanel
+            visible={showFiles}
+            tree={skillTree}
+            defaultExpanded={true}
+            activePath={activeFile}
+            onFileSelect={handleFileSelect}
+            title="Files"
+            showRefresh={true}
+            onRefresh={loadSkillFiles}
+            onClose={() => setShowFiles(false)}
+            {...treeCallbacks}
+          />
+        </Suspense>
       </div>
     );
   }
@@ -318,18 +322,20 @@ export default function SkillDetail() {
       </div>
 
       {/* Files 抽屉（仅文件树） */}
-      <FileTreePanel
-        visible={showFiles}
-        tree={skillTree}
-        defaultExpanded={true}
-        activePath={activeFile}
-        onFileSelect={handleFileSelect}
-        title="Files"
-        showRefresh={true}
-        onRefresh={loadSkillFiles}
-        onClose={() => setShowFiles(false)}
-        {...treeCallbacks}
-      />
+      <Suspense fallback={<div className="file-tree-loading">Loading files...</div>}>
+        <FileTreePanel
+          visible={showFiles}
+          tree={skillTree}
+          defaultExpanded={true}
+          activePath={activeFile}
+          onFileSelect={handleFileSelect}
+          title="Files"
+          showRefresh={true}
+          onRefresh={loadSkillFiles}
+          onClose={() => setShowFiles(false)}
+          {...treeCallbacks}
+        />
+      </Suspense>
     </div>
   );
 }

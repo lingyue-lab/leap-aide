@@ -8,6 +8,7 @@ import WorkspacesPanel from '@/components/sidebar/WorkspacesPanel';
 import TerminalPanel from '@/components/sidebar/TerminalPanel';
 
 import SettingsPanel from '@/components/sidebar/SettingsPanel';
+import { wsManager } from '@/stores/wsManager';
 import type { NavPanel } from '@/types';
 
 interface SidebarProps {
@@ -38,7 +39,7 @@ export default function Sidebar({ width = 300, onResizeStart }: SidebarProps) {
       setActivePanel(panel);
       setSidebarOpen(true);
       // Ensure WS reconnects if it died (e.g. after screen lock).
-      import('@/stores/wsManager').then(({ wsManager }) => wsManager.ensureConnected());
+      wsManager.ensureConnected();
     }
   };
 

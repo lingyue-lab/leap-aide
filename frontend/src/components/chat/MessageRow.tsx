@@ -925,18 +925,39 @@ function MessageRowComponent({ message, messages = [], toolCalls = [], isStreami
       const btn = document.createElement('button');
       btn.className = 'code-copy-btn';
       btn.title = 'Copy';
-      const iconSpan = (name: string) =>
-        `<span class="material-symbols-rounded" style="font-size:18px;font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24;line-height:1;display:inline-flex;align-items:center;justify-content:center;user-select:none">${name}</span>`;
-      btn.innerHTML = iconSpan('content_copy');
+
+      /**
+       * Build a small DOM icon for the copy button. We used to construct an
+       * `innerHTML` string with a Material Symbols ligature; now we mount a
+       * lucide-react SVG inline so the button doesn't depend on font loading.
+       */
+      const buildIcon = (iconName: 'content_copy' | 'check') => {
+        const span = document.createElement('span');
+        span.className = 'icon-wrap';
+        span.style.cssText =
+          'display:inline-flex;align-items:center;justify-content:center;line-height:1;user-select:none';
+        // Inline lucide SVGs (paths from lucide-react v0.469).
+        // Copy: <rect> clipboard, Check: <polyline> checkmark.
+        if (iconName === 'content_copy') {
+          span.innerHTML =
+            '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+        } else {
+          span.innerHTML =
+            '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+        }
+        return span;
+      };
+
+      btn.replaceChildren(buildIcon('content_copy'));
       btn.addEventListener('click', () => {
         const text = code.textContent || '';
-        const copyIcon = iconSpan('content_copy');
-        const checkIcon = iconSpan('check');
+        const copyIcon = buildIcon('content_copy');
+        const checkIcon = buildIcon('check');
         const onSuccess = () => {
-          btn.innerHTML = checkIcon;
+          btn.replaceChildren(checkIcon);
           btn.classList.add('copied');
           setTimeout(() => {
-            btn.innerHTML = copyIcon;
+            btn.replaceChildren(copyIcon);
             btn.classList.remove('copied');
           }, 2000);
         };

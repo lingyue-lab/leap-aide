@@ -12,7 +12,6 @@ import { ProtectedRoute } from './contexts/AuthContext';
 import { useStreamNotify } from './hooks/useStreamNotify';
 import { handleNotifyEvent } from './stores/notifyManager';
 import { wsManager } from './stores/wsManager';
-import { initFontMonitor, checkMaterialSymbolsFont } from './utils/fontMonitor';
 import { FONT_ZOOM_MAP } from './constants';
 
 function App() {
@@ -23,12 +22,10 @@ function App() {
   const { setTheme } = useTheme();
   useStreamNotify(currentSessionId);
 
-  // Load settings, workspaces, and init font monitor on mount
+  // Load settings and workspaces on mount
   React.useEffect(() => {
     loadSettings();
     loadWorkspaces();
-    initFontMonitor();
-    checkMaterialSymbolsFont();
   }, []);
 
   // Connect to WebSocket with a small delay to allow font loading first.

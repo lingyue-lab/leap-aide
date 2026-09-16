@@ -7,6 +7,7 @@ import { useChatStream } from '@/hooks/useChatStream';
 import { useModeSync } from '@/hooks/useModeSync';
 import * as StreamManager from '@/stores/streamManager';
 import { chatService } from '@/services/api';
+import { wsManager } from '@/stores/wsManager';
 import ChatMessages from './ChatMessages';
 import ChatComposer from './ChatComposer';
 import QueueStatusBar from './QueueStatusBar';
@@ -109,7 +110,7 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
     console.log(`[ChatInterface] session switch`, { from: prevId, to: sessionId });
 
     // Ensure WS is alive so stream reconnection and session notifications work.
-    import('@/stores/wsManager').then(({ wsManager }) => wsManager.ensureConnected());
+    wsManager.ensureConnected();
 
     // Notify MainContent FIRST (synchronous DOM manipulation) to show overlay
     // before React state updates cause messages to clear.

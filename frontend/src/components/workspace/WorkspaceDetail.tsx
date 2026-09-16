@@ -1,7 +1,9 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
-import FileTreePanel from '@/components/shared/FileTreePanel';
+// Lazy-load FileTreePanel so react-arborist + react-dnd (~120KB) is only
+// fetched when the user actually opens a workspace detail view.
+const FileTreePanel = lazy(() => import('@/components/shared/FileTreePanel'));
 import FileView from '@/components/shared/FileView';
 import type { FileType } from '@/components/shared/FileView';
 import type { FileNode } from '@/types';
@@ -149,27 +151,29 @@ export default function WorkspaceDetail() {
       ) : (
         <WorkspaceOverview />
       )}
-      <FileTreePanel
-        visible={showFileTree}
-        defaultWidth={280}
-        minWidth={180}
-        maxWidth={500}
-        storageKey="hermes_workspace_files_width"
-        rootPath={currentWorkspace || ''}
-        loader={workspaceLoader}
-        loadKey={currentWorkspace}
-        defaultExpanded={false}
-        activePath={previewPath}
-        onFileSelect={(path) => { setPreview(path); setPreviewEditing(false); }}
-        title={currentWorkspace ? currentWorkspace.split('/').pop() : 'Files'}
-        showRefresh={true}
-        onClose={() => setShowFileTree(false)}
-        emptyMessage="Select a workspace"
-        onCreate={handleTreeCreate}
-        onRename={handleTreeRename}
-        onDelete={handleTreeDelete}
-        onEdit={handleTreeEdit}
-      />
+      <Suspense fallback={<div className="file-tree-loading">Loading files...</div>}>
+        <FileTreePanel
+          visible={showFileTree}
+          defaultWidth={280}
+          minWidth={180}
+          maxWidth={500}
+          storageKey="hermes_workspace_files_width"
+          rootPath={currentWorkspace || ''}
+          loader={workspaceLoader}
+          loadKey={currentWorkspace}
+          defaultExpanded={false}
+          activePath={previewPath}
+          onFileSelect={(path) => { setPreview(path); setPreviewEditing(false); }}
+          title={currentWorkspace ? currentWorkspace.split('/').pop() : 'Files'}
+          showRefresh={true}
+          onClose={() => setShowFileTree(false)}
+          emptyMessage="Select a workspace"
+          onCreate={handleTreeCreate}
+          onRename={handleTreeRename}
+          onDelete={handleTreeDelete}
+          onEdit={handleTreeEdit}
+        />
+      </Suspense>
     </div>
   );
 }

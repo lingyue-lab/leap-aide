@@ -5,6 +5,7 @@ import { useSessionStore } from '@/stores/useSessionStore';
 import { showBackgroundTaskCard } from '@/components/dialogs/BackgroundTaskCard';
 import { showInfoCard, dismissInfoCard } from '@/components/dialogs/InfoCard';
 import { refreshGoalStatus } from '@/components/chat/GoalStatusBar';
+import { wsManager } from '@/stores/wsManager';
 import * as StreamManager from '@/stores/streamManager';
 import { useIsBusy } from '@/utils/sessionBusy';
 import type { SessionStreamState } from '@/stores/streamManager';
@@ -257,8 +258,7 @@ export function useChatStream() {
   ) => {
     // Ensure WS is alive before starting a stream — the backend sends
     // begin_stream via WS, and _send() silently drops if disconnected.
-    const { wsManager: _ws } = await import('@/stores/wsManager');
-    _ws.ensureConnected();
+    wsManager.ensureConnected();
 
     const store = useChatStore.getState();
 
@@ -313,7 +313,6 @@ export function useChatStream() {
     let originalMsg: string | undefined;
     if (isSlash) {
       try {
-        const { chatService } = await import('@/services/api');
         const dispatchResult = await chatService.dispatchCommand(
           sessionId, message, abortController?.signal,
         );

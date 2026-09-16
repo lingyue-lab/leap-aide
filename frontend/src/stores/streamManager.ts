@@ -16,6 +16,11 @@
  */
 
 import type { Message, ToolCall, UsageInfo, ContentBlock } from '@/types';
+import { useChatStore } from '@/stores/useChatStore';
+import { useSessionStore } from '@/stores/useSessionStore';
+import { chatService, sessionService } from '@/services/api';
+import { wsManager } from '@/stores/wsManager';
+import { showInfoCard, dismissInfoCard } from '@/components/dialogs/InfoCard';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -97,16 +102,13 @@ const _compressingSessions = new Set<string>();
 function _dismissCompressing(sessionId: string) {
   if (!_compressingSessions.has(sessionId)) return;
   _compressingSessions.delete(sessionId);
-  import('@/components/dialogs/InfoCard').then(({ dismissInfoCard }) => {
-    dismissInfoCard(sessionId);
-  });
+  dismissInfoCard(sessionId);
 }
 
 /**
  * StreamManager — Per-session streaming state and replay event handling.
  * Single entry point: startSessionStream (called from begin_stream notify).
  */
-import { useChatStore } from '@/stores/useChatStore';
 
 // ── Pending load tracking (interrupt mode) ─────────────────────────────────
 
@@ -150,7 +152,6 @@ export async function submitStreamRequest(
   abortSignal?: AbortSignal,
   originalMsg?: string,
 ): Promise<any> {
-  const { chatService } = await import('@/services/api');
   return chatService.startChat(sessionId, message, model, workspace, attachments, mode, abortSignal, originalMsg);
 }
 
@@ -289,7 +290,6 @@ export async function reconnectStream(
   });
 
   // Use WebSocket replay
-  const { wsManager } = await import('@/stores/wsManager');
   wsManager.connectSession(sessionId, handleReplayEvent);
 
   _notify(sessionId);
@@ -326,7 +326,6 @@ export async function startSessionStream(sessionId: string, streamId?: string): 
   // For background sessions with existing state, preserve existing messages.
   // For background sessions without state, load from backend.
   let seedMessages: Message[];
-  const { useSessionStore } = await import('@/stores/useSessionStore');
   const currentSid = useSessionStore.getState().currentSessionId;
 
   if (currentSid === sessionId) {
@@ -338,7 +337,6 @@ export async function startSessionStream(sessionId: string, streamId?: string): 
   } else {
     // Background session, no existing state: load from backend
     try {
-      const { sessionService } = await import('@/services/api');
       const resp = await sessionService.getSession(sessionId);
       const session = (resp as any)?.session;
       seedMessages = session?.messages || [];
@@ -376,7 +374,6 @@ export async function startSessionStream(sessionId: string, streamId?: string): 
   });
 
   // Use WebSocket replay
-  const { wsManager } = await import('@/stores/wsManager');
   wsManager.connectSession(sessionId, handleReplayEvent);
 
   _notify(sessionId);
@@ -403,9 +400,7 @@ export function stopBackgroundStream(sessionId: string): void {
   if (!s) return;
   console.log(`[StreamManager] stopBackgroundStream: session=${sessionId}`);
   // Disconnect WebSocket session if connected
-  import('@/stores/wsManager').then(({ wsManager }) => {
-    wsManager.disconnectSession(sessionId);
-  });
+  wsManager.disconnectSession(sessionId);
   // Cancel any pending throttled notification so stale tokens from
   // this session are not pushed to useChatStore after the stream is
   // stopped (critical for interrupt mode where a new stream starts
@@ -486,9 +481,7 @@ export function getActiveSessionIds(): string[] {
  * Close all active WebSocket connections. Called on page unload to free up connections.
  */
 export function closeAllStreams(): void {
-  import('@/stores/wsManager').then(({ wsManager }) => {
-    wsManager.disconnect();
-  });
+  wsManager.disconnect();
 }
 
 // Close all WebSocket connections on page unload to free up connections for refresh
@@ -541,17 +534,13 @@ export function handleReplayEvent(sessionId: string, event: string, data: any): 
         });
         _notifyImmediate(sessionId);
         // Also clear useChatStore.busy
-        import('@/stores/useChatStore').then(({ useChatStore: chatStore }) => {
-          if (chatStore.getState().busy) {
-            chatStore.getState().setBusy(false);
-          }
-        });
+        if (useChatStore.getState().busy) {
+          useChatStore.getState().setBusy(false);
+        }
       }
       // Reset subscription tracking — no stream exists, next begin_stream
       // needs a fresh subscribeReplay.
-      import('@/stores/wsManager').then(({ wsManager }) => {
-        wsManager.clearSubscription(sessionId);
-      });
+      wsManager.clearSubscription(sessionId);
       break;
 
     case 'message_start': {
@@ -618,11 +607,9 @@ export function handleReplayEvent(sessionId: string, event: string, data: any): 
       // Always clear useChatStore.busy — even if StreamManager state was
       // already cleared by subscribe_success's stale-cleaning, the done event
       // means the backend has finished and the UI must not stay stuck.
-      import('@/stores/useChatStore').then(({ useChatStore: chatStore }) => {
-        if (chatStore.getState().busy) {
-          chatStore.getState().setBusy(false);
-        }
-      });
+      if (useChatStore.getState().busy) {
+        useChatStore.getState().setBusy(false);
+      }
       // Cancel safety timeout — done received successfully
       const doneSafetyTimeout = _safetyTimeouts.get(sessionId);
       if (doneSafetyTimeout) {
@@ -644,32 +631,26 @@ export function handleReplayEvent(sessionId: string, event: string, data: any): 
       // Previously handled by the 'end_stream' notify event (now removed).
       // The replay buffer may not include the final assistant message;
       // loadSession ensures the UI has the complete persisted history.
-      import('@/stores/useSessionStore').then(({ useSessionStore }) => {
-        const currentSid = useSessionStore.getState().currentSessionId;
-        if (currentSid === sessionId) {
-          useSessionStore.getState().loadSession(sessionId).then(async () => {
-            if (useSessionStore.getState().currentSessionId !== sessionId) return;
-            const session = useSessionStore.getState().currentSession;
-            if (session?.messages) {
-              const { useChatStore } = await import('@/stores/useChatStore');
-              useChatStore.getState().setMessages(session.messages);
-              replaceSessionMessages(sessionId, session.messages);
-            }
-            if (session?.tool_calls) {
-              const { useChatStore } = await import('@/stores/useChatStore');
-              useChatStore.getState().setToolCalls(session.tool_calls);
-            }
-          }).catch((err) => {
-            console.error(`[StreamManager] DONE: loadSession FAILED for session=${sessionId}`, err);
-          });
-        }
-      });
+      const currentSid = useSessionStore.getState().currentSessionId;
+      if (currentSid === sessionId) {
+        useSessionStore.getState().loadSession(sessionId).then(() => {
+          if (useSessionStore.getState().currentSessionId !== sessionId) return;
+          const session = useSessionStore.getState().currentSession;
+          if (session?.messages) {
+            useChatStore.getState().setMessages(session.messages);
+            replaceSessionMessages(sessionId, session.messages);
+          }
+          if (session?.tool_calls) {
+            useChatStore.getState().setToolCalls(session.tool_calls);
+          }
+        }).catch((err) => {
+          console.error(`[StreamManager] DONE: loadSession FAILED for session=${sessionId}`, err);
+        });
+      }
       // Reset frontend subscription tracking — backend stream is done,
       // the old subscription is dead (sentinel already unsubscribed the
       // backend side). Next begin_stream needs a fresh subscribeReplay.
-      import('@/stores/wsManager').then(({ wsManager }) => {
-        wsManager.clearSubscription(sessionId);
-      });
+      wsManager.clearSubscription(sessionId);
       break;
     }
 
@@ -689,9 +670,7 @@ export function handleReplayEvent(sessionId: string, event: string, data: any): 
       });
       _notifyImmediate(sessionId);
       // Reset subscription tracking — stream ended with error
-      import('@/stores/wsManager').then(({ wsManager }) => {
-        wsManager.clearSubscription(sessionId);
-      });
+      wsManager.clearSubscription(sessionId);
       break;
     }
 
@@ -704,9 +683,7 @@ export function handleReplayEvent(sessionId: string, event: string, data: any): 
       });
       _notifyImmediate(sessionId);
       // Reset subscription tracking — stream ended with error
-      import('@/stores/wsManager').then(({ wsManager }) => {
-        wsManager.clearSubscription(sessionId);
-      });
+      wsManager.clearSubscription(sessionId);
       break;
     }
 
@@ -762,11 +739,9 @@ export function handleReplayEvent(sessionId: string, event: string, data: any): 
     case 'compressing': {
       const reason = data.reason ? ` (${data.reason})` : '';
       _compressingSessions.add(sessionId);
-      import('@/components/dialogs/InfoCard').then(({ showInfoCard }) => {
-        showInfoCard(sessionId, `Auto-compressing${reason}...`, {
-          loading: true,
-          noDismiss: true,
-        });
+      showInfoCard(sessionId, `Auto-compressing${reason}...`, {
+        loading: true,
+        noDismiss: true,
       });
       break;
     }

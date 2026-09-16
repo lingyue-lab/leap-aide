@@ -27,6 +27,12 @@ export default defineConfig({
         manualChunks: {
           vendor: ['react', 'react-dom', 'react-router-dom'],
           i18n: ['i18next', 'react-i18next'],
+          xterm: ['@xterm/xterm', '@xterm/addon-fit'],
+          marked: ['marked'],
+          katex: ['katex'],
+          prism: ['prismjs'],
+          arborist: ['react-arborist', 'react-dnd', 'react-dnd-html5-backend', 'react-simple-code-editor'],
+          zustand: ['zustand'],
         },
       },
     },

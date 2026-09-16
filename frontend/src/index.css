@@ -2,20 +2,6 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── Font Loading Fix ──────────────────────────────────────────────────────────
-   Override font-display from 'block' to 'swap' to prevent invisible text
-   when font loading fails (e.g., SSL connection issues with self-signed certs).
-   Icons will show as fallback characters initially, then swap to Material Symbols
-   when the font loads successfully.
-   ───────────────────────────────────────────────────────────────────────────── */
-@font-face {
-  font-family: "Material Symbols Rounded";
-  font-style: normal;
-  font-weight: 100 700;
-  font-display: swap;
-  src: url("/assets/material-symbols-rounded-BSes1r24.woff2") format("woff2");
-}
-
 /* ── CSS Variables for Themes ── */
 /* Material Design 3 (M3) 语义角色为唯一真相来源。暗色为默认；亮色在
    [data-theme="light"] 覆盖 --md-*；旧组件 token 均为 --md-* 别名，自动跟随。 */
@@ -1335,6 +1321,21 @@
     flex-shrink: 0;
   }
 
+  /* M3 icon wrapper — keeps <Icon /> renders consistent across the app.
+     SVG children inherit `currentColor`; the wrapper itself is layout-only. */
+  .icon-wrap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    color: inherit;
+    user-select: none;
+    flex-shrink: 0;
+  }
+  .icon-wrap > svg {
+    display: block;
+  }
+
   .icon-btn:hover {
     background: var(--hover-bg);
     color: var(--text);
@@ -1902,6 +1903,16 @@
     50% { opacity: 0.4; transform: scale(0.75); }
   }
 
+  /* Stronger pulse for sidebar indicators (subagent streaming icon + delegate
+     waiting badge). Uses a wider scale/opacity range than bg-stream-pulse
+     so the breath is unmistakable even on a small 16×16 SVG. Tuned so the
+     dim phase is still visible on dark backgrounds (opacity 0.55 not 0.35)
+     while the scale drop (0.75) keeps the motion perceptible. */
+  @keyframes bg-stream-pulse-strong {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.55; transform: scale(0.75); }
+  }
+
   /* Unread message badge — filled primary pill shown after a background session completes */
   .sidebar-item-unread {
     display: inline-flex;
@@ -1929,13 +1940,15 @@
   }
 
   .sidebar-item-pin-indicator svg,
-  .sidebar-item-pin-indicator .material-symbols-rounded {
+  .sidebar-item-pin-indicator svg.icon,
+  .sidebar-item-pin-indicator > .icon-wrap svg {
     display: block;
     opacity: 0.55;
   }
   /* Pin is gold only when the session is active */
   .sidebar-item.active .sidebar-item-pin-indicator svg,
-  .sidebar-item.active .sidebar-item-pin-indicator .material-symbols-rounded {
+  .sidebar-item.active .sidebar-item-pin-indicator svg.icon,
+  .sidebar-item.active .sidebar-item-pin-indicator > .icon-wrap svg {
     color: var(--gold);
     opacity: 0.85;
   }
@@ -1949,7 +1962,7 @@
   }
 
   .sidebar-item-readonly-marker svg,
-  .sidebar-item-readonly-marker .material-symbols-rounded {
+  .sidebar-item-readonly-marker svg.icon {
     opacity: 0.55;
   }
 
@@ -2018,13 +2031,9 @@
 
   /* Let inner SVGs not capture pointer events (parent handles hover) */
   .sidebar-item-pin-indicator svg,
-  .sidebar-item-pin-indicator .material-symbols-rounded,
   .gateway-icon svg,
-  .gateway-icon .material-symbols-rounded,
   .sidebar-item-readonly-marker svg,
-  .sidebar-item-readonly-marker .material-symbols-rounded,
-  .sidebar-item-child-icon svg,
-  .sidebar-item-child-icon .material-symbols-rounded {
+  .sidebar-item-child-icon svg {
     pointer-events: none;
   }
 
@@ -5327,9 +5336,13 @@
 .sidebar-item-child-icon {
   flex-shrink: 0;
 }
-.sidebar-item-child-icon.streaming > .material-symbols-rounded {
-  animation: bg-stream-pulse 1.4s ease-in-out infinite;
+/* `.icon-wrap` is the wrapper rendered by <Icon>; the lucide <svg> is its
+   child (grand-child of `.sidebar-item-child-icon`). Use `> .icon-wrap svg`
+   instead of `> svg` so the animation actually applies. */
+.sidebar-item-child-icon.streaming > .icon-wrap svg {
+  animation: bg-stream-pulse-strong 1.2s ease-in-out infinite;
   color: var(--gold);
+  filter: drop-shadow(0 0 2px rgba(255, 193, 7, 0.7));
 }
 
 /* ── Subagent (delegate children) badge ────────────────────────────────── */
@@ -5354,8 +5367,9 @@
   opacity: 1;
   color: var(--primary);
 }
-.sidebar-item-delegate-badge.pulsing > .material-symbols-rounded {
-  animation: bg-stream-pulse 1.4s ease-in-out infinite;
+.sidebar-item-delegate-badge.pulsing > .icon-wrap svg {
+  animation: bg-stream-pulse-strong 1.2s ease-in-out infinite;
+  filter: drop-shadow(0 0 3px rgba(25, 118, 210, 0.75));
 }
 .sidebar-item-delegate-count {
   position: absolute;

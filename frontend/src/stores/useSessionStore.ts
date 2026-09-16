@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { Session, SessionListItem } from '@/types';
 import { useSettingsStore } from '@/stores/useSettingsStore';
+import { useChatStore } from '@/stores/useChatStore';
 
 interface SessionState {
   sessions: SessionListItem[];
@@ -152,6 +153,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       currentSession: placeholder,
       pendingNewSession: placeholder,
     });
+    // ── Reset chatStore so the compose footer shows defaults in welcome state ──
+    // enterPendingNewSession is the single entry point for entering welcome
+    // state (called from both sidebar '+' and WelcomeState's mount effect).
+    // The no-op guard above ensures we only reset on a real transition.
+    // StreamManager's _sessionStates and _sessionCache are untouched, so any
+    // in-flight stream on the previous session and any cached session data
+    // survive and can be restored when the user navigates back.
+    useChatStore.getState().reset();
     // Note: sessions[] intentionally NOT touched (per requirement "sidebar不动").
   },
 
