@@ -146,7 +146,14 @@ export default function SessionList() {
   const allSessions = useMemo(() => {
     const seen = new Set<string>();
     return filteredSessions.filter((s) => {
-      if ((s._readonly && s._parent_session_id) || s.is_subagent_session) return false;
+      // Subagent exclusion: prefer the explicit flag, fall back to
+      // `_parent_session_id` for older backend payloads that don't populate
+      // `is_subagent_session` in /api/sessions compact dict.
+      // === true (not truthy) so an explicit `false` wins over the fallback;
+      // == null tolerates both undefined and null from older payloads.
+      const isSubagent = s.is_subagent_session === true
+        || (s.is_subagent_session == null && s._parent_session_id != null);
+      if ((s._readonly && s._parent_session_id) || isSubagent) return false;
       if (seen.has(s.session_id)) return false;
       seen.add(s.session_id);
       return true;

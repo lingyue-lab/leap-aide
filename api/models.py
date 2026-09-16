@@ -1234,6 +1234,11 @@ def _all_sessions_from_db(db, active_session_ids):
             'compression_anchor_message_key': row.get('compression_anchor_message_key__webui'),
             'mode': row.get('mode__webui', 'manual'),
             '_parent_session_id': row.get('parent_session_id'),
+            # Mirror Session.compact() (line 924): subagent = has parent_session_id.
+            # The DB `source` value is 'webui' for webui-spawned subagents (the SDK
+            # inherits HERMES_SESSION_SOURCE from the parent process), so we MUST
+            # derive from parent_session_id, not source_tag.
+            'is_subagent_session': row.get('parent_session_id') is not None,
             '_compression_segment_count': row.get('compression_segment_count__webui', 0) or 0,
             '_lineage_root_id': row.get('lineage_root_id__webui'),
             '_lineage_tip_id': row.get('lineage_tip_id__webui'),
@@ -1288,6 +1293,14 @@ def _all_sessions_from_db(db, active_session_ids):
         s.get('updated_at', 0),
     )]
     result = [s for s in result if not _hide_from_default_sidebar(s)]
+    # Subagent sessions live only inside the parent's delegate tree — never in
+    # the primary workspace list. session_visible() (line 1611) already excludes
+    # them in get_cli_sessions(); mirror that here so an older client/server
+    # pair that doesn't read `is_subagent_session` from the wire cannot leak
+    # them. Strict AND: drop only when BOTH the flag and the parent are present.
+    result = [s for s in result
+              if not (s.get('is_subagent_session') is True
+                      and s.get('_parent_session_id'))]
     result = _append_archived_sessions(result)
     return result
 
@@ -1349,6 +1362,11 @@ def _all_sessions_from_index(active_session_ids):
         s.get('updated_at', 0),
     )]
     result = [s for s in result if not _hide_from_default_sidebar(s)]
+    # Subagent exclusion — see _all_sessions_from_db() for the rationale.
+    # Strict AND: drop only when BOTH the flag and the parent are present.
+    result = [s for s in result
+              if not (s.get('is_subagent_session') is True
+                      and s.get('_parent_session_id'))]
     for s in result:
         if not s.get('profile'):
             s['profile'] = 'default'
@@ -1385,6 +1403,11 @@ def _all_sessions_from_json(active_session_ids):
         s.title, len(s.messages), s.input_tokens, s.created_at, s.updated_at,
     )]
     result = [s for s in result if not _hide_from_default_sidebar(s)]
+    # Subagent exclusion — see _all_sessions_from_db() for the rationale.
+    # Strict AND: drop only when BOTH the flag and the parent are present.
+    result = [s for s in result
+              if not (s.get('is_subagent_session') is True
+                      and s.get('_parent_session_id'))]
     for s in result:
         if not s.get('profile'):
             s['profile'] = 'default'
