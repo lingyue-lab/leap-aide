@@ -2,6 +2,35 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Material Symbols Rounded (subset font for sidebar nav icons) ──
+   The full font is ~5 MB; we ship only the 6 ligatures used by the
+   sidebar nav (Chat, Memory, Tasks, Skills, Workspaces, Terminal).
+   Regenerate via `bash scripts/subset-material-icons.sh` if the icon
+   set changes. See Icons.tsx `MATERIAL_FONT_ICONS` for the active list. */
+@font-face {
+  font-family: "Material Symbols Rounded";
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: swap;
+  src: url("/assets/material-symbols-rounded-subset.woff2") format("woff2");
+}
+
+/* Base class applied by <MaterialFontIcon>. The ligatures (e.g. "calendar_month")
+   are matched against this font's `rlig` lookups when the text is rendered. */
+.material-symbols-rounded {
+  font-family: "Material Symbols Rounded";
+  font-weight: normal;
+  font-style: normal;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-feature-settings: "liga";
+  -webkit-font-smoothing: antialiased;
+}
+
 /* ── CSS Variables for Themes ── */
 /* Material Design 3 (M3) 语义角色为唯一真相来源。暗色为默认；亮色在
    [data-theme="light"] 覆盖 --md-*；旧组件 token 均为 --md-* 别名，自动跟随。 */
