@@ -2774,7 +2774,13 @@ def _get_etag(filepath: Path) -> str:
 
 
 # Regex for Vite content-hash filenames (e.g. index-7g0fwQV9.js)
-_IMMUTABLE_RE = _re.compile(r'-[a-zA-Z0-9]{8,}\.')
+# Vite's default hash alphabet is [a-zA-Z0-9_-]; the character class MUST include
+# `-` and `_` so hashed assets containing them (e.g. index-Pf-vFOO9.css,
+# TerminalView-qxJ8_QYu.css, xterm-DGKw3h-6.js) are correctly recognized as
+# immutable. Otherwise they get Cache-Control: no-store, which on hard refresh
+# causes Chrome ERR_TOO_MANY_RETRIES on this server's 5s ThreadingHTTPServer
+# timeout (see commit d10f55b1 for the original immutable-cache work).
+_IMMUTABLE_RE = _re.compile(r'-[a-zA-Z0-9_-]{8,}\.')
 
 
 def _is_immutable_asset(filename: str) -> bool:
