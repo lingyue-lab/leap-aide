@@ -4,7 +4,7 @@ background alerts, pin-survives-update.
 """
 import json, pathlib, urllib.error, urllib.request
 
-from tests._test_helpers import get, post, make_session
+from tests._test_helpers import get, post, make_session, post_with_timeout
 
 
 # ── Cron recent endpoint ──────────────────────────────────────────────────
@@ -64,7 +64,9 @@ def test_pinned_survives_update():
     created = []
     try:
         sid, sess = make_session(created)
-        post("/api/session/pin", {"session_id": sid, "pinned": True})
+        # pin endpoint synchronously boots SessionDisplay; allow headroom.
+        post_with_timeout("/api/session/pin",
+                          {"session_id": sid, "pinned": True})
         # Update workspace/model
         post("/api/session/update", {
             "session_id": sid, "model": "test/other",

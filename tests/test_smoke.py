@@ -25,6 +25,7 @@ import urllib.error
 import urllib.request
 
 from tests._pytest_port import BASE
+from tests.conftest import TEST_STATE_DIR
 
 REPO_ROOT = pathlib.Path(__file__).parent.parent.resolve()
 
@@ -125,18 +126,42 @@ def test_chat_start_returns_stream_id(cleanup_test_sessions):
 
 
 def test_state_dir_is_isolated_from_production():
-    """Belt-and-suspenders: HERMES_HOME in the subprocess must NOT point at
-    the user's real ~/.hermes. test_pytest_state_isolation.py covers this
-    in depth; here we just sanity-check the env var surface."""
-    test_state_dir = os.environ.get("HERMES_WEBUI_STATE_DIR", "")
-    assert test_state_dir, "HERMES_WEBUI_STATE_DIR not set (conftest misconfigured?)"
+    """Belt-and-suspenders: the test state directory must NOT point at the
+    user's real ~/.hermes — both the canonical conftest constant AND the env
+    var that the server subprocess consumes must reflect the isolated path.
+
+    `TEST_STATE_DIR` is published by conftest at module-import time and is
+    never overridden by individual test files (conftest.py:298-300 reserves
+    ``HERMES_WEBUI_TEST_STATE_DIR`` as the un-clobbered mapping for this
+    purpose). Checking it directly makes the test robust to other test files
+    mutating ``HERMES_WEBUI_STATE_DIR`` at import time, which is the exact
+    failure mode that broke this assertion under --batch-size=128 (see
+    test_auth_sessions.py / test_auth_session_persistence.py).
+
+    `test_pytest_state_isolation.py` covers this in depth by importing
+    api.config and asserting STATE_DIR/SESSION_DIR paths; here we just
+    sanity-check the env-var surface that the server subprocess consumes.
+    """
+    # Canonical source: the constant conftest.py published at import time.
+    # Importing it here is what makes the test robust to alphabetical
+    # import-order clobbering of HERMES_WEBUI_STATE_DIR.
+    canonical = pathlib.Path(TEST_STATE_DIR).resolve()
     home_hermes = pathlib.Path.home() / ".hermes"
-    # test state dir should be under a 'webui-test-*' subpath, never == home/.hermes
-    assert pathlib.Path(test_state_dir) != home_hermes, (
-        f"test state dir collides with production: {test_state_dir}"
+    assert canonical != home_hermes, (
+        f"conftest TEST_STATE_DIR collides with production: {canonical}"
     )
-    assert "webui-test" in test_state_dir, (
-        f"test state dir should match webui-test-* pattern: {test_state_dir}"
+    assert "webui-test" in str(canonical), (
+        f"conftest TEST_STATE_DIR should match webui-test-* pattern: {canonical}"
+    )
+
+    # Cross-check: the env var the server subprocess consumes must also
+    # reflect the same isolated path. If another test file mutated it
+    # between conftest import and now, we want to know about it.
+    env_state_dir = os.environ.get("HERMES_WEBUI_STATE_DIR", "")
+    assert env_state_dir, "HERMES_WEBUI_STATE_DIR not set (conftest misconfigured?)"
+    assert pathlib.Path(env_state_dir).resolve() == canonical, (
+        f"env HERMES_WEBUI_STATE_DIR={env_state_dir!r} does not match "
+        f"conftest TEST_STATE_DIR={canonical!r} (clobbered by another test?)"
     )
 
 

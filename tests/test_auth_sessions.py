@@ -2,31 +2,58 @@
 Tests for auth session lifecycle — session creation, verification, expiry,
 and lazy pruning of expired entries.
 """
+import os
+import shutil
+import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
-import tempfile
-import os
 
-# Isolate state dir so we don't touch real sessions
-_TEST_STATE = Path(tempfile.mkdtemp())
-os.environ["HERMES_WEBUI_STATE_DIR"] = str(_TEST_STATE)
+# Add repo root to sys.path so `import api.auth` resolves. The server
+# subprocess already has it on PYTHONPATH via conftest; this keeps
+# direct `python -m unittest tests.test_auth_sessions` invocations working.
+_REPO_ROOT = Path(__file__).parent.parent.resolve()
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Import the auth module once at module level. Per-test state isolation is
+# done in setUp by monkey-patching api.config.STATE_DIR (and the derived
+# _SESSIONS_FILE in api.auth), NOT by mutating os.environ. Mutating
+# os.environ['HERMES_WEBUI_STATE_DIR'] at import time clobbers the value
+# that conftest.py:68 publishes for the test server subprocess and breaks
+# sibling tests like test_smoke.test_state_dir_is_isolated_from_production
+# under --batch-size>=2 (alphabetical collection imports this file first).
+import api.auth as auth
 
-import importlib
 
-# Force re-import of auth module so it picks up our TEST_STATE_DIR
-auth = importlib.import_module("api.auth")
-
-
-class TestSessionPruning(unittest.TestCase):
-    """Verify expired session cleanup works correctly."""
+class _AuthIsolatedTestCase(unittest.TestCase):
+    """Mixin: patches api.config.STATE_DIR and api.auth._SESSIONS_FILE for
+    the duration of each test. Subclasses get a fresh tmpdir per test."""
 
     def setUp(self):
-        # Clear any leftover sessions from other tests
+        self._tmpdir = Path(tempfile.mkdtemp(prefix="webui-test-auth-"))
+        import api.config as _config
+        self._saved_config_state_dir = _config.STATE_DIR
+        self._saved_auth_state_dir = auth.STATE_DIR
+        self._saved_sessions_file = auth._SESSIONS_FILE
+        _config.STATE_DIR = self._tmpdir
+        auth.STATE_DIR = self._tmpdir
+        auth._SESSIONS_FILE = self._tmpdir / ".sessions.json"
         auth._sessions.clear()
+
+    def tearDown(self):
+        import api.config as _config
+        try:
+            _config.STATE_DIR = self._saved_config_state_dir
+            auth.STATE_DIR = self._saved_auth_state_dir
+            auth._SESSIONS_FILE = self._saved_sessions_file
+        finally:
+            shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+
+class TestSessionPruning(_AuthIsolatedTestCase):
+    """Verify expired session cleanup works correctly."""
 
     def test_session_created_valid(self):
         """A fresh session token should verify as valid."""
@@ -108,11 +135,8 @@ class TestSessionPruning(unittest.TestCase):
             self.fail("Session token not found in _sessions")
 
 
-class TestSessionInvalidation(unittest.TestCase):
+class TestSessionInvalidation(_AuthIsolatedTestCase):
     """Test session logout / invalidation."""
-
-    def setUp(self):
-        auth._sessions.clear()
 
     def test_invalidate_session_removes_token(self):
         """Calling invalidate_session should remove the token from _sessions."""

@@ -76,6 +76,31 @@ def post(path, body=None, headers=None):
         return json.loads(e.read()), e.code
 
 
+def post_with_timeout(path, body=None, headers=None, timeout=60):
+    """POST JSON with a caller-controlled timeout (default 60s).
+
+    Use this for endpoints that synchronously boot heavy subsystems
+    and take longer than the default 10s canary window.  Today the
+    only such endpoint is POST /api/session/pin, whose server-side
+    SessionDisplay.start() takes 10-15s on cold start (Xvfb + dbus
+    + fcitx5 + openbox + x11vnc + Chrome), then 3-6s on warm starts.
+
+    Do NOT use this helper for the common case -- the default post()'s
+    10s timeout is a deliberate canary for hung servers and should
+    not be relaxed globally.
+    """
+    data = json.dumps(body or {}).encode()
+    h = {"Content-Type": "application/json"}
+    if headers:
+        h.update(headers)
+    req = urllib.request.Request(BASE + path, data=data, headers=h)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read()), r.status
+    except urllib.error.HTTPError as e:
+        return json.loads(e.read()), e.code
+
+
 # ── 3-tuple: body + status + headers (security assertions) ─────────────────
 
 def get_with_headers(path, headers=None):

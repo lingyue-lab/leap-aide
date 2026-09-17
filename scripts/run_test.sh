@@ -32,6 +32,11 @@ FRONTEND_DIR="${PROJECT_ROOT}/frontend"
 FRONTEND_RESULTS_DIR="${FRONTEND_DIR}/tests/.results"
 PYTEST_EXTRA="${PYTEST_EXTRA:-}"
 VITEST_EXTRA="${VITEST_EXTRA:-}"
+# PYTEST_SETUP_SHOW=1 → pass --setup-show to pytest so each fixture
+# SETUP/TEARDOWN is printed. Use to verify why a session-scoped fixture
+# is being re-entered mid-batch (the symptom was the test_server fixture
+# firing its setup phase multiple times in a single pytest process).
+PYTEST_SETUP_SHOW="${PYTEST_SETUP_SHOW:-0}"
 DRY_RUN="${DRY_RUN:-0}"
 # BATCH_SIZE is parsed by parse_runner_flags (CLI flag wins, then env, then 1).
 # Leave empty here so parse_runner_flags can distinguish "unset" from "explicitly 1".
@@ -202,6 +207,7 @@ ${B}Frontend SUBCMD:${R}
 ${B}Environment:${R}
   PYTEST_EXTRA="..."           # extra pytest flags (e.g. "-x -k smoke")
   VITEST_EXTRA="..."           # extra vitest flags (e.g. "--reporter=verbose")
+  PYTEST_SETUP_SHOW=1          # pass --setup-show to pytest (debug fixture lifecycle)
   DRY_RUN=1                    # print command without executing
   BATCH_SIZE=N                 # tests per pytest invocation (default 1)
   MAX_TESTS=N                  # cumulative test-case cap; 0 = no limit (default)
@@ -280,7 +286,7 @@ resolve_targets() {
     smoke)
       printf '%s\n' \
         tests/test_smoke.py \
-        tests/test_sprint1.py \
+        tests/test_api_sessions_crud.py \
         tests/test_chat_start_commands.py \
         tests/test_regressions.py \
         tests/test_pytest_state_isolation.py
@@ -470,6 +476,7 @@ run_pytest_batched() {
       "env" "PYTHONUNBUFFERED=1"
       "pytest" "${batch[@]}"
       "-v" "--junitxml=${batch_xml}"
+      $([[ "${PYTEST_SETUP_SHOW}" == "1" ]] && echo "--setup-show")
       ${PYTEST_EXTRA}
     )
 

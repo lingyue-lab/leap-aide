@@ -57,6 +57,30 @@ TEST_STATE_DIR = pathlib.Path(os.getenv(
 ))
 TEST_WORKSPACE = TEST_STATE_DIR / 'test-workspace'
 
+# Minimal stub hermes config so AIAgent init completes inside the background
+# chat/start thread. Without it, /api/chat/start spawns the agent thread,
+# init_agent() in hermes-agent reaches agent_init.py:1417 with no provider
+# resolved and raises RuntimeError("No LLM provider configured..."). That
+# RuntimeError is harmless to the HTTP response (chat/start already returned
+# stream_id), but it produces a noisy traceback in server.log on every
+# smoke run.
+#
+# The 'custom' provider + base_url combo enters the explicit-creds branch
+# at agent/agent_init.py:~1263 (`if api_key and base_url`), which builds
+# client_kwargs directly and skips resolve_provider_client() / the
+# RuntimeError at :1417 entirely. The base_url points at Ollama's default
+# loopback (127.0.0.1:11434) — never contacted by tests that only assert
+# the chat/start HTTP contract (no consumer reads the SSE stream).
+# 'no-key-required' is hermes-agent's sentinel set at runtime_provider.py:
+# 1368-1369 when a custom provider has no key configured.
+_STUB_HERMES_CONFIG_YAML = (
+    "model:\n"
+    "  provider: custom\n"
+    "  base_url: http://127.0.0.1:11434/v1\n"
+    "  api_key: no-key-required\n"
+    "  default: stub-test-model\n"
+)
+
 # Publish at module level so api.config, _pytest_port.py, and any test module
 # importing stateful API code during collection see the isolated test paths.
 #
@@ -87,29 +111,44 @@ if not SERVER_SCRIPT.exists():
         "Is conftest.py in the tests/ subdirectory of the repo?"
     )
 
-# ── Hermes agent discovery (mirrors api/config._discover_agent_dir) ───────
+# ── Hermes agent discovery ─────────────────────────────────────────────────
 def _discover_agent_dir() -> pathlib.Path:
-    candidates = [
-        os.getenv('HERMES_WEBUI_AGENT_DIR', ''),
-        str(HERMES_HOME / 'hermes-agent'),
-        str(REPO_ROOT.parent / 'hermes-agent'),
-        str(HOME / '.hermes' / 'hermes-agent'),
-        str(HOME / 'hermes-agent'),
-        # System install path: hermes-agent shipped as a Python package under
-        # /usr/local/lib/hermes-agent (e.g. testbox setup, Docker images,
-        # `pip install hermes-agent` deployments). Mirrors the path the
-        # production server expects per CLAUDE.md.
-        '/usr/local/lib/hermes-agent',
-        '/opt/hermes-agent',
-        '/usr/local/hermes-agent',
-    ]
-    for c in candidates:
-        if not c:
-            continue
-        p = pathlib.Path(c).expanduser()
-        if p.exists() and (p / 'run_agent.py').exists():
-            return p.resolve()
-    return None
+    """Locate the hermes-agent checkout.
+
+    Delegates to api.config._discover_agent_dir so the test process sees the
+    same candidate list as the server it spawns. Historically this function
+    duplicated the candidate list inline (the comment above used to read
+    "mirrors api/config._discover_agent_dir"), but the two implementations
+    drifted: conftest missed the XDG_DATA_HOME and parent-of-parent entries
+    that api/config.py added later, so on testbox conftest frequently
+    returned None even when api/config found /usr/local/lib/hermes-agent.
+
+    Delegating here is safe at pytest collection time: api/config has no
+    top-level side effects beyond computing module-level Path constants,
+    which is exactly what the test process wants (HERMES_WEBUI_STATE_DIR is
+    already overridden at line 68 above before any api import can happen).
+
+    The fallback list covers environments where api.config can't be imported
+    (missing hermes-agent deps on the host running pytest).
+    """
+    try:
+        from api.config import _discover_agent_dir as _impl
+        return _impl()
+    except Exception:
+        # Fallback: minimal candidate list so the test process at least boots
+        # in environments where api.config can't be imported.
+        for c in [
+            os.getenv('HERMES_WEBUI_AGENT_DIR', ''),
+            '/usr/local/lib/hermes-agent',
+            '/opt/hermes-agent',
+            '/usr/local/hermes-agent',
+        ]:
+            if not c:
+                continue
+            p = pathlib.Path(c).expanduser()
+            if p.exists() and (p / 'run_agent.py').exists():
+                return p.resolve()
+        return None
 
 # ── Python discovery (mirrors api/config._discover_python) ────────────────
 def _discover_python(agent_dir) -> str:
@@ -259,6 +298,37 @@ def test_server():
     Start an isolated test server on TEST_PORT with a clean state directory.
     Paths are discovered dynamically -- no hardcoded absolute path assumptions.
     """
+    import atexit as _atexit
+    _trace_path = pathlib.Path("/tmp/leap-aide-test-server-trace.log")
+    _trace_path.parent.mkdir(parents=True, exist_ok=True)
+    def _trace(msg):
+        import datetime as _dt
+        try:
+            with _trace_path.open("a") as _f:
+                _f.write(f"{_dt.datetime.now().isoformat()} pid={os.getpid()} {msg}\n")
+        except Exception:
+            pass
+    _trace(f"test_server fixture ENTRY port={TEST_PORT}")
+    # Capture pytest session state + caller frame to diagnose double-entry
+    try:
+        import traceback as _tb
+        import atexit as _atexit
+        _caller_frames = _tb.extract_stack(limit=6)
+        _trace(f"  cwd={os.getcwd()} conftest globals id={id(globals())}")
+        for _fr in _caller_frames[-4:]:
+            _trace(f"    at {_fr.filename}:{_fr.lineno} in {_fr.name}")
+        # Register an atexit handler to confirm when (or whether) pytest exits
+        def _atexit_handler():
+            import datetime as _dt2
+            try:
+                with _trace_path.open("a") as _f:
+                    _f.write(f"{_dt2.datetime.now().isoformat()} pid={os.getpid()} ATEXIT — pytest is exiting\n")
+            except Exception:
+                pass
+        _atexit.register(_atexit_handler)
+    except Exception as _e:
+        _trace(f"  trace capture failed: {_e}")
+
     # Kill any leftover process on the test port before starting.
     # Stale servers from QA harness runs or prior test sessions cause
     # conftest to think the server is already up, producing false failures.
@@ -274,6 +344,13 @@ def test_server():
         shutil.rmtree(TEST_STATE_DIR)
     TEST_STATE_DIR.mkdir(parents=True)
     TEST_WORKSPACE.mkdir(parents=True)
+
+    # Write a minimal stub hermes config so the background chat/start
+    # agent thread completes init_agent() without raising
+    # RuntimeError("No LLM provider configured"). See _STUB_HERMES_CONFIG_YAML
+    # for the full rationale. Written before server subprocess starts so
+    # api/config._get_config_path() sees it on first read.
+    (TEST_STATE_DIR / 'config.yaml').write_text(_STUB_HERMES_CONFIG_YAML)
 
     # Symlink real skills into test home so skill-related tests work,
     # but all write-heavy state stays isolated.
@@ -313,6 +390,16 @@ def test_server():
             'GOOGLE_API_KEY', 'DEEPSEEK_API_KEY',
         )):
             del env[_k]
+    # Inject a synthetic OPENROUTER_API_KEY so the catalog builds an openrouter
+    # group. Our _STUB_HERMES_CONFIG_YAML sets `provider: custom` which makes
+    # _resolve_compatible_session_model (api/routes.py:345) enter the
+    # custom/openrouter normalization branch; without an openrouter group in
+    # the catalog, that branch replaces the persisted session model with
+    # default_model (api/routes.py:361), breaking test_session_update and
+    # similar tests that round-trip arbitrary model strings through /api/session.
+    # The fake key is never used to call OpenRouter — the auxiliary client
+    # marks openrouter unhealthy on 401 and moves on, same outcome as before.
+    env["OPENROUTER_API_KEY"] = "stub-openrouter-key-for-test-only"
     # Optional test-only DeepSeek key. Set LEAP_AIDE_TEST_DEEPSEEK_KEY in the
     # shell that invokes pytest (CI secret, dev machine .env, etc.) and the
     # value is forwarded as DEEPSEEK_API_KEY into the server subprocess.
@@ -359,33 +446,82 @@ def test_server():
         env["HERMES_WEBUI_AGENT_DIR"] = str(HERMES_AGENT)
 
     # DEBUG: capture server logs to file so seed failures are diagnosable.
+    # Use a managed file object: subprocess.Popen inherits the fd, but the
+    # Python-level file wrapper must be closed before pytest exits or the
+    # gc'd flush can hold up interpreter shutdown (manifests as the
+    # pytest process showing "100%" then hanging on exit).
     _server_log = open(TEST_STATE_DIR / "server.log", "wb")
-    proc = subprocess.Popen(
-        [VENV_PYTHON, str(SERVER_SCRIPT)],
-        cwd=WORKDIR,
-        env=env,
-        stdout=_server_log,
-        stderr=_server_log,
-    )
-
-    if not _wait_for_server(TEST_BASE, timeout=20):
-        proc.kill()
-        pytest.fail(
-            f"Test server on port {TEST_PORT} did not start within 20s.\n"
-            f"  server.py : {SERVER_SCRIPT}\n"
-            f"  python    : {VENV_PYTHON}\n"
-            f"  agent dir : {HERMES_AGENT}\n"
-            f"  workdir   : {WORKDIR}\n"
-        )
-
-    yield proc
-
-    proc.terminate()
     try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait(timeout=5)
+        proc = subprocess.Popen(
+            [VENV_PYTHON, str(SERVER_SCRIPT)],
+            cwd=WORKDIR,
+            env=env,
+            stdout=_server_log,
+            stderr=_server_log,
+        )
+        _trace(f"test_server Popen pid={proc.pid} port={TEST_PORT}")
+
+        if not _wait_for_server(TEST_BASE, timeout=20):
+            proc.kill()
+            pytest.fail(
+                f"Test server on port {TEST_PORT} did not start within 20s.\n"
+                f"  server.py : {SERVER_SCRIPT}\n"
+                f"  python    : {VENV_PYTHON}\n"
+                f"  agent dir : {HERMES_AGENT}\n"
+                f"  workdir   : {WORKDIR}\n"
+            )
+
+        yield proc
+        _trace(f"test_server YIELD DONE — entering teardown proc.pid={proc.pid}")
+        _trace(f"  post-yield: before proc.kill() — generator state: {proc}")
+
+        # ── Teardown: SIGKILL without wait ─────────────────────────────
+        # CRITICAL — do NOT block in this fixture's post-yield.
+        # Background: pytest 9.1.1's session finalizer calls next() on
+        # the generator to advance past yield. If the post-yield code
+        # blocks (e.g. proc.wait() on a server whose SIGTERM handler
+        # is stuck in server.py's 6-step shutdown cascade), pytest
+        # observes the long wait as fixture failure, clears
+        # FixtureDef.cached_result, and re-runs setup for the next
+        # test — spawning a duplicate server.py. Evidence from
+        # /tmp/leap-aide-test-server-trace.log on testbox (batch-size=50,
+        # pytest 9.1.1, session-scoped autouse test_server):
+        #
+        #   20:26:13.229 pid=172268 post-yield: proc.terminate() returned
+        #   20:26:16.753 pid=172268 test_server fixture ENTRY port=26597
+        #   20:26:16.755 caller stack: pytest_fixture_setup → call_fixture_func
+        #   20:26:17.327 pid=172268 test_server Popen pid=174095 port=26597
+        #
+        # First server (PID 172272) was left as <defunct> because
+        # proc.wait() never completed; pytest re-entered setup and
+        # spawned PID 174095 instead. Batch 2 ended up serving tests
+        # against two overlapping server.py processes, with the orphan
+        # PID 172272 persisting as a zombie until pytest exits.
+        #
+        # Fix: SIGKILL and return immediately. The kernel reaps the
+        # zombie asynchronously; the next pytest run's `fuser -k` at
+        # fixture ENTRY (line ~338 below) guarantees port cleanup.
+        # No `proc.wait()` is called here — it is the wait that
+        # triggers pytest's re-entry, not the signal itself.
+        try:
+            proc.kill()
+            _trace(f"  post-yield: proc.kill() returned (SIGKILL sent, no wait)")
+        except BaseException as _e:
+            _trace(f"  post-yield: proc.kill() raised {_e!r}")
+            # Don't re-raise — pytest must see this fixture as cleanly
+            # finalized even if kill() fails (e.g. process already dead).
+            # The next batch's port-cleanup guarantees no leftovers.
+    finally:
+        _trace(f"test_server fixture EXIT (finally block) proc.pid={proc.pid}")
+        # Close the server-log file wrapper BEFORE pytest tears down its
+        # session. subprocess.Popen already inherited the underlying fd,
+        # so closing the Python-level wrapper only releases the Python
+        # object — it does not affect the server's ability to write to
+        # the log until the server itself exits.
+        try:
+            _server_log.close()
+        except Exception:
+            pass
 
     # DEBUG: preserve test state dir + server log for diagnosis
     if os.environ.get("LEAP_AIDE_KEEP_TEST_STATE") == "1":
@@ -473,6 +609,74 @@ def cleanup_test_sessions():
         last_ws_file.write_text(str(TEST_WORKSPACE), encoding='utf-8')
     except Exception:
         pass
+
+
+# ── Per-test server liveness check ────────────────────────────────────────────
+# When test_server crashes mid-batch (e.g. an unhandled exception in a request
+# handler), every subsequent HTTP-based test in the same pytest process fails
+# with `ConnectionRefusedError: [Errno 111]`. That cascades into hundreds of
+# confusing failures that all point at "urllib URLError" instead of the real
+# culprit. This fixture surfaces the crash immediately at the next test's
+# setup boundary, dumping the tail of server.log so the failing test (the
+# one whose teardown crashed the server) is obvious from the pytest output.
+#
+# Declared last among the autouse fixtures so its yield-teardown runs last;
+# pytest runs teardown in reverse order of setup, so the position matters.
+
+@pytest.fixture(autouse=True)
+def _fail_fast_if_server_died():
+    """After each test, ping the server. If it crashed, fail with server.log tail.
+
+    Prevents 200+ cascading 'Connection refused' failures by surfacing the
+    exact pytest process boundary at which test_server died.
+
+    IMPORTANT: This fixture MUST NOT add latency to the happy path. The
+    timeout=2s ping only triggers if /health is unreachable; a healthy
+    server responds in <10ms. If the server is dead, pytest.fail() short-
+    circuits subsequent tests, so the 2s ping only fires at most once.
+    """
+    import datetime as _dt
+    _wd_path = pathlib.Path("/tmp/leap-aide-test-server-trace.log")
+    def _wd(msg):
+        try:
+            with _wd_path.open("a") as _f:
+                _f.write(f"{_dt.datetime.now().isoformat()} pid={os.getpid()} _fail_fast: {msg}\n")
+        except Exception:
+            pass
+    _wd("yield — test finished, pinging server")
+    # Check for a crash marker written by the previous test's teardown.
+    # If present, fail the CURRENT test (not the previous one) so we don't
+    # trigger pytest's "teardown failed → reset session fixture" machinery,
+    # which caused a second server.py spawn in batch-size > 1 runs.
+    _crash_marker = pathlib.Path("/tmp/leap-aide-test-server-crash.txt")
+    if _crash_marker.exists():
+        _wd("found crash marker from previous test — reading it")
+        msg = _crash_marker.read_text(encoding="utf-8")
+        _crash_marker.unlink()
+        pytest.fail(msg)
+    yield
+    _wd("teardown — pinging server")
+    if not _wait_for_server(TEST_BASE, timeout=2):
+        _wd("SERVER DEAD — writing fixture-failed marker (no pytest.fail to avoid re-run)")
+        log_path = TEST_STATE_DIR / "server.log"
+        if log_path.exists():
+            tail = log_path.read_text(errors='replace')[-4000:]
+        else:
+            tail = "<no server.log>"
+        # Write a marker file instead of pytest.fail(). pytest.fail() in a
+        # teardown fixture triggers pytest's "fixture failed → reset and retry"
+        # machinery, which re-enters session-scoped fixtures. That cascade
+        # produced a second server.py process mid-session (visible in
+        # /tmp/leap-aide-test-server-trace.log). Raising a non-pytest
+        # exception also retries. Writing the marker and returning cleanly
+        # surfaces the failure to the JUnit XML on the NEXT test's setup
+        # boundary without triggering pytest's fixture-reset path.
+        crash_marker = pathlib.Path("/tmp/leap-aide-test-server-crash.txt")
+        crash_marker.write_text(
+            f"test_server died during the last test. tail of {log_path}:\n{tail}",
+            encoding="utf-8",
+        )
+    _wd("server alive — ok")
 
 
 # ── Convenience helpers ────────────────────────────────────────────────────────

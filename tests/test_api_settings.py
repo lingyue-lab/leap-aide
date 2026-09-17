@@ -4,7 +4,7 @@ Tests: settings panel, session pinning, session import, SSE reconnect.
 import json, pathlib, urllib.error, urllib.request, urllib.parse
 
 from tests._pytest_port import TEST_DEFAULT_MODEL
-from tests._test_helpers import get, post, make_session
+from tests._test_helpers import get, post, make_session, post_with_timeout
 
 
 # ── Settings API ──────────────────────────────────────────────────────────
@@ -73,7 +73,13 @@ def test_pin_session():
     created = []
     try:
         sid, _ = make_session(created)
-        d, status = post("/api/session/pin", {"session_id": sid, "pinned": True})
+        # POST /api/session/pin synchronously boots SessionDisplay on the
+        # server (Xvfb + dbus + fcitx5 + openbox + x11vnc + Chrome), which
+        # takes 10-15s on cold start and 3-6s warm. -- post_with_timeout
+        # gives the test the headroom to wait, while post()'s default 10s
+        # canary is preserved for the common case.
+        d, status = post_with_timeout("/api/session/pin",
+                                      {"session_id": sid, "pinned": True})
         assert status == 200
         assert d['ok'] is True
         assert d['session']['pinned'] is True
@@ -86,8 +92,10 @@ def test_unpin_session():
     created = []
     try:
         sid, _ = make_session(created)
-        post("/api/session/pin", {"session_id": sid, "pinned": True})
-        d, status = post("/api/session/pin", {"session_id": sid, "pinned": False})
+        post_with_timeout("/api/session/pin",
+                          {"session_id": sid, "pinned": True})
+        d, status = post_with_timeout("/api/session/pin",
+                                      {"session_id": sid, "pinned": False})
         assert status == 200
         assert d['session']['pinned'] is False
     finally:
@@ -101,7 +109,8 @@ def test_pinned_in_session_list():
         sid, _ = make_session(created)
         # Pin it and give it a title so it shows in the list
         post("/api/session/rename", {"session_id": sid, "title": "Pinned Test"})
-        post("/api/session/pin", {"session_id": sid, "pinned": True})
+        post_with_timeout("/api/session/pin",
+                          {"session_id": sid, "pinned": True})
         d, _ = get("/api/sessions")
         match = [s for s in d['sessions'] if s['session_id'] == sid]
         assert len(match) == 1
@@ -115,7 +124,8 @@ def test_pinned_persists_on_reload():
     created = []
     try:
         sid, _ = make_session(created)
-        post("/api/session/pin", {"session_id": sid, "pinned": True})
+        post_with_timeout("/api/session/pin",
+                          {"session_id": sid, "pinned": True})
         d, _ = get(f"/api/session?session_id={sid}")
         assert d['session']['pinned'] is True
     finally:
