@@ -5,6 +5,7 @@ import Layout from './components/layout/Layout';
 import ChatInterface from './components/chat/ChatInterface';
 import ObserverPage from './components/observer/ObserverPage';
 import LoadingSpinner from './components/common/LoadingSpinner';
+import DialogHost from './components/common/DialogHost';
 import { useSessionStore } from './stores/useSessionStore';
 import { useSettingsStore } from './stores/useSettingsStore';
 import { useWorkspaceStore } from './stores/useWorkspaceStore';
@@ -95,6 +96,11 @@ function App() {
       {pinningSession && (
         <LoadingSpinner mode="fullscreen" />
       )}
+      {/* Global host for showConfirmDialog / showPromptDialog helpers.
+          Mounted once at the App root so any module can queue a dialog
+          request without prop drilling. Renders nothing when no dialog
+          is open. */}
+      <DialogHost />
     </ProtectedRoute>
   );
 }

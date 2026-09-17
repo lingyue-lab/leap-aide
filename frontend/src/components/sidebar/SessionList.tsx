@@ -9,6 +9,7 @@ import CustomScrollbar from '@/components/common/CustomScrollbar';
 import SessionSearchModal from '@/components/common/SessionSearchModal';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import { Icon } from '@/components/common/Icons';
+import M3Dialog from '@/components/common/M3Dialog';
 import type { DelegateChildSession } from '@/types';
 
 
@@ -315,31 +316,6 @@ export default function SessionList() {
     setCleanupPreview(null);
   };
 
-  const handleCleanupConfirm = async () => {
-    setCleanupRunning(true);
-    try {
-      const res = await fetch('/api/sessions/cleanup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source: cleanupSource, older_than_days: cleanupDays }),
-        credentials: 'include',
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setCleanupPreview(data.deleted_count);
-        // Reload sessions after cleanup
-        await loadSessions();
-      } else {
-        alert(data.error || 'Cleanup failed');
-      }
-    } catch (err) {
-      alert(`Cleanup failed: ${(err as Error).message}`);
-    } finally {
-      setCleanupRunning(false);
-      setShowCleanupModal(false);
-    }
-  };
-
   if (!workspacesLoaded) {
     return <div className="flex-1 flex items-center justify-center"><LoadingSpinner mode="inline" minimal /></div>;
   }
@@ -393,7 +369,7 @@ export default function SessionList() {
               onClick={() => handleCleanupOpen()}
               title="Clean up old gateway sessions"
             >
-              <Icon name="delete" size={18} />
+              <Icon name="auto_delete" size={18} />
             </button>
           )}
           <button
@@ -446,59 +422,77 @@ export default function SessionList() {
         )}
       </CustomScrollbar>
 
-      {/* Cleanup Modal */}
-      {showCleanupModal && (
-        <div className="clear-history-overlay" onClick={handleCleanupClose}>
-          <div className="clear-history-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="clear-history-modal__title">{t('sessions.cleanup_title')}</div>
-            <div className="clear-history-modal__desc">
-              {t('sessions.cleanup_desc')}
-            </div>
-            <div className="clear-history-modal__field">
-              <label className="clear-history-modal__label">{t('sessions.cleanup_source')}</label>
-              <select
-                className="clear-history-modal__input"
-                value={cleanupSource}
-                onChange={(e) => setCleanupSource(e.target.value)}
-              >
-                <option value="">{t('sessions.cleanup_source_placeholder')}</option>
-                <option value="all">{t('sessions.cleanup_source_all')}</option>
-                <option value="webui">{t('sessions.cleanup_source_webui')}</option>
-                <option value="cron">{t('sessions.cleanup_source_cron')}</option>
-                <option value="cli">{t('sessions.cleanup_source_cli')}</option>
-                <option value="message">{t('sessions.cleanup_source_message')}</option>
-              </select>
-            </div>
-            <div className="clear-history-modal__field">
-              <label className="clear-history-modal__label">{t('sessions.cleanup_older_than')}</label>
-              <select
-                className="clear-history-modal__input"
-                value={cleanupDays}
-                onChange={(e) => setCleanupDays(Number(e.target.value))}
-              >
-                <option value={7}>{t('sessions.cleanup_days', { count: 7 })}</option>
-                <option value={30}>{t('sessions.cleanup_days', { count: 30 })}</option>
-                <option value={90}>{t('sessions.cleanup_days', { count: 90 })}</option>
-              </select>
-            </div>
-            {cleanupPreview !== null && (
-              <div className="text-sm text-green-500 mb-2">{t('sessions.cleanup_deleted', { count: cleanupPreview })}</div>
-            )}
-            <div className="clear-history-modal__actions">
-              <button className="clear-history-modal__btn clear-history-modal__btn--cancel" onClick={handleCleanupClose}>
-                {t('cancel')}
-              </button>
-              <button
-                className="clear-history-modal__btn clear-history-modal__btn--confirm"
-                onClick={handleCleanupConfirm}
-                disabled={!cleanupSource || cleanupRunning}
-              >
-                {cleanupRunning ? t('sessions.cleanup_cleaning') : t('sessions.cleanup_clean')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Cleanup Modal — two stacked select fields + success footer line.
+          The cleanupSource / cleanupDays state stays on the parent and is
+          passed as `defaultValue` so the dialog is reset on each open;
+          the dialog forwards parsed values back through onConfirm. */}
+      <M3Dialog
+        open={showCleanupModal}
+        severity="warning"
+        icon="auto_delete"
+        title={t('sessions.cleanup_title')}
+        description={t('sessions.cleanup_desc')}
+        input={[
+          {
+            kind: 'select',
+            label: t('sessions.cleanup_source'),
+            defaultValue: cleanupSource,
+            options: [
+              { value: '',       label: t('sessions.cleanup_source_placeholder') },
+              { value: 'all',    label: t('sessions.cleanup_source_all') },
+              { value: 'webui',  label: t('sessions.cleanup_source_webui') },
+              { value: 'cron',   label: t('sessions.cleanup_source_cron') },
+              { value: 'cli',    label: t('sessions.cleanup_source_cli') },
+              { value: 'message', label: t('sessions.cleanup_source_message') },
+            ],
+          },
+          {
+            kind: 'select',
+            label: t('sessions.cleanup_older_than'),
+            defaultValue: String(cleanupDays),
+            options: [7, 30, 90].map((n) => ({
+              value: String(n),
+              label: t('sessions.cleanup_days', { count: n }),
+            })),
+          },
+        ]}
+        confirmDisabled={!cleanupSource || cleanupRunning}
+        confirmText={cleanupRunning ? t('sessions.cleanup_cleaning') : t('sessions.cleanup_clean')}
+        cancelText={t('cancel')}
+        loading={cleanupRunning}
+        footer={
+          cleanupPreview !== null
+            ? t('sessions.cleanup_deleted', { count: cleanupPreview })
+            : null
+        }
+        onCancel={handleCleanupClose}
+        onConfirm={async (values) => {
+          setCleanupRunning(true);
+          try {
+            const [source, days] = (values as [string, string]) ?? ['', '30'];
+            setCleanupSource(source);
+            setCleanupDays(Number(days));
+            const res = await fetch('/api/sessions/cleanup', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ source, older_than_days: Number(days) }),
+              credentials: 'include',
+            });
+            const data = await res.json();
+            if (res.ok) {
+              setCleanupPreview(data.deleted_count);
+              await loadSessions();
+            } else {
+              alert(data.error || 'Cleanup failed'); // eslint-disable-line no-alert
+            }
+          } catch (err) {
+            alert(`Cleanup failed: ${(err as Error).message}`); // eslint-disable-line no-alert
+          } finally {
+            setCleanupRunning(false);
+            setShowCleanupModal(false);
+          }
+        }}
+      />
     </>
   );
 }

@@ -36,6 +36,7 @@ import {
   Star,
   Eye,
   AlertTriangle,
+  Brush,
   // Lists & tasks
   ListChecks,
   List,
@@ -52,6 +53,9 @@ import {
   Mic,
   User,
   Send,
+
+  // Time-based actions
+  CalendarX,
   // Common actions
   Minimize2,
   RefreshCw,
@@ -180,6 +184,7 @@ const KNOWN_ICONS: Record<string, React.ComponentType<any>> = {
   content_copy: Copy,
   create_new_folder: FolderPlus,
   delete: Trash2,
+  delete_sweep: Brush,
   description: FileText,
   drive_file_rename: PenLine,
   edit: Pencil,
@@ -207,6 +212,7 @@ const KNOWN_ICONS: Record<string, React.ComponentType<any>> = {
   history: History,
 
   // Time & calendar
+  auto_delete: CalendarX,
   calendar_month: makeMaterialIcon('calendar_month'),
 
   // Settings & system

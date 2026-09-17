@@ -10,7 +10,7 @@ import FileView, { detectFileType } from '@/components/shared/FileView';
 import type { FileType } from '@/components/shared/FileView';
 import EditorView from '@/components/shared/EditorView';
 import CodeCopyButton from '@/components/shared/CodeCopyButton';
-import { FolderClosedIcon } from '@/components/common/Icons';
+import { FolderOpenIcon } from '@/components/common/Icons';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 
 export default function SkillDetail() {
@@ -244,9 +244,9 @@ export default function SkillDetail() {
         <button
           className={`icon-btn${showFiles ? ' active' : ''}`}
           onClick={() => setShowFiles(!showFiles)}
-          title="Files"
+          title={showFiles ? 'Hide files' : 'Show files'}
         >
-          <FolderClosedIcon />
+          <FolderOpenIcon />
         </button>
       </div>
     </div>

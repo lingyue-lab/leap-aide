@@ -95,6 +95,18 @@
   --md-state-pressed: color-mix(in srgb, var(--md-on-surface) 12%, transparent);
   --md-state-drag: color-mix(in srgb, var(--md-on-surface) 16%, transparent);
 
+  /* M3 elevation tokens（dialog 使用 level-3） */
+  --md-elevation-1: 0 1px 2px rgba(0,0,0,0.18), 0 1px 3px rgba(0,0,0,0.12);
+  --md-elevation-3: 0 4px 8px 3px rgba(0,0,0,0.15), 0 1px 3px rgba(0,0,0,0.30);
+  --md-elevation-5: 0 8px 12px 6px rgba(0,0,0,0.15), 0 4px 4px rgba(0,0,0,0.30);
+
+  /* M3 type roles（仅 dialog / button 用到的 4 个；权重严格按 M3 spec）
+     https://m3.material.io/styles/typography/type-scale-tokens */
+  --md-typescale-headline-small: 400 24px/32px -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --md-typescale-title-medium:   500 16px/24px -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --md-typescale-body-medium:    400 14px/20px -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --md-typescale-label-large:    500 14px/20px -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+
   /* 形状（7 级） */
   --md-shape-xs: 4px;    /* 输入框 */
   --md-shape-sm: 8px;    /* 按钮/芯片 */
@@ -1431,8 +1443,13 @@
     flex-shrink: 0;
   }
 
-  /* Icon button — M3: small token (8dp radius), 32px container (desktop) */
+  /* Icon button — M3 icon button spec (standard / dense variant).
+     Container: 40dp touch target × 24dp icon; we use the M3 "dense" 32dp
+     variant because this codebase has many icon-btn instances in compact
+     headers (topbar / sidebar header). 8dp radius (M3 small). State layers
+     follow M3 alphas: hover 8%, focus 12%, pressed 12%. */
   .icon-btn {
+    position: relative;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1442,10 +1459,11 @@
     background: none;
     border: none;
     cursor: pointer;
-    border-radius: 8px;
+    border-radius: var(--md-shape-sm);
     color: var(--muted);
     transition: background 0.15s, color 0.15s;
     flex-shrink: 0;
+    overflow: hidden;
   }
 
   /* M3 icon wrapper — keeps <Icon /> renders consistent across the app.
@@ -1464,13 +1482,23 @@
   }
 
   .icon-btn:hover {
-    background: var(--hover-bg);
+    background: var(--md-state-hover);
     color: var(--text);
   }
+  .icon-btn:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+  .icon-btn:active {
+    background: var(--md-state-pressed);
+  }
 
+  /* Toggle state: shown when the icon button represents an "on" toggle
+     (e.g. Files panel open). M3 selected state — primary container fill at
+     ~10% (≈ M3 12% selected container opacity). */
   .icon-btn.active {
-    color: var(--blue);
-    background: rgba(var(--md-primary-rgb),0.1);
+    color: var(--md-primary);
+    background: color-mix(in srgb, var(--md-primary) 10%, transparent);
   }
 
   .icon-btn:disabled {
@@ -2350,109 +2378,6 @@
   @keyframes ws-icon-spin {
     from { transform: rotate(0deg); }
     to   { transform: rotate(360deg); }
-  }
-
-  /* Clear History modal — M3 dialog spec */
-  .clear-history-overlay {
-    position: fixed;
-    inset: 0;
-    background: var(--scrim);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 9999;
-  }
-
-  .clear-history-modal {
-    background: var(--sidebar);
-    border: 1px solid var(--border-color);
-    border-radius: 12px;
-    padding: 24px;
-    min-width: 280px;
-    max-width: 420px;
-    width: 90%;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-  }
-
-  .clear-history-modal__title {
-    font-size: 16px;
-    font-weight: 500;
-    color: var(--text-primary);
-  }
-
-  .clear-history-modal__desc {
-    font-size: 14px;
-    color: var(--text-secondary);
-    line-height: 20px;
-  }
-
-  .clear-history-modal__field {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .clear-history-modal__label {
-    font-size: 12px;
-    color: var(--text-secondary);
-  }
-
-  .clear-history-modal__input {
-    background: var(--input-bg);
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    color: var(--text-primary);
-    font-size: 16px;
-    padding: 7px 10px;
-    outline: none;
-    width: 100%;
-    box-sizing: border-box;
-  }
-
-  .clear-history-modal__input:focus {
-    border-color: var(--focus-ring);
-    box-shadow: 0 0 0 2px var(--focus-glow);
-  }
-
-  .clear-history-modal__actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 4px;
-  }
-
-  .clear-history-modal__btn {
-    min-height: 40px;
-    padding: 8px 24px;
-    border-radius: 8px;
-    font-size: 14px;
-    font-weight: 500;
-    cursor: pointer;
-    border: 1px solid transparent;
-    transition: background 0.15s;
-  }
-
-  .clear-history-modal__btn--cancel {
-    background: transparent;
-    border-color: var(--border-color);
-    color: var(--text-secondary);
-  }
-
-  .clear-history-modal__btn--cancel:hover {
-    background: var(--hover-bg);
-  }
-
-  .clear-history-modal__btn--confirm {
-    background: var(--danger);
-    color: #fff;
-    border-color: transparent;
-  }
-
-  .clear-history-modal__btn--confirm:hover {
-    background: color-mix(in srgb, var(--danger) 88%, #000);
   }
 
   .ws-opt-name {
@@ -4166,7 +4091,84 @@
   background: color-mix(in srgb, var(--md-error) 8%, transparent);
 }
 
-/* Filled button — M3 filled button（primary） */
+/* ── M3 button & dialog primitives ── */
+
+/* Base button: shared geometry + state-layer machinery.
+   The `::after` overlay technique (hover/focus/pressed layers at standard
+   M3 alphas 8% / 12% / 12%) is the canonical M3 state-layer pattern and
+   keeps hover visuals decoupled from the underlying fill colour. */
+.m3-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid transparent;
+  border-radius: var(--md-shape-sm);
+  font: var(--md-typescale-label-large);
+  letter-spacing: 0.1px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition: box-shadow 0.15s, background 0.15s;
+}
+.m3-btn--md { min-height: 40px; padding: 10px 24px; }
+.m3-btn--sm { min-height: 32px; padding: 6px 16px; font-size: 13px; }
+
+.m3-btn > span {
+  display: inline-flex;
+  align-items: center;
+}
+
+.m3-btn:hover::after,
+.m3-btn:focus-visible::after,
+.m3-btn:active::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+}
+.m3-btn:hover::after       { background: var(--md-state-hover); }
+.m3-btn:focus-visible::after { background: var(--md-state-focus); }
+.m3-btn:active::after      { background: var(--md-state-pressed); }
+.m3-btn:focus-visible      { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+/* Filled — primary fill, on-primary text. Default M3 dialog confirm. */
+.m3-btn--filled {
+  background: var(--md-primary);
+  color: var(--md-on-primary);
+}
+.m3-btn--filled.m3-btn--severity-error {
+  background: var(--md-error);
+  color: var(--md-on-error);
+}
+
+/* Text — transparent, primary text. M3 default for dialog actions. */
+.m3-btn--text {
+  background: transparent;
+  color: var(--md-primary);
+}
+.m3-btn--text.m3-btn--severity-error {
+  color: var(--md-error);
+}
+
+/* Disabled: surface-variant fill at 12% onSurface, 38% onSurface text,
+   no state layers. M3 disabled state. */
+.m3-btn--filled:disabled {
+  background: color-mix(in srgb, var(--md-on-surface) 12%, transparent);
+  color: color-mix(in srgb, var(--md-on-surface) 38%, transparent);
+  cursor: not-allowed;
+}
+.m3-btn--text:disabled {
+  color: color-mix(in srgb, var(--md-on-surface) 38%, transparent);
+  cursor: not-allowed;
+}
+.m3-btn:disabled::after { display: none; }
+
+/* Legacy alias — keep the historical .btn-filled class working for any
+   third-party / older consumer. It is implemented in terms of .m3-btn so
+   the state-layer visuals stay in sync with the new system. */
 .btn-filled {
   position: relative;
   display: inline-flex;
@@ -4178,13 +4180,10 @@
   color: var(--md-on-primary);
   border: none;
   border-radius: var(--md-shape-sm);
-  font-size: 14px;
-  font-weight: 500;
+  font: var(--md-typescale-label-large);
   letter-spacing: 0.1px;
   cursor: pointer;
-  transition: box-shadow 0.15s;
 }
-
 .btn-filled:hover::after,
 .btn-filled:focus-visible::after,
 .btn-filled:active::after {
@@ -4192,34 +4191,141 @@
   position: absolute;
   inset: 0;
   border-radius: inherit;
+  pointer-events: none;
 }
-
-.btn-filled:hover::after {
-  background: var(--md-state-hover);
-}
-
-.btn-filled:focus-visible::after {
-  background: var(--md-state-focus);
-}
-
-.btn-filled:active::after {
-  background: var(--md-state-pressed);
-}
-
-.btn-filled:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
-}
-
+.btn-filled:hover::after        { background: var(--md-state-hover); }
+.btn-filled:focus-visible::after { background: var(--md-state-focus); }
+.btn-filled:active::after       { background: var(--md-state-pressed); }
+.btn-filled:focus-visible       { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .btn-filled:disabled {
   background: color-mix(in srgb, var(--md-on-surface) 12%, transparent);
   color: color-mix(in srgb, var(--md-on-surface) 38%, transparent);
   cursor: not-allowed;
-  opacity: 1; /* 覆盖全局 button:disabled 的 0.5 */
+  opacity: 1;
+}
+.btn-filled:disabled::after { display: none; }
+
+/* ── M3 dialog overlay & surface ──
+   Spec: 28dp corners, surface-container-high fill, level-3 elevation,
+   24dp padding, min 280dp / max 560dp, scrim is theme-aware via --scrim
+   (80% dark / 32% light). */
+.m3-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--scrim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  animation: m3-dialog-fade 0.12s ease;
+}
+@keyframes m3-dialog-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
-.btn-filled:disabled::after {
-  display: none;
+.m3-dialog {
+  background: var(--md-surface-container-high);
+  border-radius: var(--md-shape-xl);
+  box-shadow: var(--md-elevation-3);
+  padding: 24px;
+  min-width: 280px;
+  max-width: 560px;
+  width: calc(100vw - 48px);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: m3-dialog-pop 0.18s cubic-bezier(0.2, 0, 0, 1);
+}
+@keyframes m3-dialog-pop {
+  from { opacity: 0; transform: scale(0.92); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.m3-dialog__header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.m3-dialog__icon {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--md-shape-full);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.m3-dialog--info    .m3-dialog__icon { background: var(--md-primary-container);  color: var(--md-on-primary-container); }
+.m3-dialog--warning .m3-dialog__icon { background: var(--md-tertiary-container); color: var(--md-on-tertiary-container); }
+.m3-dialog--danger  .m3-dialog__icon { background: var(--md-error-container);    color: var(--md-on-error-container); }
+
+.m3-dialog__title {
+  font: var(--md-typescale-headline-small);
+  color: var(--md-on-surface);
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+.m3-dialog__body {
+  font: var(--md-typescale-body-medium);
+  color: var(--md-on-surface-variant);
+  line-height: 1.43;
+  letter-spacing: 0.25px;
+}
+
+.m3-dialog__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.m3-dialog__field-label {
+  font: var(--md-typescale-label-large);
+  color: var(--md-on-surface);
+}
+.m3-dialog__field-help {
+  font-size: 12px;
+  color: var(--md-on-surface-variant);
+}
+.m3-dialog__input,
+.m3-dialog__select {
+  background: var(--md-surface-container-highest);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-shape-xs);
+  color: var(--md-on-surface);
+  font: var(--md-typescale-body-medium);
+  padding: 8px 12px;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+.m3-dialog__input:focus,
+.m3-dialog__select:focus {
+  border-color: var(--md-primary);
+  box-shadow: 0 0 0 2px var(--focus-glow);
+}
+
+.m3-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-height: 52px;
+}
+
+.m3-dialog__footer {
+  font: var(--md-typescale-body-medium);
+  color: var(--md-success);
+}
+
+@media (max-width: 480px) {
+  .m3-dialog__actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+  .m3-dialog__actions .m3-btn { width: 100%; }
 }
 
 /* Session date header */

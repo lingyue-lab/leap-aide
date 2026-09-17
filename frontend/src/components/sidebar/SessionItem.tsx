@@ -9,6 +9,7 @@ import { markSessionSeen } from '@/utils/sessionSeen';
 import { sessionService } from '@/services/api';
 import { TrashMultiIcon, Icon } from '@/components/common/Icons';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
+import M3Dialog from '@/components/common/M3Dialog';
 
 interface SessionItemProps {
   session: SessionListItem;
@@ -37,9 +38,9 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
   const [compressing, setCompressing] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [showClearModal, setShowClearModal] = useState(false);
-  const [keepLast, setKeepLast] = useState('0');
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [showClearDelegatesModal, setShowClearDelegatesModal] = useState(false);
-  const [keepDelegates, setKeepDelegates] = useState('0');
   // Streaming pulse: use active_stream_id from sessionStore for background sessions,
   // and chatStore.activeStreamId for the active session (set immediately by StreamManager).
   const chatActiveStreamId = useChatStore((s) => s.activeStreamId);
@@ -137,10 +138,18 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
     }
   };
 
-  const handleDelete = async () => {
+  const handleDelete = () => {
     setMenuOpen(false);
-    if (confirm(t('sessions.confirm_delete'))) {
+    setShowDeleteDialog(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    setShowDeleteDialog(false);
+    setDeleting(true);
+    try {
       await deleteSession(session.session_id);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -175,15 +184,14 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
       alert(t('sessions.clear_streaming_warn'));
       return;
     }
-    setKeepLast('0');
     setShowClearModal(true);
   };
 
-  const handleClearConfirm = async () => {
+  const handleClearConfirm = async (keepValue?: number | string | Array<number | string>) => {
     setShowClearModal(false);
     setClearing(true);
     window.dispatchEvent(new CustomEvent('hermes:clear-history'));
-    const keepN = Math.max(0, parseInt(keepLast, 10) || 0);
+    const keepN = Math.max(0, Number(keepValue) || 0);
     try {
       await sessionService.clearHistory(session.session_id, keepN);
       await loadSession(session.session_id);
@@ -214,10 +222,10 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
     }
   };
 
-  const handleClearDelegatesConfirm = async () => {
+  const handleClearDelegatesConfirm = async (keepValue?: number | string | Array<number | string>) => {
     setShowClearDelegatesModal(false);
     setClearing(true);
-    const keepN = Math.max(0, parseInt(keepDelegates, 10) || 0);
+    const keepN = Math.max(0, Number(keepValue) || 0);
     try {
       const result = await sessionService.clearDelegates(session.session_id, keepN);
       await loadSessions();
@@ -429,7 +437,7 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
                         {clearing ? (
                           <LoadingSpinner mode="inline" minimal size={16} />
                         ) : (
-                          <Icon name="delete" size={16} className="ws-opt-icon" />
+                          <Icon name="delete_sweep" size={16} className="ws-opt-icon" />
                         )}
                         <span className="ws-opt-name">
                           {clearing ? t('sessions.clearing') : t('sessions.clear_history')}
@@ -446,7 +454,6 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
                       onClick={() => {
                         if (canClearDelegates) {
                           setMenuOpen(false);
-                          setKeepDelegates('0');
                           setShowClearDelegatesModal(true);
                         }
                       }}
@@ -534,71 +541,62 @@ export default function SessionItem({ session, isActive, onClick, archivedChildr
         </div>
       )}
 
-      {/* Clear History Modal */}
-      {showClearModal && (
-        <div className="clear-history-overlay" onClick={() => setShowClearModal(false)}>
-          <div className="clear-history-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="clear-history-modal__title">{t('sessions.clear_history')}</div>
-            <div className="clear-history-modal__desc">{t('sessions.clear_keep_desc')}</div>
-            <div className="clear-history-modal__field">
-              <label className="clear-history-modal__label">{t('sessions.clear_keep_label')}</label>
-              <input
-                className="clear-history-modal__input"
-                type="number"
-                min="0"
-                value={keepLast}
-                onChange={(e) => setKeepLast(e.target.value)}
-                autoFocus
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleClearConfirm();
-                  if (e.key === 'Escape') setShowClearModal(false);
-                }}
-              />
-            </div>
-            <div className="clear-history-modal__actions">
-              <button className="clear-history-modal__btn clear-history-modal__btn--cancel" onClick={() => setShowClearModal(false)}>
-                {t('cancel')}
-              </button>
-              <button className="clear-history-modal__btn clear-history-modal__btn--confirm" onClick={handleClearConfirm}>
-                {t('confirm')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Clear History modal — warning severity (Clear is reversible-ish,
+          not destructive). Number input lets user keep N most-recent. */}
+      <M3Dialog
+        open={showClearModal}
+        severity="warning"
+        icon="delete_sweep"
+        title={t('sessions.clear_history')}
+        description={t('sessions.clear_keep_desc')}
+        input={{
+          kind: 'number',
+          label: t('sessions.clear_keep_label'),
+          defaultValue: 0,
+          min: 0,
+        }}
+        confirmText={clearing ? t('sessions.clearing') : t('confirm')}
+        cancelText={t('cancel')}
+        loading={clearing}
+        onCancel={() => setShowClearModal(false)}
+        onConfirm={handleClearConfirm}
+      />
 
-      {/* Clear Delegates Modal */}
-      {showClearDelegatesModal && (
-        <div className="clear-history-overlay" onClick={() => setShowClearDelegatesModal(false)}>
-          <div className="clear-history-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="clear-history-modal__title">{t('sessions.clear_delegates_confirm')}</div>
-            <div className="clear-history-modal__desc">{t('sessions.clear_delegates_desc')}</div>
-            <div className="clear-history-modal__field">
-              <label className="clear-history-modal__label">{t('sessions.clear_delegates_keep_label')}</label>
-              <input
-                className="clear-history-modal__input"
-                type="number"
-                min="0"
-                value={keepDelegates}
-                onChange={(e) => setKeepDelegates(e.target.value)}
-                autoFocus
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleClearDelegatesConfirm();
-                  if (e.key === 'Escape') setShowClearDelegatesModal(false);
-                }}
-              />
-            </div>
-            <div className="clear-history-modal__actions">
-              <button className="clear-history-modal__btn clear-history-modal__btn--cancel" onClick={() => setShowClearDelegatesModal(false)}>
-                {t('cancel')}
-              </button>
-              <button className="clear-history-modal__btn clear-history-modal__btn--confirm" onClick={handleClearDelegatesConfirm}>
-                {t('confirm')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Clear Subagents modal — same shape as Clear History. */}
+      <M3Dialog
+        open={showClearDelegatesModal}
+        severity="warning"
+        icon="account_tree"
+        title={t('sessions.clear_delegates_confirm')}
+        description={t('sessions.clear_delegates_desc')}
+        input={{
+          kind: 'number',
+          label: t('sessions.clear_delegates_keep_label'),
+          defaultValue: 0,
+          min: 0,
+        }}
+        confirmText={clearing ? t('sessions.clearing') : t('confirm')}
+        cancelText={t('cancel')}
+        loading={clearing}
+        onCancel={() => setShowClearDelegatesModal(false)}
+        onConfirm={handleClearDelegatesConfirm}
+      />
+
+      {/* Delete Session dialog — danger severity. The menu action is
+          already disabled when session.pinned is true (see line ~467),
+          so the dialog itself does not need an additional pinned gate. */}
+      <M3Dialog
+        open={showDeleteDialog}
+        severity="danger"
+        icon="delete"
+        title={t('sessions.delete')}
+        description={t('sessions.confirm_delete')}
+        confirmText={deleting ? t('sessions.deleting') : t('sessions.delete')}
+        cancelText={t('cancel')}
+        loading={deleting}
+        onCancel={() => setShowDeleteDialog(false)}
+        onConfirm={handleDeleteConfirm}
+      />
     </>
   );
 }

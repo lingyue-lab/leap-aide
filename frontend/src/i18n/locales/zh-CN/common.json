@@ -70,6 +70,7 @@
     "compress_confirm": "压缩此会话的历史记录？较旧的消息将由 AI 进行摘要，以减少上下文占用。此操作不可撤销。",
     "clear_history": "清空历史记录",
     "clearing": "清空中...",
+    "deleting": "删除中...",
     "clear_confirm": "清空此会话的所有消息？此操作不可撤销。",
     "clear_keep_desc": "需要保留最近多少条消息？填 0 表示全部删除。",
     "clear_keep_label": "保留条数（0 = 全部删除）",

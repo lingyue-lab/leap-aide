@@ -70,6 +70,7 @@
     "compress_confirm": "Compress this session's history? Older messages will be summarized by AI to reduce context size. This cannot be undone.",
     "clear_history": "Clear History",
     "clearing": "Clearing...",
+    "deleting": "Deleting...",
     "clear_confirm": "Clear all messages in this session? This cannot be undone.",
     "clear_keep_desc": "How many recent messages do you want to keep? Enter 0 to delete all.",
     "clear_keep_label": "Messages to keep (0 = delete all)",

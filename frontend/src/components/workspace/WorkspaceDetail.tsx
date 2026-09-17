@@ -69,7 +69,7 @@ function WorkspaceFileMain({ showFileTree, onToggleFileTree }: WorkspaceFileMain
           <button
             className={`icon-btn${showFileTree ? ' active' : ''}`}
             onClick={onToggleFileTree}
-            title={showFileTree ? 'Hide file tree' : 'Show file tree'}
+            title={showFileTree ? 'Hide files' : 'Show files'}
           >
             <FolderOpenIcon />
           </button>
