@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import Layout from './components/layout/Layout';
 import ChatInterface from './components/chat/ChatInterface';
 import ObserverPage from './components/observer/ObserverPage';
+import LoadingSpinner from './components/common/LoadingSpinner';
 import { useSessionStore } from './stores/useSessionStore';
 import { useSettingsStore } from './stores/useSettingsStore';
 import { useWorkspaceStore } from './stores/useWorkspaceStore';
@@ -16,7 +17,7 @@ import { FONT_ZOOM_MAP } from './constants';
 
 function App() {
   const { i18n } = useTranslation();
-  const { currentSessionId } = useSessionStore();
+  const { currentSessionId, pinningSession } = useSessionStore();
   const { settings, loadSettings } = useSettingsStore();
   const loadWorkspaces = useWorkspaceStore((s) => s.loadWorkspaces);
   const { setTheme } = useTheme();
@@ -84,6 +85,16 @@ function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Layout>
+      {/* Fullscreen overlay shown while /api/session/pin synchronously
+          boots SessionDisplay on the server (10-15s cold start). Mounted
+          once at App root; visibility is driven entirely by the store
+          flag, so it stays out of the way during normal use.
+          Scrim + centered spinner, no card wrapper — matches the
+          M3 progress indicator overlay spec and keeps this spinner
+          visually identical to the inline/overlay variants. */}
+      {pinningSession && (
+        <LoadingSpinner mode="fullscreen" />
+      )}
     </ProtectedRoute>
   );
 }

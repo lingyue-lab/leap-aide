@@ -25,6 +25,14 @@ interface SessionState {
    *  real session (POST /api/chat/start round-trip + StreamManager reconnect).
    *  Drives the Loading Spinner in WelcomeState. */
   pendingNewSessionPromoting: boolean;
+  /** Session id currently being pinned/unpinned. Non-null while a
+   *  pinSession() promise is in flight. The server-side /api/session/pin
+   *  handler synchronously boots SessionDisplay (Xvfb + dbus + fcitx5 +
+   *  openbox + x11vnc + Chrome), which takes 10-15s on cold start.
+   *  Drives the fullscreen PinningOverlay so the user sees feedback that
+   *  the click registered. Cleared in a finally block so a server error
+   *  cannot leave the overlay stuck. */
+  pinningSession: string | null;
 
   // Actions
   loadSessions: () => Promise<void>;
@@ -77,6 +85,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   delegateChildrenVersion: 0,
   pendingNewSession: null,
   pendingNewSessionPromoting: false,
+  pinningSession: null,
 
   loadSessions: async () => {
     set({ loading: true, error: null });
@@ -308,6 +317,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   pinSession: async (id, pinned) => {
+    // Mark this session as pinning so the fullscreen PinningOverlay shows
+    // during the 10-15s server-side SessionDisplay.start() round-trip.
+    // The flag is cleared in finally so a server error cannot leave the
+    // overlay stuck on screen. Only one pin is in flight at a time by
+    // design (clicking pin on session B while A is still pinning will
+    // queue behind A's overlay).
+    set({ pinningSession: id });
     try {
       await fetch('/api/session/pin', {
         method: 'POST',
@@ -327,8 +343,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             ? { ...state.currentSession, pinned }
             : state.currentSession,
       }));
-    } catch (err) {
-      throw err;
+    } finally {
+      set({ pinningSession: null });
     }
   },
 

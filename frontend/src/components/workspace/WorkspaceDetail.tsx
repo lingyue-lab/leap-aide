@@ -8,6 +8,7 @@ import FileView from '@/components/shared/FileView';
 import type { FileType } from '@/components/shared/FileView';
 import type { FileNode } from '@/types';
 import { FolderOpenIcon } from '@/components/common/Icons';
+import LoadingSpinner from '@/components/common/LoadingSpinner';
 import WorkspaceOverview from './WorkspaceOverview';
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -151,7 +152,7 @@ export default function WorkspaceDetail() {
       ) : (
         <WorkspaceOverview />
       )}
-      <Suspense fallback={<div className="file-tree-loading">Loading files...</div>}>
+      <Suspense fallback={<LoadingSpinner mode="inline" text="Loading files..." />}>
         <FileTreePanel
           visible={showFileTree}
           defaultWidth={280}

@@ -210,7 +210,7 @@ export default function SkillDetail() {
           onCancel={handleSkillCancel}
           error={editError}
         />
-        <Suspense fallback={<div className="file-tree-loading">Loading files...</div>}>
+        <Suspense fallback={<LoadingSpinner mode="inline" text="Loading files..." />}>
           <FileTreePanel
             visible={showFiles}
             tree={skillTree}
@@ -286,7 +286,9 @@ export default function SkillDetail() {
             </div>
             <hr className="border-[var(--border)] mb-4" />
             {loadingContent ? (
-              <LoadingSpinner mode="inline" />
+              <div className="flex items-center justify-center py-8">
+                <LoadingSpinner mode="inline" />
+              </div>
             ) : renderedContent ? (
               <div className="file-view-code">
                 <CodeCopyButton content={selectedSkillContent || ''} />
@@ -322,7 +324,7 @@ export default function SkillDetail() {
       </div>
 
       {/* Files 抽屉（仅文件树） */}
-      <Suspense fallback={<div className="file-tree-loading">Loading files...</div>}>
+      <Suspense fallback={<LoadingSpinner mode="inline" text="Loading files..." />}>
         <FileTreePanel
           visible={showFiles}
           tree={skillTree}

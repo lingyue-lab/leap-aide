@@ -395,7 +395,9 @@ export default function TaskDetail() {
         </div>
 
         {loadingOutputs && outputs.length === 0 && (
-          <LoadingSpinner mode="inline" />
+          <div className="flex items-center justify-center py-4">
+            <LoadingSpinner mode="inline" />
+          </div>
         )}
 
         {!loadingOutputs && outputs.length === 0 && (

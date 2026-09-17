@@ -80,7 +80,9 @@ export default function WorkspaceOverview() {
         <div style={{ maxWidth: 672, marginLeft: 'auto', marginRight: 'auto' }}>
 
           {workspaceInfoLoading && (
-            <LoadingSpinner mode="inline" />
+            <div className="flex items-center justify-center py-8">
+              <LoadingSpinner mode="inline" />
+            </div>
           )}
 
           {!workspaceInfoLoading && !workspaceInfo && (

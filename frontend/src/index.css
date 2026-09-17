@@ -479,14 +479,34 @@
     position: relative;
   }
 
-  /* ── Unified Loading Spinner (M3 Circular Progress Indicator) ── */
+  /* ── Unified Loading Spinner ──────────────────────────────────────────────
+   * Implements the M3 Circular Progress Indicator (indeterminate variant)
+   * per https://m3.material.io/components/progress-indicators/specs.
+   *
+   * One SVG component (LoadingSpinner.tsx → M3CircularProgress) is used
+   * across all three modes (inline / overlay / fullscreen); only the wrapper
+   * layout differs.
+   *
+   * Animation:
+   *   - m3-circular-progress__arc — rotates 360deg over 2s (slow rotation)
+   *   - m3-circular-progress__arc — strokes dasharray 1→100→1 over 1.4s
+   *     (mismatched periods give M3's characteristic "uneven orbital")
+   *   - m3-circular-progress__track — static faint ring (M3 spec requires
+   *     the full circumference stays visible behind the active arc)
+   */
   .loading-spinner-overlay {
     position: absolute;
     inset: 0;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(0, 0, 0, 0.15);
+    /* Theme-adaptive M3 scrim:
+       - dark  : --scrim = 80% black (heavy dim, scrim visible against dark surface)
+       - light : --scrim = 32% black (subtle dim, scrim visible against light surface)
+       A hardcoded rgba(0,0,0,0.15) was unreadable in dark mode (15% black on
+       a near-black background is effectively invisible) and also too
+       subtle in light mode. */
+    background: var(--scrim);
     z-index: 100;
     pointer-events: none;
   }
@@ -500,27 +520,102 @@
   }
 
   .loading-spinner-inline {
-    display: flex;
-    flex-direction: column;
+    display: inline-flex;
+    flex-direction: row;
     align-items: center;
     justify-content: center;
     gap: 8px;
-    padding: 16px;
     color: var(--muted);
-  }
-
-  .loading-spinner-icon {
-    animation: spin 1.5s linear infinite;
-    color: var(--primary);
-    line-height: 1;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
   }
 
   .loading-spinner-text {
     font-size: 0.875rem;
     color: var(--muted);
+  }
+
+  /* M3 circular progress SVG — color and animation primitives.
+   * Strokes use --md-primary (M3 spec: indeterminate progress uses
+   * --md-sys-color-primary). Track is the same hue at 24% opacity.
+   *
+   * The arc and track share cx=24, cy=24, r=18, stroke-width=4.
+   * That puts both at centerline r=18, with both strokes filling
+   * the radial band r=16 to r=20 — they cannot be misaligned
+   * because they are the same circle, just one stroked solid and
+   * one dashed-and-animated. Round linecap on the arc (M3 default)
+   * extends the arc ends tangentially by 2 units; this preserves
+   * the radial band (r=16 to r=20) so the cap visually merges with
+   * the track stroke instead of bulging past it. */
+  .m3-circular-progress {
+    display: inline-block;
+    color: var(--md-primary);
+    flex-shrink: 0;
+  }
+
+  .m3-circular-progress__track {
+    stroke: var(--md-primary);
+    stroke-opacity: 0.24;
+  }
+
+  .m3-circular-progress__arc {
+    stroke: currentColor;
+    stroke-linecap: round;
+    transform-origin: 24px 24px;
+    animation:
+      m3-cp-rotate 2s linear infinite,
+      m3-cp-sweep 1.4s ease-in-out infinite;
+  }
+
+  /* transform-origin: 24px 24px is interpreted in the SVG viewBox
+     coordinate system (transform-box defaults to view-box for SVG
+     elements). The arc circle is centered on (24, 24); rotating
+     around (24, 24) — the arc's own center — keeps the arc on the
+     track instead of orbiting an offset point.
+
+     DO NOT add `transform-box: fill-box` here: it would switch the
+     origin reference to the arc's own 36×36 bounding box, so
+     "24px 24px" would resolve to (30, 30) — 6 units off-center —
+     and the arc would visibly drift off the track as it rotates.
+     (This was the bug behind the original "arc leaves the track"
+     symptom.) */
+
+  @keyframes m3-cp-rotate {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+
+  /* M3 indeterminate progress: the visible arc length grows then
+     shrinks (M3 spec calls this the "sweep"). circumference of the
+     r=18 circle is 2π×18 ≈ 113, so dasharray values 1 / 100 cover
+     roughly 1% to 90% of the circle visible. The dashoffset shifts
+     where the visible segment starts on the circle; combined with
+     the rotation animation, this gives the arc its traveling feel. */
+  @keyframes m3-cp-sweep {
+    0%   { stroke-dasharray: 1 200;   stroke-dashoffset: 0;    }
+    50%  { stroke-dasharray: 100 200; stroke-dashoffset: -30;  }
+    100% { stroke-dasharray: 1 200;   stroke-dashoffset: -120; }
+  }
+
+  /* ── Loading Spinner (M3 fullscreen scrim) ──────────────────────────
+   * Used for operations whose server-side latency is large (e.g.
+   * /api/session/pin synchronously boots SessionDisplay on the
+   * server, taking 10-15s on cold start) so the user has an
+   * unambiguous "your click registered" signal.
+   *
+   * M3 progress indicator spec keeps the fullscreen variant as a
+   * scrim with the spinner centered — no card / no border / no
+   * elevation. The wrapper just dims the page and blocks pointer
+   * events. Matches the inline and overlay modes (all three are
+   * spinner-only), so the three loading UIs look like the same
+   * component at different scopes. */
+  .loading-spinner-fullscreen {
+    position: fixed;
+    inset: 0;
+    background: var(--scrim);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    pointer-events: auto;
   }
 
   /* Right panel */
@@ -745,11 +840,6 @@
     font-style: italic;
     animation: pulse 1.5s ease-in-out infinite;
   }
-
-  @keyframes spin {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(360deg); }
-}
 
 @keyframes pulse {
     0%, 100% { opacity: 0.4; }
@@ -1197,6 +1287,14 @@
     display: flex;
     align-items: center;
     gap: 16px;
+  }
+
+  /* Chat welcome-state icon — match the dark-blue tint used by every other
+     panel's empty-state icon (`.empty-logo`). Without this rule the icon
+     inherits `--md-on-surface` from body, which renders near-black in light
+     theme and breaks visual parity with Tasks / Skills / Memory / Workspaces. */
+  .welcome-header > .icon-wrap {
+    color: color-mix(in srgb, var(--md-primary) 40%, var(--md-on-surface-variant));
   }
 
   .welcome-greeting {

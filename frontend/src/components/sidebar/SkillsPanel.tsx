@@ -188,7 +188,14 @@ export default function SkillsPanel({ isActive = false }: { isActive?: boolean }
   };
 
   if (loading) {
-    return <LoadingSpinner mode="inline" />;
+    // Match SessionList.tsx:344 pattern — wrap the inline spinner in
+    // a flex-1 centered container so it sits in the middle of the
+    // panel, not flush to the top-left.
+    return (
+      <div className="flex-1 flex items-center justify-center">
+        <LoadingSpinner mode="inline" />
+      </div>
+    );
   }
 
   return (

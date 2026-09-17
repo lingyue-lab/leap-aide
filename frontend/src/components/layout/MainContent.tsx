@@ -409,7 +409,7 @@ export default function MainContent({ children }: MainContentProps) {
               key={t.id}
               className={`terminal-instance ${activeTerminalId === t.id ? 'active' : ''}`}
             >
-              <Suspense fallback={<div className="terminal-loading">Loading terminal...</div>}>
+              <Suspense fallback={<LoadingSpinner mode="inline" text="Loading terminal..." />}>
                 <TerminalView terminalId={t.id} />
               </Suspense>
             </div>
