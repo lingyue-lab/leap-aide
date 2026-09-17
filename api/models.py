@@ -525,6 +525,21 @@ class Session:
     def _sync_to_db(self, db) -> None:
         """Sync webui-specific metadata to state.db.
 
+        Pre-condition: the session row must already exist in state.db.
+        For sessions created through chat turns, the SDK creates the row
+        (source='cli' or source='webui' depending on the channel). For
+        sessions constructed in-memory by webui (e.g. new_session), the
+        caller must explicitly call db.create_session first. Callers that
+        reach _sync_to_db knowing the row was created upstream (e.g.
+        import_cli_session, which asserts the CLI SDK created it during
+        the chat turn) do not need to create_session themselves.
+
+        _sync_to_db deliberately does NOT call db.create_session itself:
+        webui-owned metadata writes must only touch __webui columns;
+        the SDK owns row creation. Calling _sync_to_db on a non-existent
+        row would silently no-op the UPDATE (matches 0 rows) and leave
+        the caller in an inconsistent state.
+
         Only updates webui-owned columns (``__webui`` suffix,
         ``original_content__webui``).  Non-webui fields (content, role,
         tool_calls, tokens, model, cwd, message_count,
@@ -549,12 +564,6 @@ class Session:
         next turn.  Every other message-row write is owned by the SDK.
         """
         sid = self.session_id
-
-        # ── Ensure session row exists + update webui metadata ──────────
-        # Use SDK's create_session() to insert the row with all required
-        # fields (started_at is NOT NULL).  The old INSERT OR IGNORE
-        # omitted started_at, silently failing and leaving the row absent.
-        db.create_session(sid, 'webui')
 
         def _do_write(conn):
             # Ensure llm_title_generated__webui column exists (added post-migration)
@@ -1060,6 +1069,19 @@ def new_session(workspace=None, model=None, profile=None, defer_notify=False):
             SESSIONS.popitem(last=False)
     if not defer_notify:
         _notify_session_event('upsert_session', s)
+
+    # Ensure row exists in state.db before sync_webui_metadata can write
+    # __webui columns. _sync_to_db deliberately does not auto-create rows
+    # (webui-owned metadata writes must only touch __webui columns; the
+    # SDK owns row creation).
+    try:
+        db = _get_session_db()
+        if db is not None:
+            db.create_session(s.session_id, 'webui')
+    except Exception:
+        logger.warning("Failed to create session row %s in state.db",
+                       s.session_id, exc_info=True)
+
     # Persist defaults to state.db immediately so the composer footer
     # reflects the selected workspace / model / reasoning / etc.
     try:
@@ -1452,83 +1474,6 @@ def _get_all_delegate_children_map(db) -> dict[str, list[dict]]:
         return {}
 
 
-# ── Migration: JSON → state.db ──────────────────────────────────────────────
-
-_MIGRATION_META_KEY = 'webui_migration_complete'
-
-
-def migrate_json_sessions_to_db(force: bool = False) -> dict:
-    """One-time migration: import all JSON sessions into state.db.
-
-    Scans ``SESSION_DIR/*.json``, loads each session, and writes it to
-    state.db.  Idempotent — sessions that already exist in state.db are
-    skipped.  Tracks completion via a ``state_meta`` key so subsequent
-    startups skip the migration automatically.
-
-    Set ``force=True`` to re-run even if the migration marker exists.
-
-    Returns a dict with ``{imported, skipped, errors, total}`` counts.
-    """
-    db = _get_session_db()
-    if db is None:
-        return {'imported': 0, 'skipped': 0, 'errors': 0, 'total': 0,
-                'message': 'state.db unavailable'}
-
-    # Check if already migrated
-    if not force:
-        try:
-            marker = db.get_meta(_MIGRATION_META_KEY)
-            if marker and marker.get('value') == '1':
-                return {'imported': 0, 'skipped': 0, 'errors': 0, 'total': 0,
-                        'message': 'already migrated'}
-        except Exception:
-            pass  # state_meta table might not exist yet
-
-    json_files = sorted(SESSION_DIR.glob('*.json'))
-    result = {'imported': 0, 'skipped': 0, 'errors': 0, 'total': len(json_files)}
-
-    for p in json_files:
-        if p.name.startswith('_'):
-            result['skipped'] += 1
-            continue
-        sid = p.stem
-        try:
-            # Check if already in state.db
-            existing = db.get_session(sid)
-            if existing is not None and not force:
-                result['skipped'] += 1
-                continue
-
-            # Load from JSON and save to state.db
-            data = json.loads(p.read_text(encoding='utf-8'))
-            messages = data.pop('messages', [])
-            data.pop('tool_calls', None)
-            # Remove runtime-only fields that shouldn't be persisted
-            for rk in ('active_stream_id', 'pending_user_message',
-                       'pending_attachments', 'pending_started_at'):
-                data.pop(rk, None)
-            s = Session(**data)
-            s.messages = messages
-            s.sync_webui_metadata(write_json=False, skip_index=True)
-            result['imported'] += 1
-            logger.info("Migrated session %s to state.db", sid)
-        except Exception:
-            logger.warning("Failed to migrate session %s to state.db", sid,
-                           exc_info=True)
-            result['errors'] += 1
-
-    # Mark migration complete
-    try:
-        db.set_meta(_MIGRATION_META_KEY, '1')
-    except Exception:
-        logger.debug("Failed to set migration marker")
-
-    logger.info("JSON→DB migration: %d imported, %d skipped, %d errors, %d total",
-                result['imported'], result['skipped'], result['errors'],
-                result['total'])
-    return result
-
-
 # ── Project helpers ──────────────────────────────────────────────────────────
 
 def load_projects() -> list:
@@ -1558,6 +1503,24 @@ def import_cli_session(
     Returns the Session object.
     """
     from api.config import normalize_model_prefix
+
+    # Pre-condition: the session row must already exist in state.db.
+    # CLI SDK and webui share state.db (via get_active_hermes_home());
+    # the CLI chat turn creates the row with source='cli' before
+    # _handle_session_import_cli reaches here (see Session.load check
+    # in api/routes.py:_handle_session_import_cli). _sync_to_db no
+    # longer auto-creates rows (webui-owned metadata writes must only
+    # touch __webui columns; the SDK owns row creation). If we got
+    # here with no row, that's an invariant violation — fail loud so
+    # the upstream bug is visible, don't silently mask it with a
+    # fallback create_session.
+    db = _get_session_db()
+    if db is not None and db.get_session(session_id) is None:
+        raise RuntimeError(
+            f"Cannot import CLI session {session_id}: row missing from "
+            f"state.db. CLI SDK should have created it during the chat turn."
+        )
+
     s = Session(
         session_id=session_id,
         title=title,

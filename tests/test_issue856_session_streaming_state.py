@@ -14,31 +14,56 @@ from api.stream_manager import stream_manager
 
 @pytest.fixture(autouse=True)
 def _isolate_session_stream_state(tmp_path, monkeypatch):
-    """Keep session/index/stream state isolated from the host environment."""
+    """Per-test state.db + SESSION_DIR isolation.
+
+    Tests in this file write to state.db via sync_webui_metadata. The shared
+    TEST_STATE_DIR/state.db accumulates FTS5/overlay2 corruption across the
+    full regression run (see db092c8d). Per-test isolation gives each test a
+    virgin DB, so prior tests can never break the in-process reads here.
+
+    Mirrors the test_cron_session_title fake_hermes_home pattern: redirect
+    HERMES_HOME to a tmp_path subdir, reset the api.models _session_db
+    singleton so the next _get_session_db() opens a fresh connection
+    against the new file.
+    """
+    fake_home = tmp_path / "hermes_home"
+    fake_home.mkdir()
     session_dir = tmp_path / "sessions"
     session_dir.mkdir()
     index_file = session_dir / "_index.json"
 
+    monkeypatch.setenv("HERMES_HOME", str(fake_home))
+    monkeypatch.setenv("HERMES_BASE_HOME", str(fake_home))
     monkeypatch.setattr(models, "SESSION_DIR", session_dir)
     monkeypatch.setattr(models, "SESSION_INDEX_FILE", index_file)
+    # Close + reset the singleton so _get_session_db() opens against fake_home.
+    from api.models import _close_session_db
+    _close_session_db()
     models.SESSIONS.clear()
     stream_manager._streams.clear()
     stream_manager._session_streams.clear()
 
     yield
 
+    _close_session_db()
     models.SESSIONS.clear()
     stream_manager._streams.clear()
     stream_manager._session_streams.clear()
 
 
 def _make_session(session_id, stream_id=None, message_count=1):
+    from api.models import _get_session_db
     s = Session(
         session_id=session_id,
         title=session_id,
         messages=[{"role": "user", "content": f"seed-{session_id}"}] * message_count,
     )
     s.active_stream_id = stream_id
+    # _sync_to_db no longer auto-creates the row (see api/models.py change).
+    # Caller of sync_webui_metadata must ensure the row exists first.
+    db = _get_session_db()
+    if db is not None:
+        db.create_session(session_id, "webui")
     return s
 
 
