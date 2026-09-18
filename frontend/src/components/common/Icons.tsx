@@ -108,7 +108,7 @@ export interface MaterialIconProps extends IconProps {
 // with the FILL axis driven by the `fill` prop (0 = outlined, 1 = filled).
 //
 // The font is subsetted to just these 6 ligatures (~180 KB vs ~5 MB
-// upstream) — see scripts/subset-material-icons.sh. Keep this set and the
+// upstream) — see frontend/scripts/subset-material-icons.sh. Keep this set and the
 // LIGATURES list in that script in sync.
 
 /**

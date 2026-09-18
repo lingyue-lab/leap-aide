@@ -35,7 +35,7 @@ static/
 *.log
 
 # Version file written by Docker/CI build — generated, never committed
-api/_version.py
+backend/app/api/_version.py
 
 # OS files
 .DS_Store
@@ -55,7 +55,7 @@ graphify-out/
 .lingyue-lab
 
 # Regression test runner artifacts (junit XML, logs)
-tests/.results/
+backend/tests/.results/
 
 # Frontend test artifacts
 frontend/tests/.results/

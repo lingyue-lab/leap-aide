@@ -2,7 +2,9 @@ version: "3.8"
 
 services:
   hermes-webui:
-    build: .
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     ports:
     # select only one; use 127.0.0.1 version to expose to localhost only
       - "127.0.0.1:8787:8787"

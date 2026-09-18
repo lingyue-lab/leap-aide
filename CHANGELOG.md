@@ -943,7 +943,7 @@ Co-authored by @bergeouss.
 
 ### Fixed
 - **Default model change surfaced stale value after model-list TTL cache landed** — `set_hermes_default_model()` now explicitly invalidates `_available_models_cache` after `reload_config()`. The 60s TTL cache introduced in v0.50.121 (#780) only invalidates on config-file mtime change, but `reload_config()` resyncs `_cfg_mtime` before `get_available_models()` runs — so the mtime check never fires and the POST response (plus downstream reads within the TTL window) returned the previous model until the cache expired. Root cause of the `test_default_model_updates_hermes_config` CI flake as well. (#788)
-- **Test teardown restores conftest default deterministically** — `test_default_model_updates_hermes_config` now restores to the conftest-injected `TEST_DEFAULT_MODEL` (via `tests/_pytest_port.py`) instead of reading the pre-test value from `/api/models`, so teardown is stable regardless of ordering. Also updates `TESTING.md` automated-test count to 1578. (#788)
+- **Test teardown restores conftest default deterministically** — `test_default_model_updates_hermes_config` now restores to the conftest-injected `TEST_DEFAULT_MODEL` (via `tests/_pytest_port.py`) instead of reading the pre-test value from `/api/models`, so teardown is stable regardless of ordering. Also updates `docs/testing.md` automated-test count to 1578. (#788)
 
 ## [v0.50.122] — 2026-04-21
 

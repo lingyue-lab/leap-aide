@@ -31,7 +31,7 @@ jobs:
       # testbox at /usr/local/lib/hermes-agent), so agent-dependent tests
       # will be auto-skipped via conftest.py's pytest_collection_modifyitems.
       # Full coverage (including agent-dependent cases) runs via
-      # `./scripts/run_test.sh full` on the testbox before release.
+      # `./scripts/run-test.sh full` on the testbox before release.
       #
       # No global --timeout flag: pytest-timeout's os._exit(1) on slow tests
       # would tear down the session-scoped test_server fixture mid-run.

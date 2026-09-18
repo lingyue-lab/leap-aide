@@ -45,7 +45,7 @@ pytest tests/ -v --timeout=60
 
 CI also runs this suite on Python `3.11`, `3.12`, and `3.13`.
 
-If your change affects browser behavior, also run the relevant manual checks from [TESTING.md](TESTING.md).
+If your change affects browser behavior, also run the relevant manual checks from [docs/testing.md](docs/testing.md).
 
 ### 3. Clear PR Description
 
@@ -81,9 +81,9 @@ If your change alters behavior, architecture, testing, setup, or user-facing wor
 Common files:
 
 - [README.md](README.md) for setup, usage, and contributor-facing commands
-- [ROADMAP.md](ROADMAP.md) for shipped features and sprint history
-- [ARCHITECTURE.md](ARCHITECTURE.md) for implementation details and design constraints
-- [TESTING.md](TESTING.md) for manual and automated verification guidance
+- [docs/roadmap.md](docs/roadmap.md) for shipped features and sprint history
+- [docs/architecture.md](docs/architecture.md) for implementation details and design constraints
+- [docs/testing.md](docs/testing.md) for manual and automated verification guidance
 - [CHANGELOG.md](CHANGELOG.md) when maintainers want release-note-ready entries
 
 ## Project-Specific Guidelines
@@ -163,9 +163,9 @@ Want the smoothest review?
 ## Development References
 
 - [README.md](README.md)
-- [ARCHITECTURE.md](ARCHITECTURE.md)
-- [TESTING.md](TESTING.md)
-- [ROADMAP.md](ROADMAP.md)
-- [SPRINTS.md](SPRINTS.md)
+- [docs/architecture.md](docs/architecture.md)
+- [docs/testing.md](docs/testing.md)
+- [docs/roadmap.md](docs/roadmap.md)
+- [docs/sprints.md](docs/sprints.md)
 
 Questions are best raised early, before a large change is finished.

@@ -33,7 +33,7 @@ export default defineConfig({
       '.cache',
     ],
 
-    // Mirror the CI-friendly defaults from scripts/run_test.sh.
+    // Mirror the CI-friendly defaults from scripts/run-test.sh.
     reporters: process.env.CI ? ['default', 'junit'] : ['verbose'],
 
     // Output junit XML into tests/.results/ when CI mode is on.

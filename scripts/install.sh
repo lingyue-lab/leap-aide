@@ -602,7 +602,7 @@ if [ "$IN_DOCKER" = true ]; then
   fi
 
   # fcitx5 trigger key is configured at runtime via D-Bus SetConfig
-  # (see api/session_display.py _configure_fcitx5_trigger_key)
+  # (see backend/app/api/session_display.py _configure_fcitx5_trigger_key)
   if command -v fcitx5 >/dev/null 2>&1; then
     ok "fcitx5 installed (trigger key set at session start via D-Bus)"
   fi
@@ -1012,12 +1012,12 @@ if [ "$USE_VENV" = true ]; then
   VENV_PYTHON="$VENV_DIR/bin/python"
 
   "$VENV_PIP" install --quiet --upgrade pip
-  "$VENV_PIP" install --quiet -r "$DEST/requirements.txt"
+  "$VENV_PIP" install --quiet -r "$DEST/backend/requirements.txt"
   ok "Python dependencies installed"
 else
   info "Skipping virtual environment (--no-venv)"
   pip3 install --quiet --upgrade pip
-  pip3 install --quiet -r "$DEST/requirements.txt"
+  pip3 install --quiet -r "$DEST/backend/requirements.txt"
   ok "Python dependencies installed (system-wide)"
 fi
 
@@ -1025,8 +1025,8 @@ fi
 say ""
 say "${B}Installing command wrappers...${R}"
 
-if [ -f "$DEST/scripts/install-wrappers.sh" ]; then
-  bash "$DEST/scripts/install-wrappers.sh" --force 2>&1
+if [ -f "$DEST/backend/scripts/install-wrappers.sh" ]; then
+  bash "$DEST/backend/scripts/install-wrappers.sh" --force 2>&1
   ok "Command wrappers installed"
 else
   warn "install-wrappers.sh not found — skipping"
@@ -1060,7 +1060,7 @@ After=network.target
 Type=simple
 WorkingDirectory=$DEST
 Environment="PATH=$DEST/.venv/bin:/usr/local/bin:/usr/bin:/bin"
-ExecStart=$DEST/.venv/bin/python bootstrap.py --no-browser
+ExecStart=$DEST/.venv/bin/python backend/app/bootstrap.py --no-browser
 Restart=on-failure
 RestartSec=5
 EnvironmentFile=$DEST/.env

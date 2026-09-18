@@ -5,7 +5,7 @@
 /* ── Material Symbols Rounded (subset font for sidebar nav icons) ──
    The full font is ~5 MB; we ship only the 6 ligatures used by the
    sidebar nav (Chat, Memory, Tasks, Skills, Workspaces, Terminal).
-   Regenerate via `bash scripts/subset-material-icons.sh` if the icon
+   Regenerate via `bash frontend/scripts/subset-material-icons.sh` if the icon
    set changes. See Icons.tsx `MATERIAL_FONT_ICONS` for the active list. */
 @font-face {
   font-family: "Material Symbols Rounded";

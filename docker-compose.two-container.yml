@@ -59,7 +59,7 @@ services:
     volumes:
       # Same hermes home as the agent — shares config, sessions, state
       - hermes-home:/home/hermeswebui/.hermes
-      # Agent source mounted where docker_init.bash expects it.
+      # Agent source mounted where docker-init.sh expects it.
       # At startup the init script runs:
       #   uv pip install /home/hermeswebui/.hermes/hermes-agent
       # which installs the agent and all its Python dependencies.

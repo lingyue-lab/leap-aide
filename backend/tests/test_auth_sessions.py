@@ -1,0 +1,158 @@
+"""
+Tests for auth session lifecycle — session creation, verification, expiry,
+and lazy pruning of expired entries.
+"""
+import os
+import shutil
+import sys
+import tempfile
+import time
+import unittest
+from pathlib import Path
+
+# Add repo root to sys.path so `import api.auth` resolves. The server
+# subprocess already has it on PYTHONPATH via conftest; this keeps
+# direct `python -m unittest tests.test_auth_sessions` invocations working.
+_REPO_ROOT = Path(__file__).parent.parent.resolve()
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+# Import the auth module once at module level. Per-test state isolation is
+# done in setUp by monkey-patching api.config.STATE_DIR (and the derived
+# _SESSIONS_FILE in api.auth), NOT by mutating os.environ. Mutating
+# os.environ['HERMES_WEBUI_STATE_DIR'] at import time clobbers the value
+# that conftest.py:68 publishes for the test server subprocess and breaks
+# sibling tests like test_smoke.test_state_dir_is_isolated_from_production
+# under --batch-size>=2 (alphabetical collection imports this file first).
+import app.api.auth as auth
+
+
+class _AuthIsolatedTestCase(unittest.TestCase):
+    """Mixin: patches api.config.STATE_DIR and api.auth._SESSIONS_FILE for
+    the duration of each test. Subclasses get a fresh tmpdir per test."""
+
+    def setUp(self):
+        self._tmpdir = Path(tempfile.mkdtemp(prefix="webui-test-auth-"))
+        import app.api.config as _config
+        self._saved_config_state_dir = _config.STATE_DIR
+        self._saved_auth_state_dir = auth.STATE_DIR
+        self._saved_sessions_file = auth._SESSIONS_FILE
+        _config.STATE_DIR = self._tmpdir
+        auth.STATE_DIR = self._tmpdir
+        auth._SESSIONS_FILE = self._tmpdir / ".sessions.json"
+        auth._sessions.clear()
+
+    def tearDown(self):
+        import app.api.config as _config
+        try:
+            _config.STATE_DIR = self._saved_config_state_dir
+            auth.STATE_DIR = self._saved_auth_state_dir
+            auth._SESSIONS_FILE = self._saved_sessions_file
+        finally:
+            shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+
+class TestSessionPruning(_AuthIsolatedTestCase):
+    """Verify expired session cleanup works correctly."""
+
+    def test_session_created_valid(self):
+        """A fresh session token should verify as valid."""
+        token = auth.create_session()
+        self.assertTrue(auth.verify_session(token))
+
+    def test_expired_session_pruned(self):
+        """Manually inserting an expired entry should be pruned on next verify_session call."""
+        # Insert sessions that have already expired
+        auth._sessions["fake_token"] = time.time() - 100
+        auth._sessions["another_fake"] = time.time() - 50
+        # Insert one valid session (far future)
+        auth._sessions["good_token"] = time.time() + 3600
+
+        # _sessions has 3 entries, 2 expired
+        self.assertEqual(len(auth._sessions), 3)
+
+        # Call verify_session — this triggers _prune_expired_sessions()
+        # Cookie format is token.signature, so we need a dot to pass the early check
+        auth.verify_session("fake_token.fake_sig")
+
+        # After verification, only the valid session should remain
+        self.assertEqual(len(auth._sessions), 1)
+        self.assertIn("good_token", auth._sessions)
+        self.assertNotIn("fake_token", auth._sessions)
+        self.assertNotIn("another_fake", auth._sessions)
+
+    def test_prune_does_not_remove_valid_sessions(self):
+        """_prune_expired_sessions should never remove sessions that are still active."""
+        auth._sessions["active_1"] = time.time() + 86400  # 24 hours from now
+        auth._sessions["active_2"] = time.time() + 7200    # 2 hours from now
+        auth._sessions["expired_1"] = time.time() - 10
+
+        auth._prune_expired_sessions()
+
+        self.assertEqual(len(auth._sessions), 2)
+        self.assertIn("active_1", auth._sessions)
+        self.assertIn("active_2", auth._sessions)
+        self.assertNotIn("expired_1", auth._sessions)
+
+    def test_verify_session_prunes_before_verification(self):
+        """verify_session should prune expired entries before checking the target token.
+
+        This ensures that _prune_expired_sessions() is called at the very top
+        of verify_session(), so cleanup happens on every auth check.
+        """
+        auth._sessions["expired_for_test"] = time.time() - 999
+
+        # verify_session with an invalid cookie triggers the full path:
+        # _prune_expired_sessions -> signature check -> return False
+        result = auth.verify_session("nonexistent.bad_sig")
+        self.assertFalse(result)
+
+        # The expired entry should have been cleaned up
+        self.assertNotIn("expired_for_test", auth._sessions)
+
+    def test_prune_handles_empty_dict(self):
+        """_prune_expired_sessions should be safe on an empty dict."""
+        auth._sessions.clear()
+        auth._prune_expired_sessions()
+        self.assertEqual(len(auth._sessions), 0)
+
+    def test_session_ttl_is_24_hours(self):
+        """Newly created sessions should have the expected 24-hour TTL."""
+        auth._sessions.clear()
+        token_hex = auth.create_session().split(".")[0]
+        # The _sessions dict stores token -> expiry_time
+        # We can check the expiry is approximately _DEFAULT_SESSION_TTL seconds from now
+        # by looking up the raw entry via the token
+        from app.api.auth import _sessions, _DEFAULT_SESSION_TTL
+        # find our entry
+        for t, exp in _sessions.items():
+            if t == token_hex:
+                # expiry should be within 5 seconds of now + _DEFAULT_SESSION_TTL
+                expected = time.time() + _DEFAULT_SESSION_TTL
+                self.assertAlmostEqual(exp, expected, delta=5)
+                break
+        else:
+            self.fail("Session token not found in _sessions")
+
+
+class TestSessionInvalidation(_AuthIsolatedTestCase):
+    """Test session logout / invalidation."""
+
+    def test_invalidate_session_removes_token(self):
+        """Calling invalidate_session should remove the token from _sessions."""
+        token = auth.create_session()
+        self.assertTrue(auth.verify_session(token))
+
+        auth.invalidate_session(token)
+        # Token should be gone
+        self.assertFalse(auth.verify_session(token))
+
+    def test_invalidate_unknown_token_is_safe(self):
+        """Invalidating a non-existent token should not raise."""
+        auth._sessions.clear()
+        auth.invalidate_session("nonexistent_token")
+        # Should not raise
+
+
+if __name__ == "__main__":
+    unittest.main()

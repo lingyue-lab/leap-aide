@@ -68,7 +68,7 @@ What makes it different from other agentic tools:
   the results back into its own memory
 - **Self-hosted** — your conversations, your memory, your hardware
 
-**vs. the field** *(landscape is actively shifting — see [HERMES.md](HERMES.md) for the full breakdown)*:
+**vs. the field** *(landscape is actively shifting — see [docs/hermes.md](docs/hermes.md) for the full breakdown)*:
 
 | | OpenClaw | Claude Code | Codex CLI | OpenCode | Hermes |
 |---|---|---|---|---|---|
@@ -89,7 +89,7 @@ with memory, cron, and messaging. The key differences: Hermes writes and saves i
 automatically as a core behavior (OpenClaw's skill system centers on a community marketplace);
 Hermes is more stable across updates (OpenClaw has documented release regressions and ClawHub
 has had security incidents involving malicious skills); and Hermes runs natively in the Python
-ecosystem. See [HERMES.md](HERMES.md) for the full side-by-side.
+ecosystem. See [docs/hermes.md](docs/hermes.md) for the full side-by-side.
 
 ---
 
@@ -499,7 +499,7 @@ across 53 test files.
 - 7 built-in themes: Dark (default), Light, Slate, Solarized Dark, Monokai, Nord, OLED
 - Switch via Settings panel dropdown (instant live preview) or `/theme` command
 - Persists across reloads (server-side in settings.json + localStorage for flicker-free loading)
-- Custom themes: define a `:root[data-theme="name"]` CSS block and it works — see [THEMES.md](THEMES.md)
+- Custom themes: define a `:root[data-theme="name"]` CSS block and it works — see [docs/themes.md](docs/themes.md)
 
 ### Settings and configuration
 - **Hermes Control Center** (sidebar launcher button) -- Conversation tab (export/import/clear), Preferences tab (model, send key, theme, language, all toggles), System tab (version, password)
@@ -578,13 +578,13 @@ State lives outside the repo at `~/.hermes/webui-mvp/` by default
 
 ## Docs
 
-- `HERMES.md` -- why Hermes, mental model, and detailed comparison to Claude Code / Codex / OpenCode / Cursor
-- `ROADMAP.md` -- feature roadmap and sprint history
-- `ARCHITECTURE.md` -- system design, all API endpoints, implementation notes
-- `TESTING.md` -- manual browser test plan and automated coverage reference
+- `docs/hermes.md` -- why Hermes, mental model, and detailed comparison to Claude Code / Codex / OpenCode / Cursor
+- `docs/roadmap.md` -- feature roadmap and sprint history
+- `docs/architecture.md` -- system design, all API endpoints, implementation notes
+- `docs/testing.md` -- manual browser test plan and automated coverage reference
 - `CHANGELOG.md` -- release notes per sprint
-- `SPRINTS.md` -- forward sprint plan with CLI + Claude parity targets
-- `THEMES.md` -- theme system documentation, custom theme guide
+- `docs/sprints.md` -- forward sprint plan with CLI + Claude parity targets
+- `docs/themes.md` -- theme system documentation, custom theme guide
 
 ## Contributors
 
@@ -697,7 +697,7 @@ Added a streaming token buffer and post-run message scrub to `streaming.py` to d
 
 ---
 
-Want to contribute? See [ARCHITECTURE.md](ARCHITECTURE.md) for the codebase layout and [TESTING.md](TESTING.md) for how to run the test suite. The best contributions are focused, well-tested, and solve a real problem — exactly what every person on this list did.
+Want to contribute? See [docs/architecture.md](docs/architecture.md) for the codebase layout and [docs/testing.md](docs/testing.md) for how to run the test suite. The best contributions are focused, well-tested, and solve a real problem — exactly what every person on this list did.
 
 ## Repo
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# build.sh — Build frontend and/or pre-compile Python
+# build.sh — Build frontend and/or pre-compile backend Python
 #
 # Usage:
 #   ./scripts/build.sh                 # Build everything
 #   ./scripts/build.sh --frontend      # Frontend only
-#   ./scripts/build.sh --python        # Python only
+#   ./scripts/build.sh --backend        # backend only
 #   ./scripts/build.sh --clean         # Clean build artifacts
 #   ./scripts/build.sh --watch         # Watch mode (frontend)
 #   ./scripts/build.sh --release       # Production build (minified)
@@ -31,7 +31,7 @@ die()  { printf "${RED}✗${R} %s\n" "$*" >&2; exit 1; }
 
 # ── Options ──
 BUILD_FRONTEND=false
-BUILD_PYTHON=false
+BUILD_BACKEND=false
 CLEAN=false
 WATCH=false
 RELEASE=false
@@ -39,7 +39,7 @@ RELEASE=false
 # If no arguments, build everything
 if [ $# -eq 0 ]; then
   BUILD_FRONTEND=true
-  BUILD_PYTHON=true
+  BUILD_BACKEND=true
 fi
 
 # ── Parse arguments ──
@@ -49,13 +49,13 @@ while [[ $# -gt 0 ]]; do
       BUILD_FRONTEND=true
       shift
       ;;
-    --python|-p)
-      BUILD_PYTHON=true
+    --backend|-b)
+      BUILD_BACKEND=true
       shift
       ;;
     --all|-a)
       BUILD_FRONTEND=true
-      BUILD_PYTHON=true
+      BUILD_BACKEND=true
       shift
       ;;
     --clean|-c)
@@ -76,7 +76,7 @@ while [[ $# -gt 0 ]]; do
       echo ""
       echo "Options:"
       echo "  --frontend, -f    Build frontend only"
-      echo "  --python, -p      Pre-compile Python only"
+      echo "  --backend, -b      Pre-compile backend only"
       echo "  --all, -a         Build everything (default)"
       echo "  --clean, -c       Clean build artifacts"
       echo "  --watch, -w       Watch mode (frontend)"
@@ -86,7 +86,7 @@ while [[ $# -gt 0 ]]; do
       echo "Examples:"
       echo "  ./scripts/build.sh              # Build all"
       echo "  ./scripts/build.sh -f           # Frontend only"
-      echo "  ./scripts/build.sh -p           # Python only"
+      echo "  ./scripts/build.sh -b           # backend only"
       echo "  ./scripts/build.sh -c -a        # Clean and rebuild all"
       echo "  ./scripts/build.sh -w           # Watch frontend for changes"
       exit 0
@@ -175,7 +175,7 @@ build_frontend() {
   ok "Frontend built"
 }
 
-build_python() {
+build_backend() {
   say "${B}Pre-compiling Python bytecode...${R}"
 
   if ! command -v python3 >/dev/null 2>&1; then
@@ -185,14 +185,14 @@ build_python() {
 
   # Count files before
   local count_before
-  count_before=$(find "$PROJECT_ROOT" -name "*.pyc" 2>/dev/null | wc -l)
+  count_before=$(find "$PROJECT_ROOT/backend" -name "*.pyc" 2>/dev/null | wc -l)
 
   # Compile
-  python3 -m compileall -q "$PROJECT_ROOT" 2>/dev/null || true
+  python3 -m compileall -q "$PROJECT_ROOT/backend" 2>/dev/null || true
 
   # Count files after
   local count_after
-  count_after=$(find "$PROJECT_ROOT" -name "*.pyc" 2>/dev/null | wc -l)
+  count_after=$(find "$PROJECT_ROOT/backend" -name "*.pyc" 2>/dev/null | wc -l)
 
   local new_files=$((count_after - count_before))
   ok "Python bytecode compiled ($new_files new .pyc files)"
@@ -215,9 +215,9 @@ if [ "$BUILD_FRONTEND" = true ]; then
   build_frontend
 fi
 
-# Build Python
-if [ "$BUILD_PYTHON" = true ]; then
-  build_python
+# Build backend
+if [ "$BUILD_BACKEND" = true ]; then
+  build_backend
 fi
 
 # Done

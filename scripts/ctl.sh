@@ -62,8 +62,11 @@ _server_pid() {
       return
     fi
   fi
-  # Fallback: find from process table (port is in env, not cmdline)
-  pgrep -f "python.*server.py" 2>/dev/null | head -1 || true
+  # Fallback: find from process table (port is in env, not cmdline).
+  # Match both legacy ``python backend/app/server.py`` and the FastAPI-style
+  # ``python -m app.server`` invocation.
+  pgrep -f "python.*backend/app/server\.py" 2>/dev/null | head -1 || true
+  pgrep -f "python.*-m app\.server" 2>/dev/null | head -1 || true
 }
 
 _port_in_use() {
@@ -91,9 +94,12 @@ cmd_stop() {
   fi
   rm -f "$PID_FILE"
 
-  # 2. Fallback cleanup
-  pkill -f "bootstrap.py.*--no-browser" 2>/dev/null || true
-  pkill -f "python.*server.py" 2>/dev/null || true
+  # 2. Fallback cleanup. Match both the old ``python backend/app/server.py``
+  # and the new ``python -m app.server`` invocations so restart always kills
+  # the right process regardless of which entry point started it.
+  pkill -f "backend/app/bootstrap.py.*--no-browser" 2>/dev/null || true
+  pkill -f "python.*backend/app/server\.py" 2>/dev/null || true
+  pkill -f "python.*-m app\.server" 2>/dev/null || true
   pkill -f "hermes gateway" 2>/dev/null || true
   sleep 1
 
@@ -139,7 +145,7 @@ cmd_start() {
   local python
   python=$(_find_python)
   unset ANTHROPIC_BASE_URL
-  HOST=0.0.0.0 LOG_LEVEL=DEBUG "${python}" "${PROJECT_ROOT}/bootstrap.py" --no-browser
+  HOST=0.0.0.0 LOG_LEVEL=DEBUG "${python}" "${PROJECT_ROOT}/backend/app/bootstrap.py" --no-browser
   local rc=$?
   if [[ $rc -ne 0 ]]; then
     _fail "Server failed to start (exit code $rc)"
