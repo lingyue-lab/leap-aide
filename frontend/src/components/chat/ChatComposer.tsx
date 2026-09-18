@@ -328,6 +328,18 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
     }
     return ids;
   }, [modelGroups]);
+  // Final fallback: the first model from any provider group the catalog
+  // returns.  Used when neither session.model nor settings.model points to a
+  // model in the loaded catalog (format mismatch, stale provider, or missing
+  // settings).  Mirrors the WelcomeState pattern in MainContent.tsx:71-87,
+  // but lives inside the composer so the chat view (which does not pass
+  // defaultModelId) also gets a preselected model.
+  const firstCatalogModelId = useMemo(() => {
+    for (const g of modelGroups) {
+      if (g.models?.[0]?.id) return g.models[0].id;
+    }
+    return '';
+  }, [modelGroups]);
   const sessionModel = currentSession?.model ?? '';
   const settingsModel = settings?.model ?? '';
   const resolvedModel = sessionModel || settingsModel;
@@ -336,8 +348,13 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
       ? resolvedModel
       // Fall back to defaultModelId (welcome state) when session/settings model
       // is empty or points at an unconfigured provider. Keeps the picker
-      // pre-selected instead of showing "Model" as the trigger label.
-      : (defaultModelId && allModelIds.has(defaultModelId) ? defaultModelId : '');
+      // pre-selected instead of showing "Model" as the trigger label.  When
+      // defaultModelId is also unavailable or stale, fall back to the first
+      // model the catalog returns so the footer always shows something the
+      // user can actually run.
+      : (defaultModelId && allModelIds.has(defaultModelId)
+          ? defaultModelId
+          : firstCatalogModelId);
   const displayModel = effectiveModel
     ? effectiveModel.split('/').pop() ?? effectiveModel
     : 'Model';
