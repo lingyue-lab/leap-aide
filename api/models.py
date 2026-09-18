@@ -255,15 +255,52 @@ def _get_session_db():
 
 
 def _close_session_db():
-    """Close the shared SessionDB connection. Called on server shutdown."""
+    """Close the shared SessionDB connection. Idempotent and shutdown-safe.
+
+    Designed to be safe to call from:
+      - Normal request paths (server shutdown, test fixture teardown)
+      - atexit handlers (sys.meta_path still alive)
+      - pytest fixture finalizers (sys.meta_path still alive)
+      - The SDK's internal __del__ path (sys.meta_path may be None —
+        failures swallowed by BaseException)
+
+    The trailing gc.collect() is load-bearing: it forces the SDK's
+    SessionDB instance and its internal sqlite3.Connection objects to
+    run __del__ NOW, while sys.meta_path is still populated. Without
+    it, the SDK's __del__ may sit on the cyclic-GC list and only be
+    collected during interpreter shutdown — exactly when sys.meta_path
+    is None, which is when
+
+        "read-conn close failed for ... : sys.meta_path is None,
+         Python is likely shutting down"
+
+    gets emitted by the hermes-agent SDK's finalizer. Forcing a GC
+    pass here makes the finalizer run while sys.meta_path is still
+    alive, so the SDK's close path can import sqlite3 normally and
+    the warning never fires.
+    """
     global _session_db
     with _session_db_lock:
         if _session_db is not None:
             try:
                 _session_db.close()
-            except Exception:
+            except BaseException:
+                # Closing the SDK SessionDB may raise from inside its
+                # close() (e.g. the SDK tries to print a warning while
+                # sys.meta_path is being cleared). Swallow ALL — the
+                # whole point of this function is to suppress that
+                # kind of late-shutdown noise.
                 pass
             _session_db = None
+    # Force immediate reclamation of the SDK's internal sqlite3
+    # connections while sys.meta_path is still alive. This runs ONCE
+    # per shutdown — not on any request hot path. The hot path uses
+    # _get_session_db(), which never reaches here.
+    try:
+        import gc as _gc_close_db
+        _gc_close_db.collect()
+    except BaseException:
+        pass
 
 
 def _upsert_webui_col(db, rowid, sid, col_name, value):

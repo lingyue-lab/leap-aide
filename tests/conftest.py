@@ -498,6 +498,16 @@ def test_server():
         # against two overlapping server.py processes, with the orphan
         # PID 172272 persisting as a zombie until pytest exits.
         #
+        # A previous attempt tried `proc.terminate() + bounded wait + SIGKILL
+        # fallback` to give server.py's 6-step cascade a chance to run.
+        # That re-introduced the same re-entry bug above (any `proc.wait()`
+        # longer than ~3s on a stuck cascade re-enters setup) and was
+        # reverted. The clean shutdown for the TEST process (where the
+        # "read-conn close failed" warning actually originates) is handled
+        # by the L1 defense-in-depth fixtures/hooks below this fixture —
+        # those run BEFORE pytest teardown and close `_session_db` while
+        # `sys.meta_path` is still populated.
+        #
         # Fix: SIGKILL and return immediately. The kernel reaps the
         # zombie asynchronously; the next pytest run's `fuser -k` at
         # fixture ENTRY (line ~338 below) guarantees port cleanup.
@@ -516,8 +526,8 @@ def test_server():
         # Close the server-log file wrapper BEFORE pytest tears down its
         # session. subprocess.Popen already inherited the underlying fd,
         # so closing the Python-level wrapper only releases the Python
-        # object — it does not affect the server's ability to write to
-        # the log until the server itself exits.
+        # object — it does not affect the server's ability to write to the
+        # log until the server itself exits.
         try:
             _server_log.close()
         except Exception:
@@ -541,6 +551,95 @@ def test_server():
             shutil.rmtree(TEST_STATE_DIR)
         except Exception:
             pass
+
+
+# ── Defense in depth: close any leaked SessionDB singleton at session end ──────
+# The hermes-agent SDK's `SessionDB` keeps an internal read-only sqlite
+# connection. If any test in this run acquires the api.models `_session_db`
+# singleton (e.g. tests/test_issue856_session_streaming_state.py) and fails
+# to close it before pytest exits, the SDK's `__del__` finalizer fires
+# during interpreter shutdown — and emits:
+#
+#     read-conn close failed for .../state.db: sys.meta_path is None,
+#     Python is likely shutting down
+#
+# The per-test fix lives in tests that touch the singleton directly
+# (they wrap usage in a `_session_db_isolated()` context manager so the
+# singleton is closed on every exit path). The fixtures/hooks below are
+# belt-and-suspenders: they fire after every test, before pytest tears
+# down its import system, while `sys.meta_path` is still populated.
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _close_session_db_on_session_end():
+    """Close any leaked SessionDB singleton at the end of the pytest session.
+
+    pytest runs session-scoped fixture finalizers in REVERSE order to
+    setup. This fixture is defined AFTER `test_server`, so its finalizer
+    runs BEFORE `test_server`'s SIGTERM teardown but AFTER all per-test
+    fixtures have torn down — which is the right place to flush any
+    leaked in-process singleton.
+
+    Idempotent: `_close_session_db()` is safe to call repeatedly. If
+    nothing leaked, the underlying `_session_db is None` short-circuit
+    makes this a no-op (~microseconds).
+    """
+    yield
+    try:
+        from api.models import _close_session_db
+        _close_session_db()
+    except BaseException:
+        # Never fail fixture teardown — pytest must see this as cleanly
+        # finalized. A failure here would just create a second warning
+        # in addition to the one we're trying to suppress.
+        pass
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """pytest hook: close the singleton right before pytest tears down.
+
+    Runs AFTER session-scoped fixture finalizers but BEFORE pytest's
+    module-import-system teardown. `sys.meta_path` is still populated,
+    so the SDK's sqlite close path can import sqlite3 normally and
+    emits no warning.
+    """
+    try:
+        from api.models import _close_session_db
+        _close_session_db()
+    except BaseException:
+        pass
+
+
+def pytest_unconfigure(config):
+    """pytest hook: last chance before pytest tears down the test process.
+
+    Runs even if the session crashed earlier than pytest_sessionfinish.
+    Like the session finalizer above, this is a backstop in case a
+    session-scoped fixture failed mid-way and skipped its finalizer.
+    """
+    try:
+        from api.models import _close_session_db
+        _close_session_db()
+    except BaseException:
+        pass
+
+
+# atexit fallback: runs at interpreter shutdown if pytest exits via a
+# normal return path (not os._exit, which skips atexit). This is the
+# absolute last line of defense before CPython starts tearing down
+# `sys.meta_path`. Registered at module-import time so it survives
+# fixture re-entry (cf. the tracer-only atexit handler near the top
+# of this file — they coexist without interfering).
+import atexit as _atexit_session_close  # noqa: E402
+
+def _atexit_close_session_db():  # noqa: E302
+    try:
+        from api.models import _close_session_db
+        _close_session_db()
+    except BaseException:
+        pass
+
+_atexit_session_close.register(_atexit_close_session_db)
 
 
 # ── Test base URL ─────────────────────────────────────────────────────────────
