@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import { flushSync } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useSessionStore } from '@/stores/useSessionStore';
@@ -29,6 +29,7 @@ import { Icon } from '@/components/common/Icons';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import ChatComposer from '@/components/chat/ChatComposer';
 import { useChatStream } from '@/hooks/useChatStream';
+import { gateProviders } from '@/utils/providersGate';
 
 
 interface MainContentProps {
@@ -103,6 +104,17 @@ function WelcomeState() {
     // pendingNewSession was null would otherwise bail here.
     const placeholderSid = useSessionStore.getState().pendingNewSession?.session_id;
     if (!placeholderSid || !text.trim()) return;
+
+    // Gate: refuse to send the first welcome message until at least one
+    // model provider is configured. Without this the user sees a 401
+    // mid-stream and has no clear path to fix it.
+    let outcome: 'passed' | 'navigated' = 'passed';
+    try {
+      outcome = await gateProviders();
+    } catch {
+      outcome = 'passed';
+    }
+    if (outcome !== 'passed') return;
     // Resolve the model to use for this turn.  Order:
     //   1. welcomeModelId — user's explicit pick in the picker (highest
     //      priority; honors what they actually clicked)
@@ -198,6 +210,47 @@ function NonTerminalContent({
   const setShowNewWorkspaceForm = useWorkspaceStore((s) => s.setShowNewWorkspaceForm);
 
   const settingsTabActive = useSettingsTabStore((s) => s.settingsTabActive);
+
+  // Gate: trigger the providers precondition check on the initial mount
+  // when the user lands directly on a gated view (chat or cron jobs).
+  // NavTabs.switchPanel handles tab-click navigation, so this effect only
+  // runs once per "entry" — when the route / session view first renders
+  // and the user lands on chat via `/` or `/session/:id`. We use a ref
+  // to ensure we don't fire on every tab flag change (only on entry).
+  //
+  // Note: this component is only mounted when terminalTabActive is false
+  // (the parent switches between two parallel <main> elements), so we
+  // don't need to check the terminal flag here.
+  const gateFiredRef = useRef(false);
+  useEffect(() => {
+    const isChatView =
+      !settingsTabActive &&
+      !skillsTabActive &&
+      !memoryTabActive &&
+      !workspacesTabActive;
+    const isTasksView = tasksTabActive;
+    const isGatedView = isChatView || isTasksView;
+
+    if (!isGatedView) {
+      // Reset so re-entering a gated view (e.g. switching back to chat)
+      // will fire the gate again.
+      gateFiredRef.current = false;
+      return;
+    }
+
+    if (gateFiredRef.current) return;
+    gateFiredRef.current = true;
+
+    gateProviders().catch(() => {
+      gateFiredRef.current = false;
+    });
+  }, [
+    settingsTabActive,
+    skillsTabActive,
+    memoryTabActive,
+    workspacesTabActive,
+    tasksTabActive,
+  ]);
 
   // ── Non-chat content views ──────────────────────────────────────────────────
 

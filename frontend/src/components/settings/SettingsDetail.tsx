@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSettingsTabStore } from '@/stores/useSettingsTabStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
+import { useProvidersGateStore } from '@/stores/useProvidersGateStore';
 import { useTheme } from '@/contexts/ThemeContext';
 import { configFileService, providersService } from '@/services/api';
 import FileView from '@/components/shared/FileView';
@@ -478,6 +479,18 @@ function ProviderRow({ provider }: { provider: Provider }) {
         flashFeedback('ok', t('settings.providers.saved'));
         setApiKey('');
         setHasKey(true);
+        // Refresh the gate with a fresh provider list. Fail-open on
+        // network error (user just added a key — assume they now have
+        // at least one configured provider). ProvidersGroup on next
+        // mount will correct if this assumption is wrong.
+        providersService.getProviders()
+          .then((r) => {
+            const configured = (r.providers ?? []).some((p) => p.has_key);
+            useProvidersGateStore.getState().setConfigured(configured);
+          })
+          .catch(() => {
+            useProvidersGateStore.getState().setConfigured(true);
+          });
       } else {
         flashFeedback('err', res.error ?? 'Failed');
       }
@@ -496,6 +509,19 @@ function ProviderRow({ provider }: { provider: Provider }) {
         flashFeedback('ok', t('settings.providers.cleared'));
         setApiKey('');
         setHasKey(false);
+        // Refresh the gate with a fresh provider list. Fail-closed on
+        // network error (user just deleted a key — assume they may now
+        // have zero configured providers; the next chat / tasks click
+        // will then show the gate dialog). ProvidersGroup on next mount
+        // will correct if this assumption is wrong.
+        providersService.getProviders()
+          .then((r) => {
+            const configured = (r.providers ?? []).some((p) => p.has_key);
+            useProvidersGateStore.getState().setConfigured(configured);
+          })
+          .catch(() => {
+            useProvidersGateStore.getState().setConfigured(false);
+          });
       } else {
         flashFeedback('err', res.error ?? 'Failed');
       }
@@ -645,7 +671,16 @@ function ProvidersGroup() {
   useEffect(() => {
     setLoading(true);
     providersService.getProviders()
-      .then((res) => setProviders(res.providers ?? []))
+      .then((res) => {
+        setProviders(res.providers ?? []);
+        // ProvidersGroup is the single source of truth for the gate: each
+        // time the user opens Settings → Providers we sync the gate from
+        // the backend response. This corrects stale state left behind by
+        // a failed `check()` (e.g. transient network blip after a delete
+        // would otherwise leave the gate stuck on its previous value).
+        const configured = (res.providers ?? []).some((p) => p.has_key);
+        useProvidersGateStore.getState().setConfigured(configured);
+      })
       .catch((e) => setError((e as Error).message))
       .finally(() => setLoading(false));
   }, []);

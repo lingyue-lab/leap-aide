@@ -12,6 +12,7 @@
     "save": "Save",
     "saving": "Saving...",
     "cancel": "Cancel",
+    "ok": "OK",
     "confirm": "Confirm",
     "delete": "Delete",
     "edit": "Edit",
@@ -215,6 +216,13 @@
       "cleared": "Key removed",
       "oauth_hint": "Uses OAuth — configure via CLI: hermes model",
       "not_configurable_hint": "Key managed in config.yaml"
+    }
+  },
+  "providers": {
+    "gate": {
+      "title": "Add an API key to get started",
+      "description": "No model providers are configured yet. Chat and scheduled tasks need at least one provider with an API key. Open Settings → Model Providers to add one.",
+      "configure": "Configure providers"
     }
   },
   "workspace": {

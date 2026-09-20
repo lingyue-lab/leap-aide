@@ -12,6 +12,7 @@
     "save": "保存",
     "saving": "保存中...",
     "cancel": "取消",
+    "ok": "好的",
     "confirm": "确认",
     "delete": "删除",
     "edit": "编辑",
@@ -215,6 +216,13 @@
       "cleared": "Key 已清除",
       "oauth_hint": "使用 OAuth — 请通过 CLI 配置：hermes model",
       "not_configurable_hint": "Key 在 config.yaml 中管理"
+    }
+  },
+  "providers": {
+    "gate": {
+      "title": "请先添加 API Key",
+      "description": "尚未配置任何模型提供商。对话和定时任务都需要至少一个已配置 Key 的提供商。请前往 设置 → 模型提供商 添加。",
+      "configure": "前往配置"
     }
   },
   "workspace": {

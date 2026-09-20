@@ -8,6 +8,7 @@ import { useSettingsTabStore } from '@/stores/useSettingsTabStore';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { setChatPanelActive } from '@/hooks/useStreamNotify';
 import { markSessionSeen } from '@/utils/sessionSeen';
+import { gateProviders } from '@/utils/providersGate';
 import type { NavPanel } from '@/types';
 import { Icon } from '@/components/common/Icons';
 import { useAuth } from '@/contexts/AuthContext';
@@ -95,7 +96,22 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
     setSettingsTabActive(false);
   };
 
-  const switchPanel = (panel: NavPanel) => {
+  const switchPanel = async (panel: NavPanel) => {
+    // Chat and cron jobs (Tasks) both require at least one configured
+    // model provider — gate them via the shared precondition runner.
+    // Other tabs (skills, memory, workspaces, terminal, settings) work
+    // fine without a provider and are not gated.
+    if (panel === 'chat' || panel === 'tasks') {
+      let outcome: 'passed' | 'navigated' = 'passed';
+      try {
+        outcome = await gateProviders();
+      } catch {
+        // Dialog or check threw — fail open so the user is not locked
+        // out by a transient infrastructure error.
+        outcome = 'passed';
+      }
+      if (outcome !== 'passed') return;
+    }
     cancelEditing();
     onPanelChange(panel);
     clearAllTabStates();
@@ -137,7 +153,7 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
             className={`nav-tab ${activePanel === tab.panel ? 'active' : ''}`}
             data-panel={tab.panel}
             data-label={t(tab.labelKey)}
-            onClick={() => switchPanel(tab.panel)}
+            onClick={() => { void switchPanel(tab.panel); }}
             title={t(tab.titleKey)}
             aria-label={t(tab.titleKey)}
           >
@@ -155,7 +171,7 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
           className={`nav-tab ${activePanel === 'settings' ? 'active' : ''}`}
           data-panel="settings"
           data-label={t('settings.preferences')}
-          onClick={() => switchPanel('settings')}
+          onClick={() => { void switchPanel('settings'); }}
           title={t('settings.preferences')}
           aria-label={t('settings.preferences')}
         >

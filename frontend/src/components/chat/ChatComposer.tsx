@@ -13,6 +13,8 @@ import MultiSelection from '@/components/common/MultiSelection';
 import ContextUsageIndicator from '@/components/chat/ContextUsageIndicator';
 import { useModeShortcut } from '@/hooks/useModeShortcut';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
+import { gateProviders } from '@/utils/providersGate';
+import { useProvidersGateStore } from '@/stores/useProvidersGateStore';
 import { markSessionSeen } from '@/utils/sessionSeen';
 import SlashCommandDropdown from '@/components/chat/SlashCommandDropdown';
 import { useIsBusy } from '@/utils/sessionBusy';
@@ -379,6 +381,18 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
       .finally(() => { setModelsLoading(false); setModelDataLoaded(true); });
   }, [modelDataLoaded]);
 
+  // Reset the model cache when the providers gate transitions (configured
+  // toggles between true / false). Without this, the user who first
+  // opened the chat with no providers (modelGroups was empty,
+  // modelDataLoaded was set true by the failed fetch) would never see a
+  // real model list after configuring a provider — they'd have to reload
+  // the page. Skipping the initial null state avoids a spurious reset on
+  // first mount before the boot check resolves.
+  const gateConfigured = useProvidersGateStore((s) => s.configured);
+  useEffect(() => {
+    if (gateConfigured !== null) setModelDataLoaded(false);
+  }, [gateConfigured]);
+
   const handleModelSelect = useCallback(async (modelId: string | null) => {
     if (!modelId) return;
     // Always reflect the user's pick in the trigger label immediately
@@ -399,6 +413,21 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
     }
   }, [currentSession, updateSessionModel, onModelChange]);
 
+  // Wrapper for the model chip's popover: gate first, then load models.
+  // Lets the user see the gate dialog (with "Configure providers" CTA) when
+  // they click an empty-state chip, instead of opening a popover that just
+  // shows "No models available".
+  const handleModelMenuOpen = useCallback(async () => {
+    let outcome: 'passed' | 'navigated' = 'passed';
+    try {
+      outcome = await gateProviders();
+    } catch {
+      outcome = 'passed';
+    }
+    if (outcome !== 'passed') return;
+    loadModels();
+  }, [loadModels]);
+
   // Auto-resize textarea
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -409,16 +438,28 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
     textarea.style.overflowY = h >= 200 ? 'auto' : 'hidden';
   }, [input]);
 
-  const handleSubmit = useCallback(() => {
+  const handleSubmit = useCallback(async () => {
     if (!canSend) return;
     const text = input.trim();
     if (!text && pendingFiles.length === 0) return;
-    
+
+    // Gate: refuse to send until at least one model provider is configured.
+    // Catches slash commands, paste, drop, voice transcripts — every path
+    // flows through handleSubmit, so a single check is sufficient.
+    let outcome: 'passed' | 'navigated' = 'passed';
+    try {
+      outcome = await gateProviders();
+    } catch {
+      // Dialog or check threw — fail open.
+      outcome = 'passed';
+    }
+    if (outcome !== 'passed') return;
+
     setInput('');
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
-    
+
     // Slash commands (/help, /status, /model, etc.) are read-only queries
     // that don't affect the LLM context — never interrupt a running stream.
     const isSlash = text.startsWith('/');
@@ -718,7 +759,7 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
                 })),
               }))}
               onSelect={handleModelSelect}              loading={modelsLoading}
-              onOpen={loadModels}
+              onOpen={handleModelMenuOpen}
               emptyText="No models available"
               header="Model"
             />

@@ -52,6 +52,19 @@ if (typeof globalThis.IntersectionObserver === 'undefined') {
   globalThis.IntersectionObserver = StubIntersectionObserver;
 }
 
+// ResizeObserver is missing from jsdom. CustomScrollbar (and a few
+// other layout components) construct one in useEffect to track content
+// size. Stub it so render paths that mount CustomScrollbar do not crash.
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  class StubResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  // @ts-expect-error — assigning a stub class to a global missing in jsdom
+  globalThis.ResizeObserver = StubResizeObserver;
+}
+
 // jsdom (or vitest's jsdom env) installs a `localStorage` property on
 // globalThis whose VALUE is undefined — so the property is `in` globalThis
 // but reading `localStorage.getItem` throws. Bare `localStorage.getItem(...)`

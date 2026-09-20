@@ -27,6 +27,16 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Ensure pytest from the project's .venv is on PATH.
+# The testbox harness invokes this script with a clean shell that does not
+# have .venv/bin prepended, so bare `pytest` invocations below would fail
+# with "No such file or directory". Falling back silently keeps local
+# development (where pytest may be installed elsewhere) working unchanged.
+if [[ -x "${PROJECT_ROOT}/.venv/bin/pytest" ]]; then
+  export PATH="${PROJECT_ROOT}/.venv/bin:${PATH}"
+fi
+
 RESULTS_DIR="${PROJECT_ROOT}/backend/tests/.results"
 FRONTEND_DIR="${PROJECT_ROOT}/frontend"
 FRONTEND_RESULTS_DIR="${FRONTEND_DIR}/tests/.results"

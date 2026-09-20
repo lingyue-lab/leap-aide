@@ -1,4 +1,3 @@
-import { useState, useEffect } from 'react';
 import NavTabs from '@/components/sidebar/NavTabs';
 import SessionList from '@/components/sidebar/SessionList';
 import TasksPanel from '@/components/sidebar/TasksPanel';
@@ -9,6 +8,7 @@ import TerminalPanel from '@/components/sidebar/TerminalPanel';
 
 import SettingsPanel from '@/components/sidebar/SettingsPanel';
 import { wsManager } from '@/stores/wsManager';
+import { useSidebarPanelStore } from '@/stores/useSidebarPanelStore';
 import type { NavPanel } from '@/types';
 
 interface SidebarProps {
@@ -17,23 +17,18 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ width = 300, onResizeStart }: SidebarProps) {
-  const [activePanel, setActivePanel] = useState<NavPanel>('chat');
-  const [sidebarOpen, setSidebarOpen] = useState(() => {
-    const saved = localStorage.getItem('hermes_sidebar_open');
-    return saved !== null ? saved === 'true' : true;
-  });
-
-  // Persist sidebarOpen to localStorage
-  useEffect(() => {
-    localStorage.setItem('hermes_sidebar_open', String(sidebarOpen));
-  }, [sidebarOpen]);
+  const activePanel = useSidebarPanelStore((s) => s.activePanel);
+  const sidebarOpen = useSidebarPanelStore((s) => s.sidebarOpen);
+  const setActivePanel = useSidebarPanelStore((s) => s.setActivePanel);
+  const setSidebarOpen = useSidebarPanelStore((s) => s.setSidebarOpen);
+  const toggleSidebarOpen = useSidebarPanelStore((s) => s.toggleSidebarOpen);
 
   const closeSidebar = () => setSidebarOpen(false);
 
   const handlePanelChange = (panel: NavPanel) => {
     if (panel === activePanel) {
       // Clicking the active tab toggles sidebar open/close
-      setSidebarOpen(prev => !prev);
+      toggleSidebarOpen();
     } else {
       // Different tab — switch panel and ensure sidebar is open
       setActivePanel(panel);

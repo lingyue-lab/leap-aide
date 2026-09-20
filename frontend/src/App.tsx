@@ -9,6 +9,7 @@ import DialogHost from './components/common/DialogHost';
 import { useSessionStore } from './stores/useSessionStore';
 import { useSettingsStore } from './stores/useSettingsStore';
 import { useWorkspaceStore } from './stores/useWorkspaceStore';
+import { useProvidersGateStore } from './stores/useProvidersGateStore';
 import { useTheme } from './contexts/ThemeContext';
 import { ProtectedRoute } from './contexts/AuthContext';
 import { useStreamNotify } from './hooks/useStreamNotify';
@@ -24,10 +25,14 @@ function App() {
   const { setTheme } = useTheme();
   useStreamNotify(currentSessionId);
 
-  // Load settings and workspaces on mount
+  // Load settings, workspaces, and the providers-gate state on mount.
+  // The gate check is fire-and-forget — it warms the cache so the first
+  // click on Chat/Tasks doesn't show a brief "checking…" UI; failures
+  // are handled inside `check()` by failing open.
   React.useEffect(() => {
     loadSettings();
     loadWorkspaces();
+    useProvidersGateStore.getState().check();
   }, []);
 
   // Connect to WebSocket with a small delay to allow font loading first.

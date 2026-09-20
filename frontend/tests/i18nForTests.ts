@@ -34,12 +34,20 @@ void i18n
         },
         common: {
           no_matching_commands: 'No matching commands',
+          ok: 'OK',
           sessions: {
             subagent: 'Subagent',
             actions: 'Actions',
             confirm_delete: 'Delete this session?',
             compress_confirm: 'Compress this session?',
             clear_streaming_warn: 'Cannot clear a streaming session.',
+          },
+          providers: {
+            gate: {
+              title: 'Add an API key to get started',
+              description: 'No model providers are configured yet.',
+              configure: 'Configure providers',
+            },
           },
         },
       },

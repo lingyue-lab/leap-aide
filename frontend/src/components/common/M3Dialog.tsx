@@ -40,6 +40,12 @@ export interface M3DialogProps {
   confirmText: string;
   /** Cancel/dismiss button label. */
   cancelText: string;
+  /** Hide the cancel button AND block Escape / scrim dismissal. Used by the
+   *  providers-gate "force configure" dialog — there is no safe way to
+   *  cancel because the chat / cron panel is unreachable without a key.
+   *  M3 calls this a "Basic Dialog" (single primary action) vs the
+   *  two-button "Confirmation Dialog" variant. */
+  hideCancel?: boolean;
   /** Loading state — disables confirm, swaps it to a spinner, blocks Escape. */
   loading?: boolean;
   /** Disables confirm (e.g. Cleanup's "no source selected" gate). */
@@ -103,6 +109,7 @@ export default function M3Dialog({
   footer,
   onConfirm,
   onCancel,
+  hideCancel = false,
 }: M3DialogProps) {
   const titleId = useId();
   const descId = useId();
@@ -158,12 +165,16 @@ export default function M3Dialog({
     const focusInitial = () => {
       const surface = surfaceRef.current;
       if (!surface) return;
-      // First focusable input/select inside, else cancel button.
+      // First focusable input/select inside, else primary action. When the
+      // cancel button is hidden (Basic Dialog) there is only one action —
+      // focus it so Enter / Space fires confirm immediately.
       const firstField = surface.querySelector<HTMLElement>(
         'input, select, textarea',
       );
       if (firstField) {
         firstField.focus();
+      } else if (hideCancel) {
+        confirmRef.current?.focus();
       } else {
         cancelRef.current?.focus();
       }
@@ -179,7 +190,14 @@ export default function M3Dialog({
         if (e.key === 'Escape') e.preventDefault();
         return;
       }
+      // When cancel is hidden the dialog has no dismiss path; swallowing
+      // Escape prevents accidental dismissal that would leave the user
+      // stuck (chat / cron panel still unreachable without a key).
       if (e.key === 'Escape') {
+        if (hideCancel) {
+          e.preventDefault();
+          return;
+        }
         e.preventDefault();
         onCancel();
         return;
@@ -257,6 +275,7 @@ export default function M3Dialog({
 
   const handleScrimClick = () => {
     if (loading) return;
+    if (hideCancel) return;
     onCancel();
   };
 
@@ -351,14 +370,16 @@ export default function M3Dialog({
         {footer && <div className="m3-dialog__footer">{footer}</div>}
 
         <div className="m3-dialog__actions">
-          <M3Button
-            ref={cancelRef}
-            variant="text"
-            onClick={onCancel}
-            disabled={loading}
-          >
-            {cancelText}
-          </M3Button>
+          {!hideCancel && (
+            <M3Button
+              ref={cancelRef}
+              variant="text"
+              onClick={onCancel}
+              disabled={loading}
+            >
+              {cancelText}
+            </M3Button>
+          )}
           <M3Button
             ref={confirmRef}
             variant="filled"
