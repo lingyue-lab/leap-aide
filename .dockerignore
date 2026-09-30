@@ -5,3 +5,13 @@ __pycache__
 *.pyo
 tests/
 .env*
+# Host-side dev/build outputs that must never enter the image.
+.venv/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.cache/
+.lingyue-lab/
+docs/
+# Build artifacts already shipped via /static (ci/runtime skip them).
+backend/scripts/.results/

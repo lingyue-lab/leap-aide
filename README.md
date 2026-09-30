@@ -127,7 +127,7 @@ If provider setup is still incomplete after install, the onboarding wizard will 
 
 **Pre-built images** (amd64 + arm64) are published to GHCR on every release:
 
-Make sure the `HERMES_WEBUI_STATE_DIR` (by default `~/.hermes/webui-mvp`, as detailed in the `.env.example` file) folder exist with the UID/GID of the owner of the `.hermes` folder. 
+Make sure the `HERMES_WEBUI_STATE_DIR` (by default `~/.hermes/webui-mvp`, as detailed in the `.env.example` file) folder exist with the UID/GID of the owner of the `.hermes` folder.
 The container will also mount your configured "workspace" (also from the example .env.example) as `/workspace`. adapt the location as needed.
 
 
@@ -135,8 +135,9 @@ The container will also mount your configured "workspace" (also from the example
 docker pull ghcr.io/nesquena/hermes-webui:latest
 docker run -d \
 -e WANTED_UID=`id -u` -e WANTED_GID=`id -g` \
--v ~/.hermes:/home/hermeswebui/.hermes -e HERMES_WEBUI_STATE_DIR=/home/hermeswebui/.hermes/webui-mvp \
+-v ~/.hermes:/home/leap-aide/.hermes -e HERMES_WEBUI_STATE_DIR=/home/leap-aide/.hermes/webui-mvp \
 -v ~/workspace:/workspace \
+-v /usr/local/lib/hermes-agent:/home/leap-aide/.hermes/hermes-agent \
 -p 8787:8787 ghcr.io/nesquena/hermes-webui:latest
 ```
 
@@ -150,12 +151,13 @@ docker compose up -d
 Or build locally:
 
 ```bash
-docker build -t hermes-webui .
+docker buildx build --target runtime -t leap-aide:runtime -f Dockerfile .
 docker run -d \
 -e WANTED_UID=`id -u` -e WANTED_GID=`id -g` \
--v ~/.hermes:/home/hermeswebui/.hermes -e HERMES_WEBUI_STATE_DIR=/home/hermeswebui/.hermes/webui-mvp \
+-v ~/.hermes:/home/leap-aide/.hermes -e HERMES_WEBUI_STATE_DIR=/home/leap-aide/.hermes/webui-mvp \
 -v ~/workspace:/workspace \
--p 8787:8787 hermes-webui
+-v /usr/local/lib/hermes-agent:/home/leap-aide/.hermes/hermes-agent \
+-p 8787:8787 leap-aide:runtime
 ```
 
 Open http://localhost:8787 in your browser.
@@ -165,8 +167,9 @@ To enable password protection:
 ```bash
 docker run -d \
 -e WANTED_UID=`id -u` -e WANTED_GID=`id -g` \
--v ~/.hermes:/home/hermeswebui/.hermes -e HERMES_WEBUI_STATE_DIR=/home/hermeswebui/.hermes/webui-mvp \
+-v ~/.hermes:/home/leap-aide/.hermes -e HERMES_WEBUI_STATE_DIR=/home/leap-aide/.hermes/webui-mvp \
 -v ~/workspace:/workspace \
+-v /usr/local/lib/hermes-agent:/home/leap-aide/.hermes/hermes-agent \
 -p 8787:8787 -e HERMES_WEBUI_PASSWORD=your-secret ghcr.io/nesquena/hermes-webui:latest
 ```
 
@@ -174,38 +177,22 @@ docker run -d \
 > To expose on a network, change the port to `"8787:8787"` in `docker-compose.yml`
 > and set `HERMES_WEBUI_PASSWORD` to enable authentication.
 
-### Two-container setup (Agent + WebUI)
+### hermes-agent setup
 
-If you run the Hermes Agent in its own Docker container and want the WebUI
-in a separate container:
-
-```bash
-docker compose -f docker-compose.two-container.yml up -d
-```
-
-This starts both containers with shared volumes:
-
-- **`hermes-home`** — shared `~/.hermes` for config, sessions, skills, memory
-- **`hermes-agent-src`** — the agent's source code, mounted into the WebUI
-  container so it can install the agent's Python dependencies at startup
-
-> **Volume type:** The compose files use named Docker volumes by default.
-> If you prefer bind mounts to an existing directory (e.g. for sharing state
-> with an agent container you already run), both containers must mount the
-> same host path — the agent writes to `/root/.hermes`, the WebUI reads from
-> `/home/hermeswebui/.hermes`. See `docker-compose.two-container.yml` for
-> a bind-mount example.
-
-The WebUI's init script automatically installs hermes-agent and all its
-dependencies (openai, anthropic, etc.) into its own Python environment on
+The WebUI runs `hermes-agent` from a host install. Before starting the container,
+make sure `scripts/install.sh` has been run on the host — it installs
+`hermes-agent` to `/usr/local/lib/hermes-agent` (overridable via `HERMES_AGENT_DIR`).
+The compose file mounts that directory into the container so the WebUI's init
+script can install `hermes-agent`'s Python dependencies into its own venv on
 first boot. Subsequent restarts reuse the installed packages.
 
 > **How it works:** The WebUI imports hermes-agent's Python modules directly
-> (not via HTTP). The shared volume makes the agent source available, and
-> the init script runs `uv pip install` to set up the dependencies. Both
-> containers share the same `~/.hermes` directory for config and state.
+> (not via HTTP). The host mount makes the agent source available, and the
+> init script runs `uv pip install` to set up the dependencies. Both the host
+> and the container share the same `~/.hermes` directory for config and state.
 
-See `docker-compose.two-container.yml` for the full configuration.
+If `hermes-agent` is not mounted, the WebUI starts in "reduced functionality"
+mode (no model auto-detection, no personality routing, no CLI session imports).
 
 ### Running alongside hermes-dashboard (three-container setup)
 

@@ -1,0 +1,27 @@
+# Per-build-context ignore file for the *cicd* target only.
+#
+# Used by:
+#   docker buildx build --ignore-file backend/.dockerignore.ci --target cicd ...
+#   buildah bud       --ignorefile backend/.dockerignore.ci --target cicd ...
+#
+# Differs from the repo-root .dockerignore: tests/ is intentionally NOT
+# excluded so the cicd target can COPY backend/tests into the image and run pytest.
+.git
+.pytest_cache
+__pycache__
+*.pyc
+*.pyo
+.env*
+# Host-side dev/build outputs that must never enter the image (mirrors
+# repo-root .dockerignore). ci doesn't need these either — pytest is
+# installed via uv, frontend is not exercised in ci.
+.venv/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.cache/
+.lingyue-lab/
+docs/
+# backend/scripts/.results/ holds local test artifacts; never needed.
+backend/scripts/.results/
+# tests/ is intentionally included — ci target needs it

@@ -48,10 +48,13 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          target: runtime
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: HERMES_VERSION=${{ github.ref_name }}
+          build-args: |
+            HERMES_VERSION=${{ github.ref_name }}
+            HERMES_AGENT_COMMIT=$(grep '^HERMES_AGENT_COMMIT=' backend/scripts/hermes-agent.env | cut -d= -f2-)
           cache-from: type=gha
           cache-to: type=gha,mode=max

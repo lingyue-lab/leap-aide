@@ -8,7 +8,7 @@ Two problems fixed:
 1. uv was downloaded at container startup; fails in air-gapped / firewalled environments.
    Fix: pre-install uv in the Docker image at build time (system-wide in /usr/local/bin).
 2. workspace directory created with plain mkdir (as root); bind-mount dirs created by
-   Docker as root are unwritable by the hermeswebui user.
+   Docker as root are unwritable by the leap-aide user.
    Fix: sudo mkdir + sudo chown for workspace directory.
 """
 import pathlib
@@ -43,29 +43,28 @@ class TestDockerfileUvPreinstall:
         )
         assert uv_install_line is not None, "Could not find uv install line in Dockerfile"
         # Must either use UV_INSTALL_DIR pointing to /usr/local/bin, or run as root
-        # (so the default install location is accessible to hermeswebui user)
+        # (so the default install location is accessible to leap-aide user)
         has_system_dir = "/usr/local/bin" in uv_install_line or "UV_INSTALL_DIR=/usr/local/bin" in DOCKERFILE
         assert has_system_dir, (
-            "uv must be installed to /usr/local/bin (system-wide) so hermeswebui user "
-            "can find it. Installing as hermeswebuitoo puts it in /home/hermeswebuitoo/.local/bin "
-            "which is NOT on hermeswebui's PATH."
+            "uv must be installed to /usr/local/bin (system-wide) so leap-aide user "
+            "can find it. Installing as leap-aide-init puts it in /home/leap-aide-init/.local/bin "
+            "which is NOT on leap-aide's PATH."
         )
 
     def test_dockerfile_uv_installed_before_copy(self):
-        """uv installation must happen before COPY . /apptoo so it's in the image."""
-        import re
+        """uv installation must happen before COPY . /build so it's in the image."""
         uv_pos = DOCKERFILE.find("uv/install.sh")
         # Match COPY regardless of flags (e.g. --chown=...) — only the destination matters.
-        m = re.search(r"^COPY\b.*\s/apptoo\b", DOCKERFILE, re.MULTILINE)
+        m = re.search(r"^COPY\b.*\s/build\b", DOCKERFILE, re.MULTILINE)
         assert uv_pos != -1, "uv install not found in Dockerfile"
-        assert m is not None, "COPY ... /apptoo not found in Dockerfile"
+        assert m is not None, "COPY ... /build not found in Dockerfile"
         copy_pos = m.start()
-        assert uv_pos < copy_pos, "uv must be installed before COPY . /apptoo"
+        assert uv_pos < copy_pos, "uv must be installed before COPY . /build"
 
     def test_dockerfile_uv_installed_as_root_or_before_user_switch(self):
         """uv must be installed as root (USER root) to reach /usr/local/bin.
-        If installed as hermeswebuitoo, it lands in ~hermeswebuitoo/.local/bin,
-        which the hermeswebui user at runtime can't see.
+        If installed as leap-aide-init, it lands in ~leap-aide-init/.local/bin,
+        which the leap-aide user at runtime can't see.
         """
         lines = DOCKERFILE.splitlines()
         uv_line_idx = next(i for i, l in enumerate(lines) if "uv/install.sh" in l)
@@ -77,8 +76,8 @@ class TestDockerfileUvPreinstall:
                 break
         assert user_before == "root", (
             f"uv install must run as USER root (found USER {user_before!r}). "
-            "Installing as hermeswebuitoo puts uv in /home/hermeswebuitoo/.local/bin "
-            "which is not accessible to the hermeswebui runtime user."
+            "Installing as leap-aide-init puts uv in /home/leap-aide-init/.local/bin "
+            "which is not accessible to the leap-aide runtime user."
         )
 
 
@@ -115,7 +114,7 @@ class TestInitScriptUvSkip:
         assert else_pos != -1, "No 'else' branch in uv conditional"
         assert curl_pos != -1, "No 'curl' in uv conditional block"
         assert curl_pos > else_pos, (
-            "curl download must be in the 'else' branch, not the 'if/then' branch"
+            "curl download must be in the 'else' branch, not in the 'if/then' branch"
         )
 
     def test_init_script_error_exit_on_download_failure(self):
@@ -125,10 +124,10 @@ class TestInitScriptUvSkip:
             "so the container exits with a clear message instead of failing silently"
         )
 
-    def test_init_script_path_includes_hermeswebui_local_bin(self):
-        """PATH must include /home/hermeswebui/.local/bin for fallback runtime install."""
-        assert "/home/hermeswebui/.local/bin" in INIT_SCRIPT, (
-            "docker-init.sh must include /home/hermeswebui/.local/bin in PATH "
+    def test_init_script_path_includes_leap_aide_local_bin(self):
+        """PATH must include /home/leap-aide/.local/bin for fallback runtime install."""
+        assert "/home/leap-aide/.local/bin" in INIT_SCRIPT, (
+            "docker-init.sh must include /home/leap-aide/.local/bin in PATH "
             "for the case where uv is installed at runtime via curl"
         )
 
@@ -141,7 +140,7 @@ class TestWorkspacePermissions:
         """docker-init.sh must use 'sudo mkdir' for the workspace directory.
 
         Docker auto-creates bind-mount directories as root if they don't exist,
-        leaving them unwritable by hermeswebui. sudo mkdir + chown fixes this.
+        leaving them unwritable by leap-aide. sudo mkdir + chown fixes this.
         """
         # Find the workspace section
         ws_section = INIT_SCRIPT[
@@ -154,21 +153,21 @@ class TestWorkspacePermissions:
         )
 
     def test_workspace_uses_sudo_chown(self):
-        """docker-init.sh must chown the workspace to hermeswebui when writable.
+        """docker-init.sh must chown the workspace to leap-aide when writable.
 
         The chown is now conditional on the workspace being writable, to allow
         read-only (:ro) workspace mounts without crashing (#670). The sudo chown
         must still be present in the script (just guarded by [ -w ]).
         """
-        assert 'sudo chown hermeswebui:hermeswebui "$HERMES_WEBUI_DEFAULT_WORKSPACE"' in INIT_SCRIPT, (
-            "docker-init.sh must 'sudo chown hermeswebui:hermeswebui' the workspace "
+        assert 'sudo chown leap-aide:leap-aide "$HERMES_WEBUI_DEFAULT_WORKSPACE"' in INIT_SCRIPT, (
+            "docker-init.sh must 'sudo chown leap-aide:leap-aide' the workspace "
             "when it is writable, so the app user can write to it (#357)"
         )
 
     def test_workspace_mkdir_before_chown(self):
         """sudo mkdir must come before sudo chown in docker-init.sh."""
         mkdir_pos = INIT_SCRIPT.find('sudo mkdir -p "$HERMES_WEBUI_DEFAULT_WORKSPACE"')
-        chown_pos = INIT_SCRIPT.find('sudo chown hermeswebui:hermeswebui "$HERMES_WEBUI_DEFAULT_WORKSPACE"')
+        chown_pos = INIT_SCRIPT.find('sudo chown leap-aide:leap-aide "$HERMES_WEBUI_DEFAULT_WORKSPACE"')
         assert mkdir_pos != -1, "sudo mkdir for workspace not found"
         assert chown_pos != -1, "sudo chown for workspace not found"
         assert mkdir_pos < chown_pos, "sudo mkdir must come before sudo chown"

@@ -125,9 +125,22 @@ SKIP_BUILD=false
 NON_INTERACTIVE=false
 FORCE=false
 INSTALL_SERVICE=true
+DEPS_ONLY=false
 NPM_REGISTRY=""
 DEBUG_INSTALL=false
-HERMES_COMMIT="${HERMES_COMMIT:-f43eabee5f36e11448086ee8ee17c499958e81bf}"
+# Source the shared hermes-agent defaults so HERMES_COMMIT stays in lock-step
+# with the Dockerfile (which reads the same file as a build-arg). The file
+# is bash-sourceable; the variables it defines can still be overridden by
+# the caller via --hermes-commit / --hermes-branch / env vars.
+if [ -f "$DEST/backend/scripts/hermes-agent.env" ]; then
+  # shellcheck disable=SC1091
+  set +u
+  . "$DEST/backend/scripts/hermes-agent.env"
+  set -u
+fi
+
+HERMES_COMMIT="${HERMES_COMMIT:-${HERMES_AGENT_COMMIT:-f43eabee5f36e11448086ee8ee17c499958e81bf}}"
+HERMES_REPO_URL="${HERMES_REPO_URL:-${HERMES_AGENT_REPO_URL:-}}"
 HERMES_BRANCH=""
 FORCE_HERMES_COMMIT=false
 _HERMES_VERSION_SPECIFIED=false
@@ -190,6 +203,14 @@ while [[ $# -gt 0 ]]; do
       INSTALL_SERVICE=false
       shift
       ;;
+    --deps-only)
+      # Skip leap-aide self-install (clone/symlink). The caller is expected to
+      # pass --dir <existing leap-aide source> so subsequent steps (Python
+      # deps, wrappers) can still find leap-aide files at $DEST. systemd
+      # service is already auto-skipped inside Docker.
+      DEPS_ONLY=true
+      shift
+      ;;
     --npm-registry)
       NPM_REGISTRY="$2"
       shift 2
@@ -206,6 +227,25 @@ while [[ $# -gt 0 ]]; do
     --hermes-branch)
       HERMES_BRANCH="$2"
       _HERMES_VERSION_SPECIFIED=true
+      shift 2
+      ;;
+    --hermes-repo-url)
+      # Pin to a custom hermes-agent git URL (e.g. a fork or private mirror).
+      # Sets the HERMES_REPO_URL env var, which the hermes-agent installer
+      # reads at startup:
+      #   REPO_URL="${HERMES_REPO_URL:-https://github.com/NousResearch/hermes-agent.git}"
+      # Empty = upstream NousResearch.
+      HERMES_REPO_URL="$2"
+      _HERMES_VERSION_SPECIFIED=true
+      shift 2
+      ;;
+    --hermes-home)
+      # Override the default `$HOME/.hermes` base dir used by the
+      # hermes-agent installer. With --hermes-home /usr/local/lib the
+      # agent installs to /usr/local/lib/hermes-agent (the documented
+      # location in leap-aide's README). Empty = installer default
+      # ($HOME/.hermes). Pass `--hermes-home ""` to keep installer default.
+      HERMES_HOME="$2"
       shift 2
       ;;
     --force-hermes-commit)
@@ -243,6 +283,10 @@ while [[ $# -gt 0 ]]; do
       echo "  --hermes-branch NM  hermes-agent branch to install (overrides --hermes-commit)"
       echo "  --force-hermes-commit  Force hermes-agent commit even if it rolls back"
       echo "  --china-mirror      Use Tsinghua apt mirror for faster downloads in China"
+      echo "  --deps-only         Skip leap-aide self-install (clone/symlink)."
+      echo "                      Keeps system deps, hermes-agent, Playwright, browser-use,"
+      echo "                      Python deps, command wrappers. Use --dir to point at an"
+      echo "                      existing leap-aide source."
       echo "  -h, --help          Show this help"
       echo ""
       echo "Environment variables:"
@@ -547,6 +591,28 @@ if [ "$IN_DOCKER" = true ]; then
   if [ ! -f /etc/ssl/certs/ca-certificates.crt ] && [ ! -f /etc/pki/tls/certs/ca-bundle.crt ]; then
     _sys_deps_to_install="${_sys_deps_to_install} ca-certificates"
   fi
+  # Node.js 22 LTS for hermes-agent install + frontend tooling. hermes-agent
+  # 1.0.0 requires Node >=22.22 and npm >=11.17 (see its package.json engines).
+  # Ubuntu's stock nodejs is 18.x — too old. Install via NodeSource (signed
+  # repo) so we always have a fresh LTS. Idempotent: if NodeSource setup
+  # already ran (e.g. on a re-run), it's a no-op.
+  _installed_node=false
+  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    if command -v apt-get >/dev/null 2>&1; then
+      if ! node --version 2>/dev/null | grep -qE '^v(2[2-9]|[3-9][0-9])'; then
+        info "Node.js 22+ required by hermes-agent. Installing via NodeSource..."
+        curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+          && apt-get install -y --no-install-recommends nodejs \
+          && _installed_node=true || warn "NodeSource install failed; falling back to apt nodejs"
+      fi
+    fi
+  fi
+  # git is required by both hermes-agent install and Dockerfile build-arg
+  # commit consistency checks. Always install (it's tiny and harmless if
+  # already present).
+  if ! command -v git >/dev/null 2>&1; then
+    _sys_deps_to_install="${_sys_deps_to_install} git"
+  fi
   # VNC observation dependencies (Xvfb, x11vnc, openbox, wmctrl)
   if ! command -v Xvfb >/dev/null 2>&1; then
     _sys_deps_to_install="${_sys_deps_to_install} xvfb"
@@ -668,6 +734,11 @@ _ha_args=("--skip-browser")
 [ "$NON_INTERACTIVE" = true ] && _ha_args+=("--non-interactive" "--skip-setup")
 [ -n "$HERMES_BRANCH" ] && _ha_args+=("--branch" "$HERMES_BRANCH")
 [ -n "$HERMES_COMMIT" ] && _ha_args+=("--commit" "$HERMES_COMMIT")
+# Pass --hermes-home if the caller explicitly set HERMES_HOME. Empty (default
+# behavior of [ -n "" ] is false) means we don't pass the flag, so the
+# installer uses its own default ($HOME/.hermes). This keeps host behavior
+# unchanged while letting Docker override to /usr/local/lib.
+[ -n "$HERMES_HOME" ] && _ha_args+=("--hermes-home" "$HERMES_HOME")
 [ "$FORCE_HERMES_COMMIT" = true ] && _ha_args+=("--force-commit")
 
 AGENT_DIR=$(_hermes_agent_found || true)
@@ -692,10 +763,21 @@ else
   # Override npm to force --loglevel=verbose and retry on network errors.
   # hermes-agent's installer uses `npm install --silent` which hides all output.
   # Network flakiness (ECONNRESET) can cause transient failures.
+  #
+  # Also add --unsafe-perm when running as root. npm ≥7 refuses to run as
+  # root at all unless --unsafe-perm is set. The cicd Dockerfile runs
+  # install.sh as root so apt-get + /usr/local/bin wrappers work; we need
+  # this --unsafe-perm to let hermes-agent's npm install succeed in that
+  # context. Host usage is unaffected: --unsafe-perm is a no-op for
+  # non-root users.
   npm() {
     local retries=3
+    local unsafe=()
+    if [ "$(id -u)" -eq 0 ]; then
+      unsafe+=(--unsafe-perm)
+    fi
     for ((i = 1; i <= retries; i++)); do
-      if command npm "$@" --loglevel=verbose; then
+      if command npm "${unsafe[@]}" "$@" --loglevel=verbose; then
         return 0
       fi
       if ((i < retries)); then
@@ -707,6 +789,10 @@ else
     return 1
   }
   export -f npm
+  # Export HERMES_REPO_URL so the hermes-agent installer can pick it up
+  # (the installer reads this env var at startup; see its source). Empty
+  # value (the default) means use upstream NousResearch/hermes-agent.
+  [ -n "$HERMES_REPO_URL" ] && export HERMES_REPO_URL || unset HERMES_REPO_URL
   if command -v curl >/dev/null 2>&1; then
     curl -fsSL "$HERMES_AGENT_INSTALLER" | bash -s -- "${_ha_args[@]}" || true
   elif command -v wget >/dev/null 2>&1; then
@@ -722,7 +808,8 @@ else
   else
     die "hermes-agent installation failed. Check the output above for errors."
   fi
-  # Verify commit if specified
+  # Verify commit pin (warn-only — catches "I bumped hermes-agent on host but
+  # forgot to rebuild the image"). Skip when --hermes-commit was not specified.
   if [ -n "$HERMES_COMMIT" ] && [ -n "$AGENT_DIR" ] && [ -d "$AGENT_DIR/.git" ]; then
     _actual_commit=$(git -C "$AGENT_DIR" rev-parse --short HEAD 2>/dev/null || true)
     _expected_short="${HERMES_COMMIT:0:12}"
@@ -882,8 +969,12 @@ else
 fi
 
 # ── Step 3: Clone or update repo ──
-say ""
-say "${B}Installing Leap Aide to ${DEST}...${R}"
+# Skipped when --deps-only — caller provides leap-aide source via --dir <path>.
+# Steps 4 (Python deps) and 5 (wrappers) still run because they read from
+# $DEST/backend/{requirements.txt,scripts/install-wrappers.sh}.
+if [ "$DEPS_ONLY" = false ]; then
+  say ""
+  say "${B}Installing Leap Aide to ${DEST}...${R}"
 
 # Handle git safe.directory for cross-user/local mounts
 if [ -n "$REPO_URL" ] && [[ "$REPO_URL" == /* || "$REPO_URL" == file://* ]]; then
@@ -994,6 +1085,7 @@ else
     ok "Checked out commit: $COMMIT_SHA"
   fi
 fi
+fi  # DEPS_ONLY=false guard around Step 3 (clone/update)
 
 # ── Step 4: Install Python dependencies ──
 say ""
@@ -1011,13 +1103,24 @@ if [ "$USE_VENV" = true ]; then
   VENV_PIP="$VENV_DIR/bin/pip"
   VENV_PYTHON="$VENV_DIR/bin/python"
 
-  "$VENV_PIP" install --quiet --upgrade pip
-  "$VENV_PIP" install --quiet -r "$DEST/backend/requirements.txt"
+  # Trusted-host handling for China mirrors: pip refuses to talk to non-PyPI
+  # HTTPS hosts unless we explicitly mark them trusted. Same logic as
+  # Dockerfile cicd stage's _trusted variable. We key off PIP_INDEX_URL env
+  # (which the Dockerfile exports) so we don't depend on --china-mirror
+  # being passed.
+  _pip_trusted="--trusted-host pypi.org --trusted-host files.pythonhosted.org"
+  case "${PIP_INDEX_URL:-}" in
+    *tuna.tsinghua*) _pip_trusted="$_pip_trusted --trusted-host pypi.tuna.tsinghua.edu.cn --trusted-host files.tuna.tsinghua.edu.cn" ;;
+    *aliyun*)        _pip_trusted="$_pip_trusted --trusted-host mirrors.aliyun.com" ;;
+  esac
+
+  "$VENV_PIP" install --quiet --upgrade pip $_pip_trusted
+  "$VENV_PIP" install --quiet -r "$DEST/backend/requirements.txt" $_pip_trusted
   ok "Python dependencies installed"
 else
   info "Skipping virtual environment (--no-venv)"
-  pip3 install --quiet --upgrade pip
-  pip3 install --quiet -r "$DEST/backend/requirements.txt"
+  pip3 install --quiet --upgrade pip $_pip_trusted
+  pip3 install --quiet -r "$DEST/backend/requirements.txt" $_pip_trusted
   ok "Python dependencies installed (system-wide)"
 fi
 
