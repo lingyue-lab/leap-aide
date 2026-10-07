@@ -160,6 +160,37 @@ docker run -d \
 -p 8787:8787 leap-aide:runtime
 ```
 
+### Builder requirements
+
+The `cicd` build target uses BuildKit's `--mount=type=secret` for SSH key
+injection into the `hermes-agent` installer (when building against an
+internal git server instead of the default upstream). This requires a
+recent BuildKit-enabled builder:
+
+- **docker buildx** ≥ 23.0 (Feb 2023) — bundled with Docker Engine 23+.
+  Plain `docker build` without `DOCKER_BUILDKIT=1` does not support it.
+- **buildah** ≥ 1.24 (Sep 2021).
+- **podman** — inherits buildah's `--mount=type=secret` support; track
+  the underlying buildah version.
+
+If you use the default upstream `NousResearch/hermes-agent` (HTTPS clone),
+no SSH credential is needed and `--mount=type=secret` is a no-op
+(`required=false` skips when no `--secret` is passed). To build against
+an internal git server:
+
+```bash
+docker buildx build --target cicd \
+    --secret id=git_host_key,src=/path/to/host_key \
+    --secret id=git_identity_key,src=/path/to/id_ed25519 \
+    --build-arg HERMES_AGENT_REPO_URL=ssh://git@host:port/path \
+    -t leap-aide:cicd -f Dockerfile .
+```
+
+**Never push images built with `--secret` to a public registry** —
+even though `--mount=type=secret` keeps key bytes out of layers, the
+build-time secret forwarding path itself may log file paths (an
+internal-server fingerprint is itself a small intelligence leak).
+
 Open http://localhost:8787 in your browser.
 
 To enable password protection:

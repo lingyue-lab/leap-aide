@@ -24,6 +24,13 @@
 #
 # Portability constraints (avoid BuildKit-only features):
 #   - No heredoc RUN. No RUN --mount=type=cache|ssh|bind. No --output.
+#   - No RUN --mount=type=secret: EXEMPTED. Required for SSH credential
+#     injection during the hermes-agent installer clone (host key + identity
+#     key). Supported by docker buildx 23+ (Feb 2023) and buildah 1.24+
+#     (Sep 2021); podman inherits buildah. The security trade-off (zero
+#     layer residue vs an extra BuildKit dependency) is justified by the
+#     fact that the cicd image itself is open-source and we cannot leak key
+#     bytes into any published layer. See README "Builder requirements".
 #   - Standard COPY/COPY --chown/COPY --chmod (Dockerfile 1.6+, both engines).
 #   - Multi-arch via caller --platform; buildah also needs QEMU+binfmt.
 # ============================================================================
@@ -357,7 +364,46 @@ RUN echo "=== proxy + registry config ===" \
 # empty = upstream NousResearch) to install.sh. Uses POSIX `set --` so the
 # RUN works under /bin/sh (dash on Ubuntu) — Docker's default SHELL doesn't
 # support bash arrays.
-RUN export PLAYWRIGHT_DOWNLOAD_HOST="${BUILD_PLAYWRIGHT_DOWNLOAD_HOST}" \
+# ── install.sh via hermes-agent installer ─────────────────────────────────
+# The hermes-agent installer (curl|bash black box, scripts/install.sh:797)
+# clones $HERMES_REPO_URL when set to an internal SSH URL. To prevent layer
+# leakage of SSH credentials, host key + identity key are passed via
+# BuildKit --mount=type=secret and bound directly to /root/.ssh/*. These
+# mountpoints exist only for this RUN's mount namespace — they do NOT
+# persist into the layer's filesystem snapshot, so the resulting image
+# cannot leak key bytes regardless of where it is pushed.
+#
+# required=false: when no --secret is passed (default upstream NousResearch
+# HTTPS clone), the dst paths don't exist and the if-guard skips ssh setup
+# entirely. The /root/.ssh parent dir is created unconditionally below;
+# if both secrets are absent, the dir is empty after RUN — no leak.
+#
+# See Dockerfile:26-32 for the --mount=type=secret exemption rationale.
+# Debug echo below (between the config-write block and the hermes-pin/-repo
+# assembly) confirms the BuildKit secret mounts landed in the container
+# before install.sh's git clone runs. ~50ms, no network. If the build later
+# fails with "No RSA host key is known", the missing/mismatched entry here
+# is the root cause; if everything below looks right, the failure is
+# downstream (e.g. install.sh overwriting known_hosts). Safe to keep: output
+# is non-sensitive (fingerprint + first line of known_hosts only).
+RUN --mount=type=secret,id=git_host_key,dst=/root/.ssh/known_hosts,mode=0444,required=false \
+    --mount=type=secret,id=git_identity_key,dst=/root/.ssh/id_ed25519_install,mode=0400,required=false \
+    export PLAYWRIGHT_DOWNLOAD_HOST="${BUILD_PLAYWRIGHT_DOWNLOAD_HOST}" \
+    && mkdir -p -m 700 /root/.ssh \
+    && [ -f /root/.ssh/known_hosts ] && chmod 644 /root/.ssh/known_hosts || true \
+    && [ -f /root/.ssh/id_ed25519_install ] && chmod 600 /root/.ssh/id_ed25519_install || true \
+    && if [ -f /root/.ssh/id_ed25519_install ]; then \
+         printf 'Host *\n    StrictHostKeyChecking yes\n    IdentitiesOnly yes\n    IdentityFile /root/.ssh/id_ed25519_install\n' \
+             > /root/.ssh/config; \
+         chmod 600 /root/.ssh/config; \
+       fi \
+    && echo "===DEBUG ssh secret mount===" \
+    && ls -la /root/.ssh/ \
+    && (head -1 /root/.ssh/known_hosts 2>/dev/null | cut -c1-120 || echo "known_hosts: <missing>") \
+    && (ssh-keygen -lf /root/.ssh/id_ed25519_install 2>/dev/null \
+        || echo "id_ed25519_install: <missing or unreadable>") \
+    && (cat /root/.ssh/config 2>/dev/null || echo "config: <missing>") \
+    && echo "===END DEBUG===" \
     && _hermes_pin= \
     && _hermes_repo= \
     && if [ -n "${HERMES_AGENT_COMMIT}" ]; then \

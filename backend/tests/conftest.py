@@ -32,7 +32,6 @@ TESTS_DIR        = pathlib.Path(__file__).parent.resolve()
 REPO_ROOT        = TESTS_DIR.parent.resolve()
 ACTUAL_REPO_ROOT = TESTS_DIR.parent.parent.resolve()
 HOME             = pathlib.Path.home()
-HERMES_HOME      = pathlib.Path(os.getenv('HERMES_HOME', str(HOME / '.hermes')))
 
 # Make the leap-aide `tests` package importable as `tests` for legacy
 # `from tests._pytest_port import …` / `from tests.conftest import …` lines.
@@ -61,9 +60,19 @@ def _auto_state_dir_name(repo_root) -> str:
 TEST_PORT      = int(os.getenv('HERMES_WEBUI_TEST_PORT',
                                str(_auto_test_port(REPO_ROOT))))
 TEST_BASE      = f"http://127.0.0.1:{TEST_PORT}"
+# Default parent is $HOME/.hermes, NOT $HERMES_HOME.
+# The cicd Docker image sets HERMES_HOME=/usr/local/lib as the SDK install
+# root, and leap-aide-init (the test user) has no write permission there.
+# Using HERMES_HOME as the test state dir parent landed TEST_STATE_DIR under
+# the SDK tree and made SESSIONS_DISPLAY_DIR (and other state dirs derived
+# from STATE_DIR) uncreatable at module-load time -- aborting collection with
+# PermissionError. Conftest still writes HERMES_HOME=TEST_STATE_DIR into
+# os.environ below so the SDK's config discovery is redirected into the
+# sandbox; this change only affects the *parent path* used when the env
+# override is absent.
 TEST_STATE_DIR = pathlib.Path(os.getenv(
     'HERMES_WEBUI_TEST_STATE_DIR',
-    str(HERMES_HOME / _auto_state_dir_name(REPO_ROOT))
+    str(HOME / '.hermes' / _auto_state_dir_name(REPO_ROOT))
 ))
 TEST_WORKSPACE = TEST_STATE_DIR / 'test-workspace'
 
@@ -374,12 +383,13 @@ def test_server():
     # api/config._get_config_path() sees it on first read.
     (TEST_STATE_DIR / 'config.yaml').write_text(_STUB_HERMES_CONFIG_YAML)
 
-    # Symlink real skills into test home so skill-related tests work,
-    # but all write-heavy state stays isolated.
-    real_skills  = HERMES_HOME / 'skills'
-    test_skills  = TEST_STATE_DIR / 'skills'
-    if real_skills.exists() and not test_skills.exists():
-        test_skills.symlink_to(real_skills)
+    # Bundled skills are seeded into $HERMES_HOME/skills by the server's
+    # Stage 6 boot step (app/api/skills_sync.py:seed_bundled_skills). The
+    # server subprocess re-runs that step on every test_server fixture
+    # entry, so we deliberately do NOT pre-populate TEST_STATE_DIR/skills
+    # here -- a stale symlink from a previous fixture entry would either
+    # point at root-owned SDK skills (read-only for the test user, breaks
+    # skill-create tests) or be skipped by the seed stage's src==dst check.
 
     # Isolated cron state
     (TEST_STATE_DIR / 'cron').mkdir(parents=True, exist_ok=True)
