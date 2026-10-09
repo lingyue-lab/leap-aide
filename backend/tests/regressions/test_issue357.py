@@ -1,7 +1,7 @@
 """
 Tests for GitHub issue #357: Docker container fails to start without internet access.
 
-Structural tests — verify Dockerfile and docker-init.sh contain the expected
+Structural tests — verify Dockerfile and docker-entrypoint.sh contain the expected
 patterns for pre-installed uv and workspace permission fixes.
 
 Two problems fixed:
@@ -20,7 +20,7 @@ import re
 # hops to reach the same checkout root.
 REPO = pathlib.Path(__file__).resolve().parents[3]
 DOCKERFILE = (REPO / "backend" / "Dockerfile").read_text(encoding="utf-8")
-INIT_SCRIPT = (REPO / "backend" / "scripts" / "docker-init.sh").read_text(encoding="utf-8")
+INIT_SCRIPT = (REPO / "backend" / "scripts" / "docker-entrypoint.sh").read_text(encoding="utf-8")
 
 
 # ── Dockerfile: uv pre-installed at build time ───────────────────────────────
@@ -81,14 +81,14 @@ class TestDockerfileUvPreinstall:
         )
 
 
-# ── docker-init.sh: skip uv download when already present ─────────────────
+# ── docker-entrypoint.sh: skip uv download when already present ─────────────────
 
 class TestInitScriptUvSkip:
 
     def test_init_script_checks_uv_before_download(self):
-        """docker-init.sh must check 'command -v uv' before attempting download."""
+        """docker-entrypoint.sh must check 'command -v uv' before attempting download."""
         assert "command -v uv" in INIT_SCRIPT, (
-            "docker-init.sh must check 'command -v uv' to skip download "
+            "docker-entrypoint.sh must check 'command -v uv' to skip download "
             "when uv is already pre-installed in the image (#357)"
         )
 
@@ -96,7 +96,7 @@ class TestInitScriptUvSkip:
         """Init script must use conditional logic (if/else) around the uv download."""
         # Pattern: if command -v uv ... else ... fi
         assert re.search(r'if\s+command\s+-v\s+uv', INIT_SCRIPT), (
-            "docker-init.sh must use 'if command -v uv' guard around the download"
+            "docker-entrypoint.sh must use 'if command -v uv' guard around the download"
         )
 
     def test_init_script_curl_download_in_else_branch(self):
@@ -106,7 +106,7 @@ class TestInitScriptUvSkip:
             r'if\s+command\s+-v\s+uv.*?fi',
             INIT_SCRIPT, re.DOTALL
         )
-        assert m, "Could not find uv conditional block in docker-init.sh"
+        assert m, "Could not find uv conditional block in docker-entrypoint.sh"
         block = m.group(0)
         # curl must appear after 'else' not in the 'then' branch
         else_pos = block.find("else")
@@ -120,24 +120,24 @@ class TestInitScriptUvSkip:
     def test_init_script_error_exit_on_download_failure(self):
         """Curl download must call error_exit on failure (not silently continue)."""
         assert "error_exit" in INIT_SCRIPT and "Failed to install uv" in INIT_SCRIPT, (
-            "docker-init.sh must call error_exit if uv download fails, "
+            "docker-entrypoint.sh must call error_exit if uv download fails, "
             "so the container exits with a clear message instead of failing silently"
         )
 
     def test_init_script_path_includes_leap_aide_local_bin(self):
         """PATH must include /home/leap-aide/.local/bin for fallback runtime install."""
         assert "/home/leap-aide/.local/bin" in INIT_SCRIPT, (
-            "docker-init.sh must include /home/leap-aide/.local/bin in PATH "
+            "docker-entrypoint.sh must include /home/leap-aide/.local/bin in PATH "
             "for the case where uv is installed at runtime via curl"
         )
 
 
-# ── docker-init.sh: workspace directory permissions ────────────────────────
+# ── docker-entrypoint.sh: workspace directory permissions ────────────────────────
 
 class TestWorkspacePermissions:
 
     def test_workspace_uses_sudo_mkdir(self):
-        """docker-init.sh must use 'sudo mkdir' for the workspace directory.
+        """docker-entrypoint.sh must use 'sudo mkdir' for the workspace directory.
 
         Docker auto-creates bind-mount directories as root if they don't exist,
         leaving them unwritable by leap-aide. sudo mkdir + chown fixes this.
@@ -148,24 +148,24 @@ class TestWorkspacePermissions:
             INIT_SCRIPT.find("HERMES_WEBUI_DEFAULT_WORKSPACE") + 800
         ]
         assert "sudo mkdir" in ws_section, (
-            "docker-init.sh must use 'sudo mkdir -p' for the workspace directory "
+            "docker-entrypoint.sh must use 'sudo mkdir -p' for the workspace directory "
             "to handle the case where Docker created the bind-mount dir as root (#357)"
         )
 
     def test_workspace_uses_sudo_chown(self):
-        """docker-init.sh must chown the workspace to leap-aide when writable.
+        """docker-entrypoint.sh must chown the workspace to leap-aide when writable.
 
         The chown is now conditional on the workspace being writable, to allow
         read-only (:ro) workspace mounts without crashing (#670). The sudo chown
         must still be present in the script (just guarded by [ -w ]).
         """
         assert 'sudo chown leap-aide:leap-aide "$HERMES_WEBUI_DEFAULT_WORKSPACE"' in INIT_SCRIPT, (
-            "docker-init.sh must 'sudo chown leap-aide:leap-aide' the workspace "
+            "docker-entrypoint.sh must 'sudo chown leap-aide:leap-aide' the workspace "
             "when it is writable, so the app user can write to it (#357)"
         )
 
     def test_workspace_mkdir_before_chown(self):
-        """sudo mkdir must come before sudo chown in docker-init.sh."""
+        """sudo mkdir must come before sudo chown in docker-entrypoint.sh."""
         mkdir_pos = INIT_SCRIPT.find('sudo mkdir -p "$HERMES_WEBUI_DEFAULT_WORKSPACE"')
         chown_pos = INIT_SCRIPT.find('sudo chown leap-aide:leap-aide "$HERMES_WEBUI_DEFAULT_WORKSPACE"')
         assert mkdir_pos != -1, "sudo mkdir for workspace not found"
@@ -185,21 +185,21 @@ class TestWorkspacePermissions:
         attempting chown or a write test, so :ro bind-mounts don't crash startup.
         """
         assert '[ -w "$HERMES_WEBUI_DEFAULT_WORKSPACE" ]' in INIT_SCRIPT, (
-            "docker-init.sh must guard chown with [ -w ] to support read-only "
+            "docker-entrypoint.sh must guard chown with [ -w ] to support read-only "
             "workspace mounts (:ro) without crashing (#670)"
         )
         # Read-only path must log a clear message rather than calling error_exit
         assert "read-only workspace is supported" in INIT_SCRIPT, (
-            "docker-init.sh must print a clear message when workspace is read-only (#670)"
+            "docker-entrypoint.sh must print a clear message when workspace is read-only (#670)"
         )
 
     def test_init_script_syntax_valid(self):
-        """docker-init.sh must pass bash -n syntax check."""
+        """docker-entrypoint.sh must pass bash -n syntax check."""
         import subprocess
         result = subprocess.run(
-            ["bash", "-n", str(REPO / "backend" / "scripts" / "docker-init.sh")],
+            ["bash", "-n", str(REPO / "backend" / "scripts" / "docker-entrypoint.sh")],
             capture_output=True, text=True
         )
         assert result.returncode == 0, (
-            f"docker-init.sh failed bash -n syntax check:\n{result.stderr}"
+            f"docker-entrypoint.sh failed bash -n syntax check:\n{result.stderr}"
         )

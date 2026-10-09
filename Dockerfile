@@ -3,12 +3,13 @@
 # Leap Aide — multi-stage image, builds with both docker buildx and buildah.
 #
 # Targets:
-#   * runtime (default) — production image. CMD=[/leap-aide_init.bash]
 #   * cicd              — test + build image. No ENTRYPOINT/CMD — caller
 #                         (Tekton, scripts/run-test.sh, scripts/build.sh)
 #                         drives the command. Provides pytest + Node +
 #                         frontend deps + scripts/run-test.sh +
 #                         scripts/build.sh.
+#   * runtime (default) — production image, trimmed FROM cicd to drop
+#                         dev/test artifacts. ENTRYPOINT=[/leap-aide-entrypoint.sh].
 #
 # Build contexts:
 #   docker buildx build --target runtime -t leap-aide:runtime -f Dockerfile .
@@ -133,9 +134,12 @@ RUN if [ "A${BUILD_APT_PROXY:-}" != "A" ]; then \
 # both because:
 #   - runtime stage (FROM builder) needs these deps and never runs install.sh
 #   - install.sh needs to work standalone on hosts without this Dockerfile
+# `git` is needed by scripts/npm_warmup.sh (which clones hermes-agent via
+# SSH BEFORE install.sh runs). Without it pre-installed here, warmup
+# silently skips and install.sh ends up doing the slow work uncached.
 RUN apt-get update -y --fix-missing --no-install-recommends \
     && apt-get install -y --no-install-recommends \
-        apt-utils locales sudo curl rsync openssh-client \
+        apt-utils locales sudo curl rsync openssh-client git \
         python3.12 python3.12-venv python3.12-dev \
         libatomic1 xz-utils build-essential \
         xvfb x11vnc openbox wmctrl xterm \
@@ -183,8 +187,36 @@ USER root
 
 # Pre-install uv system-wide so the container doesn't need internet access at
 # runtime. Installing as root places uv in /usr/local/bin, available to all users.
-# docker-init.sh will skip the download when uv is already on PATH.
-RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+# docker-entrypoint.sh will skip the download when uv is already on PATH.
+#
+# Defense in depth:
+#   * `set -euo pipefail` — exit on any error, unset var, or pipeline failure.
+#     The naive `curl ... | sh` form silently swallows curl errors (sh reads
+#     EOF and exits 0), producing an image with no uv that breaks later
+#     stages with cryptic "uv: command not found" failures.
+#   * Download to /tmp/uv-install.sh first, then exec the file. This makes
+#     the failure surface as "curl couldn't fetch" rather than "sh ran with
+#     empty stdin" — easier to diagnose.
+#   * `curl --retry 5 --retry-delay 10 --retry-all-errors` — covers the
+#     SSL_ERROR_SYSCALL / connection reset cases seen in testbox builds
+#     routed through an intercepting HTTP proxy (transparent TLS
+#     interception occasionally fails the handshake).
+#
+# Why `/bin/bash -c` instead of just `RUN`:
+#   * Default SHELL for RUN is /bin/sh (dash on Ubuntu 24.04), which doesn't
+#     support `set -o pipefail` (bash-only option). Plain RUN fails with
+#     "/bin/sh: 1: set: Illegal option -o pipefail".
+#   * SHELL ["/bin/bash", "-c"] directive before this RUN is recognized by
+#     buildah as a step but doesn't actually switch the executor for the
+#     following RUN under --isolation=oci (verified on testbox). Explicit
+#     /bin/bash invocation sidesteps both issues and works identically
+#     across docker buildx and buildah.
+RUN /bin/bash -c 'set -euo pipefail && \
+    curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors \
+        -o /tmp/uv-install.sh \
+        https://astral.sh/uv/install.sh && \
+    env UV_INSTALL_DIR=/usr/local/bin sh /tmp/uv-install.sh && \
+    rm -f /tmp/uv-install.sh'
 
 # Marker file used by install.sh is_docker() detection
 RUN touch /.within_container
@@ -225,35 +257,6 @@ RUN _trusted="--trusted-host pypi.org --trusted-host files.pythonhosted.org"; \
         "hindsight-client>=0.4.22" \
         $_trusted
 
-# ---- runtime: production image (default) ------------------------------------
-FROM app AS runtime
-
-USER leap-aide-init
-
-# Unset proxy env vars. The base stage declares HTTP_PROXY/HTTPS_PROXY/NO_PROXY
-# (and lowercase variants) as ENV for build-time use (apt, curl, uv, npm
-# inside Dockerfile RUNs). For runtime, we don't want the build proxy to
-# leak into the running server — runtime deployments should configure their
-# own proxy via the deployment environment if needed. Setting to empty
-# string is equivalent to unset for all proxy-aware tools (curl, npm, uv,
-# pip, etc.).
-ENV HTTP_PROXY= \
-    HTTPS_PROXY= \
-    NO_PROXY= \
-    http_proxy= \
-    https_proxy= \
-    no_proxy=
-
-COPY --chmod=555 backend/scripts/docker-init.sh /leap-aide_init.bash
-
-# Default to binding all interfaces (required for container networking)
-ENV HERMES_WEBUI_HOST=0.0.0.0 \
-    HERMES_WEBUI_PORT=8787
-
-EXPOSE 8787
-
-CMD ["/leap-aide_init.bash"]
-
 # ---- cicd: test + build image -----------------------------------------------
 FROM app AS cicd
 
@@ -266,8 +269,61 @@ ARG BUILD_PLAYWRIGHT_DOWNLOAD_HOST=
 # `npm config set registry` only writes to /root/.npmrc; USER leap-aide-init
 # has empty /home/leap-aide-init/.npmrc and no env var, so npm falls back
 # to registry.npmjs.org for frontend ci + playwright installs.
+#
+# Also persist fetch timeout/retry as ENV so the values apply to ALL npm/npx
+# calls in the image (install.sh's npm deps, npx playwright install, frontend
+# npm ci) — not just the immediate `npm ci` invocation. Defaults: 5-min fetch-
+# timeout × 2 retries is too lenient for flaky CDNs (npmmirror cache miss
+# observed at ~43s/pack); 60s × 5 retries with 10–60s backoff surfaces
+# transient failures quickly instead of stacking into minutes of total wait.
 ENV npm_config_registry="${BUILD_NPM_REGISTRY}" \
-    NPM_CONFIG_REGISTRY="${BUILD_NPM_REGISTRY}"
+    NPM_CONFIG_REGISTRY="${BUILD_NPM_REGISTRY}" \
+    npm_config_fetch_timeout=60000 \
+    npm_config_fetch_retries=5 \
+    npm_config_fetch_retry_mintimeout=10000 \
+    npm_config_fetch_retry_maxtimeout=60000
+
+# electron / electron-builder postinstall downloads (electron's `node install.js`,
+# electron-builder's `code-sign` helper) fetch binaries from GitHub releases by
+# default. From China this routinely hangs/fails for the full ~150MB Electron
+# zip. Mirror URLs are build-args (overridable from outside, same pattern as
+# BUILD_NPM_REGISTRY / BUILD_PLAYWRIGHT_DOWNLOAD_HOST) so test-build-*.sh can
+# set them per build. We set both the canonical env var (ELECTRON_MIRROR) and
+# npm's auto-prefixed variant (npm_config_electron_mirror) to cover all
+# electron versions and downstream forks.
+ARG BUILD_ELECTRON_MIRROR=
+ARG BUILD_ELECTRON_BUILDER_BINARIES_MIRROR=
+ENV ELECTRON_MIRROR="${BUILD_ELECTRON_MIRROR}" \
+    ELECTRON_BUILDER_BINARIES_MIRROR="${BUILD_ELECTRON_BUILDER_BINARIES_MIRROR}" \
+    npm_config_electron_mirror="${BUILD_ELECTRON_MIRROR}" \
+    npm_config_electron_builder_binaries_mirror="${BUILD_ELECTRON_BUILDER_BINARIES_MIRROR}"
+
+# npm postinstall pre-warm toggle (scripts/npm_warmup.sh). OFF by default.
+#   --build-arg BUILD_NPM_WARMUP=1   → run the warmup before install.sh
+#   --build-arg BUILD_NPM_WARMUP=0   → skip entirely (default)
+# Accepted truthy values: 1 / true / yes / on. Anything else = off.
+#
+# When ON, the warmup RUN below clones hermes-agent and pre-fetches the
+# electron + playwright binaries into the caches the real `npm install`
+# postinstall checks, so those ~300MB never touch the network (matters from
+# China, where the GitHub / playwright CDNs hang or time out). When OFF the
+# warmup RUN is a no-op echo and install.sh falls back to its own mirror
+# download path — slower, but requires no git_identity_key secret and no SSH
+# clone, so it works on any builder.
+#
+# The `npm_warmup.sh --clean` at the end of the install.sh RUN is gated on the
+# same flag: running --clean without a warmup would only delete caches
+# install.sh legitimately produced.
+ARG BUILD_NPM_WARMUP=0
+
+# Pre-warm scratch dir. Used by scripts/npm_warmup.sh to clone
+# hermes-agent and curl pre-fetch electron binaries ahead of the install.sh
+# RUN. The same path is read by install.sh's WARMUP_DIR detection so the
+# warmup clone is also reused as the installer source (eliminates the
+# `curl https://hermes-agent.nousresearch.com/install.sh` network call).
+# The actual directory is removed at the end of the install.sh RUN via
+# `npm_warmup.sh --clean`, so it doesn't bloat the image.
+ENV WARMUP_DIR=/tmp/hermes-agent-warmup
 
 # Custom hermes-agent git URL (e.g. private mirror / fork). Empty = upstream
 # NousResearch/hermes-agent. Read by hermes-agent installer as
@@ -386,14 +442,59 @@ RUN echo "=== proxy + registry config ===" \
 # is the root cause; if everything below looks right, the failure is
 # downstream (e.g. install.sh overwriting known_hosts). Safe to keep: output
 # is non-sensitive (fingerprint + first line of known_hosts only).
-RUN --mount=type=secret,id=git_host_key,dst=/root/.ssh/known_hosts,mode=0444,required=false \
-    --mount=type=secret,id=git_identity_key,dst=/root/.ssh/id_ed25519_install,mode=0400,required=false \
+#
+# Pre-warm: clone hermes-agent and curl-fetch its postinstall binaries
+# (currently just electron) into the cache that electron's `node install.js`
+# checks. Doing this BEFORE install.sh runs means the real `npm install`'s
+# electron postinstall finds the cache populated and skips the network
+# round-trip entirely. The warmup script is non-fatal — any failure logs
+# a warning and continues; install.sh then falls back to the existing
+# curl https://hermes-agent.nousresearch.com/install.sh path.
+#
+# WARMUP_DIR is the same path install.sh's WARMUP_DIR detection checks for,
+# so the warmup's clone is also reused as the installer source (avoids a
+# second clone and a `curl https://hermes-agent.nousresearch.com/install.sh`
+# network call from inside the container).
+#
+# Note: no known_hosts mount here. The git server's host
+# key seems to rotate / have multiple keys not captured by ssh-keyscan, and
+# StrictHostKeyChecking=accept-new (in install.sh's SSH config below)
+# needs to WRITE the accepted key to known_hosts — which a read-only mount
+# would prevent. Letting SSH create its own /root/.ssh/known_hosts in the
+# writable container layer avoids the conflict.
+# Gated on BUILD_NPM_WARMUP (default 0). When off, the whole step is a
+# no-op echo — no clone, no cache pre-fetch, no secret mount needed.
+# The verification block confirms the warmup populated electron's cache dir:
+# the real npm install's electron postinstall looks there and skips the
+# network round-trip when both files are present. Non-empty `ls` + non-zero
+# size = warmup took effect; absence = install.sh will hit the mirror.
+RUN --mount=type=secret,id=git_identity_key,dst=/root/.ssh/id_ed25519_install,mode=0400,required=false \
+    case "${BUILD_NPM_WARMUP:-0}" in 1|true|yes|on) _warmup=1 ;; *) _warmup=0 ;; esac; \
+    if [ "$_warmup" = "1" ]; then \
+        bash /build/scripts/npm_warmup.sh; \
+        echo "===DEBUG warmup cache state==="; \
+        (ls -la /root/.cache/electron/ 2>/dev/null || echo "  (no electron cache dir)"); \
+        (du -sb /root/.cache/electron/ 2>/dev/null || echo "  (du failed)"); \
+        echo "===END DEBUG==="; \
+    else \
+        echo "=== npm_warmup skipped (BUILD_NPM_WARMUP=${BUILD_NPM_WARMUP:-0}; pass --build-arg BUILD_NPM_WARMUP=1 to enable) ==="; \
+    fi
+
+RUN --mount=type=secret,id=git_identity_key,dst=/root/.ssh/id_ed25519_install,mode=0400,required=false \
     export PLAYWRIGHT_DOWNLOAD_HOST="${BUILD_PLAYWRIGHT_DOWNLOAD_HOST}" \
     && mkdir -p -m 700 /root/.ssh \
-    && [ -f /root/.ssh/known_hosts ] && chmod 644 /root/.ssh/known_hosts || true \
     && [ -f /root/.ssh/id_ed25519_install ] && chmod 600 /root/.ssh/id_ed25519_install || true \
     && if [ -f /root/.ssh/id_ed25519_install ]; then \
-         printf 'Host *\n    StrictHostKeyChecking yes\n    IdentitiesOnly yes\n    IdentityFile /root/.ssh/id_ed25519_install\n' \
+         # StrictHostKeyChecking accept-new: trust the server's host key on
+         # first connect and persist it to /root/.ssh/known_hosts. The
+         # The git server's host key seems to rotate / have
+         # multiple keys not captured by ssh-keyscan, so the strict
+         # `yes` mode fails with "Host key verification failed". accept-new
+         # is the TOFU (trust on first use) variant — first connect
+         # accepts and stores, subsequent connects verify against the
+         # stored key. Still safer than `no` (which would silently accept
+         # any key, including MITM).
+         printf 'Host *\n    StrictHostKeyChecking accept-new\n    IdentitiesOnly yes\n    IdentityFile /root/.ssh/id_ed25519_install\n' \
              > /root/.ssh/config; \
          chmod 600 /root/.ssh/config; \
        fi \
@@ -403,6 +504,22 @@ RUN --mount=type=secret,id=git_host_key,dst=/root/.ssh/known_hosts,mode=0444,req
     && (ssh-keygen -lf /root/.ssh/id_ed25519_install 2>/dev/null \
         || echo "id_ed25519_install: <missing or unreadable>") \
     && (cat /root/.ssh/config 2>/dev/null || echo "config: <missing>") \
+    && echo "===END DEBUG===" \
+    # Verify the critical env vars are in scope BEFORE invoking install.sh.
+    # Previously install.sh had `DEBUG_INSTALL=false` as a literal default
+    # which overrode the inherited env (verified 2026-10-09: the build.log
+    # never showed "Debug logging enabled" until we switched to
+    # `${DEBUG_INSTALL:-false}`). This echo catches the same class of bug
+    # for any other env vars we set in this RUN.
+    && echo "===DEBUG env vars before install.sh===" \
+    && echo "DEBUG_INSTALL=${DEBUG_INSTALL:-<unset>}" \
+    && echo "ELECTRON_MIRROR=${ELECTRON_MIRROR:-<unset>}" \
+    && echo "PLAYWRIGHT_DOWNLOAD_HOST=${PLAYWRIGHT_DOWNLOAD_HOST:-<unset>}" \
+    && echo "NPM_REGISTRY=${NPM_REGISTRY:-<unset>}" \
+    && echo "HERMES_AGENT_REPO_URL=${HERMES_AGENT_REPO_URL:-<unset>}" \
+    && echo "HERMES_AGENT_COMMIT=${HERMES_AGENT_COMMIT:-<unset>}" \
+    && echo "no_proxy=${no_proxy:-<unset>}" \
+    && echo "NO_PROXY=${NO_PROXY:-<unset>}" \
     && echo "===END DEBUG===" \
     && _hermes_pin= \
     && _hermes_repo= \
@@ -416,7 +533,25 @@ RUN --mount=type=secret,id=git_host_key,dst=/root/.ssh/known_hosts,mode=0444,req
               --skip-build --non-interactive --china-mirror \
               --npm-registry "${BUILD_NPM_REGISTRY}" \
               ${_hermes_pin} ${_hermes_repo} \
+    && export DEBUG_INSTALL=true \
     && bash /build/scripts/install.sh "$@" 2>&1 \
+    # Post-install verification: did electron install.js hit the cache (good,
+    # warmup worked) or did it download (warmup missed for this version)?
+    # With DEBUG_INSTALL=true, @electron/get logs the URL it tried and
+    # "Found locally: ..." on cache hit. Combined with the warmup ls above,
+    # we can tell exactly which code path was taken.
+    && echo "===DEBUG post-install cache state===" \
+    && (ls -la /root/.cache/electron/ 2>/dev/null || echo "  (no electron cache dir)") \
+    && (du -sb /root/.cache/electron/ 2>/dev/null || echo "  (du failed)") \
+    && echo "===END DEBUG===" \
+    # Clean up the warmup artifacts — only when the warmup actually ran
+    # (BUILD_NPM_WARMUP, default off). WARMUP_DIR clone (~hundreds of MB of
+    # hermes-agent source) and the pre-fetched electron zip (~150MB) are
+    # no longer needed — install.sh has used the clone and electron's
+    # install.js has extracted the zip. Removing them keeps the image lean.
+    # When the warmup is off there is nothing of ours to clean, and running
+    # --clean anyway would just delete caches install.sh legitimately made.
+    && case "${BUILD_NPM_WARMUP:-0}" in 1|true|yes|on) bash /build/scripts/npm_warmup.sh --clean ;; esac \
     # install.sh's apt-get install leaves /var/lib/apt/lists/* in the layer
     # (~30-100MB of metadata for already-installed packages). Strip it — the
     # cicd image doesn't need apt after this point and BuildKit will re-cache
@@ -438,12 +573,41 @@ USER leap-aide-init
 
 # Frontend deps (vitest, vite, tsc, postcss, tailwindcss) for tests + static
 # build. install.sh doesn't touch frontend. Drop to leap-aide-init since npm ≥7
-# refuses root installs.
+# refuses root installs. Timeout/retry is set as cicd-stage ENV (above) so it
+# applies here AND to install.sh's npm/npx calls; no per-invocation flags needed.
 RUN cd /build/frontend \
     && if [ -n "${BUILD_NPM_REGISTRY:-}" ]; then npm config set registry "${BUILD_NPM_REGISTRY}"; fi \
     && npm ci --no-audit --no-fund \
     && npm cache clean --force \
     && rm -rf node_modules/.cache
+
+# Build the frontend once, bake the artifacts (static/) into the image.
+# Doing this in cicd (not runtime) because:
+#   * cicd already has node + npm + frontend/node_modules (from `npm ci`
+#     above); runtime stage purges them (Dockerfile:521-545), so it can't
+#     run `npm run build` on its own.
+#   * runtime stage derives FROM cicd, so /build/static/ is inherited
+#     automatically. One bake, both images.
+# Without this step, runtime's `COPY . /build` (Dockerfile:231) would pick
+# up whatever stale static/ happens to be in the build context — empty on
+# clean CI, stale on local devs — and the served frontend would 404 or
+# load JS with hashes that no longer match index.html.
+#
+# Drop the vite cache + tsbuildinfo after build (rebuildable on demand);
+# keep frontend/src/ — cicd still runs vitest on it. Keep node_modules —
+# runtime trims it later.
+#
+# The leading `rm -rf` clears vite's outputs from the build context. COPY .
+# /build (Dockerfile:231) brings in whatever stale static/ the build
+# host has, and the prior `static/assets/*.gz` (written by build.sh's
+# gzip step) would either (a) get gzip-rejected on the new build
+# (forcing gzip -f) or (b) shadow regenerated content. Removing just
+# assets/ + index.html is enough — static/logo/ + static/observer.html
+# are repo-tracked, not build outputs, and static/novnc/ is recreated
+# by npm's postbuild step.
+RUN rm -rf /build/static/assets /build/static/index.html \
+    && bash /build/scripts/build.sh --frontend \
+    && rm -rf /build/frontend/.vite /build/frontend/.tsbuildinfo
 
 # Defensive chmod: scripts are tracked with +x in git and COPY preserves the
 # mode bit, but some fuse-overlayfs / BuildKit cache layers have been seen
@@ -462,3 +626,110 @@ WORKDIR /build
 #   command=["scripts/build.sh"]     args=["--frontend"]        # bake ../static/
 #   command=["pytest"]               args=["backend/tests/", "-v"]
 #   command=["bash", "-c"]           args=["cd frontend && npm run build"]
+
+# ---- runtime: production image (default) — trimmed FROM cicd ---------------
+# Derived from cicd so every released runtime image is a derivative of a
+# cicd build that has passed validation. Cleans dev/test artifacts that the
+# server does not need at runtime (frontend deps, build toolchain, pytest).
+FROM cicd AS runtime
+
+USER root
+
+# Unset build-time-only env vars that cicd stage inherited but runtime
+# should not leak. Empty string is equivalent to unset for proxy-aware
+# tools and for npm / curl / uv.
+ENV HTTP_PROXY= \
+    HTTPS_PROXY= \
+    NO_PROXY= \
+    http_proxy= \
+    https_proxy= \
+    no_proxy= \
+    npm_config_registry= \
+    NPM_CONFIG_REGISTRY= \
+    npm_config_fetch_timeout= \
+    npm_config_fetch_retries= \
+    npm_config_fetch_retry_mintimeout= \
+    npm_config_fetch_retry_maxtimeout= \
+    BUILD_PLAYWRIGHT_DOWNLOAD_HOST= \
+    ELECTRON_MIRROR= \
+    ELECTRON_BUILDER_BINARIES_MIRROR= \
+    npm_config_electron_mirror= \
+    npm_config_electron_builder_binaries_mirror= \
+    WARMUP_DIR=
+
+# Preserve these from the cicd stage — runtime still consumes them:
+#   HERMES_AGENT_COMMIT  — warn-only consistency check in entrypoint
+#   HERMES_HOME          — read by `hermes` CLI
+#   HERMES_AGENT_REPO_URL — forwarded by entrypoint scripts
+
+# ── Trim test framework ──────────────────────────────────────────────────────
+# cicd stage installs pytest+pytest-timeout for tests. Remove them from runtime.
+RUN _trusted="--trusted-host pypi.org --trusted-host files.pythonhosted.org"; \
+    case "${UV_INDEX_URL:-}" in \
+        *tuna.tsinghua*) _trusted="$_trusted --trusted-host pypi.tuna.tsinghua.edu.cn --trusted-host files.tuna.tsinghua.edu.cn" ;; \
+    esac; \
+    uv pip uninstall --system pytest pytest-timeout $_trusted || true
+
+# ── Trim apt build chain ─────────────────────────────────────────────────────
+# cicd base stage installs these for hermes-agent wheels + frontend deps.
+# Runtime does not compile or run Node/Python dev tools.
+RUN apt-get purge -y --auto-remove \
+        build-essential python3.12-dev xz-utils libatomic1 \
+    && apt-get remove -y --purge nodejs npm \
+    && apt-get autoremove -y --purge \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb /var/cache/apt/pkgcache.bin /var/cache/apt/srcpkgcache.bin
+
+# ── Trim frontend build artifacts ───────────────────────────────────────────
+# frontend/node_modules (~300MB+) was installed by cicd for vitest+npm ci.
+# Runtime only needs the prebuilt static/ assets — frontend source tree is not
+# required.
+RUN rm -rf /build/frontend/node_modules \
+           /build/frontend/dist \
+           /build/frontend/.vite \
+           /build/frontend/.cache \
+           /build/frontend/.tsbuildinfo
+
+# ── Trim npm caches ──────────────────────────────────────────────────────────
+# Preserve /root/.npm/_npx/ — backend/scripts/agent-browser-wrapper.sh looks up
+# agent-browser in this cache (line 90) as the primary path; only falls back to
+# `npx` (now removed) if the lookup misses. Also preserve /home/leap-aide-init
+# npm layout for consistency.
+RUN rm -rf /root/.npm/_cacache /root/.npm/_logs /root/.npm/_temp /root/.npm/_update-notifier-last-checked \
+           /root/.npm/_cacache-content \
+           /home/leap-aide-init/.npm/_cacache /home/leap-aide-init/.npm/_logs /home/leap-aide-init/.npm/_temp \
+           /usr/local/lib/node_modules /usr/local/include/node /usr/local/share/man/man1/node* /usr/local/share/doc/*node* \
+           /root/.cache/node /root/.cache/npm /root/.cache/pip /root/.cache/uv /home/leap-aide-init/.cache/pip
+
+# ── Trim build/test shell scripts ────────────────────────────────────────────
+# cicd stage keeps these for build+test convenience; runtime does not invoke
+# them. Repo source remains unchanged (in scripts/), only the /build/scripts/
+# copies are removed.
+RUN rm -f /build/scripts/install.sh \
+          /build/scripts/build.sh \
+          /build/scripts/run-test.sh \
+          /build/scripts/cmd-util.sh
+
+# ── Defensive cleanup ────────────────────────────────────────────────────────
+# Strip any SSH scaffolding cicd stage left from secret mounts (always present
+# because install.sh may clone hermes-agent via SSH even when secrets are
+# absent). Also strip any stray archives or shell history outside ms-playwright
+# (which the VNC observer still needs).
+RUN rm -rf /root/.ssh /root/.bash_history /root/.lesshst /root/.viminfo /root/.wget-hsts /root/.gitconfig \
+    && find / -xdev -maxdepth 4 -type f \( -name "*.zip" -o -name "*.tar.gz" -o -name "*.tgz" -o -name "*.tar.xz" \) \
+        -not -path "/root/.cache/ms-playwright/*" \
+        -delete 2>/dev/null || true
+
+# Restore runtime user. cicd stage ended at USER leap-aide-init; restoring here
+# means the ENTRYPOINT bash runs as the right user.
+USER leap-aide-init
+
+COPY --chmod=555 backend/scripts/docker-entrypoint.sh /leap-aide-entrypoint.sh
+
+# Default to binding all interfaces (required for container networking)
+ENV HERMES_WEBUI_HOST=0.0.0.0 \
+    HERMES_WEBUI_PORT=8787
+
+EXPOSE 8787
+
+ENTRYPOINT ["/leap-aide-entrypoint.sh"]

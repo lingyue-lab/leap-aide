@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# docker-init.sh — runtime bootstrap for the leap-aide container
+# docker-entrypoint.sh — runtime entrypoint for the leap-aide container
 #
 # Responsibilities:
 #   1. Validate ENV_IGNORELIST / ENV_OBFUSCATE_PART

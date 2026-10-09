@@ -29,7 +29,7 @@ rest of the boot sequence. Permissions: requires ``$HERMES_HOME`` to be
 writable by the leap-aide process; if it isn't (e.g. ``HERMES_HOME=/usr/local/lib``
 in a locked-down container), the function logs a warning and returns 0 —
 the operator then needs to point ``HERMES_HOME`` at a user-owned location
-via ``docker-compose.yml`` / ``.env`` / ``docker-init.sh``.
+via ``docker-compose.yml`` / ``.env`` / ``docker-entrypoint.sh``.
 """
 from __future__ import annotations
 

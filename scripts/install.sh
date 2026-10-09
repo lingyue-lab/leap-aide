@@ -127,7 +127,13 @@ FORCE=false
 INSTALL_SERVICE=true
 DEPS_ONLY=false
 NPM_REGISTRY=""
-DEBUG_INSTALL=false
+# Each `=false` / `=""` below used to be a literal default that overrode any
+# env var the caller (Dockerfile) exported — the script's local assignment
+# wins over inherited env. Switch to `${VAR:-default}` so the caller's env
+# always takes priority. This matters for DEBUG_INSTALL (which the Dockerfile
+# sets to get @electron/get:* logs) and the hermes-agent pin (HERMES_COMMIT,
+# HERMES_REPO_URL) which the Dockerfile passes via build-arg.
+DEBUG_INSTALL="${DEBUG_INSTALL:-false}"
 # Source the shared hermes-agent defaults so HERMES_COMMIT stays in lock-step
 # with the Dockerfile (which reads the same file as a build-arg). The file
 # is bash-sourceable; the variables it defines can still be overridden by
@@ -141,10 +147,10 @@ fi
 
 HERMES_COMMIT="${HERMES_COMMIT:-${HERMES_AGENT_COMMIT:-f43eabee5f36e11448086ee8ee17c499958e81bf}}"
 HERMES_REPO_URL="${HERMES_REPO_URL:-${HERMES_AGENT_REPO_URL:-}}"
-HERMES_BRANCH=""
-FORCE_HERMES_COMMIT=false
+HERMES_BRANCH="${HERMES_BRANCH:-}"
+FORCE_HERMES_COMMIT="${FORCE_HERMES_COMMIT:-false}"
 _HERMES_VERSION_SPECIFIED=false
-USE_ALIYUN_MIRROR=false
+USE_ALIYUN_MIRROR="${USE_ALIYUN_MIRROR:-false}"
 
 # Detect non-interactive mode (e.g. curl | bash)
 if [ -t 0 ]; then
@@ -716,11 +722,20 @@ if [ -n "$NPM_REGISTRY" ]; then
     npm config set registry "$NPM_REGISTRY"
   fi
   ok "npm registry set to $NPM_REGISTRY"
-  # Auto-set Electron mirror for China registry
-  if [[ "$NPM_REGISTRY" == *"npmmirror"* ]]; then
-    export ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
-    info "Electron mirror set to npmmirror.com"
-  fi
+fi
+
+# Default ELECTRON_MIRROR for the China npmmirror registry. Only set when the
+# caller didn't already provide one (Dockerfile sets it via BUILD_ELECTRON_MIRROR,
+# so this no-ops there). Use the cnpm binary search API (302 →
+# cdn.npmmirror.com/binaries/) rather than the older /mirrors/ alias — the
+# cnpm API URL works through HTTP_PROXY (the /mirrors/ URL's cross-domain
+# redirect to cdn breaks over proxy; verified 2026-10-08).
+if [ -z "${ELECTRON_MIRROR:-}" ] && [[ "${NPM_REGISTRY:-}" == *"npmmirror"* ]]; then
+  # Trailing slash is REQUIRED: @electron/get joins `${mirror}v${version}/...`
+  # with no separator — without it the URL becomes `.../electronv40.10.2/...`
+  # and 404s (verified 2026-10-09).
+  export ELECTRON_MIRROR="https://registry.npmmirror.com/-/binary/electron/"
+  info "Electron mirror defaulted to cnpm API (302→cdn.npmmirror.com); override by setting ELECTRON_MIRROR"
 fi
 
 # Enable debug logging if requested
@@ -793,10 +808,28 @@ else
   # (the installer reads this env var at startup; see its source). Empty
   # value (the default) means use upstream NousResearch/hermes-agent.
   [ -n "$HERMES_REPO_URL" ] && export HERMES_REPO_URL || unset HERMES_REPO_URL
+  # --retry 5 --retry-all-errors: covers the SSL_ERROR_SYSCALL / TLS handshake
+  # failures seen in testbox builds routed through the transparent proxy.
+  # Same pattern as the uv install at Dockerfile:212 — without
+  # --retry-all-errors, curl would not retry on TLS handshake failures and
+  # the build would fail immediately.
+  #
+  # HERMES_REPO_URL is left as-is (set from HERMES_AGENT_REPO_URL build-arg).
+  # We previously overrode this to file://${WARMUP_DIR} to make the
+  # installer's git clone a local copy, but that path hits the container's
+  # RLIMIT_NOFILE hard cap ("Too many open files" / "fetch-pack: invalid
+  # index-pack output") and ulimit can't raise it. The trade-off:
+  #   - file:// clone: fast, but hits FD limit, can't raise it
+  #   - ssh:// clone (default): network round-trip, slow from China, but
+  #     works. The warmup's electron/playwright pre-fetch still applies,
+  #     so the only network call the installer adds is the hermes-agent
+  #     repo clone itself.
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$HERMES_AGENT_INSTALLER" | bash -s -- "${_ha_args[@]}" || true
+    curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors \
+         "$HERMES_AGENT_INSTALLER" | bash -s -- "${_ha_args[@]}" || true
   elif command -v wget >/dev/null 2>&1; then
-    wget -qO- "$HERMES_AGENT_INSTALLER" | bash -s -- "${_ha_args[@]}" || true
+    wget --tries=5 --waitretry=10 -qO- \
+         "$HERMES_AGENT_INSTALLER" | bash -s -- "${_ha_args[@]}" || true
   else
     die "curl or wget is required to download hermes-agent."
   fi

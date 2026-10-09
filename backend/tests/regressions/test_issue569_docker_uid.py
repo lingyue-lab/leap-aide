@@ -1,5 +1,5 @@
 """
-Issue #569 (extracted): docker-init.sh must auto-detect host UID/GID.
+Issue #569 (extracted): docker-entrypoint.sh must auto-detect host UID/GID.
 
 Carved out of the original tests/test_issue569_579.py — that file mixed a
 still-valid backend check (this file) with several tests that hit
@@ -14,13 +14,13 @@ import pathlib
 import re
 import unittest
 
-INIT_SCRIPT = (pathlib.Path(__file__).parent.parent.parent.parent / "backend" / "scripts" / "docker-init.sh").read_text(
+INIT_SCRIPT = (pathlib.Path(__file__).parent.parent.parent.parent / "backend" / "scripts" / "docker-entrypoint.sh").read_text(
     encoding="utf-8"
 )
 
 
 class TestHostUidAutoDetect(unittest.TestCase):
-    """docker-init.sh: UID must be auto-detected from a mounted probe."""
+    """docker-entrypoint.sh: UID must be auto-detected from a mounted probe."""
 
     def test_stat_uid_used(self):
         self.assertRegex(
@@ -43,7 +43,7 @@ class TestHostUidAutoDetect(unittest.TestCase):
 
 
 class TestHostGidAutoDetect(unittest.TestCase):
-    """docker-init.sh: GID must be auto-detected from a mounted probe."""
+    """docker-entrypoint.sh: GID must be auto-detected from a mounted probe."""
 
     def test_stat_gid_used(self):
         self.assertRegex(
