@@ -8,8 +8,8 @@
 #   3. Swap from leap-aide-init (UID 1025) to leap-aide (UID dynamically adjusted)
 #   4. Align /app ownership with the runtime UID (the tree is baked into the image)
 #   5. Provision state dir, workspace dir
-#   6. Install hermes-agent into a venv (from a host mount if provided, else
-#      the copy baked into the image at /usr/local/lib/hermes-agent)
+#   6. Locate the hermes-agent venv built at image-build time (fail fast if
+#      missing — no runtime install fallback by design)
 #   7. Start the leap-aide server
 #
 # Run as root (the Dockerfile USER is leap-aide-init which has passwordless sudo).
@@ -247,8 +247,16 @@ rm -f $it || error_exit "Failed to delete test file in /app"
 
 echo ""; echo "== Checking required environment variables for leap-aide"
 
-echo ""; echo "-- HERMES_WEBUI_VERSION: Where to store sessions, workspaces, and other state (default: ~/.hermes/webui-mvp)"
-if [ -z "${HERMES_WEBUI_STATE_DIR+x}" ]; then error_exit "HERMES_WEBUI_STATE_DIR not set"; fi;
+echo ""; echo "-- HERMES_WEBUI_STATE_DIR: Where to store sessions, workspaces, and other state (default: ~/.hermes/webui)"
+# Not required from compose/env: default to ~/.hermes/webui — the same default
+# bootstrap.py, ctl.sh and api/config.py use. The docker-compose volume mounts
+# persistent state at /home/leap-aide/.hermes, so the default lands on the
+# mounted volume without an explicit variable. Set HERMES_WEBUI_STATE_DIR to
+# override.
+if [ -z "${HERMES_WEBUI_STATE_DIR:-}" ]; then
+  export HERMES_WEBUI_STATE_DIR="$HOME/.hermes/webui"
+  echo "-- HERMES_WEBUI_STATE_DIR not set — defaulting to $HERMES_WEBUI_STATE_DIR"
+fi
 echo "-- HERMES_WEBUI_STATE_DIR: $HERMES_WEBUI_STATE_DIR"
 if [ ! -d "$HERMES_WEBUI_STATE_DIR" ]; then mkdir -p $HERMES_WEBUI_STATE_DIR || error_exit "Failed to create state directory at $HERMES_WEBUI_STATE_DIR"; fi
 if [ ! -d "$HERMES_WEBUI_STATE_DIR" ]; then error_exit "HERMES_WEBUI_STATE_DIR directory does not exist at $HERMES_WEBUI_STATE_DIR"; fi
@@ -274,105 +282,60 @@ else
 fi
 
 echo ""; echo "==================="
-echo ""; echo "== Creating a new virtual environment for leap-aide"
+echo ""; echo "== Locating hermes-agent environment"
 
-# uv is baked into the image at /usr/local/bin (installed as root with
-# UV_INSTALL_DIR=/usr/local/bin; TestDockerfileUvPreinstall asserts this).
-# There used to be a `curl | sh` fallback here for images that lacked it. It
-# was unreachable for this image, and a production entrypoint that fetches and
-# executes remote code at start is a supply-chain surface — a missing uv is an
-# image defect, so fail fast instead of quietly repairing it over the network.
-command -v uv >/dev/null 2>&1 \
-  || error_exit "uv not found on PATH — image was built without it (expected /usr/local/bin/uv)"
-
-cd /app
-if [ -f /app/venv/bin/python3 ]; then
-  echo ""; echo "== Existing virtual environment found — reusing (fast restart)"
-else
-  echo ""; echo "== Creating new virtual environment"
-  uv venv venv
+# The hermes-agent installer owns the Python dependency environment and builds
+# it at image-build time ($AGENT_DIR/venv: created and synced by the installer;
+# fails the build if it is missing). There is intentionally NO runtime install
+# fallback here: a missing venv is an image defect, so fail fast instead of
+# silently building a second environment at container start. The WebUI imports
+# the SDK modules themselves dynamically (sys.path via api/config.py) — the
+# venv only provides the third-party deps the server interpreter needs.
+_agent_paths=(
+  "/usr/local/lib/hermes-agent"
+)
+_agent_src=""
+for _p in "${_agent_paths[@]}"; do
+  if [ -d "$_p" ] && [ -f "$_p/pyproject.toml" ]; then
+    _agent_src="$_p"
+    break
+  fi
+done
+if [ -z "$_agent_src" ]; then
+  error_exit "hermes-agent source not found (looked in: ${_agent_paths[*]}) — image was built without it"
 fi
-export VIRTUAL_ENV=/app/venv
-test -d /app/venv
-test -f /app/venv/bin/activate
 
-echo "";echo "== Activating leap-aide's virtual environment"
-source /app/venv/bin/activate || error_exit "Failed to activate leap-aide virtual environment"
-test -x /app/venv/bin/python3
-
-echo ""; echo "== Installing hermes-agent into leap-aide's venv"
-# Backend deps (pyyaml, hindsight-client) are baked into the image at build time.
-# Only hermes-agent remains a runtime install — sourced from a host mount when
-# one is provided, otherwise from the copy already in the image.
-
-if [ -f /app/venv/.agent_installed ]; then
-  echo ""; echo "== hermes-agent already installed — skipping (fast restart)"
-else
-  echo ""; echo "== Locating hermes-agent source"
-  # Ordered user-override first, image default last: a host-provided agent
-  # (mounted at /home/leap-aide/.hermes/hermes-agent) wins when present, but
-  # the copy baked into the image at /usr/local/lib/hermes-agent is enough on
-  # its own — no HERMES_AGENT_DIR bind mount is required.
-  _agent_paths=(
-    "/usr/local/lib/hermes-agent"
-  )
-  _agent_src=""
-  for _p in "${_agent_paths[@]}"; do
-    if [ -d "$_p" ] && [ -f "$_p/pyproject.toml" ]; then
-      _agent_src="$_p"
-      break
-    fi
-  done
-  if [ -n "$_agent_src" ]; then
-    # Optional commit-pin consistency check (warn-only). Catches "I bumped
-    # hermes-agent on host but forgot to rebuild the image". HERMES_AGENT_COMMIT
-    # is baked into the image from backend/scripts/hermes-agent.env.
-    if [ -n "${HERMES_AGENT_COMMIT:-}" ] && [ -d "$_agent_src/.git" ]; then
-      _actual=$(git -C "$_agent_src" rev-parse HEAD 2>/dev/null || echo "")
-      _expected_short="${HERMES_AGENT_COMMIT:0:12}"
-      if [ -n "$_actual" ] && [ "$_actual" != "$_expected_short" ]; then
-        echo "!! WARNING: hermes-agent commit mismatch: expected ${_expected_short}, got ${_actual} — continuing"
-      fi
-    fi
-    uv pip install "$_agent_src[all]" --trusted-host pypi.org --trusted-host files.pythonhosted.org || error_exit "Failed to install hermes-agent's requirements"
-    touch /app/venv/.agent_installed
-  else
-    echo ""
-    echo "!! WARNING: hermes-agent source not found."
-    for _p in "${_agent_paths[@]}"; do
-      echo "!!   looked in: $_p"
-    done
-    echo "!! The WebUI will start with reduced functionality (no model auto-detection,"
-    echo "!! no personality routing, no CLI session imports)."
-    echo "!! The image normally ships it at /usr/local/lib/hermes-agent — if that is"
-    echo "!! missing, the image was built without it. To override with a host copy,"
-    echo "!! mount it at /home/leap-aide/.hermes/hermes-agent (optional)."
-    echo ""
+# Optional commit-pin consistency check (warn-only). Catches "I bumped
+# hermes-agent on host but forgot to rebuild the image". HERMES_AGENT_COMMIT
+# is baked into the image from backend/scripts/hermes-agent.env.
+if [ -n "${HERMES_AGENT_COMMIT:-}" ] && [ -d "$_agent_src/.git" ]; then
+  _actual=$(git -C "$_agent_src" rev-parse HEAD 2>/dev/null || echo "")
+  _expected_short="${HERMES_AGENT_COMMIT:0:12}"
+  if [ -n "$_actual" ] && [ "$_actual" != "$_expected_short" ]; then
+    echo "!! WARNING: hermes-agent commit mismatch: expected ${_expected_short}, got ${_actual} — continuing"
   fi
 fi
 
+_agent_python="$_agent_src/venv/bin/python"
+if [ ! -x "$_agent_python" ]; then
+  error_exit "hermes-agent venv missing at $_agent_python — the installer's dependency stage did not complete (check the image build log); no runtime install fallback by design"
+fi
+echo "-- hermes-agent venv: $_agent_python"
+
 echo ""; echo "== Running leap-aide (via scripts/ctl.sh)"
 
-# ctl.sh sources /app/.env itself, but we need the values *here* to compute the
-# log path below, so load it first. Loading twice is harmless.
-if [ -f /app/.env ]; then
-  echo "-- Loading /app/.env"
-  set -a; . /app/.env; set +a
-fi
+# Pin the interpreter to the agent venv (dev parity: bootstrap.py's
+# discover_launcher_python() prefers agent_dir/venv/bin/python). WebUI deps
+# (pyyaml, hindsight-client) were installed into the same venv at build time
+# (scripts/install.sh), so bootstrap's `import yaml` check passes and it never
+# falls back to creating a REPO_ROOT/.venv.
+export HERMES_WEBUI_PYTHON="$_agent_python"
 
-# Pin the interpreter to the venv this script prepared. bootstrap.py's
-# discover_launcher_python() would otherwise prefer agent_dir/venv/bin/python,
-# or fall through to creating its own REPO_ROOT/.venv and pip-installing —
-# neither of which is where we installed hermes-agent.
-export HERMES_WEBUI_PYTHON="${VIRTUAL_ENV}/bin/python3"
-
-# ctl.sh names its PID/log files from $WEBUI_PORT (note: NOT HERMES_WEBUI_PORT,
-# and it is read before ctl.sh sources .env), while bootstrap.py writes its log
-# to $HERMES_WEBUI_STATE_DIR/bootstrap-<port>.log. Mirror both so the path below
-# is the one that actually gets written.
-export WEBUI_PORT="${HERMES_WEBUI_PORT:-8787}"
+# ctl.sh owns .env loading and resolves the server log path (it mirrors
+# bootstrap.py's $HERMES_WEBUI_STATE_DIR/bootstrap-<port>.log naming), so ask
+# it instead of loading /app/.env a second time here.
 _ctl=/app/scripts/ctl.sh
-_log="${HERMES_WEBUI_STATE_DIR:-$HOME/.hermes/webui}/bootstrap-${WEBUI_PORT}.log"
+_log=$(bash "$_ctl" log-path)
 
 bash "$_ctl" start || error_exit "ctl.sh start failed"
 

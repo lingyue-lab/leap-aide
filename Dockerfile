@@ -333,6 +333,13 @@ ENV WARMUP_DIR=/tmp/hermes-agent-warmup
 ARG HERMES_AGENT_REPO_URL=
 ENV HERMES_AGENT_REPO_URL=${HERMES_AGENT_REPO_URL}
 
+# Optional accelerator prefix for the hermes-agent installer fetch (prepended
+# to the resolved raw.githubusercontent.com URL by scripts/install.sh). Empty =
+# direct access. Site-specific — pass at build time, never hardcode:
+#   --build-arg HERMES_INSTALLER_MIRROR="https://<gh-proxy>/"
+ARG HERMES_INSTALLER_MIRROR=
+ENV HERMES_INSTALLER_MIRROR=${HERMES_INSTALLER_MIRROR}
+
 # Where hermes-agent installs to. Default /usr/local/lib/hermes-agent (the
 # path documented in leap-aide's README). Override via --build-arg if you
 # need it elsewhere (e.g. /opt/hermes-agent for a non-root install).
@@ -697,11 +704,16 @@ RUN apt-get purge -y --auto-remove \
 # frontend/node_modules (~300MB+) was installed by cicd for vitest+npm ci.
 # Runtime only needs the prebuilt static/ assets — frontend source tree is not
 # required.
+# /app/.venv: stale second venv from older install flows. The single Python
+# env is the agent venv (/usr/local/lib/hermes-agent/venv); if /app/.venv ever
+# reappears at runtime that is a regression alarm (bootstrap should never need
+# to create one).
 RUN rm -rf /app/frontend/node_modules \
            /app/frontend/dist \
            /app/frontend/.vite \
            /app/frontend/.cache \
-           /app/frontend/.tsbuildinfo
+           /app/frontend/.tsbuildinfo \
+           /app/.venv
 
 # ── Trim npm caches ──────────────────────────────────────────────────────────
 # Preserve /root/.npm/_npx/ — backend/scripts/agent-browser-wrapper.sh looks up

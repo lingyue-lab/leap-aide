@@ -4,16 +4,49 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WEBUI_PORT=${WEBUI_PORT:-8787}
-PORT_HEX=$(printf '%04X' "$WEBUI_PORT")
-PID_FILE="$HOME/.hermes/webui/server-${WEBUI_PORT}.pid"
-LOG_FILE="$HOME/.hermes/webui/bootstrap-${WEBUI_PORT}.log"
-SHUTDOWN_TIMEOUT=8
 
 # ── Load .env ──
+# Only fills in variables that are not already set. Values already present in
+# the environment (docker-compose `environment:`, an exported shell variable)
+# win over .env; .env is skipped for those keys. Pre-existing values are
+# snapshotted and restored after sourcing so we reuse bash's own .env parsing
+# without its override side effect.
 if [[ -f "${PROJECT_ROOT}/.env" ]]; then
+  _dotenv_keep=()
+  while IFS= read -r _line || [[ -n "${_line}" ]]; do
+    _stmt="${_line#export }"
+    case "${_stmt}" in
+      *=*) ;;
+      *) continue ;;
+    esac
+    _key="${_stmt%%=*}"
+    _key="${_key#"${_key%%[![:space:]]*}"}"
+    _key="${_key%"${_key##*[![:space:]]}"}"
+    case "${_key}" in
+      ''|*[!A-Za-z0-9_]*|[0-9]*) continue ;;
+    esac
+    if eval "[ -n \"\${${_key}+set}\" ]"; then
+      _dotenv_keep+=("$(declare -p "${_key}")")
+    fi
+  done < "${PROJECT_ROOT}/.env"
   set -a; source "${PROJECT_ROOT}/.env"; set +a
+  if [[ ${#_dotenv_keep[@]} -gt 0 ]]; then
+    for _stmt in "${_dotenv_keep[@]}"; do eval "${_stmt}"; done
+  fi
+  unset _line _stmt _key _dotenv_keep
 fi
+
+# WEBUI_PORT names the pid/log files below. Prefer an explicit WEBUI_PORT,
+# then the server's bind port (HERMES_WEBUI_PORT), then the default. Resolved
+# AFTER the .env load so a port configured in .env names the files correctly.
+WEBUI_PORT=${WEBUI_PORT:-${HERMES_WEBUI_PORT:-8787}}
+PORT_HEX=$(printf '%04X' "$WEBUI_PORT")
+# Mirror bootstrap.py, which writes server-<port>.pid and bootstrap-<port>.log
+# into $HERMES_WEBUI_STATE_DIR (default ~/.hermes/webui).
+STATE_DIR="${HERMES_WEBUI_STATE_DIR:-$HOME/.hermes/webui}"
+PID_FILE="$STATE_DIR/server-${WEBUI_PORT}.pid"
+LOG_FILE="$STATE_DIR/bootstrap-${WEBUI_PORT}.log"
+SHUTDOWN_TIMEOUT=8
 
 # ── Timing helpers ──
 _CTL_T0=$SECONDS
@@ -129,7 +162,7 @@ cmd_start() {
   _stage "server_start"
 
   # 1. Rotate old log to old_logs/
-  OLD_LOGS_DIR="$HOME/.hermes/webui/old_logs"
+  OLD_LOGS_DIR="$STATE_DIR/old_logs"
   mkdir -p "$OLD_LOGS_DIR"
   if [[ -f "$LOG_FILE" ]]; then
     _seq=1
@@ -205,6 +238,15 @@ cmd_status() {
   _ok
 }
 
+# ── Command: log-path ──
+# Print the resolved server log path and exit. Used by docker-entrypoint.sh to
+# follow the server log for `docker logs`. Exits immediately so stdout carries
+# only the path (no "[ctl] Total:" trailer) and is safe to capture with $( ).
+cmd_log_path() {
+  printf '%s\n' "$LOG_FILE"
+  exit 0
+}
+
 # ── Main entry ──
 if [[ $# -eq 0 ]]; then
   echo "Usage: $0 <command> [command...]"
@@ -213,6 +255,7 @@ if [[ $# -eq 0 ]]; then
   echo "  stop      Gracefully stop all services"
   echo "  restart   Restart (stop + start)"
   echo "  status    Show running status"
+  echo "  log-path  Print the server log path (for log following/tailing)"
   echo ""
   echo "For build operations, use: ./scripts/build.sh"
   exit 1
@@ -224,6 +267,7 @@ for arg in "$@"; do
     stop)     cmd_stop ;;
     restart)  cmd_restart ;;
     status)   cmd_status ;;
+    log-path) cmd_log_path ;;
     build|install)
       echo "[ctl] WARNING: '$arg' command is deprecated."
       echo "[ctl] Use './scripts/build.sh' for build operations."

@@ -114,7 +114,9 @@ is_docker() {
 # ── Configuration (defaults) ──
 REPO_URL="${LEAP_AIDE_REPO:-https://github.com/nousresearch/leap-aide.git}"
 DEST="${LEAP_AIDE_DIR:-$HOME/leap-aide}"
-HERMES_AGENT_INSTALLER="https://hermes-agent.nousresearch.com/install.sh"
+# Resolved AFTER option parsing so it always matches the hermes-agent ref being
+# installed — see "Resolve the hermes-agent installer URL" below.
+HERMES_AGENT_INSTALLER=""
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 BRANCH="main"
 
@@ -744,6 +746,33 @@ if [ "$DEBUG_INSTALL" = true ]; then
   info "Debug logging enabled (electron download details)"
 fi
 
+# ── Resolve the hermes-agent installer URL ─────────────────────────────────────
+# Resolved here — after option parsing and env loading — so it always matches
+# the hermes-agent version being installed. Rules:
+#   1. HERMES_AGENT_INSTALLER_URL set → use as-is (full override)
+#   2. HERMES_BRANCH set             → raw.githubusercontent.com/.../<branch>/scripts/install.sh
+#   3. HERMES_COMMIT set             → raw.githubusercontent.com/.../<commit>/scripts/install.sh
+#   4. otherwise                     → https://hermes-agent.nousresearch.com/install.sh (tracks main)
+# Rules 2/3 fetch the installer from the same ref that gets checked out, so the
+# installer and the tree can never skew. The floating hosted URL tracks main and
+# silently broke pinned installs when main moved to the pm/ dependency manager
+# (pre-pm trees have no pm/lock.json, so `pm install` failed and no Python venv
+# was ever created).
+# HERMES_INSTALLER_MIRROR (optional prefix, include trailing slash) is prepended
+# to the final URL — point it at a raw.githubusercontent.com accelerator when
+# direct access is blocked. Site-specific mirrors stay in env vars, not here.
+if [ -n "${HERMES_AGENT_INSTALLER_URL:-}" ]; then
+  HERMES_AGENT_INSTALLER="$HERMES_AGENT_INSTALLER_URL"
+elif [ -n "${HERMES_BRANCH:-}" ]; then
+  HERMES_AGENT_INSTALLER="https://raw.githubusercontent.com/NousResearch/hermes-agent/${HERMES_BRANCH}/scripts/install.sh"
+elif [ -n "${HERMES_COMMIT:-}" ]; then
+  HERMES_AGENT_INSTALLER="https://raw.githubusercontent.com/NousResearch/hermes-agent/${HERMES_COMMIT}/scripts/install.sh"
+else
+  HERMES_AGENT_INSTALLER="https://hermes-agent.nousresearch.com/install.sh"
+fi
+HERMES_AGENT_INSTALLER="${HERMES_INSTALLER_MIRROR:-}${HERMES_AGENT_INSTALLER}"
+info "hermes-agent installer: $HERMES_AGENT_INSTALLER"
+
 # Build hermes-agent installer args
 _ha_args=("--skip-browser")
 [ "$NON_INTERACTIVE" = true ] && _ha_args+=("--non-interactive" "--skip-setup")
@@ -824,15 +853,43 @@ else
   #     works. The warmup's electron/playwright pre-fetch still applies,
   #     so the only network call the installer adds is the hermes-agent
   #     repo clone itself.
+  # Fetch the installer to a file first so a 404 (bad ref / unreachable
+  # mirror) produces a clear error instead of piping an error page into bash.
+  _ha_installer="$(mktemp)"
   if command -v curl >/dev/null 2>&1; then
     curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors \
-         "$HERMES_AGENT_INSTALLER" | bash -s -- "${_ha_args[@]}" || true
+         "$HERMES_AGENT_INSTALLER" -o "$_ha_installer" \
+      || die "Failed to fetch hermes-agent installer from $HERMES_AGENT_INSTALLER — check that the ref exists upstream (fork-only SHAs need a HERMES_AGENT_INSTALLER_URL override) or set HERMES_INSTALLER_MIRROR for raw.githubusercontent acceleration"
   elif command -v wget >/dev/null 2>&1; then
-    wget --tries=5 --waitretry=10 -qO- \
-         "$HERMES_AGENT_INSTALLER" | bash -s -- "${_ha_args[@]}" || true
+    wget --tries=5 --waitretry=10 -qO "$_ha_installer" \
+         "$HERMES_AGENT_INSTALLER" \
+      || die "Failed to fetch hermes-agent installer from $HERMES_AGENT_INSTALLER — check that the ref exists upstream (fork-only SHAs need a HERMES_AGENT_INSTALLER_URL override) or set HERMES_INSTALLER_MIRROR for raw.githubusercontent acceleration"
   else
     die "curl or wget is required to download hermes-agent."
   fi
+  # The pinned installer hardcodes GitHub upstream clone URLs (REPO_URL_SSH/
+  # REPO_URL_HTTPS) and predates HERMES_REPO_URL support — without this rewrite
+  # it silently clones NousResearch instead of the configured mirror. Rewrite
+  # both URL forms so SSH goes straight to the fork (deploy key applies) and the
+  # HTTPS fallback also lands there; if both fail, the installer exits loudly.
+  # Pure text substitution, zero intrusion into the installer's stages (clone →
+  # venv → deps → node → path → config) — it survives installer refactors. When
+  # a future installer natively honors HERMES_REPO_URL, the patterns simply do
+  # not match (harmless no-op). sed delimiter is `|` because URLs contain `/`
+  # and `:`; a `|` inside HERMES_REPO_URL is not escaped (documented limitation).
+  if [ -n "$HERMES_REPO_URL" ]; then
+    sed -e "s|git@github.com:NousResearch/hermes-agent.git|${HERMES_REPO_URL}|g" \
+        -e "s|https://github.com/NousResearch/hermes-agent.git|${HERMES_REPO_URL}|g" \
+        "$_ha_installer" > "$_ha_installer.patched" \
+      && mv "$_ha_installer.patched" "$_ha_installer" \
+      || die "Failed to rewrite hermes-agent installer clone URLs to $HERMES_REPO_URL"
+    grep -q "$HERMES_REPO_URL" "$_ha_installer" \
+      || warn "hermes-agent installer no longer hardcodes NousResearch clone URLs — clone source unverified (installer may honor HERMES_REPO_URL natively)"
+  fi
+  # The installer may return non-zero for optional components (e.g. npm), so
+  # we don't fail on its exit code — the venv check below verifies the core.
+  bash "$_ha_installer" "${_ha_args[@]}" || true
+  rm -f "$_ha_installer"
   AGENT_DIR=$(_hermes_agent_found || true)
   if [ -n "$AGENT_DIR" ]; then
     ok "hermes-agent installed at ${B}$AGENT_DIR${R}"
@@ -851,6 +908,19 @@ else
     fi
   fi
 fi
+
+# ── Verify the agent Python venv (the server's interpreter) ────────────────────
+# The agent installer owns the dependency environment ($AGENT_DIR/venv: uv venv
+# + uv sync at install time). The container entrypoint has no runtime fallback
+# install — a missing venv is fatal at startup — so fail here, at install/build
+# time, instead of shipping a broken image. (Historically the floating hosted
+# installer could skew from the pinned commit and silently fail its dependency
+# stage, leaving a bare source tree.)
+AGENT_DIR=$(_hermes_agent_found || true)
+if [ -z "$AGENT_DIR" ] || [ ! -x "$AGENT_DIR/venv/bin/python" ]; then
+  die "hermes-agent Python venv not found at ${AGENT_DIR:-<unknown>}/venv — the installer's dependency stage failed; see the installer output above"
+fi
+ok "hermes-agent venv at ${B}$AGENT_DIR/venv${R}"
 
 # ── Fix playwright-core version & install browser ──
 # hermes-agent bundles playwright-core <1.60.0 which hangs on Node.js v26+
@@ -1121,35 +1191,39 @@ fi
 fi  # DEPS_ONLY=false guard around Step 3 (clone/update)
 
 # ── Step 4: Install Python dependencies ──
+# WebUI deps go into the hermes-agent venv — the interpreter the server runs
+# under (bootstrap.py's discover_launcher_python() prefers
+# agent_dir/venv/bin/python). One venv only: the old $DEST/.venv was a second,
+# redundant environment (and a bootstrap.py fallback path that hid breakage).
 say ""
 say "${B}Setting up Python environment...${R}"
 
+AGENT_DIR=$(_hermes_agent_found || true)
+if [ -z "$AGENT_DIR" ] || [ ! -x "$AGENT_DIR/venv/bin/python" ]; then
+  die "hermes-agent Python venv not found at ${AGENT_DIR:-<unknown>}/venv — cannot install WebUI dependencies"
+fi
+
+# Trusted-host handling for China mirrors (pip path only): pip refuses to talk
+# to non-PyPI HTTPS hosts unless we explicitly mark them trusted. Keyed off
+# PIP_INDEX_URL (which the Dockerfile exports) so we don't depend on
+# --china-mirror being passed. The uv path (agent venv) accepts the configured
+# index as-is — no TLS-verification bypass flags there.
+_pip_trusted="--trusted-host pypi.org --trusted-host files.pythonhosted.org"
+case "${PIP_INDEX_URL:-}" in
+  *tuna.tsinghua*) _pip_trusted="$_pip_trusted --trusted-host pypi.tuna.tsinghua.edu.cn --trusted-host files.tuna.tsinghua.edu.cn" ;;
+  *aliyun*)        _pip_trusted="$_pip_trusted --trusted-host mirrors.aliyun.com" ;;
+esac
+
 if [ "$USE_VENV" = true ]; then
-  VENV_DIR="$DEST/.venv"
-  if [ ! -d "$VENV_DIR" ]; then
-    python3 -m venv "$VENV_DIR"
-    ok "Virtual environment created"
-  else
-    info "Virtual environment already exists"
+  # The agent venv is created by uv and ships no pip — install via uv into it.
+  _uv_bin="$(command -v uv || true)"
+  if [ -z "$_uv_bin" ] && [ -x "${HERMES_HOME:-$HOME/.hermes}/bin/uv" ]; then
+    _uv_bin="${HERMES_HOME:-$HOME/.hermes}/bin/uv"
   fi
-
-  VENV_PIP="$VENV_DIR/bin/pip"
-  VENV_PYTHON="$VENV_DIR/bin/python"
-
-  # Trusted-host handling for China mirrors: pip refuses to talk to non-PyPI
-  # HTTPS hosts unless we explicitly mark them trusted. Same logic as
-  # Dockerfile cicd stage's _trusted variable. We key off PIP_INDEX_URL env
-  # (which the Dockerfile exports) so we don't depend on --china-mirror
-  # being passed.
-  _pip_trusted="--trusted-host pypi.org --trusted-host files.pythonhosted.org"
-  case "${PIP_INDEX_URL:-}" in
-    *tuna.tsinghua*) _pip_trusted="$_pip_trusted --trusted-host pypi.tuna.tsinghua.edu.cn --trusted-host files.tuna.tsinghua.edu.cn" ;;
-    *aliyun*)        _pip_trusted="$_pip_trusted --trusted-host mirrors.aliyun.com" ;;
-  esac
-
-  "$VENV_PIP" install --quiet --upgrade pip $_pip_trusted
-  "$VENV_PIP" install --quiet -r "$DEST/backend/requirements.txt" $_pip_trusted
-  ok "Python dependencies installed"
+  [ -n "$_uv_bin" ] || die "uv not found — needed to install WebUI dependencies into $AGENT_DIR/venv"
+  "$_uv_bin" pip install --python "$AGENT_DIR/venv/bin/python" -r "$DEST/backend/requirements.txt" \
+    || die "Failed to install WebUI dependencies into $AGENT_DIR/venv"
+  ok "Python dependencies installed into ${B}$AGENT_DIR/venv${R}"
 else
   info "Skipping virtual environment (--no-venv)"
   pip3 install --quiet --upgrade pip $_pip_trusted

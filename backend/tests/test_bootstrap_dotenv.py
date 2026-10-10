@@ -11,10 +11,11 @@ Covers:
   3. _load_repo_dotenv() strips quotes from values
   4. _load_repo_dotenv() is a no-op when .env does not exist
   5. _load_repo_dotenv() prints a warning (not crash) on unreadable .env
-  6. _load_repo_dotenv() overwrites existing env vars (shell source semantics)
+  6. _load_repo_dotenv() preserves env vars already set (docker-compose
+     `environment:` and exported shell variables win over .env)
   7. _load_repo_dotenv() handles 'export FOO=bar' prefix
   8. _load_repo_dotenv() preserves values containing '='
-  9. Variables are set unconditionally (not setdefault)
+  9. Variables already present in the environment are never replaced
   10. Structural: loader is called before DEFAULT_HOST/DEFAULT_PORT
 """
 import os
@@ -49,11 +50,13 @@ class TestLoadRepoDotenv:
 
     def test_sets_env_var_from_dotenv(self, tmp_path):
         """Basic key=value is loaded into os.environ."""
+        os.environ.pop("HERMES_WEBUI_HOST", None)
         self._run(tmp_path, "HERMES_WEBUI_HOST=0.0.0.0\n")
         assert os.environ.get("HERMES_WEBUI_HOST") == "0.0.0.0"
 
     def test_sets_port_from_dotenv(self, tmp_path):
         """HERMES_WEBUI_PORT is loaded as a string (caller does int() conversion)."""
+        os.environ.pop("HERMES_WEBUI_PORT", None)
         self._run(tmp_path, "HERMES_WEBUI_PORT=18787\n")
         assert os.environ.get("HERMES_WEBUI_PORT") == "18787"
 
@@ -65,16 +68,19 @@ class TestLoadRepoDotenv:
 
     def test_ignores_blank_lines(self, tmp_path):
         """Blank lines are silently skipped without error."""
+        os.environ.pop("HERMES_WEBUI_PORT", None)
         self._run(tmp_path, "\n\nHERMES_WEBUI_PORT=9000\n\n")
         assert os.environ.get("HERMES_WEBUI_PORT") == "9000"
 
     def test_strips_double_quoted_values(self, tmp_path):
         """Values wrapped in double quotes are stripped."""
+        os.environ.pop("HERMES_WEBUI_HOST", None)
         self._run(tmp_path, 'HERMES_WEBUI_HOST="0.0.0.0"\n')
         assert os.environ.get("HERMES_WEBUI_HOST") == "0.0.0.0"
 
     def test_strips_single_quoted_values(self, tmp_path):
         """Values wrapped in single quotes are stripped."""
+        os.environ.pop("HERMES_WEBUI_HOST", None)
         self._run(tmp_path, "HERMES_WEBUI_HOST='0.0.0.0'\n")
         assert os.environ.get("HERMES_WEBUI_HOST") == "0.0.0.0"
 
@@ -106,11 +112,29 @@ class TestLoadRepoDotenv:
             "_load_repo_dotenv() should print a warning to stderr on read failure"
         )
 
-    def test_overwrites_existing_env_var(self, tmp_path):
-        """Unconditional overwrite matches shell source semantics."""
+    def test_preserves_existing_env_var(self, tmp_path):
+        """Already-set variables win over .env — the .env line is skipped.
+
+        This is what makes docker-compose `environment:` (and exported shell
+        variables) take priority over the .env file.
+        """
         os.environ["HERMES_WEBUI_HOST"] = "127.0.0.1"
         self._run(tmp_path, "HERMES_WEBUI_HOST=0.0.0.0\n")
-        assert os.environ.get("HERMES_WEBUI_HOST") == "0.0.0.0"
+        assert os.environ.get("HERMES_WEBUI_HOST") == "127.0.0.1"
+
+    def test_preserves_existing_but_fills_unset(self, tmp_path):
+        """Mixed case: set keys keep their value, unset keys come from .env."""
+        os.environ["HERMES_WEBUI_HOST"] = "127.0.0.1"
+        os.environ.pop("HERMES_WEBUI_PORT", None)
+        self._run(tmp_path, "HERMES_WEBUI_HOST=0.0.0.0\nHERMES_WEBUI_PORT=18787\n")
+        assert os.environ.get("HERMES_WEBUI_HOST") == "127.0.0.1"
+        assert os.environ.get("HERMES_WEBUI_PORT") == "18787"
+
+    def test_set_but_empty_env_var_is_not_replaced(self, tmp_path):
+        """A variable set to the empty string still counts as set — .env skips it."""
+        os.environ["HERMES_WEBUI_HOST"] = ""
+        self._run(tmp_path, "HERMES_WEBUI_HOST=0.0.0.0\n")
+        assert os.environ.get("HERMES_WEBUI_HOST") == ""
 
     def test_does_not_set_empty_values(self, tmp_path):
         """A key whose value is empty after stripping is not set to a non-empty string."""
@@ -125,6 +149,8 @@ class TestLoadRepoDotenv:
 
     def test_multiple_keys_all_loaded(self, tmp_path):
         """Multiple key=value pairs in one file are all loaded."""
+        os.environ.pop("HERMES_WEBUI_HOST", None)
+        os.environ.pop("HERMES_WEBUI_PORT", None)
         content = "HERMES_WEBUI_HOST=0.0.0.0\nHERMES_WEBUI_PORT=18787\n"
         self._run(tmp_path, content)
         assert os.environ.get("HERMES_WEBUI_HOST") == "0.0.0.0"
@@ -132,11 +158,13 @@ class TestLoadRepoDotenv:
 
     def test_value_with_equals_sign_preserved(self, tmp_path):
         """Values containing '=' (e.g. base64) are preserved correctly."""
+        os.environ.pop("MY_KEY", None)
         self._run(tmp_path, "MY_KEY=abc=def==\n")
         assert os.environ.get("MY_KEY") == "abc=def=="
 
     def test_export_prefix_stripped(self, tmp_path):
         """'export FOO=bar' lines are parsed correctly — export prefix is stripped."""
+        os.environ.pop("HERMES_WEBUI_HOST", None)
         self._run(tmp_path, "export HERMES_WEBUI_HOST=0.0.0.0\n")
         assert os.environ.get("HERMES_WEBUI_HOST") == "0.0.0.0", (
             "'export KEY=value' lines must set KEY, not 'export KEY'"

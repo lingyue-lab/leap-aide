@@ -28,18 +28,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 def _load_repo_dotenv() -> None:
     """Load REPO_ROOT/.env into os.environ.
 
-    Mirrors what start.sh does via ``set -a; source .env`` so that running
-    ``python3 bootstrap.py`` directly behaves identically to ``./start.sh``.
-    Variables are set unconditionally (matching shell source semantics), so a
-    value in .env overrides one already present in the shell environment.
-    To keep a CLI-supplied value, unset it from .env or launch via start.sh
-    and override there.
+    Fills in only variables that are not already present in the environment.
+    A value already set in the environment (docker-compose ``environment:``,
+    an exported shell variable, the image ENV) wins over .env — the .env line
+    is skipped for that key. This matches the loader in scripts/ctl.sh so the
+    precedence ``environment > .env`` holds however the server is launched.
 
     Only loads the webui repo .env — not ~/.hermes/.env, which the server
     loads independently at startup for provider credentials.
-
-    Note: does not handle the ``export FOO=bar`` prefix — strip ``export``
-    from .env values if copy-pasting from a shell rc file.
     """
     env_path = REPO_ROOT / ".env"
     if not env_path.exists():
@@ -55,7 +51,7 @@ def _load_repo_dotenv() -> None:
             if k.startswith("export "):
                 k = k[7:].strip()
             v = v.strip().strip('"').strip("'")
-            if k:
+            if k and k not in os.environ:
                 os.environ[k] = v
     except Exception as exc:
         import sys as _sys

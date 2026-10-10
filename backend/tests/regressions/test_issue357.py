@@ -87,13 +87,15 @@ class TestDockerfileUvPreinstall:
 # ── docker-entrypoint.sh: uv comes from the image, never from the network ──────
 
 class TestInitScriptUvPreinstalled:
-    """uv is installed at build time — see TestDockerfileUvPreinstall above.
+    """uv comes from the image (build time) — the entrypoint never touches it.
 
     The entrypoint used to fall back to `curl ... | sh` when `command -v uv`
     failed. That branch was unreachable for this image, and a production
     entrypoint that fetches and executes remote code at container start is a
-    supply-chain surface. A missing uv is an image defect, so the entrypoint
-    now fails fast instead of quietly repairing it over the network.
+    supply-chain surface. The runtime install was later removed entirely: the
+    hermes-agent installer builds $AGENT_DIR/venv at image-build time and the
+    entrypoint only consumes it (fail-fast when missing) — so the entrypoint
+    needs neither uv nor any network install at runtime.
     """
 
     def test_init_script_does_not_download_uv(self):
@@ -106,13 +108,24 @@ class TestInitScriptUvPreinstalled:
             "docker-entrypoint.sh must not curl anything uv-related at runtime"
         )
 
-    def test_init_script_fails_fast_when_uv_missing(self):
-        """A missing uv must abort with a clear message, not fall through."""
-        assert "command -v uv" in INIT_SCRIPT, (
-            "docker-entrypoint.sh must probe for uv and fail fast when it is absent"
+    def test_init_script_has_no_runtime_install(self):
+        """No venv creation or pip/uv installs at runtime — the agent venv
+        built at image-build time is the single Python environment."""
+        assert "uv venv" not in INIT_SCRIPT, (
+            "docker-entrypoint.sh must not create venvs at runtime"
         )
-        assert "error_exit" in INIT_SCRIPT and "uv not found" in INIT_SCRIPT, (
-            "docker-entrypoint.sh must error_exit with a clear message when uv is missing"
+        assert "uv pip" not in INIT_SCRIPT and "pip install" not in INIT_SCRIPT, (
+            "docker-entrypoint.sh must not install packages at runtime"
+        )
+
+    def test_init_script_requires_agent_venv(self):
+        """A missing agent venv must abort with a clear message, not fall back."""
+        assert "venv/bin/python" in INIT_SCRIPT, (
+            "docker-entrypoint.sh must locate the hermes-agent venv built at "
+            "image-build time"
+        )
+        assert "error_exit" in INIT_SCRIPT and "venv missing" in INIT_SCRIPT, (
+            "docker-entrypoint.sh must error_exit when the agent venv is absent"
         )
 
     def test_init_script_does_not_patch_path_for_local_bin(self):
