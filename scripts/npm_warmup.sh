@@ -100,7 +100,7 @@ for _candidate in \
     "${HERMES_AGENT_ENV:-}" \
     "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/../backend/scripts/hermes-agent.env" \
     "./backend/scripts/hermes-agent.env" \
-    "/build/backend/scripts/hermes-agent.env"; do
+    "/app/backend/scripts/hermes-agent.env"; do
   if [ -n "$_candidate" ] && [ -f "$_candidate" ]; then
     _env_file="$_candidate"
     break

@@ -54,6 +54,12 @@ graphify-out/
 .venv
 .lingyue-lab
 
+# Buildah image store kept on a local ext4 mount for container builds
+# (see BUILDAH_ROOT in scripts/build.sh). Can grow to hundreds of GB.
+# Second pattern covers the misspelled runroot name the lab script sets.
+.buildah-storage*/
+.buldah-storage*/
+
 # Regression test runner artifacts (junit XML, logs)
 backend/tests/.results/
 

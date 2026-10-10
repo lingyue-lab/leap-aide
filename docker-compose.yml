@@ -20,11 +20,6 @@ services:
       # Your workspace directory shown on first launch (adapt if yours is different,
       # the container will use the mounted /workspace)
       - ${HERMES_WORKSPACE:-${HOME}/workspace}:/workspace
-      # hermes-agent installed by scripts/install.sh at /usr/local/lib/hermes-agent
-      # is mounted into /home/leap-aide/.hermes/hermes-agent so docker-entrypoint.sh
-      # picks it up and installs it into the runtime venv. Override
-      # HERMES_AGENT_DIR if your host uses a non-standard install path.
-      - ${HERMES_AGENT_DIR:-/usr/local/lib/hermes-agent}:/home/leap-aide/.hermes/hermes-agent
     environment:
       # Set to your host user ID: run `id -u` and `id -g` to find them.
       # On macOS, UIDs start at 501 (not 1000), so set UID and GID in a .env file:

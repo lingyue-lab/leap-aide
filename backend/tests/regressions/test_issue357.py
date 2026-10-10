@@ -19,7 +19,7 @@ import re
 # tests/ to repo root in one hop; from backend/tests/regressions/ we need 4
 # hops to reach the same checkout root.
 REPO = pathlib.Path(__file__).resolve().parents[3]
-DOCKERFILE = (REPO / "backend" / "Dockerfile").read_text(encoding="utf-8")
+DOCKERFILE = (REPO / "Dockerfile").read_text(encoding="utf-8")
 INIT_SCRIPT = (REPO / "backend" / "scripts" / "docker-entrypoint.sh").read_text(encoding="utf-8")
 
 
@@ -28,9 +28,12 @@ INIT_SCRIPT = (REPO / "backend" / "scripts" / "docker-entrypoint.sh").read_text(
 class TestDockerfileUvPreinstall:
 
     def test_dockerfile_installs_uv_at_build_time(self):
-        """Dockerfile must install uv via RUN curl at build time (not only at runtime)."""
-        assert "RUN curl" in DOCKERFILE and "uv/install.sh" in DOCKERFILE, (
-            "Dockerfile must install uv at build time via RUN curl .../uv/install.sh"
+        """Dockerfile must install uv via curl at build time (not only at runtime)."""
+        # The fetch sits inside a `RUN /bin/bash -c '...'` wrapper rather than
+        # immediately after RUN, so match on the fetch itself — a literal
+        # "RUN curl" prefix would never match.
+        assert "curl" in DOCKERFILE and "uv/install.sh" in DOCKERFILE, (
+            "Dockerfile must install uv at build time via curl .../uv/install.sh"
         )
 
     def test_dockerfile_uv_installed_system_wide(self):
@@ -52,14 +55,14 @@ class TestDockerfileUvPreinstall:
         )
 
     def test_dockerfile_uv_installed_before_copy(self):
-        """uv installation must happen before COPY . /build so it's in the image."""
+        """uv installation must happen before COPY . /app so it's in the image."""
         uv_pos = DOCKERFILE.find("uv/install.sh")
         # Match COPY regardless of flags (e.g. --chown=...) — only the destination matters.
-        m = re.search(r"^COPY\b.*\s/build\b", DOCKERFILE, re.MULTILINE)
+        m = re.search(r"^COPY\b.*\s/app\b", DOCKERFILE, re.MULTILINE)
         assert uv_pos != -1, "uv install not found in Dockerfile"
-        assert m is not None, "COPY ... /build not found in Dockerfile"
+        assert m is not None, "COPY ... /app not found in Dockerfile"
         copy_pos = m.start()
-        assert uv_pos < copy_pos, "uv must be installed before COPY . /build"
+        assert uv_pos < copy_pos, "uv must be installed before COPY . /app"
 
     def test_dockerfile_uv_installed_as_root_or_before_user_switch(self):
         """uv must be installed as root (USER root) to reach /usr/local/bin.
@@ -81,54 +84,42 @@ class TestDockerfileUvPreinstall:
         )
 
 
-# ── docker-entrypoint.sh: skip uv download when already present ─────────────────
+# ── docker-entrypoint.sh: uv comes from the image, never from the network ──────
 
-class TestInitScriptUvSkip:
+class TestInitScriptUvPreinstalled:
+    """uv is installed at build time — see TestDockerfileUvPreinstall above.
 
-    def test_init_script_checks_uv_before_download(self):
-        """docker-entrypoint.sh must check 'command -v uv' before attempting download."""
+    The entrypoint used to fall back to `curl ... | sh` when `command -v uv`
+    failed. That branch was unreachable for this image, and a production
+    entrypoint that fetches and executes remote code at container start is a
+    supply-chain surface. A missing uv is an image defect, so the entrypoint
+    now fails fast instead of quietly repairing it over the network.
+    """
+
+    def test_init_script_does_not_download_uv(self):
+        """No runtime fetch of uv — the image bakes it into /usr/local/bin."""
+        assert "uv/install.sh" not in INIT_SCRIPT, (
+            "docker-entrypoint.sh must not download uv at runtime; the image "
+            "installs it at build time to /usr/local/bin"
+        )
+        assert not re.search(r"curl[^\n]*uv", INIT_SCRIPT), (
+            "docker-entrypoint.sh must not curl anything uv-related at runtime"
+        )
+
+    def test_init_script_fails_fast_when_uv_missing(self):
+        """A missing uv must abort with a clear message, not fall through."""
         assert "command -v uv" in INIT_SCRIPT, (
-            "docker-entrypoint.sh must check 'command -v uv' to skip download "
-            "when uv is already pre-installed in the image (#357)"
+            "docker-entrypoint.sh must probe for uv and fail fast when it is absent"
+        )
+        assert "error_exit" in INIT_SCRIPT and "uv not found" in INIT_SCRIPT, (
+            "docker-entrypoint.sh must error_exit with a clear message when uv is missing"
         )
 
-    def test_init_script_skips_download_if_present(self):
-        """Init script must use conditional logic (if/else) around the uv download."""
-        # Pattern: if command -v uv ... else ... fi
-        assert re.search(r'if\s+command\s+-v\s+uv', INIT_SCRIPT), (
-            "docker-entrypoint.sh must use 'if command -v uv' guard around the download"
-        )
-
-    def test_init_script_curl_download_in_else_branch(self):
-        """The curl download must be in the else branch (only runs if uv not found)."""
-        # Find the conditional block
-        m = re.search(
-            r'if\s+command\s+-v\s+uv.*?fi',
-            INIT_SCRIPT, re.DOTALL
-        )
-        assert m, "Could not find uv conditional block in docker-entrypoint.sh"
-        block = m.group(0)
-        # curl must appear after 'else' not in the 'then' branch
-        else_pos = block.find("else")
-        curl_pos = block.find("curl")
-        assert else_pos != -1, "No 'else' branch in uv conditional"
-        assert curl_pos != -1, "No 'curl' in uv conditional block"
-        assert curl_pos > else_pos, (
-            "curl download must be in the 'else' branch, not in the 'if/then' branch"
-        )
-
-    def test_init_script_error_exit_on_download_failure(self):
-        """Curl download must call error_exit on failure (not silently continue)."""
-        assert "error_exit" in INIT_SCRIPT and "Failed to install uv" in INIT_SCRIPT, (
-            "docker-entrypoint.sh must call error_exit if uv download fails, "
-            "so the container exits with a clear message instead of failing silently"
-        )
-
-    def test_init_script_path_includes_leap_aide_local_bin(self):
-        """PATH must include /home/leap-aide/.local/bin for fallback runtime install."""
-        assert "/home/leap-aide/.local/bin" in INIT_SCRIPT, (
-            "docker-entrypoint.sh must include /home/leap-aide/.local/bin in PATH "
-            "for the case where uv is installed at runtime via curl"
+    def test_init_script_does_not_patch_path_for_local_bin(self):
+        """No ~/.local/bin PATH hack — that only served the removed curl install."""
+        assert "/home/leap-aide/.local/bin" not in INIT_SCRIPT, (
+            "docker-entrypoint.sh must not add ~/.local/bin to PATH; uv is "
+            "installed system-wide to /usr/local/bin"
         )
 
 

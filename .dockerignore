@@ -1,17 +1,99 @@
-.git
-.pytest_cache
-__pycache__
+# Build context exclusions — single source of truth for every stage
+# (base / app / cicd / runtime). runtime derives FROM cicd derives FROM app, so
+# there is no per-target difference worth keeping: the old .dockerignore.cicd
+# was merged into this file and deleted.
+#
+# buildah picks this up automatically from the context root — do NOT pass
+# --ignorefile unless you deliberately want a different filter.
+#
+# HARD CONSTRAINTS — paths the Dockerfile or the build scripts read; they must
+# survive this filter:
+#   backend/tests                        -> Dockerfile:358
+#   backend/scripts/docker-entrypoint.sh -> Dockerfile:727
+#   backend/scripts/hermes-agent.env     -> scripts/npm_warmup.sh
+#
+# Rules of thumb:
+#   * Mirror .gitignore: what is not worth committing is not worth shipping.
+#   * Hidden entries are FAIL-CLOSED. `**/.*` drops every hidden path at any
+#     depth — directories AND files — because Docker's pattern matcher cannot
+#     tell `.claude/` from `.env` by type, only by name. Leaving hidden files
+#     in by default is how a nested `a/.env` leaks a password into the image.
+#   * If a build ever needs a hidden file, un-exclude it explicitly below.
+#     New hidden files do NOT enter the image until you do.
+
+# --- Hidden entries at any depth: .git .github .claude .venv .pytest_cache
+# --- frontend/.vite backend/__pycache__ .buildah-storage-root ... ---
+**/.*
+
+# --- Whitelist: hidden files that must survive the rule above. Docker's
+# --- pattern matcher cannot tell a hidden directory from a hidden file, so
+# --- this list is how a hidden FILE opts back in. ORDER MATTERS: a `!` line
+# --- only overrides exclusions that appear EARLIER in this file.
+# ---
+# --- .env is required at runtime — install.sh writes a systemd unit with
+# --- EnvironmentFile=$DEST/.env — so the runtime image must contain it.
+# --- NOTE: it carries HERMES_WEBUI_PASSWORD and TLS key paths and is baked
+# --- into an image layer; rotate those if the image is ever shared.
+!.env
+
+# --- Python cache / packaging junk (not hidden, so not caught above).
+# --- `**/` prefix is required: unlike .gitignore, a bare `__pycache__/` in
+# --- .dockerignore matches the root only and lets backend/__pycache__ through.
+**/__pycache__/
 *.pyc
 *.pyo
-tests/
-.env*
-# Host-side dev/build outputs that must never enter the image.
-.venv/
-frontend/node_modules/
+*.pyd
+
+# --- Node & frontend tooling (reinstalled inside the image). Same `**/`
+# --- requirement as above — a nested node_modules must not slip through.
+**/node_modules/
+frontend/.tsbuildinfo
+
+# --- Frontend build output. Every file here is regenerated during the image
+# build: vite emits assets/ + index.html, copies frontend/public/ out as
+# logo/ + observer.html, and `postbuild` copies @novnc/novnc into novnc/.
+# Shipping a stale host copy is exactly why Dockerfile:608 has to `rm -rf`
+# assets/ + index.html again. (Dockerfile's "repo-tracked" note about
+# static/logo + observer.html is wrong — git tracks nothing under static/.)
 frontend/dist/
-frontend/.vite/
-frontend/.cache/
-.lingyue-lab/
+static/
+
+# --- Generated version badge — Dockerfile:240 overwrites it ---
+backend/app/api/_version.py
+
+# --- Not hidden, but never belong in an image ---
+CLAUDE.md
+AGENTS.md
+copilot-instructions.md
+git_commit_head.txt
+
+# --- Local-only review harness, scratch, backups ---
+graphify-out/
+archive/
+*.bak
+*.swp
+*.swo
+
+# --- Screenshots & transient artifacts ---
+screenshot-*.png
+full-UI.png
+
+# --- Docs (the Dockerfile never reads them) ---
 docs/
-# Build artifacts already shipped via /static (ci/runtime skip them).
-backend/scripts/.results/
+
+# --- Local buildah image store + runroot (BUILDAH_ROOT / BUILDAH_RUNROOT).
+# Must never enter the build context: `COPY . /build` would walk the whole
+# store, including live overlay `merged/` mountpoints (minutes of metadata
+# I/O) and then bake it into the image. Also covered by **/.*; the explicit
+# rules keep the "why" next to the names. The second pattern covers the
+# misspelled runroot name currently used by the lab script.
+.buildah-storage*/
+
+# --- OS junk / logs ---
+Thumbs.db
+*.log
+
+# --- Test artifacts only. The tests themselves are wanted (see HARD
+# CONSTRAINTS above) — only their results are disposable.
+backend/tests/.results/
+frontend/tests/.results/

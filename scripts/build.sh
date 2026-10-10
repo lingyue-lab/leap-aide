@@ -116,6 +116,8 @@ while [[ $# -gt 0 ]]; do
       echo "  DOCKER_NETWORK             RUN network mode (default: host)"
       echo "  DOCKER_LOG_DIR             default: ~/.cache/leap-aide"
       echo "  BUILDAH_STORAGE_DRIVER     default: overlay"
+      echo "  BUILDAH_ROOT               buildah store root (empty = buildah default)"
+      echo "  BUILDAH_RUNROOT            buildah runroot (empty = buildah default)"
       echo ""
       echo "Examples:"
       echo "  ./scripts/build.sh              # Build all"
@@ -249,8 +251,9 @@ build_backend() {
 # Builds the `runtime` stage of the repo-root Dockerfile with buildah.
 # Ported from .lingyue-lab/scripts/test-build-runtime-image.sh.
 #
-# Everything site-specific (proxy, package mirrors, git host, registry tag)
-# comes from the environment — nothing is hardcoded here. See --help.
+# Everything site-specific (proxy, package mirrors, git host, registry tag,
+# buildah store location) comes from the environment — nothing is hardcoded
+# here. See --help.
 #
 # Every Dockerfile ARG is forwarded as a --build-arg of the same name, always
 # explicitly, even when empty: the cicd stage's ARGs inherit into the runtime
@@ -327,12 +330,46 @@ build_container_image() {
     --build-arg "BUILD_NPM_WARMUP=${BUILD_NPM_WARMUP:-0}"
   )
 
+  # Optional store override. Empty = buildah's default store, so behaviour is
+  # unchanged unless a site opts in. --root/--runroot are buildah global
+  # (persistent) flags; cobra accepts them in any position, but they are listed
+  # before `build` to match the documented buildah form.
+  #
+  # Why this matters: the default store is often on a filesystem the kernel
+  # refuses as an overlay upperdir (e.g. a container's own overlayfs snapshot),
+  # which makes layer commits fail outright. Pointing at a real ext4 mount
+  # gives "Native Overlay Diff: true" and keeps the overlay driver in-kernel
+  # instead of falling back to fuse-overlayfs.
+  if [ -n "${BUILDAH_ROOT:-}" ] && [ "$(id -u)" -ne 0 ]; then
+    die "BUILDAH_ROOT is set — please run as root"
+  fi
+
+  local -a store_args=()
+  if [ -n "${BUILDAH_ROOT:-}" ]; then
+    store_args+=(--root "$BUILDAH_ROOT")
+  fi
+  if [ -n "${BUILDAH_RUNROOT:-}" ]; then
+    store_args+=(--runroot "$BUILDAH_RUNROOT")
+  fi
+
+  # Display-only prefix so the verification commands printed below hit the
+  # same store the build actually used. Built from store_args, so it cannot
+  # drift from the real invocation.
+  local ba_display="buildah --storage-driver ${BUILDAH_STORAGE_DRIVER:-overlay}"
+  if [ ${#store_args[@]} -gt 0 ]; then
+    ba_display+=" ${store_args[*]}"
+  fi
+
   # --layers reuses the image layer cache; --jobs 0 uncaps multi-arch build
   # parallelism; --isolation=oci matches the lab script. --ignorefile is
-  # deliberately NOT passed: .dockerignore.cicd is for the cicd target only,
-  # runtime builds against the default .dockerignore.
+  # deliberately NOT passed: every target shares the repo-root .dockerignore.
   local -a cmd=(
     buildah --storage-driver "${BUILDAH_STORAGE_DRIVER:-overlay}"
+  )
+  if [ ${#store_args[@]} -gt 0 ]; then
+    cmd+=("${store_args[@]}")
+  fi
+  cmd+=(
     build --layers --jobs 0
     --network="${DOCKER_NETWORK:-host}"
     --target runtime
@@ -352,6 +389,10 @@ build_container_image() {
   cmd+=(--tag "$DOCKER_IMAGE" -f "$PROJECT_ROOT/Dockerfile" "$PROJECT_ROOT")
 
   _dlog "buildah build --target runtime → ${DOCKER_IMAGE}"
+  _dlog "  store                 = ${BUILDAH_ROOT:-<buildah default>}"
+  _dlog "  runroot               = ${BUILDAH_RUNROOT:-<buildah default>}"
+  _dlog "  context               = ${PROJECT_ROOT}"
+  _dlog "  ignorefile            = ${PROJECT_ROOT}/.dockerignore (auto-read by buildah)"
   _dlog "  HERMES_AGENT_REPO_URL = ${hermes_repo:-<upstream>}"
   _dlog "  HERMES_AGENT_COMMIT   = ${ha_commit:-<unset>}"
   _dlog "  HERMES_VERSION        = ${ha_version}"
@@ -370,8 +411,8 @@ build_container_image() {
   ok "runtime build OK — ${DOCKER_IMAGE}"
   say ""
   say "${B}Manual verification (optional):${R}"
-  say "  buildah images ${DOCKER_IMAGE} --format '{{.Name}}:{{.Tag}}\t{{.Size}}'"
-  say "  buildah inspect --type image ${DOCKER_IMAGE} --format '{{.OCIv1.Config.Entrypoint}}'"
+  say "  ${ba_display} images ${DOCKER_IMAGE} --format '{{.Name}}:{{.Tag}}\t{{.Size}}'"
+  say "  ${ba_display} inspect --type image ${DOCKER_IMAGE} --format '{{.OCIv1.Config.Entrypoint}}'"
   say "  curl -s http://localhost:8787/health   # once the container is running"
 }
 

@@ -6,9 +6,10 @@
 #   1. Validate ENV_IGNORELIST / ENV_OBFUSCATE_PART
 #   2. Detect WANTED_UID/WANTED_GID from mounted volumes
 #   3. Swap from leap-aide-init (UID 1025) to leap-aide (UID dynamically adjusted)
-#   4. Prepare /app from /build (rsync + chown)
+#   4. Align /app ownership with the runtime UID (the tree is baked into the image)
 #   5. Provision state dir, workspace dir
-#   6. Install hermes-agent from host mount into a venv (skipped if not mounted)
+#   6. Install hermes-agent into a venv (from a host mount if provided, else
+#      the copy baked into the image at /usr/local/lib/hermes-agent)
 #   7. Start the leap-aide server
 #
 # Run as root (the Dockerfile USER is leap-aide-init which has passwordless sudo).
@@ -231,10 +232,14 @@ if [ -f $it ]; then
 fi
 
 ##
-echo ""; echo "-- Making sure /app is owned by the leap-aide user to avoid permission issues when running the server "
-sudo mkdir -p /app || error_exit "Failed to create /app directory"
-sudo chown leap-aide:leap-aide /app || error_exit "Failed to set owner of /app to leap-aide user"
-sudo rsync -av --chown=leap-aide:leap-aide /build/ /app/ || error_exit "Failed to sync /build to /app with correct ownership"
+echo ""; echo "-- Aligning /app ownership with the leap-aide user"
+# /app is baked into the image and is owned by leap-aide-init. The UID is
+# adapted at runtime (see WANTED_UID above) and `usermod` does not touch files
+# that already exist, so re-own the tree to match — otherwise the server runs
+# as a user that cannot write its own checkout.
+# This replaces the old `rsync /build/ /app/`, which re-copied the whole tree
+# on every start just to apply --chown.
+sudo chown -R ${WANTED_UID}:${WANTED_GID} /app || error_exit "Failed to set owner of /app to ${WANTED_UID}:${WANTED_GID}"
 it=/app/.testfile; touch $it || error_exit "Failed to verify /app directory"
 rm -f $it || error_exit "Failed to delete test file in /app"
 
@@ -269,20 +274,16 @@ else
 fi
 
 echo ""; echo "==================="
-echo ""; echo "== Installing uv and creating a new virtual environment for leap-aide"
+echo ""; echo "== Creating a new virtual environment for leap-aide"
 
-export PATH="/home/leap-aide/.local/bin/:$PATH"
-if command -v uv &>/dev/null; then
-  echo "-- uv already installed ($(uv --version)), skipping download"
-else
-  echo "-- uv not found, downloading..."
-  curl -LsSf https://astral.sh/uv/install.sh | sh || error_exit "Failed to install uv — check network connectivity"
-fi
-export UV_PROJECT_ENVIRONMENT=venv
-
-export UV_CACHE_DIR=/uv_cache
-sudo mkdir -p ${UV_CACHE_DIR} || error_exit "Failed to create /uv_cache directory"
-sudo chown leap-aide:leap-aide ${UV_CACHE_DIR} || error_exit "Failed to set owner of ${UV_CACHE_DIR} to leap-aide user"
+# uv is baked into the image at /usr/local/bin (installed as root with
+# UV_INSTALL_DIR=/usr/local/bin; TestDockerfileUvPreinstall asserts this).
+# There used to be a `curl | sh` fallback here for images that lacked it. It
+# was unreachable for this image, and a production entrypoint that fetches and
+# executes remote code at start is a supply-chain surface — a missing uv is an
+# image defect, so fail fast instead of quietly repairing it over the network.
+command -v uv >/dev/null 2>&1 \
+  || error_exit "uv not found on PATH — image was built without it (expected /usr/local/bin/uv)"
 
 cd /app
 if [ -f /app/venv/bin/python3 ]; then
@@ -301,15 +302,19 @@ test -x /app/venv/bin/python3
 
 echo ""; echo "== Installing hermes-agent into leap-aide's venv"
 # Backend deps (pyyaml, hindsight-client) are baked into the image at build time.
-# Only hermes-agent remains a runtime install — it comes from a host mount.
+# Only hermes-agent remains a runtime install — sourced from a host mount when
+# one is provided, otherwise from the copy already in the image.
 
 if [ -f /app/venv/.agent_installed ]; then
   echo ""; echo "== hermes-agent already installed — skipping (fast restart)"
 else
-  echo ""; echo "== Locating hermes-agent source on host"
+  echo ""; echo "== Locating hermes-agent source"
+  # Ordered user-override first, image default last: a host-provided agent
+  # (mounted at /home/leap-aide/.hermes/hermes-agent) wins when present, but
+  # the copy baked into the image at /usr/local/lib/hermes-agent is enough on
+  # its own — no HERMES_AGENT_DIR bind mount is required.
   _agent_paths=(
-    "/home/leap-aide/.hermes/hermes-agent"
-    "/opt/hermes"
+    "/usr/local/lib/hermes-agent"
   )
   _agent_src=""
   for _p in "${_agent_paths[@]}"; do
@@ -334,35 +339,56 @@ else
   else
     echo ""
     echo "!! WARNING: hermes-agent source not found."
-    echo "!!   Looked in: ${_agent_paths[0]}"
-    echo "!!              ${_agent_paths[1]}"
+    for _p in "${_agent_paths[@]}"; do
+      echo "!!   looked in: $_p"
+    done
     echo "!! The WebUI will start with reduced functionality (no model auto-detection,"
     echo "!! no personality routing, no CLI session imports)."
-    echo "!! To fix: mount the agent source volume into the container:"
-    echo "!!   -v /usr/local/lib/hermes-agent:/home/leap-aide/.hermes/hermes-agent"
-    echo "!! (Or run scripts/install.sh on the host to install hermes-agent first.)"
+    echo "!! The image normally ships it at /usr/local/lib/hermes-agent — if that is"
+    echo "!! missing, the image was built without it. To override with a host copy,"
+    echo "!! mount it at /home/leap-aide/.hermes/hermes-agent (optional)."
     echo ""
   fi
 fi
 
-echo ""; echo "== Running leap-aide"
+echo ""; echo "== Running leap-aide (via scripts/ctl.sh)"
 
-# Graceful shutdown: forward SIGTERM/SIGINT to the Python server process
-_python_pid=""
+# ctl.sh sources /app/.env itself, but we need the values *here* to compute the
+# log path below, so load it first. Loading twice is harmless.
+if [ -f /app/.env ]; then
+  echo "-- Loading /app/.env"
+  set -a; . /app/.env; set +a
+fi
+
+# Pin the interpreter to the venv this script prepared. bootstrap.py's
+# discover_launcher_python() would otherwise prefer agent_dir/venv/bin/python,
+# or fall through to creating its own REPO_ROOT/.venv and pip-installing —
+# neither of which is where we installed hermes-agent.
+export HERMES_WEBUI_PYTHON="${VIRTUAL_ENV}/bin/python3"
+
+# ctl.sh names its PID/log files from $WEBUI_PORT (note: NOT HERMES_WEBUI_PORT,
+# and it is read before ctl.sh sources .env), while bootstrap.py writes its log
+# to $HERMES_WEBUI_STATE_DIR/bootstrap-<port>.log. Mirror both so the path below
+# is the one that actually gets written.
+export WEBUI_PORT="${HERMES_WEBUI_PORT:-8787}"
+_ctl=/app/scripts/ctl.sh
+_log="${HERMES_WEBUI_STATE_DIR:-$HOME/.hermes/webui}/bootstrap-${WEBUI_PORT}.log"
+
+bash "$_ctl" start || error_exit "ctl.sh start failed"
+
+# ctl.sh is not a foreground supervisor: bootstrap.py Popen()s the server with
+# start_new_session=True and returns once it is healthy. Keep PID 1 alive and
+# surface the server log on stdout so `docker logs` works. `tail -F` (not -f)
+# survives ctl.sh's log rotation into old_logs/.
 _graceful_shutdown() {
-  echo "[docker] Received SIGTERM, forwarding to app.server (PID $_python_pid)..."
-  if [ -n "$_python_pid" ] && kill -0 "$_python_pid" 2>/dev/null; then
-    kill -TERM "$_python_pid"
-    wait "$_python_pid" 2>/dev/null || true
-  fi
+  echo "[docker] Received SIGTERM, stopping via ctl.sh..."
+  bash "$_ctl" stop || true
   exit 0
 }
 trap _graceful_shutdown SIGTERM SIGINT
 
-cd /app
-cd /app/backend && python -m app.server &
-_python_pid=$!
-wait "$_python_pid" || error_exit "leap-aide failed or exited with an error"
+echo "-- Following server log: $_log"
+tail -n +1 -F "$_log" &
+wait
 
-# we should never be here because the server should be running indefinitely, but if we are, we exit safely
 ok_exit "Clean exit"

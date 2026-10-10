@@ -82,15 +82,14 @@ jobs:
           # Read the shared commit pin from the source-of-truth env file.
           _commit=$(grep '^HERMES_AGENT_COMMIT=' backend/scripts/hermes-agent.env | cut -d= -f2-)
           # buildah needs --layers for layer-cache parity with docker buildx.
-          # --ignorefile (no hyphen) overrides the default ignore so tests/ is
-          # included in the build context.
+          # Context filter is the repo-root .dockerignore (single source of
+          # truth for every stage) — do not pass --ignorefile.
           buildah bud \
             --target cicd \
             --layers \
             --build-arg "HERMES_AGENT_COMMIT=${_commit}" \
             --cache-from type=gha \
             --cache-to type=gha,mode=max \
-            --ignorefile .dockerignore.cicd \
             --tag leap-aide:cicd \
             -f Dockerfile .
 

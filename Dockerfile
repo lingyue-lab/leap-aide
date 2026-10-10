@@ -13,11 +13,12 @@
 #
 # Build contexts:
 #   docker buildx build --target runtime -t leap-aide:runtime -f Dockerfile .
-#   docker buildx build --target cicd --ignore-file .dockerignore.cicd \
-#                        -t leap-aide:cicd -f Dockerfile .
+#   docker buildx build --target cicd -t leap-aide:cicd -f Dockerfile .
 #   buildah bud --target runtime --layers -t leap-aide:runtime -f Dockerfile .
-#   buildah bud --target cicd --layers --ignorefile .dockerignore.cicd \
-#               -t leap-aide:cicd -f Dockerfile .
+#   buildah bud --target cicd --layers -t leap-aide:cicd -f Dockerfile .
+#
+# Every target shares one context filter, .dockerignore at the repo root —
+# do not pass --ignore-file/--ignorefile.
 #
 # Why these engines: docker buildx is the most battle-tested path for multi-arch
 # GHA builds (release.yml uses it). buildah (Step 7 of the plan) is used by CI
@@ -167,7 +168,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONIOENCODING=utf-8
 
 # Build directory used by all later stages; runtime will rsync this into /app.
-WORKDIR /build
+WORKDIR /app
 
 # Sudo without password (same as install.sh)
 RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
@@ -230,14 +231,14 @@ FROM base AS app
 
 USER root
 
-# Source tree (excludes .git, __pycache__, tests/, .env* via repo-root .dockerignore)
-COPY --chown=leap-aide-init:leap-aide-init . /build
+# Source tree (filtered by repo-root .dockerignore: .git, hidden dirs, node_modules, static/, .env*, ...)
+COPY --chown=leap-aide-init:leap-aide-init . /app
 
 # Bake the git version tag into the image so the settings badge works even
 # when .git is not present (it is excluded by .dockerignore).
 # CI passes: --build-arg HERMES_VERSION=$(git describe --tags --always)
 ARG HERMES_VERSION=unknown
-RUN echo "__version__ = '${HERMES_VERSION}'" > /build/backend/app/api/_version.py
+RUN echo "__version__ = '${HERMES_VERSION}'" > /app/backend/app/api/_version.py
 
 # hermes-agent pin (commit SHA). See backend/scripts/hermes-agent.env for
 # rationale and the silent-fallback caveat when the SHA isn't reachable from
@@ -251,7 +252,7 @@ RUN _trusted="--trusted-host pypi.org --trusted-host files.pythonhosted.org"; \
         *tuna.tsinghua*) _trusted="$_trusted --trusted-host pypi.tuna.tsinghua.edu.cn --trusted-host files.tuna.tsinghua.edu.cn" ;; \
     esac; \
     uv pip install --system \
-        -r /build/backend/requirements.txt \
+        -r /app/backend/requirements.txt \
         $_trusted \
     && uv pip install --system \
         "hindsight-client>=0.4.22" \
@@ -349,13 +350,12 @@ USER root
 # chrome-wrapper / hermes-chrome / agent-browser.
 RUN chmod 755 /root
 
-# Re-COPY backend/tests/ on top of the /build/backend/tests/ already populated
-# by the earlier COPY . /build, so the cicd image always has tests/ regardless of
-# whether the build context used the repo-root .dockerignore (which excludes
-# tests/) or .dockerignore.cicd (which keeps it). Path mirrors the repo
+# Re-COPY backend/tests/ on top of the /app/backend/tests/ already populated
+# by the earlier COPY . /app, so the cicd image always has tests/ even if
+# .dockerignore ever grows a rule that would drop them. Path mirrors the repo
 # layout (backend/tests/) so conftest.py's REPO_ROOT discovery resolves the
 # server.py location correctly.
-COPY --chown=leap-aide-init:leap-aide-init backend/tests /build/backend/tests
+COPY --chown=leap-aide-init:leap-aide-init backend/tests /app/backend/tests
 
 # ---- DEBUG: verify mirror + connectivity before install.sh runs ----
 # Temporary debug block — confirms proxy + registry reachability. Once the
@@ -399,14 +399,14 @@ RUN echo "=== proxy + registry config ===" \
 # for non-root users).
 #
 # install.sh in --deps-only mode:
-#   - SKIPS leap-aide self-install (clone/symlink) — provided by /build already
+#   - SKIPS leap-aide self-install (clone/symlink) — provided by /app already
 #   - RUNS apt-get system deps (nodejs, npm, git, locales, …)
 #   - RUNS hermes-agent install (curl|bash installer, pinned to
 #     HERMES_AGENT_COMMIT — see env file)
 #   - RUNS Playwright Chromium download (separate from hermes-agent's bundled
 #     playwright-core to avoid the Node v26 hang bug — matches install.sh:776)
 #   - RUNS browser-use CLI install
-#   - RUNS leap-aide Python deps (uv pip install -r /build/backend/requirements.txt)
+#   - RUNS leap-aide Python deps (uv pip install -r /app/backend/requirements.txt)
 #   - RUNS command wrappers (chrome-wrapper, agent-browser-wrapper)
 # systemd is auto-skipped inside Docker (IN_DOCKER=true).
 #
@@ -471,7 +471,7 @@ RUN echo "=== proxy + registry config ===" \
 RUN --mount=type=secret,id=git_identity_key,dst=/root/.ssh/id_ed25519_install,mode=0400,required=false \
     case "${BUILD_NPM_WARMUP:-0}" in 1|true|yes|on) _warmup=1 ;; *) _warmup=0 ;; esac; \
     if [ "$_warmup" = "1" ]; then \
-        bash /build/scripts/npm_warmup.sh; \
+        bash /app/scripts/npm_warmup.sh; \
         echo "===DEBUG warmup cache state==="; \
         (ls -la /root/.cache/electron/ 2>/dev/null || echo "  (no electron cache dir)"); \
         (du -sb /root/.cache/electron/ 2>/dev/null || echo "  (du failed)"); \
@@ -529,12 +529,12 @@ RUN --mount=type=secret,id=git_identity_key,dst=/root/.ssh/id_ed25519_install,mo
     && if [ -n "${HERMES_AGENT_REPO_URL}" ]; then \
          _hermes_repo="--hermes-repo-url ${HERMES_AGENT_REPO_URL}"; \
        fi \
-    && set -- --deps-only --dir /build \
+    && set -- --deps-only --dir /app \
               --skip-build --non-interactive --china-mirror \
               --npm-registry "${BUILD_NPM_REGISTRY}" \
               ${_hermes_pin} ${_hermes_repo} \
     && export DEBUG_INSTALL=true \
-    && bash /build/scripts/install.sh "$@" 2>&1 \
+    && bash /app/scripts/install.sh "$@" 2>&1 \
     # Post-install verification: did electron install.js hit the cache (good,
     # warmup worked) or did it download (warmup missed for this version)?
     # With DEBUG_INSTALL=true, @electron/get logs the URL it tried and
@@ -551,7 +551,7 @@ RUN --mount=type=secret,id=git_identity_key,dst=/root/.ssh/id_ed25519_install,mo
     # install.js has extracted the zip. Removing them keeps the image lean.
     # When the warmup is off there is nothing of ours to clean, and running
     # --clean anyway would just delete caches install.sh legitimately made.
-    && case "${BUILD_NPM_WARMUP:-0}" in 1|true|yes|on) bash /build/scripts/npm_warmup.sh --clean ;; esac \
+    && case "${BUILD_NPM_WARMUP:-0}" in 1|true|yes|on) bash /app/scripts/npm_warmup.sh --clean ;; esac \
     # install.sh's apt-get install leaves /var/lib/apt/lists/* in the layer
     # (~30-100MB of metadata for already-installed packages). Strip it — the
     # cicd image doesn't need apt after this point and BuildKit will re-cache
@@ -569,13 +569,23 @@ RUN _trusted="--trusted-host pypi.org --trusted-host files.pythonhosted.org"; \
     esac; \
     uv pip install --system pytest pytest-timeout \
         $_trusted
+
+# static/ is excluded from the build context (.dockerignore), so nothing
+# copies it in — the frontend build below has to create it. That needs write
+# permission on /app, and /app is root:root 755: it was created by
+# `WORKDIR /app` (line ~171) running as root, and `COPY --chown` only
+# chowns the entries it copies, not a destination directory that already
+# exists. So `mkdir /app/static` from leap-aide-init fails with EACCES.
+# Create it here, as root, and hand it over. (Before static/ was excluded
+# this never showed up: the copied static/ entry was chowned correctly.)
+RUN mkdir -p /app/static && chown leap-aide-init:leap-aide-init /app/static
 USER leap-aide-init
 
 # Frontend deps (vitest, vite, tsc, postcss, tailwindcss) for tests + static
 # build. install.sh doesn't touch frontend. Drop to leap-aide-init since npm ≥7
 # refuses root installs. Timeout/retry is set as cicd-stage ENV (above) so it
 # applies here AND to install.sh's npm/npx calls; no per-invocation flags needed.
-RUN cd /build/frontend \
+RUN cd /app/frontend \
     && if [ -n "${BUILD_NPM_REGISTRY:-}" ]; then npm config set registry "${BUILD_NPM_REGISTRY}"; fi \
     && npm ci --no-audit --no-fund \
     && npm cache clean --force \
@@ -586,9 +596,9 @@ RUN cd /build/frontend \
 #   * cicd already has node + npm + frontend/node_modules (from `npm ci`
 #     above); runtime stage purges them (Dockerfile:521-545), so it can't
 #     run `npm run build` on its own.
-#   * runtime stage derives FROM cicd, so /build/static/ is inherited
+#   * runtime stage derives FROM cicd, so /app/static/ is inherited
 #     automatically. One bake, both images.
-# Without this step, runtime's `COPY . /build` (Dockerfile:231) would pick
+# Without this step, runtime's `COPY . /app` (Dockerfile:231) would pick
 # up whatever stale static/ happens to be in the build context — empty on
 # clean CI, stale on local devs — and the served frontend would 404 or
 # load JS with hashes that no longer match index.html.
@@ -597,24 +607,27 @@ RUN cd /build/frontend \
 # keep frontend/src/ — cicd still runs vitest on it. Keep node_modules —
 # runtime trims it later.
 #
-# The leading `rm -rf` clears vite's outputs from the build context. COPY .
-# /build (Dockerfile:231) brings in whatever stale static/ the build
-# host has, and the prior `static/assets/*.gz` (written by build.sh's
-# gzip step) would either (a) get gzip-rejected on the new build
-# (forcing gzip -f) or (b) shadow regenerated content. Removing just
-# assets/ + index.html is enough — static/logo/ + static/observer.html
-# are repo-tracked, not build outputs, and static/novnc/ is recreated
-# by npm's postbuild step.
-RUN rm -rf /build/static/assets /build/static/index.html \
-    && bash /build/scripts/build.sh --frontend \
-    && rm -rf /build/frontend/.vite /build/frontend/.tsbuildinfo
+# static/ is excluded from the build context (.dockerignore), so a stale host
+# copy never reaches the image — every file under it is regenerated here:
+# vite emits assets/ + index.html, copies frontend/public/ out as logo/ +
+# observer.html, and `postbuild` copies @novnc/novnc into novnc/.
+# (git tracks nothing under static/ — the old "static/logo + observer.html are
+# repo-tracked" note here was wrong.)
+#
+# The leading `rm -rf` is kept as a safety net: if a local build ever
+# re-includes static/ in the context, its stale `static/assets/*.gz` (written
+# by build.sh's gzip step) would otherwise be gzip-rejected on the new build
+# (forcing gzip -f) or shadow the regenerated files.
+RUN rm -rf /app/static/assets /app/static/index.html \
+    && bash /app/scripts/build.sh --frontend \
+    && rm -rf /app/frontend/.vite /app/frontend/.tsbuildinfo
 
 # Defensive chmod: scripts are tracked with +x in git and COPY preserves the
 # mode bit, but some fuse-overlayfs / BuildKit cache layers have been seen
 # to drop +x silently. Cheap to re-apply here.
-RUN chmod +x /build/scripts/*.sh
+RUN chmod +x /app/scripts/*.sh
 
-WORKDIR /build
+WORKDIR /app
 
 # Intentionally NO ENTRYPOINT / CMD — this is a Tekton-friendly test +
 # build environment, not a single-purpose runner. Tekton specifies
@@ -684,11 +697,11 @@ RUN apt-get purge -y --auto-remove \
 # frontend/node_modules (~300MB+) was installed by cicd for vitest+npm ci.
 # Runtime only needs the prebuilt static/ assets — frontend source tree is not
 # required.
-RUN rm -rf /build/frontend/node_modules \
-           /build/frontend/dist \
-           /build/frontend/.vite \
-           /build/frontend/.cache \
-           /build/frontend/.tsbuildinfo
+RUN rm -rf /app/frontend/node_modules \
+           /app/frontend/dist \
+           /app/frontend/.vite \
+           /app/frontend/.cache \
+           /app/frontend/.tsbuildinfo
 
 # ── Trim npm caches ──────────────────────────────────────────────────────────
 # Preserve /root/.npm/_npx/ — backend/scripts/agent-browser-wrapper.sh looks up
@@ -703,12 +716,12 @@ RUN rm -rf /root/.npm/_cacache /root/.npm/_logs /root/.npm/_temp /root/.npm/_upd
 
 # ── Trim build/test shell scripts ────────────────────────────────────────────
 # cicd stage keeps these for build+test convenience; runtime does not invoke
-# them. Repo source remains unchanged (in scripts/), only the /build/scripts/
+# them. Repo source remains unchanged (in scripts/), only the /app/scripts/
 # copies are removed.
-RUN rm -f /build/scripts/install.sh \
-          /build/scripts/build.sh \
-          /build/scripts/run-test.sh \
-          /build/scripts/cmd-util.sh
+RUN rm -f /app/scripts/install.sh \
+          /app/scripts/build.sh \
+          /app/scripts/run-test.sh \
+          /app/scripts/cmd-util.sh
 
 # ── Defensive cleanup ────────────────────────────────────────────────────────
 # Strip any SSH scaffolding cicd stage left from secret mounts (always present
