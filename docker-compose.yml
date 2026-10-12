@@ -16,9 +16,6 @@ services:
     environment:
       # You can set enviroments to override .env.
       # Set to your host user ID: run `id -u` and `id -g` to find them.
-      # On macOS, UIDs start at 501 (not 1000), so set UID and GID in a .env file:
-      #   echo "UID=$(id -u)" >> .env
-      #   echo "GID=$(id -g)" >> .env
       # Without this, the container may not be able to read your mounted files.
       - WANTED_UID=${UID:-1000}
       - WANTED_GID=${GID:-1000}
@@ -31,4 +28,10 @@ services:
       # live under the mounted ~/.hermes volume. Mirrors the entrypoint default.
       - HERMES_HOME=/home/leap-aide/.hermes
       - HERMES_WEBUI_PASSWORD=lingyue-lab
+      - HTTP_PROXY=
+      - HTTPS_PROXY=
+      - NO_PROXY=
+      - http_proxy=
+      - https_proxy=
+      - no_proxy=
     restart: unless-stopped

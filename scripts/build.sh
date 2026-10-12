@@ -109,7 +109,11 @@ while [[ $# -gt 0 ]]; do
       echo "  HERMES_HOME                hermes-agent data/seed dir at build time"
       echo "                             (default: /var/lib/leap-aide/hermes-seed)"
       echo "  HERMES_VERSION             version badge (default: git describe --tags --always)"
-      echo "  HTTP_PROXY/HTTPS_PROXY/NO_PROXY   forwarded as build-args (either case)"
+      echo "  BUILD_HTTP_PROXY/BUILD_HTTPS_PROXY/BUILD_NO_PROXY"
+      echo "                             build-time proxy (empty = direct connect)."
+      echo "                             Deliberately NOT HTTP_PROXY/HTTPS_PROXY/NO_PROXY:"
+      echo "                             those are host/runtime toolchain names and are"
+      echo "                             ignored here (host env is blocked too)"
       echo "  BUILD_APT_MIRROR, BUILD_PIP_INDEX_URL, BUILD_UV_PYTHON_MIRROR"
       echo "  BUILD_NPM_REGISTRY, BUILD_PLAYWRIGHT_DOWNLOAD_HOST"
       echo "  BUILD_ELECTRON_MIRROR, BUILD_ELECTRON_BUILDER_BINARIES_MIRROR"
@@ -261,7 +265,10 @@ build_backend() {
 # Every Dockerfile ARG is forwarded as a --build-arg of the same name, always
 # explicitly, even when empty: the cicd stage's ARGs inherit into the runtime
 # stage and must be cleared or they leak into the runtime layer's image config
-# (see the comment around Dockerfile:95).
+# (see the comment around Dockerfile:95). Exception: the six proxy ARGs are
+# fed from the BUILD_HTTP_PROXY/BUILD_HTTPS_PROXY/BUILD_NO_PROXY inputs (see
+# below) — plain HTTP_PROXY/HTTPS_PROXY/NO_PROXY are host/runtime toolchain
+# names and deliberately do not drive the build.
 #
 # Secrets: only `git_identity_key` is mounted (Dockerfile:471,483). There is
 # deliberately no `git_host_key` — the build sets StrictHostKeyChecking=
@@ -281,12 +288,26 @@ build_container_image() {
   mkdir -p "$(dirname "$DOCKER_LOG_FILE")"
   : > "$DOCKER_LOG_FILE"
 
-  # Proxy: the Dockerfile declares uppercase ARGs only (Dockerfile:53-55) and
-  # maps the lowercase variants itself (Dockerfile:56-61), but shells commonly
-  # export only lowercase. Normalize so either form works.
-  HTTP_PROXY="${HTTP_PROXY:-${http_proxy:-}}"
-  HTTPS_PROXY="${HTTPS_PROXY:-${https_proxy:-}}"
-  NO_PROXY="${NO_PROXY:-${no_proxy:-}}"
+  # Build-time proxy: BUILD_HTTP_PROXY / BUILD_HTTPS_PROXY / BUILD_NO_PROXY.
+  # Plain HTTP_PROXY/HTTPS_PROXY/NO_PROXY are deliberately NOT read — those
+  # names belong to the host/runtime toolchain (e.g. podman's --http-proxy
+  # injects them into containers at run time). Overloading the same names here
+  # made it impossible to proxy just the build or just the host. Host proxy env
+  # is blocked outright by buildah's --http-proxy=false below; the only path
+  # into the build is BUILD_* -> --build-arg.
+  # The Dockerfile consumes canonical HTTP_PROXY/HTTPS_PROXY/NO_PROXY ARGs
+  # (plus lowercase mirrors, since some tools only read those), so map at the
+  # --build-arg boundary and forward both cases.
+  local build_http_proxy="${BUILD_HTTP_PROXY:-}"
+  local build_https_proxy="${BUILD_HTTPS_PROXY:-}"
+  local build_no_proxy="${BUILD_NO_PROXY:-}"
+
+  # Compat warning: the plain names used to drive the build and no longer do.
+  if { [ -n "${HTTP_PROXY:-}${http_proxy:-}" ] && [ -z "$build_http_proxy" ]; } \
+     || { [ -n "${HTTPS_PROXY:-}${https_proxy:-}" ] && [ -z "$build_https_proxy" ]; } \
+     || { [ -n "${NO_PROXY:-}${no_proxy:-}" ] && [ -z "$build_no_proxy" ]; }; then
+    warn "HTTP_PROXY/HTTPS_PROXY/NO_PROXY no longer drive the image build — use BUILD_HTTP_PROXY/BUILD_HTTPS_PROXY/BUILD_NO_PROXY"
+  fi
 
   # hermes-agent commit pin. Env wins (the contract documented in
   # backend/scripts/hermes-agent.env); otherwise read the canonical pin.
@@ -316,9 +337,12 @@ build_container_image() {
   fi
 
   local -a build_args=(
-    --build-arg "HTTP_PROXY=$HTTP_PROXY"
-    --build-arg "HTTPS_PROXY=$HTTPS_PROXY"
-    --build-arg "NO_PROXY=$NO_PROXY"
+    --build-arg "HTTP_PROXY=$build_http_proxy"
+    --build-arg "HTTPS_PROXY=$build_https_proxy"
+    --build-arg "NO_PROXY=$build_no_proxy"
+    --build-arg "http_proxy=$build_http_proxy"
+    --build-arg "https_proxy=$build_https_proxy"
+    --build-arg "no_proxy=$build_no_proxy"
     --build-arg "HERMES_AGENT_COMMIT=$ha_commit"
     --build-arg "HERMES_AGENT_REPO_URL=$hermes_repo"
     --build-arg "HERMES_INSTALLER_MIRROR=${HERMES_INSTALLER_MIRROR:-}"
@@ -367,6 +391,9 @@ build_container_image() {
   # --layers reuses the image layer cache; --jobs 0 uncaps multi-arch build
   # parallelism; --isolation=oci matches the lab script. --ignorefile is
   # deliberately NOT passed: every target shares the repo-root .dockerignore.
+  # --http-proxy=false blocks buildah's default host-proxy env injection
+  # (default true: it copies the builder shell's HTTP_PROXY etc. into every
+  # RUN). Proxies reach the build only via BUILD_* -> --build-arg.
   local -a cmd=(
     buildah --storage-driver "${BUILDAH_STORAGE_DRIVER:-overlay}"
   )
@@ -376,6 +403,7 @@ build_container_image() {
   cmd+=(
     build --layers --jobs 0
     --network="${DOCKER_NETWORK:-host}"
+    --http-proxy=false
     --target runtime
   )
   if [ "$DOCKER_NO_CACHE" = true ]; then
@@ -397,6 +425,7 @@ build_container_image() {
   _dlog "  runroot               = ${BUILDAH_RUNROOT:-<buildah default>}"
   _dlog "  context               = ${PROJECT_ROOT}"
   _dlog "  ignorefile            = ${PROJECT_ROOT}/.dockerignore (auto-read by buildah)"
+  _dlog "  build proxy           = ${build_http_proxy:-<direct>}"
   _dlog "  HERMES_AGENT_REPO_URL = ${hermes_repo:-<upstream>}"
   _dlog "  HERMES_AGENT_COMMIT   = ${ha_commit:-<unset>}"
   _dlog "  HERMES_VERSION        = ${ha_version}"

@@ -50,16 +50,24 @@ ENV DEBIAN_FRONTEND=noninteractive
 # curl, uv, pip, hermes-agent installer etc. all read them. Set via
 #   --build-arg HTTP_PROXY=http://proxy.example.com:8080
 # or pass via host's http_proxy (BuildKit auto-forwards it).
-# Lowercase variants are also exported since some tools only check those.
+# scripts/build.sh feeds these from BUILD_HTTP_PROXY/BUILD_HTTPS_PROXY/
+# BUILD_NO_PROXY and blocks host-env injection (buildah --http-proxy=false),
+# so a host proxy never leaks into the build by accident.
+#
+# ARG, NOT ENV — deliberately. An ARG is injected into this stage's RUN
+# environments but never written into the image config, so the finished image
+# carries no HTTP_PROXY keys at all. The old `ENV HTTP_PROXY=` blanking in the
+# runtime stage could only empty the VALUE — the key stayed in the image Env
+# list (visible in `docker exec env`) because Dockerfile has no unset.
+# ARG scope does not cross FROM: app/cicd re-declare theirs.
+# All six variants are forwarded explicitly by scripts/build.sh (some tools
+# only read the lowercase names); declare all six here so RUN sees either case.
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
 ARG NO_PROXY
-ENV HTTP_PROXY=${HTTP_PROXY} \
-    HTTPS_PROXY=${HTTPS_PROXY} \
-    NO_PROXY=${NO_PROXY} \
-    http_proxy=${HTTP_PROXY} \
-    https_proxy=${HTTPS_PROXY} \
-    no_proxy=${NO_PROXY}
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
 
 # Optional mirror sources (build-arg controlled). Empty = use upstream.
 #   BUILD_APT_MIRROR        APT source root, e.g. http://mirrors.tuna.tsinghua.edu.cn/ubuntu
@@ -229,6 +237,17 @@ RUN rm -rf /var/lib/apt/lists/* /etc/apt/apt.conf.d/01proxy \
 # ---- app: source + baked deps -------------------------------------------
 FROM base AS app
 
+# Build-time proxy (see base stage): ARG-only so RUN steps can reach the
+# network without the keys ever landing in the image config. Re-declared here
+# because ARG scope stops at FROM. Lowercase mirrors the uppercase values
+# (build.sh forwards all six --build-args explicitly).
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+
 USER root
 
 # Source tree (filtered by repo-root .dockerignore: .git, hidden dirs, node_modules, static/, .env*, ...)
@@ -260,6 +279,16 @@ RUN _trusted="--trusted-host pypi.org --trusted-host files.pythonhosted.org"; \
 
 # ---- cicd: test + build image -----------------------------------------------
 FROM app AS cicd
+
+# Build-time proxy (see base stage): ARG-only, re-declared at this FROM
+# boundary so every network RUN here (install.sh, npm ci, npm_warmup) sees the
+# proxy without persisting any HTTP_PROXY keys into the image config.
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
 
 # Optional mirrors (mirror of the BUILD_APT_MIRROR / BUILD_PIP_INDEX_URL /
 # BUILD_UV_PYTHON_MIRROR pattern). Empty = upstream.
@@ -684,16 +713,12 @@ FROM cicd AS runtime
 
 USER root
 
-# Unset build-time-only env vars that cicd stage inherited but runtime
-# should not leak. Empty string is equivalent to unset for proxy-aware
-# tools and for npm / curl / uv.
-ENV HTTP_PROXY= \
-    HTTPS_PROXY= \
-    NO_PROXY= \
-    http_proxy= \
-    https_proxy= \
-    no_proxy= \
-    npm_config_registry= \
+# Blank build-time-only env vars that cicd stage inherited but runtime
+# should not leak. Empty string is equivalent to unset for npm / curl / uv.
+# Note: HTTP_PROXY / HTTPS_PROXY / NO_PROXY need no entry here — they are
+# build-arg-scoped ARGs since the base stage, so the keys never enter the
+# image config (adding `ENV HTTP_PROXY=` would just reintroduce empty keys).
+ENV npm_config_registry= \
     NPM_CONFIG_REGISTRY= \
     npm_config_fetch_timeout= \
     npm_config_fetch_retries= \
