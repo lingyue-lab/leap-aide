@@ -340,11 +340,17 @@ ENV HERMES_AGENT_REPO_URL=${HERMES_AGENT_REPO_URL}
 ARG HERMES_INSTALLER_MIRROR=
 ENV HERMES_INSTALLER_MIRROR=${HERMES_INSTALLER_MIRROR}
 
-# Where hermes-agent installs to. Default /usr/local/lib/hermes-agent (the
-# path documented in leap-aide's README). Override via --build-arg if you
-# need it elsewhere (e.g. /opt/hermes-agent for a non-root install).
-# install.sh reads HERMES_HOME env var and passes --hermes-home to installer.
-ARG HERMES_HOME=/usr/local/lib
+# HERMES_HOME is the hermes-agent DATA/state dir (config.yaml, .env, SOUL.md,
+# sessions/, logs/, skills/, managed bin/) — NOT the code checkout. During the
+# build it points at a SEED location the hermes-agent installer populates (via
+# install.sh forwarding --hermes-home). Agent code always lands at
+# /usr/local/lib/hermes-agent through the installer's root-Linux FHS layout,
+# independent of this value (see resolve_install_layout in the hermes-agent
+# installer). At runtime the entrypoint copies the seed into
+# /home/leap-aide/.hermes (the compose volume) and the runtime stage re-points
+# HERMES_HOME there. The seed path must NOT be the runtime path: the compose
+# bind mount would shadow anything baked at /home/leap-aide/.hermes.
+ARG HERMES_HOME=/var/lib/leap-aide/hermes-seed
 ENV HERMES_HOME=${HERMES_HOME}
 
 USER root
@@ -417,11 +423,12 @@ RUN echo "=== proxy + registry config ===" \
 #   - RUNS command wrappers (chrome-wrapper, agent-browser-wrapper)
 # systemd is auto-skipped inside Docker (IN_DOCKER=true).
 #
-# Don't override HOME here — install.sh runs as USER root, and the
-# hermes-agent installer defaults to /root/.hermes (or /usr/local/lib when
-# it detects it can write there). Setting HOME=/home/leap-aide-init would
-# redirect the installer to ~/.hermes of leap-aide-init, which is not what
-# we want — hermes-agent should land at /usr/local/lib/hermes-agent.
+# Don't override HOME here — install.sh runs as USER root, and HOME only
+# influences $HOME-relative fallbacks. Code placement is decided by the
+# installer's root-Linux FHS layout (/usr/local/lib/hermes-agent, independent
+# of HERMES_HOME); state lands in $HERMES_HOME (the seed dir). Setting
+# HOME=/home/leap-aide-init would redirect $HOME/.local style paths (uv tools,
+# caches) to leap-aide-init's home, which is not what we want.
 # Pass --hermes-commit (preferred for stability — see
 # backend/scripts/hermes-agent.env) and --hermes-repo-url (custom fork/mirror,
 # empty = upstream NousResearch) to install.sh. Uses POSIX `set --` so the
@@ -567,6 +574,28 @@ RUN --mount=type=secret,id=git_identity_key,dst=/root/.ssh/id_ed25519_install,mo
     && rm -rf /var/lib/apt/lists/* \
     || { echo "++ install.sh --deps-only failed"; exit 1; }
 
+# Post-install layout assertions: code at the FHS default, no state pollution
+# under /usr/local/lib, and the seed at $HERMES_HOME is complete. Fails the
+# build loudly if the upstream installer layout drifts.
+RUN set -e; \
+    test -f /usr/local/lib/hermes-agent/run_agent.py; \
+    test ! -e /usr/local/lib/.env && test ! -e /usr/local/lib/config.yaml \
+      && test ! -d /usr/local/lib/sessions && test ! -d /usr/local/lib/logs \
+      && test ! -d /usr/local/lib/memories && test ! -d /usr/local/lib/bin; \
+    test -f "$HERMES_HOME/config.yaml" && test -f "$HERMES_HOME/.env" \
+      && test -f "$HERMES_HOME/SOUL.md" && test -d "$HERMES_HOME/skills" \
+      && test -x "$HERMES_HOME/bin/uv"; \
+    python3 -c "import yaml; c=yaml.safe_load(open('$HERMES_HOME/config.yaml')); \
+      assert c.get('display',{}).get('show_reasoning') is True, 'show_reasoning patch missing'"; \
+    chmod 644 "$HERMES_HOME/.env"; \
+    ls -la "$HERMES_HOME/bin"; \
+    for _l in "$HERMES_HOME"/bin/*; do \
+      [ -L "$_l" ] || continue; \
+      _t=$(readlink -f "$_l") || { echo "dangling symlink: $_l"; exit 1; }; \
+      [ -e "$_t" ] || { echo "dangling symlink: $_l -> $_t"; exit 1; }; \
+    done; \
+    echo "layout assertions OK"
+
 # install.sh installs backend/requirements.txt (pyyaml) but NOT pytest —
 # pytest is a test framework, not a runtime dep. Add it on top, system-wide.
 USER root
@@ -679,8 +708,11 @@ ENV HTTP_PROXY= \
 
 # Preserve these from the cicd stage — runtime still consumes them:
 #   HERMES_AGENT_COMMIT  — warn-only consistency check in entrypoint
-#   HERMES_HOME          — read by `hermes` CLI
 #   HERMES_AGENT_REPO_URL — forwarded by entrypoint scripts
+#
+# HERMES_HOME is NOT preserved: the cicd stage points it at the build-time
+# seed dir. Runtime re-points it at the state dir (the compose volume).
+ENV HERMES_HOME=/home/leap-aide/.hermes
 
 # ── Trim test framework ──────────────────────────────────────────────────────
 # cicd stage installs pytest+pytest-timeout for tests. Remove them from runtime.

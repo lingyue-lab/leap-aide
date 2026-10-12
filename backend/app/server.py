@@ -308,24 +308,8 @@ def main() -> None:
     BUILTIN_DEFAULT_WORKSPACE.mkdir(parents=True, exist_ok=True)
     _done()
 
-    # ── Stage 6: Seed bundled skills ──
-    # Copy SDK-bundled skills from <agent_dir>/skills/ to HERMES_HOME/skills/
-    # so /api/skills can list them. Idempotent; never overwrites. See
-    # app/api/skills_sync.py for the full rationale (Docker cicd image has
-    # HERMES_HOME=/usr/local/lib where /skills does not exist).
-    _stage(6, 'Seeding bundled skills')
-    try:
-        from app.api.skills_sync import seed_bundled_skills
-        n = seed_bundled_skills()
-        if n > 0:
-            _done(f'{n} new')
-        else:
-            _done('all present')
-    except Exception as e:
-        _warn(str(e))
-
-    # ── Stage 7: Start gateway watcher ──
-    _stage(7, 'Starting gateway watcher')
+    # ── Stage 6: Start gateway watcher ──
+    _stage(6, 'Starting gateway watcher')
     try:
         from app.api.session_watcher import start_watcher
         start_watcher()
@@ -333,8 +317,8 @@ def main() -> None:
     except Exception as e:
         _warn(str(e))
 
-    # ── Stage 8: Create HTTP server + TLS ──
-    _stage(8, 'Creating HTTP server + TLS')
+    # ── Stage 7: Create HTTP server + TLS ──
+    _stage(7, 'Creating HTTP server + TLS')
     httpd = QuietHTTPServer((HOST, PORT), Handler)
     from app.api.config import TLS_ENABLED, TLS_CERT, TLS_KEY
     scheme = 'https' if TLS_ENABLED else 'http'
@@ -355,10 +339,10 @@ def main() -> None:
     else:
         _done()
 
-    # ── Stage 9: Validate state.db schema ──────────────────────────────
+    # ── Stage 8: Validate state.db schema ──────────────────────────────
     # Check __webui column types before any code that swallows exceptions.
     # If types are wrong, the database is from an incompatible version.
-    _stage(9, 'Validating state.db schema')
+    _stage(8, 'Validating state.db schema')
     try:
         from app.api.webui_schema import check_webui_column_types, IncompatibleSchemaError
         from app.api.models import _get_session_db
@@ -372,8 +356,8 @@ def main() -> None:
     except Exception as e:
         _done(f'skipped ({e})')
 
-    # ── Stage 10: Start session displays ──
-    _stage(10, 'Starting session displays')
+    # ── Stage 9: Start session displays ──
+    _stage(9, 'Starting session displays')
     try:
         from app.api.session_display import ensure_pinned_displays, sync_gateway_session_cwd
         sync_gateway_session_cwd()

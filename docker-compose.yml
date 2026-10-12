@@ -4,7 +4,7 @@ services:
   leap-aide:
     # Site-specific registry stays out of git — override via env, e.g.
     #   LEAP_AIDE_IMAGE=<registry>/<image>:<tag> docker compose up
-    image: ${LEAP_AIDE_IMAGE:-leap-aide-runtime:0.1.1}
+    image: ${LEAP_AIDE_IMAGE:-leap-aide-runtime:0.1.2}
     ports:
       - "8787:8787"
     volumes:
@@ -27,5 +27,8 @@ services:
       # Where to store sessions, workspaces, and other state.
       # Must live under the mounted ~/.hermes volume to persist across rebuilds.
       - HERMES_WEBUI_STATE_DIR=/home/leap-aide/.hermes/webui
+      # hermes-agent state dir (sessions, logs, memories, config, .env) — must
+      # live under the mounted ~/.hermes volume. Mirrors the entrypoint default.
+      - HERMES_HOME=/home/leap-aide/.hermes
       - HERMES_WEBUI_PASSWORD=lingyue-lab
     restart: unless-stopped

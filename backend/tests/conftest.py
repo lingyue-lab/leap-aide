@@ -61,15 +61,14 @@ TEST_PORT      = int(os.getenv('HERMES_WEBUI_TEST_PORT',
                                str(_auto_test_port(REPO_ROOT))))
 TEST_BASE      = f"http://127.0.0.1:{TEST_PORT}"
 # Default parent is $HOME/.hermes, NOT $HERMES_HOME.
-# The cicd Docker image sets HERMES_HOME=/usr/local/lib as the SDK install
-# root, and leap-aide-init (the test user) has no write permission there.
-# Using HERMES_HOME as the test state dir parent landed TEST_STATE_DIR under
-# the SDK tree and made SESSIONS_DISPLAY_DIR (and other state dirs derived
-# from STATE_DIR) uncreatable at module-load time -- aborting collection with
-# PermissionError. Conftest still writes HERMES_HOME=TEST_STATE_DIR into
-# os.environ below so the SDK's config discovery is redirected into the
-# sandbox; this change only affects the *parent path* used when the env
-# override is absent.
+# HERMES_HOME is a data/state dir and may point anywhere (in the Docker
+# image it is a build-time seed dir), so coupling the test state parent to it
+# once landed TEST_STATE_DIR under a root-owned tree and made
+# SESSIONS_DISPLAY_DIR (and other state dirs derived from STATE_DIR)
+# uncreatable at module-load time -- aborting collection with PermissionError.
+# Conftest still writes HERMES_HOME=TEST_STATE_DIR into os.environ below so
+# the SDK's config discovery is redirected into the sandbox; this change only
+# affects the *parent path* used when the env override is absent.
 TEST_STATE_DIR = pathlib.Path(os.getenv(
     'HERMES_WEBUI_TEST_STATE_DIR',
     str(HOME / '.hermes' / _auto_state_dir_name(REPO_ROOT))
@@ -383,13 +382,21 @@ def test_server():
     # api/config._get_config_path() sees it on first read.
     (TEST_STATE_DIR / 'config.yaml').write_text(_STUB_HERMES_CONFIG_YAML)
 
-    # Bundled skills are seeded into $HERMES_HOME/skills by the server's
-    # Stage 6 boot step (app/api/skills_sync.py:seed_bundled_skills). The
-    # server subprocess re-runs that step on every test_server fixture
-    # entry, so we deliberately do NOT pre-populate TEST_STATE_DIR/skills
-    # here -- a stale symlink from a previous fixture entry would either
-    # point at root-owned SDK skills (read-only for the test user, breaks
-    # skill-create tests) or be skipped by the seed stage's src==dst check.
+    # Bundled skills: the server no longer boot-seeds them (api/skills_sync.py
+    # was removed once the Docker seed copy landed in docker-entrypoint.sh).
+    # Copy the SDK bundle into TEST_STATE_DIR/skills here — TEST_STATE_DIR is
+    # wiped on every fixture entry, so copies are fresh, test-user-owned and
+    # writable (skill-create tests need write access; do NOT symlink to
+    # root-owned SDK skills). Same semantics as the deleted
+    # seed_bundled_skills(): one directory per skill, never overwrite
+    # existing entries.
+    _skills_dst = TEST_STATE_DIR / 'skills'
+    _skills_dst.mkdir(parents=True, exist_ok=True)
+    _skills_src = HERMES_AGENT / 'skills'
+    if _skills_src.is_dir():
+        for _s in _skills_src.iterdir():
+            if _s.is_dir() and not (_skills_dst / _s.name).exists():
+                shutil.copytree(_s, _skills_dst / _s.name)
 
     # Isolated cron state
     (TEST_STATE_DIR / 'cron').mkdir(parents=True, exist_ok=True)

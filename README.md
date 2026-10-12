@@ -135,7 +135,7 @@ The container will also mount your configured "workspace" (also from the example
 docker pull ghcr.io/nesquena/hermes-webui:latest
 docker run -d \
 -e WANTED_UID=`id -u` -e WANTED_GID=`id -g` \
--v ~/.hermes:/home/leap-aide/.hermes -e HERMES_WEBUI_STATE_DIR=/home/leap-aide/.hermes/webui-mvp \
+-v ~/.hermes:/home/leap-aide/.hermes -e HERMES_WEBUI_STATE_DIR=/home/leap-aide/.hermes/webui-mvp -e HERMES_HOME=/home/leap-aide/.hermes \
 -v ~/workspace:/workspace \
 -v /usr/local/lib/hermes-agent:/home/leap-aide/.hermes/hermes-agent \
 -p 8787:8787 ghcr.io/nesquena/hermes-webui:latest
@@ -154,7 +154,7 @@ Or build locally:
 docker buildx build --target runtime -t leap-aide:runtime -f Dockerfile .
 docker run -d \
 -e WANTED_UID=`id -u` -e WANTED_GID=`id -g` \
--v ~/.hermes:/home/leap-aide/.hermes -e HERMES_WEBUI_STATE_DIR=/home/leap-aide/.hermes/webui-mvp \
+-v ~/.hermes:/home/leap-aide/.hermes -e HERMES_WEBUI_STATE_DIR=/home/leap-aide/.hermes/webui-mvp -e HERMES_HOME=/home/leap-aide/.hermes \
 -v ~/workspace:/workspace \
 -v /usr/local/lib/hermes-agent:/home/leap-aide/.hermes/hermes-agent \
 -p 8787:8787 leap-aide:runtime
@@ -198,7 +198,7 @@ To enable password protection:
 ```bash
 docker run -d \
 -e WANTED_UID=`id -u` -e WANTED_GID=`id -g` \
--v ~/.hermes:/home/leap-aide/.hermes -e HERMES_WEBUI_STATE_DIR=/home/leap-aide/.hermes/webui-mvp \
+-v ~/.hermes:/home/leap-aide/.hermes -e HERMES_WEBUI_STATE_DIR=/home/leap-aide/.hermes/webui-mvp -e HERMES_HOME=/home/leap-aide/.hermes \
 -v ~/workspace:/workspace \
 -v /usr/local/lib/hermes-agent:/home/leap-aide/.hermes/hermes-agent \
 -p 8787:8787 -e HERMES_WEBUI_PASSWORD=your-secret ghcr.io/nesquena/hermes-webui:latest
@@ -221,6 +221,9 @@ first boot. Subsequent restarts reuse the installed packages.
 > (not via HTTP). The host mount makes the agent source available, and the
 > init script runs `uv pip install` to set up the dependencies. Both the host
 > and the container share the same `~/.hermes` directory for config and state.
+> Agent code lives at `/usr/local/lib/hermes-agent`; on first run the entrypoint
+> copies the image's state seed (config, .env, SOUL.md, skills) into
+> `HERMES_HOME` without overwriting existing files.
 
 If `hermes-agent` is not mounted, the WebUI starts in "reduced functionality"
 mode (no model auto-detection, no personality routing, no CLI session imports).
@@ -338,7 +341,7 @@ Full list of environment variables:
 | `HERMES_WEBUI_DEFAULT_WORKSPACE` | `~/workspace` | Default workspace |
 | `HERMES_WEBUI_DEFAULT_MODEL` | `openai/gpt-5.4-mini` | Default model |
 | `HERMES_WEBUI_PASSWORD` | *(unset)* | Set to enable password authentication |
-| `HERMES_HOME` | `~/.hermes` | Base directory for Hermes state (affects all paths) |
+| `HERMES_HOME` | `~/.hermes` | Base directory for Hermes state (affects all paths). In the container: `/home/leap-aide/.hermes` (the compose volume); first run copies the image seed in without overwriting |
 | `HERMES_CONFIG_PATH` | `~/.hermes/config.yaml` | Path to Hermes config file |
 
 ---

@@ -180,6 +180,11 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --hermes-home)
+      # Data/state dir for the hermes-agent installer (config, .env,
+      # sessions, logs). Does NOT control where the code checkout lands:
+      # root-Linux FHS installs put code at /usr/local/lib/hermes-agent
+      # regardless of this value. Empty = installer default ($HOME/.hermes).
+      # Pass `--hermes-home ""` to keep installer default.
       HERMES_HOME="$2"
       shift 2
       ;;
@@ -245,15 +250,6 @@ while [[ $# -gt 0 ]]; do
       # Empty = upstream NousResearch.
       HERMES_REPO_URL="$2"
       _HERMES_VERSION_SPECIFIED=true
-      shift 2
-      ;;
-    --hermes-home)
-      # Override the default `$HOME/.hermes` base dir used by the
-      # hermes-agent installer. With --hermes-home /usr/local/lib the
-      # agent installs to /usr/local/lib/hermes-agent (the documented
-      # location in leap-aide's README). Empty = installer default
-      # ($HOME/.hermes). Pass `--hermes-home ""` to keep installer default.
-      HERMES_HOME="$2"
       shift 2
       ;;
     --force-hermes-commit)
@@ -778,10 +774,10 @@ _ha_args=("--skip-browser")
 [ "$NON_INTERACTIVE" = true ] && _ha_args+=("--non-interactive" "--skip-setup")
 [ -n "$HERMES_BRANCH" ] && _ha_args+=("--branch" "$HERMES_BRANCH")
 [ -n "$HERMES_COMMIT" ] && _ha_args+=("--commit" "$HERMES_COMMIT")
-# Pass --hermes-home if the caller explicitly set HERMES_HOME. Empty (default
-# behavior of [ -n "" ] is false) means we don't pass the flag, so the
-# installer uses its own default ($HOME/.hermes). This keeps host behavior
-# unchanged while letting Docker override to /usr/local/lib.
+# Forward --hermes-home to the installer. HERMES_HOME is always populated
+# above (line ~120 defaults it to $HOME/.hermes), so this always passes —
+# which equals the installer's own default on host installs and lets Docker
+# point it at a seed dir at build time.
 [ -n "$HERMES_HOME" ] && _ha_args+=("--hermes-home" "$HERMES_HOME")
 [ "$FORCE_HERMES_COMMIT" = true ] && _ha_args+=("--force-commit")
 

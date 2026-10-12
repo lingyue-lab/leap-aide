@@ -14,6 +14,22 @@
   on every renamed file.
 
 ### Fixed
+- **`HERMES_HOME` semantics: state dir, not install dir** — the image build
+  passed `HERMES_HOME=/usr/local/lib` to the hermes-agent installer believing
+  it selected the install location, but the flag names the *data* dir, so
+  `config.yaml`, `.env`, `SOUL.md`, `sessions/`, `logs/`, `memories/`,
+  `state.db` all landed next to the code checkout under `/usr/local/lib` and
+  were lost on rebuild. Worse, the root-owned 0600 `/usr/local/lib/.env` was
+  unreadable by the runtime user, crashing `load_hermes_dotenv` at import and
+  putting the container in a restart loop. Runtime `HERMES_HOME` now points at
+  `/home/leap-aide/.hermes` (the compose volume, entrypoint defaults it to
+  `~/.hermes`); the image keeps an installer-produced state seed at
+  `/var/lib/leap-aide/hermes-seed` that the entrypoint copies in on first run
+  without overwriting existing files. Agent code stays at the installer's FHS
+  default `/usr/local/lib/hermes-agent`. Removed `api/skills_sync.py` (its
+  boot-stage skill seeding is subsumed by the entrypoint seed copy).
+  (`Dockerfile`, `scripts/build.sh`, `backend/scripts/docker-entrypoint.sh`,
+  `docker-compose.yml`, `backend/app/server.py`, `tests/conftest.py`)
 - **Auto-title generic fallback** — when the auxiliary title-generation call
   fails and the local fallback can only produce the generic label
   `Conversation topic`, the WebUI now keeps the existing provisional title

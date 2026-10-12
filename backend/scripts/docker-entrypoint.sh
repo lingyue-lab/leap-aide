@@ -263,6 +263,57 @@ if [ ! -d "$HERMES_WEBUI_STATE_DIR" ]; then error_exit "HERMES_WEBUI_STATE_DIR d
 it="$HERMES_WEBUI_STATE_DIR/.testfile"; touch $it || error_exit "Failed to verify state directory at $HERMES_WEBUI_STATE_DIR"
 rm -f $it || error_exit "Failed to delete test file in $HERMES_WEBUI_STATE_DIR"
 
+echo ""; echo "-- HERMES_HOME: hermes-agent state dir (default: ~/.hermes)"
+# Data dir for hermes-agent (sessions, logs, memories, config.yaml, .env,
+# SOUL.md, skills, state.db). NOT the code checkout — that lives at
+# /usr/local/lib/hermes-agent (HERMES_WEBUI_AGENT_DIR). docker-compose mounts
+# the persistent state at /home/leap-aide/.hermes, so the default lands on the
+# mounted volume. Set HERMES_HOME to override.
+if [ -z "${HERMES_HOME:-}" ]; then
+  export HERMES_HOME="$HOME/.hermes"
+  echo "-- HERMES_HOME not set — defaulting to $HERMES_HOME"
+fi
+echo "-- HERMES_HOME: $HERMES_HOME"
+
+# First-run seed: copy the image's hermes-agent state seed into HERMES_HOME.
+# The compose bind-mount shadows anything baked at /home/leap-aide/.hermes, so
+# the installer-produced seed (config.yaml with display.show_reasoning=true,
+# .env, SOUL.md, skills/, managed bin/) lives at HERMES_SEED_DIR and is copied
+# in once. NEVER overwrite existing entries — the host ~/.hermes may be shared
+# with a host hermes install.
+_seed="${HERMES_SEED_DIR:-/var/lib/leap-aide/hermes-seed}"
+sudo mkdir -p "$HERMES_HOME" || error_exit "Failed to create HERMES_HOME at $HERMES_HOME"
+if [ -d "$_seed" ]; then
+  echo "-- Seeding HERMES_HOME from $_seed (existing entries are never overwritten)"
+  # -a preserves modes/symlinks (browser-use launchers in bin/ are symlinks
+  # into the image's uv tool store).
+  for _e in "$_seed"/* "$_seed"/.[!.]*; do
+    [ -e "$_e" ] || continue
+    _n=$(basename "$_e")
+    [ -e "$HERMES_HOME/$_n" ] && continue
+    sudo cp -a "$_e" "$HERMES_HOME/$_n" || echo "!! WARNING: could not seed $_n (continuing)"
+  done
+else
+  echo "-- No seed dir at $_seed — skipping seed copy"
+fi
+# State scaffolding the SDK expects (idempotent; covers seeds that predate a dir).
+for _d in sessions logs memories image_cache audio_cache cron hooks pairing skills; do
+  sudo mkdir -p "$HERMES_HOME/$_d"
+done
+# Credential hygiene on the runtime copy (the seed .env is world-readable so
+# the cicd stage can import env_loader without root; the runtime copy must not be).
+[ -f "$HERMES_HOME/.env" ] && sudo chmod 600 "$HERMES_HOME/.env"
+# Ownership policy: always align the state tree to WANTED_UID:WANTED_GID.
+# WANTED_UID/GID are auto-detected FROM the volume owner (lines 82-125) or set
+# explicitly (compose defaults to the host UID), so this converges the tree to
+# the UID the container runs as and fixes the root-owned .env PermissionError
+# class. A no-op when ownership already matches. Note: a deliberately
+# foreign-owned volume WILL be reassigned.
+sudo chown -R "${WANTED_UID}:${WANTED_GID}" "$HERMES_HOME" \
+  || error_exit "Failed to set owner of $HERMES_HOME to ${WANTED_UID}:${WANTED_GID}"
+it="$HERMES_HOME/.testfile"; touch $it || error_exit "Failed to verify HERMES_HOME at $HERMES_HOME"
+rm -f $it || error_exit "Failed to delete test file in $HERMES_HOME"
+
 echo ""; echo "-- HERMES_WEBUI_DEFAULT_WORKSPACE: Default workspace directory shown on first launch"
 if [ -z "${HERMES_WEBUI_DEFAULT_WORKSPACE+x}" ]; then echo "HERMES_WEBUI_DEFAULT_WORKSPACE not set, setting to /workspace"; export HERMES_WEBUI_DEFAULT_WORKSPACE="/workspace"; fi;
 echo "-- HERMES_WEBUI_DEFAULT_WORKSPACE: $HERMES_WEBUI_DEFAULT_WORKSPACE"

@@ -36,9 +36,10 @@ BASE = f"http://127.0.0.1:{TEST_PORT}"
 
 # Default parent is $HOME/.hermes, NOT $HERMES_HOME -- mirrors conftest.py
 # so standalone use of this module still lands the state dir under a path the
-# test user owns. The cicd Docker image sets HERMES_HOME=/usr/local/lib (SDK
-# install root), which would otherwise route TEST_STATE_DIR to an unwritable
-# path. Conftest's env still wins via HERMES_WEBUI_TEST_STATE_DIR when set.
+# test user owns. HERMES_HOME is a data/state dir and may point at a
+# root-owned location (a build-time seed dir in the Docker image), which
+# would otherwise route TEST_STATE_DIR to an unwritable path. Conftest's env
+# still wins via HERMES_WEBUI_TEST_STATE_DIR when set.
 TEST_STATE_DIR = pathlib.Path(os.environ.get(
     'HERMES_WEBUI_TEST_STATE_DIR',
     str(pathlib.Path.home() / '.hermes' / _auto_state_dir_name(_REPO_ROOT))
