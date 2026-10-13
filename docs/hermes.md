@@ -1,9 +1,13 @@
 # Why Hermes
 
+**English** | [简体中文](hermes.zh-CN.md)
+
 Hermes is a persistent, autonomous AI agent that runs on your server. It has layered memory that
 accumulates across sessions, a cron scheduler that fires jobs while you're offline, and a
 self-improving skills system that saves reusable procedures automatically. You reach it from a
 terminal, a browser, or a messaging app — and it's the same agent with the same history every time.
+
+Leap Aide is the web UI for Hermes.
 
 This document explains the mental model, how Hermes compares to other tools honestly, and where
 it is and is not the right choice.

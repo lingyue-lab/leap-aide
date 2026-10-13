@@ -1,5 +1,10 @@
 # Hermes Web UI -- Changelog
 
+> **Note:** Documentation was restructured into bilingual `*.md` / `*.zh-CN.md`
+> pairs. This changelog is maintained in English only; historical entries keep
+> their original paths and wording. / 文档已重组为 `*.md` / `*.zh-CN.md` 双语对照；
+> 本更新日志仅维护英文，历史条目保持原样。
+
 ## [Unreleased]
 
 ### Chore

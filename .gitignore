@@ -41,10 +41,12 @@ backend/app/api/_version.py
 .DS_Store
 Thumbs.db
 
-# Local reference clones — never committed (except tracked design/UI-UX reference pages)
+# Local reference clones — never committed
+# (project docs themselves are tracked: docs/*.md and docs/images/)
 docs/*
-!docs/ui-ux/
-!docs/ui-ux/**
+!docs/*.md
+!docs/images/
+!docs/images/**
 
 # Local-only PR review harness: rendering drivers, sample bank, fixtures.
 # Used by Claude during deep reviews; never shared in the repo.
