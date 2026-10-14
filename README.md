@@ -6,7 +6,7 @@
 
 # LeapAide — Your agent for the next leap.
 
-LeapAide is an out-of-the-box agent that connects to mainstream LLM providers in one step. The agent is currently built on the [Hermes Agent](https://hermes-agent.nousresearch.com/) framework and provides a self-hosted browser interface, so LeapAide has every Hermes Agent capability: anything the Hermes CLI can do can also be done in LeapAide.
+LeapAide is an out-of-the-box agent that connects to mainstream LLM providers in one step. The agent is currently built on the [Hermes Agent](https://hermes-agent.nousresearch.com/) framework and provides a self-hosted Web browser interface, so LeapAide has every Hermes Agent capability: anything the Hermes CLI can do can also be done in LeapAide.
 
 The backend is Python standard library (no web framework); the frontend is React 18 + TypeScript + Vite, following the Material 3 frontend design specification.
 
@@ -22,7 +22,7 @@ Compared with other open-source agents, LeapAide has distinctly different goals:
 
 - Ship an out-of-the-box agent web app with an exceptionally smooth, fluid user experience.
 - Solve the pain points of using agents today, such as the friction of logging into web browsers.
-- Enhance production infrastructure-diagnosis scenarios (LLVM, JDK, OS, K8S, and so on) through extensions (tools, Skills, and more), providing powerful and reliable fault diagnosis for production IT systems.
+- Enhance capabilities for production infrastructure-diagnosis scenarios (LLVM, JDK, OS, K8S, and so on) through extensions (tools, Skills, and more), providing powerful and reliable fault diagnosis for production IT systems.
 
 LeapAide's overall web app architecture aims to stay lean, and its UI aims to match user intuition — delivering an exceptionally smooth experience.
 
@@ -43,13 +43,13 @@ As everyone knows, production IT systems depend on a great deal of infrastructur
 - The composer footer supports Manual/Smart/YOLO approval-mode switching, with approval-rule management.
 - While a chat turn is running, users can — depending on configuration — interrupt, queue, or steer (squeeze a message into the running turn) the current turn.
 - Users can configure mainstream LLM providers such as OpenAI, Anthropic, Gemini, DeepSeek, GLM, and KIMI.
-- Skills and internal commands can be invoked with slash `/`.
+- Skills and internal commands can be invoked with `slash /`.
 
 ### Sessions ###
 - Create, delete, rename, and search sessions.
 - All sessions are grouped by Workspace in the left sidebar.
 - Sessions can be pinned; pinning creates an isolated browser desktop environment for the session, and users can operate on and watch the session through the observer window.
-- Based on the conversation, the main agent session decides on its own whether to spawn sub-agent sessions. Once a sub-agent session is created, the main agent session shows a breathing icon hint, and clicking it switches to the sub-agent session.
+- Based on the conversation, the main agent session decides on its own whether to spawn sub-agent sessions. Once a sub-agent session is created, the main agent session shows a breathing, blinking icon hint, and clicking it switches to the sub-agent session.
 
 ### Scheduled Tasks ###
 - Create scheduled tasks.
