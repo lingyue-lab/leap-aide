@@ -1,0 +1,60 @@
+name: build-runtime-image
+
+on:
+  workflow_dispatch:
+  push:
+    # Temporary for debugging on the wip branch; remove after verification.
+    branches: [wip/build-runtime-docker-image-workflow]
+
+jobs:
+  build-runtime-image:
+    name: Build runtime Docker image
+    runs-on: ubuntu-latest
+    # Custom CI environment (Ubuntu 24.04 + buildah), prebuilt so each run
+    # does not pay an apt install. Maintained by the build-cicd-base-image
+    # workflow (.github/images/cicd-buildah).
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/leap-aide-cicd-base:ubuntu-24.04
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      # buildah runs the Dockerfile's RUN steps with mount namespaces inside
+      # this job container; that needs real privileges, not just root.
+      options: --privileged
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history + tags so `git describe` yields a real version.
+          fetch-depth: 0
+
+      # Build-only (no push): validates the buildah runtime build path in CI;
+      # publishing stays in release.yml. Single arch (linux/amd64) — the
+      # runner's native arch, same as scripts/build.sh --docker-image.
+      - name: Build runtime image
+        env:
+          # Point the buildah store at the host bind-mount (ext4). The job
+          # container's root is overlayfs, which the kernel refuses as an
+          # overlay upperdir and would break layer commits.
+          BUILDAH_ROOT: ${{ runner.temp }}/buildah-store
+          BUILDAH_RUNROOT: ${{ runner.temp }}/buildah-runroot
+          # Site-specific mirrors/proxies come from repo Variables; leave
+          # them unset for direct connections (see scripts/build.sh --help).
+          BUILD_HTTP_PROXY: ${{ vars.BUILD_HTTP_PROXY }}
+          BUILD_HTTPS_PROXY: ${{ vars.BUILD_HTTPS_PROXY }}
+          BUILD_NO_PROXY: ${{ vars.BUILD_NO_PROXY }}
+          BUILD_APT_MIRROR: ${{ vars.BUILD_APT_MIRROR }}
+          BUILD_PIP_INDEX_URL: ${{ vars.BUILD_PIP_INDEX_URL }}
+          BUILD_UV_PYTHON_MIRROR: ${{ vars.BUILD_UV_PYTHON_MIRROR }}
+          BUILD_NPM_REGISTRY: ${{ vars.BUILD_NPM_REGISTRY }}
+          BUILD_PLAYWRIGHT_DOWNLOAD_HOST: ${{ vars.BUILD_PLAYWRIGHT_DOWNLOAD_HOST }}
+          BUILD_ELECTRON_MIRROR: ${{ vars.BUILD_ELECTRON_MIRROR }}
+          BUILD_ELECTRON_BUILDER_BINARIES_MIRROR: ${{ vars.BUILD_ELECTRON_BUILDER_BINARIES_MIRROR }}
+          HERMES_AGENT_REPO_URL: ${{ vars.HERMES_AGENT_REPO_URL }}
+          HERMES_INSTALLER_MIRROR: ${{ vars.HERMES_INSTALLER_MIRROR }}
+        run: |
+          version="$(git describe --tags --always)"
+          ./scripts/build.sh --docker-image "leap-aide-runtime:${version}"
