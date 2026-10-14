@@ -873,7 +873,8 @@ else
   # a future installer natively honors HERMES_REPO_URL, the patterns simply do
   # not match (harmless no-op). sed delimiter is `|` because URLs contain `/`
   # and `:`; a `|` inside HERMES_REPO_URL is not escaped (documented limitation).
-  if [ -n "$HERMES_REPO_URL" ]; then
+  # ${:-} tolerates the unset done above when the URL is empty (upstream).
+  if [ -n "${HERMES_REPO_URL:-}" ]; then
     sed -e "s|git@github.com:NousResearch/hermes-agent.git|${HERMES_REPO_URL}|g" \
         -e "s|https://github.com/NousResearch/hermes-agent.git|${HERMES_REPO_URL}|g" \
         "$_ha_installer" > "$_ha_installer.patched" \
