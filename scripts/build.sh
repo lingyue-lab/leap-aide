@@ -263,7 +263,7 @@ build_backend() {
 # here. See --help.
 #
 # Every Dockerfile ARG is forwarded as a --build-arg of the same name, always
-# explicitly, even when empty: the cicd stage's ARGs inherit into the runtime
+# explicitly, even when empty: the testing stage's ARGs inherit into the runtime
 # stage and must be cleared or they leak into the runtime layer's image config
 # (see the comment around Dockerfile:95). Exception: the six proxy ARGs are
 # fed from the BUILD_HTTP_PROXY/BUILD_HTTPS_PROXY/BUILD_NO_PROXY inputs (see

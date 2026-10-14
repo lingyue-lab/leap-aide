@@ -68,7 +68,7 @@ jobs:
         run: npm test
 
   docker-backend:
-    name: Backend pytest (buildah cicd image)
+    name: Backend pytest (buildah testing image)
     runs-on: ubuntu-latest
 
     steps:
@@ -77,7 +77,7 @@ jobs:
       - name: Show buildah version
         run: buildah --version
 
-      - name: Build cicd image with buildah
+      - name: Build testing image with buildah
         run: |
           # Read the shared commit pin from the source-of-truth env file.
           _commit=$(grep '^HERMES_AGENT_COMMIT=' backend/scripts/hermes-agent.env | cut -d= -f2-)
@@ -85,18 +85,18 @@ jobs:
           # Context filter is the repo-root .dockerignore (single source of
           # truth for every stage) — do not pass --ignorefile.
           buildah bud \
-            --target cicd \
+            --target testing \
             --layers \
             --build-arg "HERMES_AGENT_COMMIT=${_commit}" \
             --cache-from type=gha \
             --cache-to type=gha,mode=max \
-            --tag leap-aide:cicd \
+            --tag leap-aide:testing \
             -f Dockerfile .
 
-      - name: Run pytest inside cicd image
+      - name: Run pytest inside testing image
         # Use buildah push to the docker daemon so `docker run` can launch it.
         # On ubuntu-latest runners the buildah store is daemon-less by default;
         # pushing to docker-daemon: makes it visible to `docker run`.
         run: |
-          buildah push --format docker leap-aide:cicd docker-daemon:leap-aide:cicd
-          docker run --rm leap-aide:cicd pytest backend/tests/ -v
+          buildah push --format docker leap-aide:testing docker-daemon:leap-aide:testing
+          docker run --rm leap-aide:testing pytest backend/tests/ -v

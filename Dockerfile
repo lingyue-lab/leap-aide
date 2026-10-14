@@ -3,19 +3,19 @@
 # LeapAide — multi-stage image, builds with both docker buildx and buildah.
 #
 # Targets:
-#   * cicd              — test + build image. No ENTRYPOINT/CMD — caller
+#   * testing           — test + build image. No ENTRYPOINT/CMD — caller
 #                         (Tekton, scripts/run-test.sh, scripts/build.sh)
 #                         drives the command. Provides pytest + Node +
 #                         frontend deps + scripts/run-test.sh +
 #                         scripts/build.sh.
-#   * runtime (default) — production image, trimmed FROM cicd to drop
+#   * runtime (default) — production image, trimmed FROM testing to drop
 #                         dev/test artifacts. ENTRYPOINT=[/leap-aide-entrypoint.sh].
 #
 # Build contexts:
 #   docker buildx build --target runtime -t leap-aide:runtime -f Dockerfile .
-#   docker buildx build --target cicd -t leap-aide:cicd -f Dockerfile .
+#   docker buildx build --target testing -t leap-aide:testing -f Dockerfile .
 #   buildah bud --target runtime --layers -t leap-aide:runtime -f Dockerfile .
-#   buildah bud --target cicd --layers -t leap-aide:cicd -f Dockerfile .
+#   buildah bud --target testing --layers -t leap-aide:testing -f Dockerfile .
 #
 # Every target shares one context filter, .dockerignore at the repo root —
 # do not pass --ignore-file/--ignorefile.
@@ -31,7 +31,7 @@
 #     key). Supported by docker buildx 23+ (Feb 2023) and buildah 1.24+
 #     (Sep 2021); podman inherits buildah. The security trade-off (zero
 #     layer residue vs an extra BuildKit dependency) is justified by the
-#     fact that the cicd image itself is open-source and we cannot leak key
+#     fact that the testing image itself is open-source and we cannot leak key
 #     bytes into any published layer. See README "Builder requirements".
 #   - Standard COPY/COPY --chown/COPY --chmod (Dockerfile 1.6+, both engines).
 #   - Multi-arch via caller --platform; buildah also needs QEMU+binfmt.
@@ -59,7 +59,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # carries no HTTP_PROXY keys at all. The old `ENV HTTP_PROXY=` blanking in the
 # runtime stage could only empty the VALUE — the key stayed in the image Env
 # list (visible in `docker exec env`) because Dockerfile has no unset.
-# ARG scope does not cross FROM: app/cicd re-declare theirs.
+# ARG scope does not cross FROM: app/testing re-declare theirs.
 # All six variants are forwarded explicitly by scripts/build.sh (some tools
 # only read the lowercase names); declare all six here so RUN sees either case.
 ARG HTTP_PROXY
@@ -139,7 +139,7 @@ RUN if [ "A${BUILD_APT_PROXY:-}" != "A" ]; then \
 #
 # Note: these intentionally overlap with install.sh's system-deps section.
 # install.sh is idempotent (checks `command -v X` before installing) so the
-# cicd stage's later `bash install.sh --deps-only` will skip them. We keep
+# testing stage's later `bash install.sh --deps-only` will skip them. We keep
 # both because:
 #   - runtime stage (FROM builder) needs these deps and never runs install.sh
 #   - install.sh needs to work standalone on hosts without this Dockerfile
@@ -277,8 +277,8 @@ RUN _trusted="--trusted-host pypi.org --trusted-host files.pythonhosted.org"; \
         "hindsight-client>=0.4.22" \
         $_trusted
 
-# ---- cicd: test + build image -----------------------------------------------
-FROM app AS cicd
+# ---- testing: test + build image -----------------------------------------------
+FROM app AS testing
 
 # Build-time proxy (see base stage): ARG-only, re-declared at this FROM
 # boundary so every network RUN here (install.sh, npm ci, npm_warmup) sees the
@@ -393,7 +393,7 @@ USER root
 RUN chmod 755 /root
 
 # Re-COPY backend/tests/ on top of the /app/backend/tests/ already populated
-# by the earlier COPY . /app, so the cicd image always has tests/ even if
+# by the earlier COPY . /app, so the testing image always has tests/ even if
 # .dockerignore ever grows a rule that would drop them. Path mirrors the repo
 # layout (backend/tests/) so conftest.py's REPO_ROOT discovery resolves the
 # server.py location correctly.
@@ -597,7 +597,7 @@ RUN --mount=type=secret,id=git_identity_key,dst=/root/.ssh/id_ed25519_install,mo
     && case "${BUILD_NPM_WARMUP:-0}" in 1|true|yes|on) bash /app/scripts/npm_warmup.sh --clean ;; esac \
     # install.sh's apt-get install leaves /var/lib/apt/lists/* in the layer
     # (~30-100MB of metadata for already-installed packages). Strip it — the
-    # cicd image doesn't need apt after this point and BuildKit will re-cache
+    # testing image doesn't need apt after this point and BuildKit will re-cache
     # if a later stage needs apt-get update.
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
@@ -648,7 +648,7 @@ USER leap-aide-init
 
 # Frontend deps (vitest, vite, tsc, postcss, tailwindcss) for tests + static
 # build. install.sh doesn't touch frontend. Drop to leap-aide-init since npm ≥7
-# refuses root installs. Timeout/retry is set as cicd-stage ENV (above) so it
+# refuses root installs. Timeout/retry is set as testing-stage ENV (above) so it
 # applies here AND to install.sh's npm/npx calls; no per-invocation flags needed.
 RUN cd /app/frontend \
     && if [ -n "${BUILD_NPM_REGISTRY:-}" ]; then npm config set registry "${BUILD_NPM_REGISTRY}"; fi \
@@ -657,11 +657,11 @@ RUN cd /app/frontend \
     && rm -rf node_modules/.cache
 
 # Build the frontend once, bake the artifacts (static/) into the image.
-# Doing this in cicd (not runtime) because:
-#   * cicd already has node + npm + frontend/node_modules (from `npm ci`
+# Doing this in testing (not runtime) because:
+#   * testing already has node + npm + frontend/node_modules (from `npm ci`
 #     above); runtime stage purges them (Dockerfile:521-545), so it can't
 #     run `npm run build` on its own.
-#   * runtime stage derives FROM cicd, so /app/static/ is inherited
+#   * runtime stage derives FROM testing, so /app/static/ is inherited
 #     automatically. One bake, both images.
 # Without this step, runtime's `COPY . /app` (Dockerfile:231) would pick
 # up whatever stale static/ happens to be in the build context — empty on
@@ -669,7 +669,7 @@ RUN cd /app/frontend \
 # load JS with hashes that no longer match index.html.
 #
 # Drop the vite cache + tsbuildinfo after build (rebuildable on demand);
-# keep frontend/src/ — cicd still runs vitest on it. Keep node_modules —
+# keep frontend/src/ — testing still runs vitest on it. Keep node_modules —
 # runtime trims it later.
 #
 # static/ is excluded from the build context (.dockerignore), so a stale host
@@ -705,15 +705,15 @@ WORKDIR /app
 #   command=["pytest"]               args=["backend/tests/", "-v"]
 #   command=["bash", "-c"]           args=["cd frontend && npm run build"]
 
-# ---- runtime: production image (default) — trimmed FROM cicd ---------------
-# Derived from cicd so every released runtime image is a derivative of a
-# cicd build that has passed validation. Cleans dev/test artifacts that the
+# ---- runtime: production image (default) — trimmed FROM testing ---------------
+# Derived from testing so every released runtime image is a derivative of a
+# testing build that has passed validation. Cleans dev/test artifacts that the
 # server does not need at runtime (frontend deps, build toolchain, pytest).
-FROM cicd AS runtime
+FROM testing AS runtime
 
 USER root
 
-# Blank build-time-only env vars that cicd stage inherited but runtime
+# Blank build-time-only env vars that testing stage inherited but runtime
 # should not leak. Empty string is equivalent to unset for npm / curl / uv.
 # Note: HTTP_PROXY / HTTPS_PROXY / NO_PROXY need no entry here — they are
 # build-arg-scoped ARGs since the base stage, so the keys never enter the
@@ -731,16 +731,16 @@ ENV npm_config_registry= \
     npm_config_electron_builder_binaries_mirror= \
     WARMUP_DIR=
 
-# Preserve these from the cicd stage — runtime still consumes them:
+# Preserve these from the testing stage — runtime still consumes them:
 #   HERMES_AGENT_COMMIT  — warn-only consistency check in entrypoint
 #   HERMES_AGENT_REPO_URL — forwarded by entrypoint scripts
 #
-# HERMES_HOME is NOT preserved: the cicd stage points it at the build-time
+# HERMES_HOME is NOT preserved: the testing stage points it at the build-time
 # seed dir. Runtime re-points it at the state dir (the compose volume).
 ENV HERMES_HOME=/home/leap-aide/.hermes
 
 # ── Trim test framework ──────────────────────────────────────────────────────
-# cicd stage installs pytest+pytest-timeout for tests. Remove them from runtime.
+# testing stage installs pytest+pytest-timeout for tests. Remove them from runtime.
 RUN _trusted="--trusted-host pypi.org --trusted-host files.pythonhosted.org"; \
     case "${UV_INDEX_URL:-}" in \
         *tuna.tsinghua*) _trusted="$_trusted --trusted-host pypi.tuna.tsinghua.edu.cn --trusted-host files.tuna.tsinghua.edu.cn" ;; \
@@ -748,7 +748,7 @@ RUN _trusted="--trusted-host pypi.org --trusted-host files.pythonhosted.org"; \
     uv pip uninstall --system pytest pytest-timeout $_trusted || true
 
 # ── Trim apt build chain ─────────────────────────────────────────────────────
-# cicd base stage installs these for hermes-agent wheels + frontend deps.
+# testing base stage installs these for hermes-agent wheels + frontend deps.
 # Runtime does not compile or run Node/Python dev tools.
 RUN apt-get purge -y --auto-remove \
         build-essential python3.12-dev xz-utils libatomic1 \
@@ -758,7 +758,7 @@ RUN apt-get purge -y --auto-remove \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb /var/cache/apt/pkgcache.bin /var/cache/apt/srcpkgcache.bin
 
 # ── Trim frontend build artifacts ───────────────────────────────────────────
-# frontend/node_modules (~300MB+) was installed by cicd for vitest+npm ci.
+# frontend/node_modules (~300MB+) was installed by testing for vitest+npm ci.
 # Runtime only needs the prebuilt static/ assets — frontend source tree is not
 # required.
 # /app/.venv: stale second venv from older install flows. The single Python
@@ -784,7 +784,7 @@ RUN rm -rf /root/.npm/_cacache /root/.npm/_logs /root/.npm/_temp /root/.npm/_upd
            /root/.cache/node /root/.cache/npm /root/.cache/pip /root/.cache/uv /home/leap-aide-init/.cache/pip
 
 # ── Trim build/test shell scripts ────────────────────────────────────────────
-# cicd stage keeps these for build+test convenience; runtime does not invoke
+# testing stage keeps these for build+test convenience; runtime does not invoke
 # them. Repo source remains unchanged (in scripts/), only the /app/scripts/
 # copies are removed.
 RUN rm -f /app/scripts/install.sh \
@@ -793,7 +793,7 @@ RUN rm -f /app/scripts/install.sh \
           /app/scripts/cmd-util.sh
 
 # ── Defensive cleanup ────────────────────────────────────────────────────────
-# Strip any SSH scaffolding cicd stage left from secret mounts (always present
+# Strip any SSH scaffolding testing stage left from secret mounts (always present
 # because install.sh may clone hermes-agent via SSH even when secrets are
 # absent). Also strip any stray archives or shell history outside ms-playwright
 # (which the VNC observer still needs).
@@ -802,7 +802,7 @@ RUN rm -rf /root/.ssh /root/.bash_history /root/.lesshst /root/.viminfo /root/.w
         -not -path "/root/.cache/ms-playwright/*" \
         -delete 2>/dev/null || true
 
-# Restore runtime user. cicd stage ended at USER leap-aide-init; restoring here
+# Restore runtime user. testing stage ended at USER leap-aide-init; restoring here
 # means the ENTRYPOINT bash runs as the right user.
 USER leap-aide-init
 

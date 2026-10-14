@@ -805,7 +805,7 @@ else
   # Network flakiness (ECONNRESET) can cause transient failures.
   #
   # Also add --unsafe-perm when running as root. npm ≥7 refuses to run as
-  # root at all unless --unsafe-perm is set. The cicd Dockerfile runs
+  # root at all unless --unsafe-perm is set. The testing Dockerfile runs
   # install.sh as root so apt-get + /usr/local/bin wrappers work; we need
   # this --unsafe-perm to let hermes-agent's npm install succeed in that
   # context. Host usage is unaffected: --unsafe-perm is a no-op for
