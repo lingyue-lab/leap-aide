@@ -31,12 +31,13 @@ jobs:
           # Full history + tags so `git describe` yields a real version.
           fetch-depth: 0
 
+      # buildah login, not docker/login-action: the cicd-builder image has
+      # buildah but no docker CLI, and buildah push reads exactly the auth
+      # file buildah login writes.
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | buildah login --username "${{ github.actor }}" --password-stdin ghcr.io
 
       # Daily build for routine testing. Testers pin one moving tag (`daily`);
       # the immutable daily-<date>-<sha> tag only exists to reproduce old
