@@ -10,6 +10,12 @@ jobs:
   build-runtime-image:
     name: Build runtime Docker image
     runs-on: ubuntu-latest
+    # Container jobs default to sh (dash); this script needs bash features
+    # (arrays, ${var:offset:len}). bash ships in the image — the Dockerfile
+    # itself runs /bin/bash.
+    defaults:
+      run:
+        shell: bash
     # CICD builder image (Ubuntu 24.04 + buildah), prebuilt so each run does
     # not pay an apt install. Maintained by the build-cicd-builder-image
     # workflow (.github/images/cicd-builder).
