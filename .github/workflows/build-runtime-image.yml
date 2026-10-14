@@ -10,11 +10,11 @@ jobs:
   build-runtime-image:
     name: Build runtime Docker image
     runs-on: ubuntu-latest
-    # Custom CI environment (Ubuntu 24.04 + buildah), prebuilt so each run
-    # does not pay an apt install. Maintained by the build-cicd-base-image
-    # workflow (.github/images/cicd-buildah).
+    # CICD builder image (Ubuntu 24.04 + buildah), prebuilt so each run does
+    # not pay an apt install. Maintained by the build-cicd-builder-image
+    # workflow (.github/images/cicd-builder).
     container:
-      image: ghcr.io/${{ github.repository_owner }}/leap-aide-cicd-base:ubuntu-24.04
+      image: ghcr.io/${{ github.repository_owner }}/leap-aide-cicd-builder:ubuntu-24.04
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -23,7 +23,7 @@ jobs:
       options: --privileged
     permissions:
       contents: read
-      packages: read
+      packages: write
 
     steps:
       - uses: actions/checkout@v4
@@ -31,10 +31,20 @@ jobs:
           # Full history + tags so `git describe` yields a real version.
           fetch-depth: 0
 
-      # Build-only (no push): validates the buildah runtime build path in CI;
-      # publishing stays in release.yml. Single arch (linux/amd64) — the
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Daily build for routine testing. Testers pin one moving tag (`daily`);
+      # the immutable daily-<date>-<sha> tag only exists to reproduce old
+      # bugs. Publish order matters: the archive tag goes first, so `daily`
+      # only moves after a fully successful publish. Semver releases and
+      # `latest` stay in release.yml. Single arch (linux/amd64) — the
       # runner's native arch, same as scripts/build.sh --docker-image.
-      - name: Build runtime image
+      - name: Build and push daily runtime image
         env:
           # Point the buildah store at the host bind-mount (ext4). The job
           # container's root is overlayfs, which the kernel refuses as an
@@ -56,5 +66,18 @@ jobs:
           HERMES_AGENT_REPO_URL: ${{ vars.HERMES_AGENT_REPO_URL }}
           HERMES_INSTALLER_MIRROR: ${{ vars.HERMES_INSTALLER_MIRROR }}
         run: |
-          version="$(git describe --tags --always)"
-          ./scripts/build.sh --docker-image "leap-aide-runtime:${version}"
+          # The job container sees the workspace as a foreign-uid mount, so
+          # bare git calls can die with exit 128 (dubious ownership). Build
+          # must never depend on version metadata being computable.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" 2>/dev/null || true
+
+          image="ghcr.io/${{ github.repository_owner }}/leap-aide-runtime"
+          archive_tag="daily-$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
+          # build.sh pins the buildah store via --root/--runroot; tag/push
+          # must address the same store or the image is invisible to them.
+          ba=(buildah --root "$BUILDAH_ROOT" --runroot "$BUILDAH_RUNROOT")
+
+          ./scripts/build.sh --docker-image "${image}:${archive_tag}"
+          "${ba[@]}" tag "${image}:${archive_tag}" "${image}:daily"
+          "${ba[@]}" push "${image}:${archive_tag}"
+          "${ba[@]}" push "${image}:daily"

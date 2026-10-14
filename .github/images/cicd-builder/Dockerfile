@@ -1,6 +1,6 @@
-# CI base image: Ubuntu 24.04 + buildah, used as the job container for
-# image-build workflows. Keep the toolset minimal; extend only when the
-# build steps actually need it.
+# CICD builder image: Ubuntu 24.04 + buildah, used as the job container
+# that builds the runtime/testing product images. Keep the toolset
+# minimal; extend only when the build steps actually need it.
 FROM ubuntu:24.04
 
 RUN apt-get update \

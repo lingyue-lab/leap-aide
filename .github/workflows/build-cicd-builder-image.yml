@@ -1,4 +1,4 @@
-name: build-cicd-base-image
+name: build-cicd-builder-image
 
 on:
   workflow_dispatch:
@@ -6,12 +6,12 @@ on:
     # Temporary for debugging on the wip branch; change back to [main] after verification.
     branches: [wip/build-runtime-docker-image-workflow]
     paths:
-      - '.github/images/cicd-buildah/**'
-      - '.github/workflows/build-cicd-base-image.yml'
+      - '.github/images/cicd-builder/**'
+      - '.github/workflows/build-cicd-builder-image.yml'
 
 jobs:
   publish:
-    name: Build and publish CICD base image
+    name: Build and publish CICD builder image
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -29,9 +29,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push CICD base image
+      - name: Build and push CICD builder image
         uses: docker/build-push-action@v6
         with:
-          context: .github/images/cicd-buildah
+          context: .github/images/cicd-builder
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/leap-aide-cicd-base:ubuntu-24.04
+          tags: ghcr.io/${{ github.repository_owner }}/leap-aide-cicd-builder:ubuntu-24.04
