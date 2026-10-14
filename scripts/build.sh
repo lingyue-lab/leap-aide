@@ -451,8 +451,8 @@ build_container_image() {
 
 # ── Main ──
 say ""
-say "${B}Leap Aide Build${R}"
-say "───────────────"
+say "${B}LeapAide Build${R}"
+say "──────────────"
 say ""
 
 # Container image build is a standalone mode: the image runs

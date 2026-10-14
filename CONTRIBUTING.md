@@ -4,11 +4,11 @@
 
 </div>
 
-# Contributing to Leap Aide
+# Contributing to LeapAide
 
-Thanks for contributing.
+Thank you for your contribution.
 
-Leap Aide's tech stack is deliberately "lean": Python standard library on the server, React + TypeScript + Vite on the client, no heavyweight frameworks anywhere. Please keep that leanness while cleanly solving real problems.
+LeapAide's tech stack is deliberately "lean": Python standard library on the server, React + TypeScript + Vite on the client, no heavyweight frameworks anywhere. Please keep that leanness while cleanly solving real problems.
 
 ---
 
@@ -80,13 +80,11 @@ Common files:
 
 ### Preserve the design constraints
 
-Leap Aide is deliberately:
+LeapAide is deliberately:
 
-- Python stdlib backend: no Flask/Django/FastAPI, and external dependencies are used sparingly
-- All docs exist as bilingual `*.md` / `*.zh-CN.md` pairs with language switchers
-- Easy to modify and run from a terminal (`./scripts/ctl.sh`, `./scripts/build.sh`)
-
-Do not introduce new infrastructure or dependencies unless the gain is clear and the trade-off justified.
+- Python stdlib backend: no Flask/Django/FastAPI, and external dependencies are introduced with restraint.
+- All docs exist as bilingual `*.md` / `*.zh-CN.md` pairs with language switchers.
+- Do not introduce new infrastructure or dependencies unless the gain is clear and the trade-off justified.
 
 ### Match the existing shape of the codebase
 

@@ -4,7 +4,7 @@
 
 </div>
 
-# Leap Aide Testing Guide
+# LeapAide Testing Guide
 
 This guide covers the automated test tiers, how to run them, and a lean manual browser smoke checklist. For the contribution workflow see [CONTRIBUTING.md](../CONTRIBUTING.md).
 
@@ -45,8 +45,8 @@ After changes that touch the UI, run the following tests manually:
 ### Session Lifecycle
 
 - **Empty state**: the first load with no sessions shows an empty state.
-- **Create / rename / delete**: create a session with the `+` button, rename it, delete it. Deleting the *last (only)* session returns to the empty state.
-- **Pin / archive**: pinning moves a session to the top. After pinning, the observe button in the title bar is visible; clicking it opens the VNC desktop to watch the browser.
+- **Create / rename / delete**: create a session with the `+` button, rename it, delete it. Deleting the **last (only)** session returns to the empty state.
+- **Pin / archive**: pinning moves a session to the top. After pinning, the observe button in the title bar is visible; clicking it opens the VNC desktop to operate the browser and observe its behavior.
 
 ### Chat & Streaming
 

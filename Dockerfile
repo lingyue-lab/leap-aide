@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # ============================================================================
-# Leap Aide — multi-stage image, builds with both docker buildx and buildah.
+# LeapAide — multi-stage image, builds with both docker buildx and buildah.
 #
 # Targets:
 #   * cicd              — test + build image. No ENTRYPOINT/CMD — caller
@@ -41,7 +41,7 @@
 FROM ubuntu:24.04 AS base
 
 LABEL maintainer="yinfangxi"
-LABEL description="Leap Aide — browser interface for Hermes Agent"
+LABEL description="LeapAide — browser interface for Hermes Agent"
 
 ENV DEBIAN_FRONTEND=noninteractive
 

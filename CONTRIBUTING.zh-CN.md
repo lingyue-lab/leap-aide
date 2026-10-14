@@ -4,11 +4,11 @@
 
 </div>
 
-# 为 Leap Aide 做贡献
+# 为 LeapAide 做贡献
 
-感谢你的贡献。
+感谢您的贡献。
 
-Leap Aide 的技术栈刻意保持"简洁"：服务端只用 Python 标准库，客户端用 React + TypeScript + Vite，任何地方都没有重型框架。请延续这种简洁，同时干净利落地解决真实问题。
+LeapAide 的技术栈刻意保持"简洁"：服务端只用 Python 标准库，客户端用 React + TypeScript + Vite，任何地方都没有重型框架。请延续这种简洁，同时干净利落地解决真实问题。
 
 ---
 
@@ -80,13 +80,11 @@ git commit log 必须为英文。
 
 ### 遵守设计约束
 
-Leap Aide 刻意保持：
+LeapAide 刻意保持：
 
-- Python 标准库后端：不使用 Flask/Django/FastAPI，对外部依赖的使用保持克制，
+- Python 标准库后端：不使用 Flask/Django/FastAPI，对外部依赖的引入保持克制。
 - 所有文档以 `*.md` / `*.zh-CN.md` 双语成对存在，并带语言切换器。
-- 易于在终端中修改和运行（`./scripts/ctl.sh`、`./scripts/build.sh`）
-
-除非收益明确、权衡合理，否则不要引入新的基础设施或依赖。
+- 除非收益明确、权衡合理，否则不要引入新的基础设施或依赖。
 
 ### 与现有代码形态保持一致
 

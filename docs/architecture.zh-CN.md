@@ -4,9 +4,9 @@
 
 </div>
 
-# Leap Aide 架构指南
+# LeapAide 架构指南
 
-Leap Aide后端为Python 标准库实现，直接以Python import 方式调用Hermes Agent SDK（与 Hermes Agent 之间没有 HTTP 跳转）；前端为 React/TypeScript，用 Vite 构建。实时更新依赖 WebSocket。 
+LeapAide 后端为 Python 标准库实现，直接以 Python import 方式调用Hermes Agent SDK（与 Hermes Agent 之间没有 HTTP 跳转）；前端为 React/TypeScript，用 Vite 构建。实时更新依赖 WebSocket。 
 
 ---
 
@@ -32,7 +32,7 @@ hermes-agent SDK            AIAgent.run_conversation()、tools、gateway
 关键原则：
 
 - **单进程**：每请求一线程，Agent 跑在守护线程上，向各会话的队列投递事件。无 asyncio，无外部消息中间件。
-- **核心功能依赖 Herems Agent SDK**：后端把 Hermes Agent SDK 当Python 模块调用，state.db 由 SDK 更新，后端不直接用SQL写/更新`state.db`。
+- **核心功能依赖 Herems Agent SDK**：后端把 Hermes Agent SDK 当Python 模块调用，state.db 由 SDK 更新，后端不直接用 SQL 写/更新`state.db`。
 - **基于 Vite 构建前端**：Vite 把 `frontend/src` 构建到 `static/`，不要手工编辑 `static/` 下的文件。
 
 ---
@@ -51,7 +51,7 @@ hermes-agent SDK            AIAgent.run_conversation()、tools、gateway
 | 面板 | `api/terminal.py`、`api/vnc.py`、`api/observer.py`、`api/cli_viewer.py` | 终端 PTY 通道；VNC 通道；observer 界面；CLI 会话列表 |
 | 业务 | `api/slash_commands.py`、`api/clarify.py`、`api/metering.py`、`api/providers.py`、`api/commands.py`、`api/background.py`、`api/updates.py` | 斜杠命令分发；clarify 对话；用量计量；provider/模型门控；命令注册表暴露；后台 goal；更新检查 |
 
-外部依赖：仅 `pyyaml`（以及 hermes-agent SDK 及其自身依赖，由 hermes-agent venv提供）。
+外部依赖：仅 pyyaml（以及 Hermes Agent SDK 及其自身依赖，由 Hermes Agent SDK venv 提供）。
 
 ---
 
@@ -79,8 +79,8 @@ hermes-agent SDK            AIAgent.run_conversation()、tools、gateway
 - **React 18 + TypeScript + Vite**，状态由 `stores/` 下的 **Zustand** store 管理。
 - i18next 负责国际化。
 - 严格遵守Google M3 Design前端规范,进行 M3 合规性评审时，应参考下列文档中的组件规范、间距、字号等标准。
-    - https://www.yuque.com/advancedux/xr6e1n
-    - https://www.cyub.vip/blog/2026/02/14/material-design-3-material-you-%E5%AE%8C%E6%95%B4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97/
+    - [网络参考资源1](https://www.yuque.com/advancedux/xr6e1n)
+    - [网络参考资源2](https://www.cyub.vip/blog/2026/02/14/material-design-3-material-you-%E5%AE%8C%E6%95%B4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97/)
 - 核心 store：`useSessionStore`、`useChatStore`、`useSettingsStore`、`useWorkspaceStore`、`useApprovalStore`。
 - API 调用通过 `services/api.ts`。Vite 开发服务器将 `/api` 代理到 `localhost:8787`。
 - 构建输出到 `../static/`，由 Python 后端直接 serve。
@@ -88,23 +88,22 @@ hermes-agent SDK            AIAgent.run_conversation()、tools、gateway
 
 ## 数据流（聊天完整链路）
 
-1. 前端 `send()` → `POST /api/chat/start`，携带 session_id + message
-2. 服务端创建 `queue.Queue`，启动守护线程运行 `_run_agent_streaming()`，返回 `stream_id`
-3. 前端通过 `/api/ws/events` 上的 WebSocket 连接接收事件；会话过程中刷新时通过 `GET /api/chat/session/stream/replay` 做 SSE 回放恢复
-4. Agent 线程运行 `AIAgent.run_conversation()`，将 token/tool/approval/done 事件放入队列
-5. `/api/ws/events` 从队列读取事件，转发给浏览器
-6. 收到 `done`：更新 session messages，保存到磁盘 JSON
+- 前端 `send()` → `POST /api/chat/start`，携带 session_id + message
+- 服务端创建 `queue.Queue`，启动守护线程运行 `_run_agent_streaming()`，返回 `stream_id`
+- 前端通过 `/api/ws/events` 上的 WebSocket 连接接收事件；会话过程中刷新时通过 `GET /api/chat/session/stream/replay` 做 SSE 回放恢复
+- Agent 线程运行 `AIAgent.run_conversation()`，将 token/tool/approval/done 事件放入队列
+- `/api/ws/events` 从队列读取事件，转发给浏览器
+- 收到 `done`：更新 session messages，保存到磁盘 JSON
 
 ---
 
 ## 数据库
 
-- Leap Aide 和 Herems Agent SDK都会使用 state.db，默认路径为 `${HERMES_HOME}/state.db`
-- Leap Aide 会在 Hermes Agent SDK之外扩展 state.db的表结构，会在表中增加一些额外的列，这些列名必须以 __webui 结尾，只有 Leap Aide 会使用这些列。
-- Leap Aide 对 state.db 的更新/写操作都必须依赖 Hermes Agent SDK的 High Level API，不允许直连 state.db 进行数据库底层的更新/写操作。由于 Hermes Agent SDK 不感知任何 __webui 列，因此所有 Hermes Agent SDK提供的 High Level API 不会读写 __webui 列。为了实现业务功能，Leap Aide 针对 __webui 列的更新/写操作可以允许直连state.db。
-- Leap Aide 不用考虑数据库的向前兼容，不用考虑数据的迁移，比如X__webui的列数据类型从TEXT换成INT，可以假设 Leap
- Aide 第一次运行，没有历史数据。
-- Leap Aide 不用考虑数据库中的历史数据修复，如果 db 中旧的数据的值在新的代码中是非法的，也不需要代码中进行自动数据修复，直接报错。
+- LeapAide 和 Herems Agent SDK 都会使用 state.db，默认路径为 `${HERMES_HOME}/state.db`
+- LeapAide 会在 Hermes Agent SDK 之外扩展 state.db的表结构，会在表中增加一些额外的列，这些列名必须以 __webui 结尾，只有 LeapAide 会使用这些列。
+- LeapAide 对 state.db 的更新/写操作都必须依赖 Hermes Agent SDK 的 High Level API，不允许直连 state.db 通过 SQL 进行数据库底层的更新操作。由于 Hermes Agent SDK 不感知任何 __webui 列，因此所有 Hermes Agent SDK提供的 High Level API 不会读/更新 __webui 列。为了实现业务功能，LeapAide 允许直连 state.db 更新 __webui 列。
+- LeapAide 不用考虑数据库的向前兼容，不用考虑数据的迁移，比如X__webui的列数据类型从TEXT换成INT，可以假设 LeapAide 第一次运行，没有历史数据。
+- LeapAide 不用考虑数据库中的历史数据修复，如果 db 中旧的数据的值在新的代码中是非法的，也不需要在后端代码中进行自动数据修复，直接报错即可。
 
 ---
 
@@ -134,6 +133,6 @@ hermes-agent SDK            AIAgent.run_conversation()、tools、gateway
 每条记录一个历史决策及其当前状态。
 
 ### ADR-001：示例
-**决策：** 待补充
-**理由：** 待补充
-**状态：** 待补充
+- **决策：** 待补充
+- **理由：** 待补充
+- **状态：** 待补充

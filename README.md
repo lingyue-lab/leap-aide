@@ -4,29 +4,29 @@
 
 </div>
 
-# Leap Aide
+# LeapAide — Your agent for the next leap.
 
-Leap Aide is an out-of-the-box agent that connects to mainstream LLM providers in one step. The agent is currently built on the [Hermes Agent](https://hermes-agent.nousresearch.com/) framework and provides a self-hosted browser interface, so Leap Aide has every Hermes Agent capability: anything the Hermes CLI can do can also be done in Leap Aide.
+LeapAide is an out-of-the-box agent that connects to mainstream LLM providers in one step. The agent is currently built on the [Hermes Agent](https://hermes-agent.nousresearch.com/) framework and provides a self-hosted browser interface, so LeapAide has every Hermes Agent capability: anything the Hermes CLI can do can also be done in LeapAide.
 
 The backend is Python standard library (no web framework); the frontend is React 18 + TypeScript + Vite, following the Material 3 frontend design specification.
 
 The UI is a three-panel layout: the left sidebar for sessions and navigation, the center chat area, and the right panel for workspace file browsing. Controls such as model and workspace selection live in the **composer footer**; all settings and session tools are centralized in the **Configuration Center** (entry at the bottom of the sidebar).
 
-<img alt="Leap Aide — three-panel layout" src="docs/images/ui-overview.png" width="1200" />
+<img alt="LeapAide — three-panel layout" src="docs/images/ui-overview.png" width="1200" />
 
 ---
 
-## Why Leap Aide
+## Why LeapAide
 
-Compared with other open-source agents, Leap Aide has distinctly different goals:
+Compared with other open-source agents, LeapAide has distinctly different goals:
 
 - Ship an out-of-the-box agent web app with an exceptionally smooth, fluid user experience.
 - Solve the pain points of using agents today, such as the friction of logging into web browsers.
 - Enhance production infrastructure-diagnosis scenarios (LLVM, JDK, OS, K8S, and so on) through extensions (tools, Skills, and more), providing powerful and reliable fault diagnosis for production IT systems.
 
-Leap Aide's overall web app architecture aims to stay lean, and its UI aims to match user intuition — delivering an exceptionally smooth experience.
+LeapAide's overall web app architecture aims to stay lean, and its UI aims to match user intuition — delivering an exceptionally smooth experience.
 
-Leap Aide also offers targeted solutions to the pain points of using agents today. Many AI tasks need to use third-party web systems. On one hand, those systems often have complex login mechanisms — SMS codes, mobile-app verification, and so on — that lock the AI out. On the other hand, how the AI uses those systems is opaque to the user: there is no way to follow in real time what the AI did on the site, which hurts on-site information gathering and can lead to wrong final decisions. Leap Aide provides every pinned LLM session with its own isolated browser desktop environment. If a task touches a website that requires login, the user can open the page ahead of time in the observer window and log in manually via WeChat or a mobile phone; the cookies produced by those operations are retained by the system, so later automated agent visits do not waste tokens on login attempts doomed to fail. The observer window also shows browser navigation changes in real time, keeping the user on top of first-hand on-site information.
+LeapAide also offers targeted solutions to the pain points of using agents today. Many AI tasks need to use third-party web systems. On one hand, those systems often have complex login mechanisms — SMS codes, mobile-app verification, and so on — that lock the AI out. On the other hand, how the AI uses those systems is opaque to the user: there is no way to follow in real time what the AI did on the site, which hurts on-site information gathering and can lead to wrong final decisions. LeapAide provides every pinned LLM session with its own isolated browser desktop environment. If a task touches a website that requires login, the user can open the page ahead of time in the observer window and log in manually via WeChat or a mobile phone; the cookies produced by those operations are retained by the system, so later automated agent visits do not waste tokens on login attempts doomed to fail. The observer window also shows browser navigation changes in real time, keeping the user on top of first-hand on-site information.
 
 As everyone knows, production IT systems depend on a great deal of infrastructure software — the LLVM compiler, the JDK runtime, operating systems, K8S cluster management, and more — and many production IT failures originate in that software. Diagnosing these problems faces many obstacles: isolated network environments (production systems are highly sensitive, often access-controlled and unable to reach the public internet), and infrastructure software that is complex and opaque (mostly large, complex open-source projects that require domain experts to maintain). The project provides professional tools, Skills, MCP, and context/background knowledge bases as system extensions, giving the ability to diagnose and troubleshoot production IT systems.
 
@@ -76,7 +76,7 @@ docker compose up -d
 
 After the Docker container starts successfully, open [http://localhost:8787](http://localhost:8787) to use the system. The default login password is `lingyue-lab`.
 
-The current configuration mounts `~/.hermes` to `/home/leap-aide/.hermes` and `~/.hermes_workspace` to `/workspace`. These two persistent directories hold runtime data so the service can recover properly across restarts. Data exchange between the host machine and Leap Aide also goes through `~/.hermes_workspace`.
+The current configuration mounts `~/.hermes` to `/home/leap-aide/.hermes` and `~/.hermes_workspace` to `/workspace`. These two persistent directories hold runtime data so the service can recover properly across restarts. Data exchange between the host machine and LeapAide also goes through `~/.hermes_workspace`.
 
 See `docker-compose.yml` for more detailed configuration; change the published port and the system configuration as needed. All system configuration is done through environment variables.
 
@@ -149,7 +149,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Acknowledgements
 
-The Leap Aide project grew out of the [hermes-webui](https://github.com/nesquena/hermes-webui) project and still carries much of its code. Because the project goals differ, the two projects have been diverging further and further, and Leap Aide has no plans to sync with hermes-webui going forward.
+The LeapAide project grew out of the [hermes-webui](https://github.com/nesquena/hermes-webui) project and still carries much of its code. Because the project goals differ, the two projects have been diverging further and further, and LeapAide has no plans to sync with hermes-webui going forward.
 
 Thanks to the hermes-webui community.
 

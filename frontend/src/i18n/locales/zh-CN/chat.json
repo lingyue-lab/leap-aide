@@ -12,7 +12,7 @@
   },
   "working": "工作中...",
   "composer": {
-    "placeholder": "向 Leap Aide 发送消息...",
+    "placeholder": "向 LeapAide 发送消息...",
     "attach": "附加文件",
     "send": "发送消息",
     "stop": "停止生成",

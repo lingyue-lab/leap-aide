@@ -336,7 +336,7 @@ function NonTerminalContent({
   // ── Default: chat view ──────────────────────────────────────────────────────
   const title = currentSession?.is_subagent_session
     ? t('sessions.subagent_title', { time: new Date((currentSession.created_at || 0) * 1000).toLocaleString() })
-    : currentSession?.title || 'Leap Aide';
+    : currentSession?.title || 'LeapAide';
 
   return (
     <>

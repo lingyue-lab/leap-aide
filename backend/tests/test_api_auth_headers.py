@@ -64,7 +64,7 @@ def test_login_page_served():
         html = r.read().decode()
         assert r.status == 200
         assert "Login" in html           # injected login_button (api/routes.py::_LOGIN_STRINGS["en"])
-        assert "Leap Aide" in html       # <title> + <h1> (static/index.html + AuthContext.tsx)
+        assert "LeapAide" in html        # <title> + <h1> (static/index.html + AuthContext.tsx)
 
 
 # ── Security headers ─────────────────────────────────────────────────────

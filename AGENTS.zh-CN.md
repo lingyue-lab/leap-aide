@@ -10,9 +10,9 @@
 
 ## 项目概述
 
-项目当前基于[Hermes Agent](https://hermes-agent.nousresearch.com/)框架开发，提供自托管浏览器界面。
+项目当前基于 [Hermes Agent](https://hermes-agent.nousresearch.com/) 框架开发，提供自托管的浏览器界面。
 
-项目后端基于Python标准库（无 Web 框架），前端为 React 18 + TypeScript + Vite，遵循 Material 3前端设计规范。
+项目后端基于 Python 标准库（无 Web 框架），前端为 React 18 + TypeScript + Vite，遵循 Material 3前端设计规范。
 
 ---
 
@@ -54,17 +54,16 @@ bash scripts/build.sh
 ---
 
 ## 代码提交规范
-不要主动创建git commit，除非用户要求。
+不要主动创建 git commit，除非用户要求。
 
-代码commit创建分为以下几个步骤
+代码 commit 创建分为以下几个步骤
 
-步骤 1: 读取并理解代码变更
-判断哪些文件需要被提交，使用 git add 添加这些变更文件，如果不确定哪些文件需要git add，向用户Clarify。
-完成 git add后，然后执行git diff --staged，充分理解全部变更文件的主要变更内容，做了哪些改动。
-
+步骤 1：读取并理解代码变更
+判断哪些文件需要被提交，使用 `git add` 添加这些变更文件，如果不确定哪些文件需要 `git add`，向用户 Clarify。
+完成 `git add` 后，然后执行`git diff --staged`，充分理解全部变更文件的主要变更内容，做了哪些改动。
 
 步骤 2：读取提交规范模板
-读取项目根目录下的 .github/commit-template.txt 文件内容，理解其中定义的规范：
+读取项目根目录下的 `.github/commit-template.txt`文件内容，理解其中定义的规范：
 
 - Type 类型（feat、fix、docs 等）
 - Subject 格式要求（祈使语气、首字母小写、不超过 72 字符、不加句号）
@@ -73,7 +72,7 @@ bash scripts/build.sh
 - 如果.github/commit-template.txt文件不存在，则输出错误并终止。
 
 步骤 3：生成符合规范的提交信息
-基于步骤 1 获取的变更diff内容和步骤 2 的模板规范，生成一条严格符合要求的 Git 提交信息。
+基于步骤 1 获取的变更 Diff 内容和步骤 2的模板规范，生成一条严格符合要求的 git 提交信息。
 生成要求：
 
 - 语言：英文
@@ -96,11 +95,11 @@ Closes #234
 Co-Authored-By: Jane Doe jane@example.com
 ```
 
-步骤 4: 使用生成的提交信息执行 git commit 
+步骤 4：使用生成的提交信息执行 `git commit`
 
 ---
 
 ## 其它
-- 所有功能都不得修改/usr/local/lib/hermes-agent(Hermes Agent SDK)，Hermes Agent SDK是外部依赖，不得修改。
-- Leap Aide的实现尽可能参考Hermes Agent SDK CLI的实现。
-- 代码comment必须使用英文。
+- 所有功能都不得修改 /usr/local/lib/hermes-agent (Hermes Agent SDK)，Hermes Agent SDK是外部依赖，不得修改。
+- LeapAide 的实现尽可能参考Hermes Agent SDK CLI的实现。
+- 代码 Comment 必须使用英文。

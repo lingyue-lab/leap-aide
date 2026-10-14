@@ -12,7 +12,7 @@
   },
   "working": "Working...",
   "composer": {
-    "placeholder": "Message Leap Aide...",
+    "placeholder": "Message LeapAide...",
     "attach": "Attach files",
     "send": "Send message",
     "stop": "Stop generating",

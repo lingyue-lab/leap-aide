@@ -4,9 +4,9 @@
 
 </div>
 
-# Leap Aide Architecture Guide
+# LeapAide Architecture Guide
 
-Leap Aide's backend is pure Python standard library, calling the Hermes Agent SDK directly via Python import (no HTTP hop to Hermes Agent); the frontend is React/TypeScript built with Vite. Realtime updates rely on WebSocket.
+LeapAide's backend is pure Python standard library, calling the Hermes Agent SDK directly via Python import (no HTTP hop to Hermes Agent); the frontend is React/TypeScript built with Vite. Realtime updates rely on WebSocket.
 
 ---
 
@@ -51,7 +51,7 @@ Key principles:
 | Panels | `api/terminal.py`, `api/vnc.py`, `api/observer.py`, `api/cli_viewer.py` | Terminal PTY channel; VNC channel; observer surface; CLI session listing |
 | Business | `api/slash_commands.py`, `api/clarify.py`, `api/metering.py`, `api/providers.py`, `api/commands.py`, `api/background.py`, `api/updates.py` | Slash-command dispatch; clarify dialogs; usage metering; provider/model gate; command registry exposure; background goals; update check |
 
-External dependencies: `pyyaml` only (plus the hermes-agent SDK and its own deps, supplied by the hermes-agent venv).
+External dependencies: `pyyaml` only (plus the Hermes Agent SDK and its own deps, supplied by the Hermes Agent SDK venv).
 
 ---
 
@@ -79,8 +79,8 @@ External dependencies: `pyyaml` only (plus the hermes-agent SDK and its own deps
 - **React 18 + TypeScript + Vite**; state is managed by **Zustand** stores under `stores/`.
 - i18next handles internationalization.
 - Strictly follow the Google Material 3 frontend specification. When reviewing M3 compliance, refer to the component specifications, spacing, font sizes, and other standards in the documents below.
-    - https://www.yuque.com/advancedux/xr6e1n
-    - https://www.cyub.vip/blog/2026/02/14/material-design-3-material-you-%E5%AE%8C%E6%95%B4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97/
+    - [Online reference 1](https://www.yuque.com/advancedux/xr6e1n)
+    - [Online reference 2](https://www.cyub.vip/blog/2026/02/14/material-design-3-material-you-%E5%AE%8C%E6%95%B4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97/)
 - Core stores: `useSessionStore`, `useChatStore`, `useSettingsStore`, `useWorkspaceStore`, `useApprovalStore`.
 - API calls go through `services/api.ts`. The Vite dev server proxies `/api` to `localhost:8787`.
 - Build output goes to `../static/`, served directly by the Python backend.
@@ -88,22 +88,22 @@ External dependencies: `pyyaml` only (plus the hermes-agent SDK and its own deps
 
 ## Data Flow (full chat path)
 
-1. Frontend `send()` → `POST /api/chat/start`, carrying session_id + message
-2. The server creates a `queue.Queue`, starts a daemon thread running `_run_agent_streaming()`, and returns `stream_id`
-3. The frontend receives events over the WebSocket at `/api/ws/events`; on a mid-session refresh it recovers via SSE replay `GET /api/chat/session/stream/replay`
-4. The agent thread runs `AIAgent.run_conversation()`, putting token/tool/approval/done events into the queue
-5. `/api/ws/events` reads events from the queue and forwards them to the browser
-6. On `done`: update session messages, save to on-disk JSON
+- Frontend `send()` → `POST /api/chat/start`, carrying session_id + message
+- The server creates a `queue.Queue`, starts a daemon thread running `_run_agent_streaming()`, and returns `stream_id`
+- The frontend receives events over the WebSocket at `/api/ws/events`; on a mid-session refresh it recovers via SSE replay `GET /api/chat/session/stream/replay`
+- The agent thread runs `AIAgent.run_conversation()`, putting token/tool/approval/done events into the queue
+- `/api/ws/events` reads events from the queue and forwards them to the browser
+- On `done`: update session messages, save to on-disk JSON
 
 ---
 
 ## Database
 
-- Both Leap Aide and the Hermes Agent SDK use state.db; the default path is `${HERMES_HOME}/state.db`.
-- Leap Aide extends the state.db schema beyond the Hermes Agent SDK, adding some extra columns to tables. Column names must end with `__webui`; only Leap Aide uses these columns.
-- All updates/writes to state.db must go through the Hermes Agent SDK's high-level API; connecting directly to state.db for low-level database updates/writes is not allowed. Since the Hermes Agent SDK is unaware of any `__webui` columns, none of the high-level APIs it provides read or write `__webui` columns. To implement features, Leap Aide is allowed to connect directly to state.db for updates/writes to `__webui` columns.
-- Leap Aide does not need to consider database forward compatibility or data migration — for example, changing the data type of an `X__webui` column from TEXT to INT. You may assume Leap Aide is running for the first time with no historical data.
-- Leap Aide does not need to repair historical data in the database. If old values in the db are invalid under new code, no automatic data repair is needed in the code — raise an error directly.
+- Both LeapAide and the Hermes Agent SDK use state.db; the default path is `${HERMES_HOME}/state.db`.
+- LeapAide extends the state.db schema beyond the Hermes Agent SDK, adding some extra columns to tables. Column names must end with `__webui`; only LeapAide uses these columns.
+- All updates/writes to state.db must go through the Hermes Agent SDK's high-level API; connecting directly to state.db via SQL for low-level database updates is not allowed. Since the Hermes Agent SDK is unaware of any `__webui` columns, none of the high-level APIs it provides read or update `__webui` columns. To implement features, LeapAide is allowed to connect directly to state.db to update `__webui` columns.
+- LeapAide does not need to consider database forward compatibility or data migration — for example, changing the data type of an `X__webui` column from TEXT to INT. You may assume LeapAide is running for the first time with no historical data.
+- LeapAide does not need to repair historical data in the database. If old values in the db are invalid under new code, no automatic data repair is needed in the backend code — raise an error directly.
 
 ---
 
@@ -133,6 +133,6 @@ External dependencies: `pyyaml` only (plus the hermes-agent SDK and its own deps
 Each entry records one historical decision and its current status.
 
 ### ADR-001: Example
-**Decision:** TBD
-**Rationale:** TBD
-**Status:** TBD
+- **Decision:** TBD
+- **Rationale:** TBD
+- **Status:** TBD

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh — One-line installer for Leap Aide
+# install.sh — One-line installer for LeapAide
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/.../scripts/install.sh | bash
@@ -35,7 +35,7 @@ fi
 # ── Log file ──
 LOG_FILE="/tmp/install-leap-aide-$(date +%Y%m%d-%H%M%S).log"
 _log() { printf '%s\n' "$*" >> "$LOG_FILE"; }
-_log "=== Leap Aide Installer started at $(date) ==="
+_log "=== LeapAide Installer started at $(date) ==="
 _log "Command: $0 $*"
 _log ""
 
@@ -264,7 +264,7 @@ while [[ $# -gt 0 ]]; do
       echo ""
       echo "┌─────────────────────────────────────────────────────────┐"
       echo "│                                                         │"
-      echo "│                 Leap Aide Installer                     │"
+      echo "│                 LeapAide Installer                      │"
       echo "│                                                         │"
       echo "└─────────────────────────────────────────────────────────┘"
       echo ""
@@ -408,7 +408,7 @@ install_package() {
 say ""
 say "${GRN}${B}┌─────────────────────────────────────────────────────────┐${R}"
 say "${GRN}${B}│                                                         │${R}"
-say "${GRN}${B}│                 Leap Aide Installer                     │${R}"
+say "${GRN}${B}│                 LeapAide Installer                      │${R}"
 say "${GRN}${B}│                                                         │${R}"
 say "${GRN}${B}└─────────────────────────────────────────────────────────┘${R}"
 say ""
@@ -488,7 +488,7 @@ if [ "$USE_ALIYUN_MIRROR" = true ]; then
         # Write DEB822 format (Ubuntu 24.04+)
         # Source: https://mirror.tuna.tsinghua.edu.cn/help/ubuntu/
         cat > /etc/apt/sources.list.d/ubuntu.sources <<MIRROR_EOF
-# Configured by Leap Aide installer --china-mirror
+# Configured by LeapAide installer --china-mirror
 # Source: https://mirror.tuna.tsinghua.edu.cn/help/ubuntu/
 Types: deb
 URIs: https://mirrors.tuna.tsinghua.edu.cn/ubuntu
@@ -525,7 +525,7 @@ MIRROR_EOF
         # Write legacy format
         # Source: https://mirror.tuna.tsinghua.edu.cn/help/ubuntu/
         cat > /etc/apt/sources.list <<MIRROR_EOF
-# Configured by Leap Aide installer --china-mirror
+# Configured by LeapAide installer --china-mirror
 # Source: https://mirror.tuna.tsinghua.edu.cn/help/ubuntu/
 deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ $_ubuntu_codename main restricted universe multiverse
 deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ $_ubuntu_codename-updates main restricted universe multiverse
@@ -966,13 +966,13 @@ if [ -n "$AGENT_DIR" ] && command -v node >/dev/null 2>&1; then
   fi
 fi
 
-# ── Step 2b: Apply Leap Aide defaults to hermes config ──
+# ── Step 2b: Apply LeapAide defaults to hermes config ──
 say ""
 say "${B}Configuring hermes defaults...${R}"
 
 HERMES_CONFIG="${HERMES_HOME}/config.yaml"
 if [ -f "$HERMES_CONFIG" ]; then
-  # Ensure display.show_reasoning is true — Leap Aide displays reasoning
+  # Ensure display.show_reasoning is true — LeapAide displays reasoning
   # blocks in the chat UI, so the backend must persist them.
   # Use python3 + pyyaml to safely modify YAML (preserves comments/structure).
   # Fall back to a simple text patch if pyyaml is not yet installed.
@@ -1073,7 +1073,7 @@ fi
 # $DEST/backend/{requirements.txt,scripts/install-wrappers.sh}.
 if [ "$DEPS_ONLY" = false ]; then
   say ""
-  say "${B}Installing Leap Aide to ${DEST}...${R}"
+  say "${B}Installing LeapAide to ${DEST}...${R}"
 
 # Handle git safe.directory for cross-user/local mounts
 if [ -n "$REPO_URL" ] && [[ "$REPO_URL" == /* || "$REPO_URL" == file://* ]]; then
@@ -1259,7 +1259,7 @@ if [ "$INSTALL_SERVICE" = true ] && [ "$IN_DOCKER" = false ]; then
 
       cat > "$SERVICE_DIR/leap-aide.service" <<EOF
 [Unit]
-Description=Leap Aide Web UI
+Description=LeapAide Web UI
 After=network.target
 
 [Service]
