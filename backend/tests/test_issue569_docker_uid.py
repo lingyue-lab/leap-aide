@@ -14,7 +14,7 @@ import pathlib
 import re
 import unittest
 
-INIT_SCRIPT = (pathlib.Path(__file__).parent.parent.parent.parent / "backend" / "scripts" / "docker-entrypoint.sh").read_text(
+INIT_SCRIPT = (pathlib.Path(__file__).parent.parent.parent / "backend" / "scripts" / "docker-entrypoint.sh").read_text(
     encoding="utf-8"
 )
 

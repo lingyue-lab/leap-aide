@@ -7,6 +7,11 @@
 # 
 # Envs:
 #   PLAYWRIGHT_DOWNLOAD_HOST - Specify to the playwright mirrors.
+#   HERMES_AGENT_COMMIT      - Pin the hermes-agent SDK to a commit. Unset (and
+#                              absent from .build.env) = install unpinned.
+#   BUILD_ENV_FILE           - Path to the build defaults file to load instead
+#                              of the auto-discovered .build.env.
+#   Exported variables always win over .build.env values.
 #
 set -euo pipefail
 
@@ -136,18 +141,6 @@ NPM_REGISTRY=""
 # sets to get @electron/get:* logs) and the hermes-agent pin (HERMES_COMMIT,
 # HERMES_REPO_URL) which the Dockerfile passes via build-arg.
 DEBUG_INSTALL="${DEBUG_INSTALL:-false}"
-# Source the shared hermes-agent defaults so HERMES_COMMIT stays in lock-step
-# with the Dockerfile (which reads the same file as a build-arg). The file
-# is bash-sourceable; the variables it defines can still be overridden by
-# the caller via --hermes-commit / --hermes-branch / env vars.
-if [ -f "$DEST/backend/scripts/hermes-agent.env" ]; then
-  # shellcheck disable=SC1091
-  set +u
-  . "$DEST/backend/scripts/hermes-agent.env"
-  set -u
-fi
-
-HERMES_COMMIT="${HERMES_COMMIT:-${HERMES_AGENT_COMMIT:-f43eabee5f36e11448086ee8ee17c499958e81bf}}"
 HERMES_REPO_URL="${HERMES_REPO_URL:-${HERMES_AGENT_REPO_URL:-}}"
 HERMES_BRANCH="${HERMES_BRANCH:-}"
 FORCE_HERMES_COMMIT="${FORCE_HERMES_COMMIT:-false}"
@@ -283,7 +276,9 @@ while [[ $# -gt 0 ]]; do
       echo "  --no-service        Skip systemd service installation"
       echo "  --npm-registry URL  npm registry (default: npmjs.org; use https://registry.npmmirror.com for China mirror)"
       echo "  --debug             Enable verbose logging (electron download, npm, etc.)"
-      echo "  --hermes-commit SHA Pin hermes-agent to a specific commit (default: f43eabee5f36)"
+      echo "  --hermes-commit SHA Pin hermes-agent to a specific commit"
+      echo "                      (default: HERMES_AGENT_COMMIT from .build.env;"
+      echo "                      unset everywhere = no pin, tracks the default branch)"
       echo "  --hermes-branch NM  hermes-agent branch to install (overrides --hermes-commit)"
       echo "  --force-hermes-commit  Force hermes-agent commit even if it rolls back"
       echo "  --china-mirror      Use Tsinghua apt mirror for faster downloads in China"
@@ -297,6 +292,9 @@ while [[ $# -gt 0 ]]; do
       echo "  LEAP_AIDE_REPO    Git repository URL"
       echo "  LEAP_AIDE_DIR     Installation directory"
       echo "  HERMES_HOME       Data directory"
+      echo "  BUILD_ENV_FILE    Build defaults file (default: .build.env beside this"
+      echo "                    script, \$DEST/.build.env, or ./.build.env)"
+      echo "  Exported variables always win over .build.env values."
       exit 0
       ;;
     *)
@@ -304,6 +302,70 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# ── Load build defaults (.build.env) ──
+# Runs AFTER option parsing so --dir / LEAP_AIDE_DIR are already resolved.
+# It used to sit above the parse loop, where it read the pre-parse $DEST and so
+# never found the file in the Docker build (which passes --dir /app); the pin
+# only reached the image through the Dockerfile's ENV.
+#
+# Precedence: the caller wins. Every key the file declares is snapshotted with
+# `declare -p` before sourcing and restored afterwards, so an exported
+# HERMES_AGENT_COMMIT (or any future field) is never clobbered by the file's
+# default. Same idiom as scripts/ctl.sh — do not replace it with a hardcoded
+# key list, or a field added to the file later will silently clobber callers.
+_build_env_file=""
+_self_dir=""
+if [ -f "$0" ]; then
+  _self_dir="$(cd "$(dirname "$0")" && pwd -P)"
+fi
+for _candidate in \
+    "${BUILD_ENV_FILE:-}" \
+    "$DEST/.build.env" \
+    "${_self_dir:+$_self_dir/../.build.env}" \
+    "./.build.env"; do
+  if [ -n "$_candidate" ] && [ -f "$_candidate" ]; then
+    _build_env_file="$_candidate"
+    break
+  fi
+done
+unset _candidate _self_dir
+if [ -n "$_build_env_file" ]; then
+  _build_env_keep=()
+  while IFS= read -r _line || [ -n "$_line" ]; do
+    _stmt="${_line#export }"
+    case "$_stmt" in
+      *=*) ;;
+      *) continue ;;
+    esac
+    _key="${_stmt%%=*}"
+    _key="${_key#"${_key%%[![:space:]]*}"}"
+    _key="${_key%"${_key##*[![:space:]]}"}"
+    case "$_key" in
+      ''|*[!A-Za-z0-9_]*|[0-9]*) continue ;;
+    esac
+    if eval "[ -n \"\${${_key}+set}\" ]"; then
+      _build_env_keep+=("$(declare -p "$_key")")
+    fi
+  done < "$_build_env_file"
+  # shellcheck disable=SC1090
+  set +u
+  . "$_build_env_file"
+  set -u
+  if [ ${#_build_env_keep[@]} -gt 0 ]; then
+    for _stmt in "${_build_env_keep[@]}"; do eval "$_stmt"; done
+  fi
+  unset _line _stmt _key _build_env_keep
+  info "build defaults: $_build_env_file"
+fi
+
+# hermes-agent pin: --hermes-commit / exported HERMES_AGENT_COMMIT > .build.env.
+# Empty is a valid state — no --commit is passed at all and the SDK install
+# tracks the installer's own default branch. There is deliberately no
+# hardcoded fallback here: the old f43eabee… default pinned every install,
+# including ones that had no access to this repo, and had already drifted
+# from the pin in .build.env.
+HERMES_COMMIT="${HERMES_COMMIT:-${HERMES_AGENT_COMMIT:-}}"
 
 # ── Detect local repo (for symlink install) ──
 LOCAL_REPO=""
@@ -748,15 +810,18 @@ fi
 #   1. HERMES_AGENT_INSTALLER_URL set → use as-is (full override)
 #   2. HERMES_BRANCH set             → raw.githubusercontent.com/.../<branch>/scripts/install.sh
 #   3. HERMES_COMMIT set             → raw.githubusercontent.com/.../<commit>/scripts/install.sh
-#   4. otherwise                     → https://hermes-agent.nousresearch.com/install.sh (tracks main)
+#   4. neither ref pinned            → https://hermes-agent.nousresearch.com/install.sh (tracks main)
 # Rules 2/3 fetch the installer from the same ref that gets checked out, so the
-# installer and the tree can never skew. The floating hosted URL tracks main and
-# silently broke pinned installs when main moved to the pm/ dependency manager
-# (pre-pm trees have no pm/lock.json, so `pm install` failed and no Python venv
-# was ever created).
-# HERMES_INSTALLER_MIRROR (optional prefix, include trailing slash) is prepended
-# to the final URL — point it at a raw.githubusercontent.com accelerator when
-# direct access is blocked. Site-specific mirrors stay in env vars, not here.
+# installer and the tree can never skew. Rule 4 is what an unpinned install gets
+# (no HERMES_AGENT_COMMIT in .build.env and none exported): the SDK then tracks
+# upstream main. That is a documented opt-out, not an accident — but be aware
+# the floating hosted URL tracks main and silently broke pinned installs when
+# main moved to the pm/ dependency manager (pre-pm trees have no pm/lock.json,
+# so `pm install` failed and no Python venv was ever created).
+# HERMES_INSTALLER_MIRROR (optional prefix, include trailing slash) points at a
+# raw.githubusercontent.com accelerator when direct access is blocked — it is
+# applied to rules 2/3 only, see the guard below. Site-specific mirrors stay in
+# env vars, not here.
 if [ -n "${HERMES_AGENT_INSTALLER_URL:-}" ]; then
   HERMES_AGENT_INSTALLER="$HERMES_AGENT_INSTALLER_URL"
 elif [ -n "${HERMES_BRANCH:-}" ]; then
@@ -766,7 +831,22 @@ elif [ -n "${HERMES_COMMIT:-}" ]; then
 else
   HERMES_AGENT_INSTALLER="https://hermes-agent.nousresearch.com/install.sh"
 fi
-HERMES_AGENT_INSTALLER="${HERMES_INSTALLER_MIRROR:-}${HERMES_AGENT_INSTALLER}"
+# HERMES_INSTALLER_MIRROR is a raw.githubusercontent.com accelerator, so it is
+# only valid for the two ref-pinned URLs above. Rule 4 is reachable for the
+# first time now that the pin is optional — prefixing the floating hosted
+# installer there would silently produce an invalid URL, so warn and use it
+# as-is instead.
+if [ -n "${HERMES_INSTALLER_MIRROR:-}" ]; then
+  case "$HERMES_AGENT_INSTALLER" in
+    https://raw.githubusercontent.com/*)
+      HERMES_AGENT_INSTALLER="${HERMES_INSTALLER_MIRROR}${HERMES_AGENT_INSTALLER}" ;;
+    *)
+      warn "HERMES_INSTALLER_MIRROR is set but the resolved installer is not a raw.githubusercontent.com URL — using it unmirrored" ;;
+  esac
+fi
+if [ -z "${HERMES_BRANCH:-}${HERMES_COMMIT:-}" ]; then
+  info "no hermes-agent ref pinned — the SDK install will track the default branch"
+fi
 info "hermes-agent installer: $HERMES_AGENT_INSTALLER"
 
 # Build hermes-agent installer args
@@ -805,7 +885,7 @@ else
   # Network flakiness (ECONNRESET) can cause transient failures.
   #
   # Also add --unsafe-perm when running as root. npm ≥7 refuses to run as
-  # root at all unless --unsafe-perm is set. The cicd Dockerfile runs
+  # root at all unless --unsafe-perm is set. The testing Dockerfile runs
   # install.sh as root so apt-get + /usr/local/bin wrappers work; we need
   # this --unsafe-perm to let hermes-agent's npm install succeed in that
   # context. Host usage is unaffected: --unsafe-perm is a no-op for
@@ -855,11 +935,11 @@ else
   if command -v curl >/dev/null 2>&1; then
     curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors \
          "$HERMES_AGENT_INSTALLER" -o "$_ha_installer" \
-      || die "Failed to fetch hermes-agent installer from $HERMES_AGENT_INSTALLER — check that the ref exists upstream (fork-only SHAs need a HERMES_AGENT_INSTALLER_URL override) or set HERMES_INSTALLER_MIRROR for raw.githubusercontent acceleration"
+      || die "Failed to fetch hermes-agent installer from $HERMES_AGENT_INSTALLER — check that the ref exists upstream (fork-only SHAs need a HERMES_AGENT_INSTALLER_URL override); HERMES_INSTALLER_MIRROR accelerates raw.githubusercontent.com URLs only"
   elif command -v wget >/dev/null 2>&1; then
     wget --tries=5 --waitretry=10 -qO "$_ha_installer" \
          "$HERMES_AGENT_INSTALLER" \
-      || die "Failed to fetch hermes-agent installer from $HERMES_AGENT_INSTALLER — check that the ref exists upstream (fork-only SHAs need a HERMES_AGENT_INSTALLER_URL override) or set HERMES_INSTALLER_MIRROR for raw.githubusercontent acceleration"
+      || die "Failed to fetch hermes-agent installer from $HERMES_AGENT_INSTALLER — check that the ref exists upstream (fork-only SHAs need a HERMES_AGENT_INSTALLER_URL override); HERMES_INSTALLER_MIRROR accelerates raw.githubusercontent.com URLs only"
   else
     die "curl or wget is required to download hermes-agent."
   fi
@@ -873,7 +953,8 @@ else
   # a future installer natively honors HERMES_REPO_URL, the patterns simply do
   # not match (harmless no-op). sed delimiter is `|` because URLs contain `/`
   # and `:`; a `|` inside HERMES_REPO_URL is not escaped (documented limitation).
-  if [ -n "$HERMES_REPO_URL" ]; then
+  # ${:-} tolerates the unset done above when the URL is empty (upstream).
+  if [ -n "${HERMES_REPO_URL:-}" ]; then
     sed -e "s|git@github.com:NousResearch/hermes-agent.git|${HERMES_REPO_URL}|g" \
         -e "s|https://github.com/NousResearch/hermes-agent.git|${HERMES_REPO_URL}|g" \
         "$_ha_installer" > "$_ha_installer.patched" \
@@ -896,11 +977,15 @@ else
   fi
   # Verify commit pin (warn-only — catches "I bumped hermes-agent on host but
   # forgot to rebuild the image"). Skip when --hermes-commit was not specified.
+  # Prefix match on the full HEAD sha: the pin may itself be a short sha, so
+  # comparing equal-length abbreviations could never match.
   if [ -n "$HERMES_COMMIT" ] && [ -n "$AGENT_DIR" ] && [ -d "$AGENT_DIR/.git" ]; then
-    _actual_commit=$(git -C "$AGENT_DIR" rev-parse --short HEAD 2>/dev/null || true)
-    _expected_short="${HERMES_COMMIT:0:12}"
-    if [ -n "$_actual_commit" ] && [ "$_actual_commit" != "${_expected_short}" ]; then
-      warn "hermes-agent commit mismatch: expected ${_expected_short}, got ${_actual_commit}"
+    _actual_commit=$(git -C "$AGENT_DIR" rev-parse HEAD 2>/dev/null || true)
+    if [ -n "$_actual_commit" ]; then
+      case "$_actual_commit" in
+        "$HERMES_COMMIT"*) ;;
+        *) warn "hermes-agent commit mismatch: expected ${HERMES_COMMIT}, got ${_actual_commit}" ;;
+      esac
     fi
   fi
 fi

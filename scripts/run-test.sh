@@ -9,6 +9,7 @@
 #   ./scripts/run-test.sh smoke                   # L1 smoke (< 5 min)
 #   ./scripts/run-test.sh function [DOMAIN]       # L2 functional area (10-30 min)
 #   ./scripts/run-test.sh full                    # L3 full regression (hours)
+#   ./scripts/run-test.sh backend [SUBCMD]        # backend pytest (smoke | function | full | sprint | setup | clean)
 #   ./scripts/run-test.sh frontend [SUBCMD]       # frontend vitest (smoke | full | clean | setup)
 #   ./scripts/run-test.sh manual                  # L4 browser manual — prints instructions
 #   ./scripts/run-test.sh setup                   # install all test deps (Python + frontend)
@@ -197,6 +198,7 @@ ${B}Usage:${R}
   $0 function [DOMAIN]        # L2 functional area (10-30 min)
   $0 full                     # L3 full regression (hours)
   $0 sprint N                 # run a single sprint file (e.g. "sprint 29", "sprint 20b")
+  $0 backend [SUBCMD]         # backend pytest (smoke | function | full | sprint | setup | clean)
   $0 frontend [SUBCMD]        # frontend vitest (smoke | full | clean | setup)
   $0 manual                   # L4 browser manual — prints instructions
   $0 setup                    # install ALL test deps (Python + frontend)
@@ -206,6 +208,15 @@ ${B}Usage:${R}
 ${B}DOMAIN values for L2:${R}
   session   model   workspace   cron   i18n
   ui        auth   all
+
+${B}Backend SUBCMD:${R}
+  (default)           alias for smoke
+  smoke               L1 smoke (< 5 min)
+  function [DOMAIN]   L2 functional area (10-30 min)
+  full                L3 full regression (hours)
+  sprint N            run a single sprint file (e.g. "sprint 29")
+  setup               install ALL test deps (Python + frontend)
+  clean               wipe stale test state dirs and ports
 
 ${B}Frontend SUBCMD:${R}
   (default)   alias for smoke
@@ -894,6 +905,32 @@ cmd_frontend() {
   (cd "${PROJECT_ROOT}" && bash -c "${cmd}")
 }
 
+# ── Subcommand: backend ──
+# Namespaced alias for the backend (pytest) levels so a caller that drives both
+# halves picks them the same way:
+#   ./scripts/run-test.sh backend full      # pytest suites
+#   ./scripts/run-test.sh frontend full     # vitest
+# It forwards to the existing top-level commands untouched — bare `smoke` /
+# `full` / `function` / `sprint` / `setup` / `clean` stay canonical (docs,
+# README and the lab scripts all call them), so this only *adds* a namespace.
+# Default is `smoke`, mirroring cmd_frontend: `full` runs for hours and must be
+# asked for explicitly.
+#
+# Sub-arguments are read from $2 rather than shifted: under `set -euo pipefail`
+# a bare `shift` on an empty positional list returns 1 and aborts the script.
+cmd_backend() {
+  local subcmd="${1:-smoke}"
+  case "$subcmd" in
+    smoke)    cmd_smoke ;;
+    function) cmd_function "${2:-all}" ;;
+    full)     cmd_full ;;
+    sprint)   cmd_sprint "${2:-}" ;;
+    setup)    cmd_setup ;;
+    clean)    cmd_clean ;;
+    *)        err "Unknown backend SUBCMD: ${subcmd}"; cmd_help; exit 1 ;;
+  esac
+}
+
 # ── Dispatch ──
 # Parse --batch-size / --max-tests / --only-batch first so the dispatch case
 # below doesn't see them. CLI flag > env var > default.
@@ -914,6 +951,7 @@ case "${1:-help}" in
   function)    shift; cmd_function "${1:-all}" ;;
   full)        cmd_full ;;
   sprint)      shift; cmd_sprint "${1:-}" ;;
+  backend)     shift; cmd_backend "$@" ;;
   frontend)    shift; cmd_frontend "${1:-smoke}" ;;
   manual)      cmd_manual ;;
   setup)       cmd_setup ;;

@@ -104,6 +104,8 @@ export HERMES_AGENT_REPO_URL="ssh://git@<path-to-your-internal-mirror-repo>/herm
 export HERMES_AGENT_COMMIT="fcbd1076a93841fa88855acce810e342a5b78101"
 ```
 
+The SDK commit pin defaults to `HERMES_AGENT_COMMIT` in the repo-root [`.build.env`](.build.env). Exporting it (as above) overrides that default; commenting the line out in `.build.env` builds without a pin, so the SDK install tracks the default branch of the repository it is cloned from. The same file also holds the Playwright fallback revisions used by the build-time npm warmup.
+
 Besides the mirrors above, you can also add HTTP_PROXY, HTTPS_PROXY, and NO_PROXY environment variables to speed up installation.
 
 ### Host ###

@@ -1,0 +1,103 @@
+name: build-runtime-image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+# One run per ref: a newer merge cancels the build it supersedes instead of
+# racing it. Two concurrent runs would both push `daily`, and whichever
+# finishes last wins — that can move the floating tag BACKWARDS onto an older
+# commit, which is exactly what testers must never see.
+#   * Cancelling is safe for the image: `buildah push` uploads blobs before the
+#     final manifest PUT, so a tag is either absent or complete, and `daily`
+#     only moves after that run's own build succeeded. A cancelled run leaves
+#     the previous `daily` in place, which is the intent.
+#   * `github.workflow` keeps this from cancelling run-tests-in-testing-image
+#     on the same ref; both should report on a push to main.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-runtime-image:
+    name: Build runtime Docker image
+    runs-on: ubuntu-latest
+    # Container jobs default to sh (dash); this script needs bash features
+    # (arrays, ${var:offset:len}). bash ships in the image — the Dockerfile
+    # itself runs /bin/bash.
+    defaults:
+      run:
+        shell: bash
+    # CICD builder image (Ubuntu 24.04 + buildah), prebuilt so each run does
+    # not pay an apt install. Maintained by the build-cicd-builder-image
+    # workflow (.github/images/cicd-builder).
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/leap-aide-cicd-builder:ubuntu-24.04
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      # buildah runs the Dockerfile's RUN steps with mount namespaces inside
+      # this job container; that needs real privileges, not just root.
+      options: --privileged
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history + tags so `git describe` yields a real version.
+          fetch-depth: 0
+
+      # buildah login, not docker/login-action: the cicd-builder image has
+      # buildah but no docker CLI, and buildah push reads exactly the auth
+      # file buildah login writes.
+      - name: Log in to GitHub Container Registry
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | buildah login --username "${{ github.actor }}" --password-stdin ghcr.io
+
+      # Daily build for routine testing. Testers pin one moving tag (`daily`);
+      # the immutable daily-<date>-<sha> tag only exists to reproduce old
+      # bugs. Publish order matters: the archive tag goes first, so `daily`
+      # only moves after a fully successful publish. Semver releases and
+      # `latest` stay in release-runtime-image.yml. Single arch (linux/amd64) —
+      # the runner's native arch, same as scripts/build.sh --docker-image.
+      - name: Build and push daily runtime image
+        env:
+          # Point the buildah store at the host bind-mount (ext4). The job
+          # container's root is overlayfs, which the kernel refuses as an
+          # overlay upperdir and would break layer commits.
+          BUILDAH_ROOT: ${{ runner.temp }}/buildah-store
+          BUILDAH_RUNROOT: ${{ runner.temp }}/buildah-runroot
+          # Site-specific mirrors/proxies come from repo Variables; leave
+          # them unset for direct connections (see scripts/build.sh --help).
+          BUILD_HTTP_PROXY: ${{ vars.BUILD_HTTP_PROXY }}
+          BUILD_HTTPS_PROXY: ${{ vars.BUILD_HTTPS_PROXY }}
+          BUILD_NO_PROXY: ${{ vars.BUILD_NO_PROXY }}
+          BUILD_APT_MIRROR: ${{ vars.BUILD_APT_MIRROR }}
+          BUILD_PIP_INDEX_URL: ${{ vars.BUILD_PIP_INDEX_URL }}
+          BUILD_UV_PYTHON_MIRROR: ${{ vars.BUILD_UV_PYTHON_MIRROR }}
+          BUILD_NPM_REGISTRY: ${{ vars.BUILD_NPM_REGISTRY }}
+          BUILD_PLAYWRIGHT_DOWNLOAD_HOST: ${{ vars.BUILD_PLAYWRIGHT_DOWNLOAD_HOST }}
+          BUILD_ELECTRON_MIRROR: ${{ vars.BUILD_ELECTRON_MIRROR }}
+          BUILD_ELECTRON_BUILDER_BINARIES_MIRROR: ${{ vars.BUILD_ELECTRON_BUILDER_BINARIES_MIRROR }}
+          HERMES_AGENT_REPO_URL: ${{ vars.HERMES_AGENT_REPO_URL }}
+          HERMES_INSTALLER_MIRROR: ${{ vars.HERMES_INSTALLER_MIRROR }}
+        run: |
+          # The job container sees the workspace as a foreign-uid mount, so
+          # bare git calls can die with exit 128 (dubious ownership). Build
+          # must never depend on version metadata being computable.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" 2>/dev/null || true
+
+          image="ghcr.io/${{ github.repository_owner }}/leap-aide-runtime"
+          archive_tag="daily-$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
+          # build.sh pins the buildah store via --root/--runroot; tag/push
+          # must address the same store or the image is invisible to them.
+          ba=(buildah --root "$BUILDAH_ROOT" --runroot "$BUILDAH_RUNROOT")
+
+          ./scripts/build.sh --docker-image "${image}:${archive_tag}"
+          "${ba[@]}" tag "${image}:${archive_tag}" "${image}:daily"
+          "${ba[@]}" push "${image}:${archive_tag}"
+          "${ba[@]}" push "${image}:daily"

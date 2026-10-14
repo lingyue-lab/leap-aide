@@ -13,8 +13,8 @@ Fixes:
 import pathlib
 import re
 
-MODELS_PY = pathlib.Path(__file__).parent.parent / 'api' / 'models.py'
-AGENT_SESSIONS_PY = pathlib.Path(__file__).parent.parent / 'api' / 'agent_sessions.py'
+MODELS_PY = pathlib.Path(__file__).parent.parent / 'app' / 'api' / 'models.py'
+AGENT_SESSIONS_PY = pathlib.Path(__file__).parent.parent / 'app' / 'api' / 'agent_sessions.py'
 src = MODELS_PY.read_text(encoding='utf-8')
 agent_src = AGENT_SESSIONS_PY.read_text(encoding='utf-8')
 combined_src = src + "\n" + agent_src

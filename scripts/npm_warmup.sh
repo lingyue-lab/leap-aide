@@ -51,6 +51,8 @@
 # ---------
 #   HERMES_AGENT_REPO_URL     Required (for pre-warm mode).
 #   HERMES_AGENT_COMMIT       Required (for pre-warm mode).
+#   BUILD_ENV_FILE            Build defaults file to load instead of the
+#                             auto-discovered .build.env.
 #   WARMUP_DIR                Where to clone hermes-agent. Default: /tmp/hermes-agent-warmup
 #   ELECTRON_MIRROR           Mirror base URL. Default: cdn.npmmirror.com direct.
 #   ELECTRON_CACHE_DIR        Where electron install.js looks. Default: /root/.cache/electron
@@ -91,29 +93,61 @@ PLAYWRIGHT_DOWNLOAD_HOST="${PLAYWRIGHT_DOWNLOAD_HOST:-${BUILD_PLAYWRIGHT_DOWNLOA
 PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/root/.cache/ms-playwright}"
 
 # ── Single source of truth ──
-# Try to source backend/scripts/hermes-agent.env for version metadata
-# (PLAYWRIGHT_FALLBACK_* and any future fields). The values are also
-# hardcoded below as a safety net for when the env file is missing
-# (e.g. running the warmup outside the leap-aide repo).
+# Source .build.env at the repo root for version metadata (PLAYWRIGHT_FALLBACK_*
+# and any future fields). The values are also hardcoded below as a safety net
+# for when the file is missing (e.g. running the warmup outside the repo) — but
+# that fallback is now announced, because a stale path here is otherwise
+# invisible: the file is read at build time from inside the image
+# (/app/.build.env), where a missing .dockerignore whitelist entry drops it.
+#
+# NOTE the relative candidate is ONE level up from this script's dir (repo
+# root), not the two it used to be when the file lived in backend/scripts/.
 _env_file=""
 for _candidate in \
-    "${HERMES_AGENT_ENV:-}" \
-    "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/../backend/scripts/hermes-agent.env" \
-    "./backend/scripts/hermes-agent.env" \
-    "/app/backend/scripts/hermes-agent.env"; do
+    "${BUILD_ENV_FILE:-}" \
+    "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/../.build.env" \
+    "./.build.env" \
+    "/app/.build.env"; do
   if [ -n "$_candidate" ] && [ -f "$_candidate" ]; then
     _env_file="$_candidate"
     break
   fi
 done
 if [ -n "$_env_file" ]; then
+  # Caller wins: snapshot every key the file declares, restore it afterwards.
+  # Without this the source would clobber a PLAYWRIGHT_FALLBACK_* (or
+  # HERMES_AGENT_COMMIT) that the build-arg exported — same idiom as
+  # scripts/ctl.sh. Costs one extra read of a small file.
+  _env_keep=()
+  while IFS= read -r _line || [ -n "$_line" ]; do
+    _stmt="${_line#export }"
+    case "$_stmt" in
+      *=*) ;;
+      *) continue ;;
+    esac
+    _key="${_stmt%%=*}"
+    _key="${_key#"${_key%%[![:space:]]*}"}"
+    _key="${_key%"${_key##*[![:space:]]}"}"
+    case "$_key" in
+      ''|*[!A-Za-z0-9_]*|[0-9]*) continue ;;
+    esac
+    if eval "[ -n \"\${${_key}+set}\" ]"; then
+      _env_keep+=("$(declare -p "$_key")")
+    fi
+  done < "$_env_file"
   # shellcheck disable=SC1090
   set +u; . "$_env_file"; set -u
+  if [ ${#_env_keep[@]} -gt 0 ]; then
+    for _stmt in "${_env_keep[@]}"; do eval "$_stmt"; done
+  fi
+  unset _line _stmt _key _env_keep
   echo "  → loaded version metadata from $_env_file"
+else
+  echo "  ! .build.env not found (looked in \$BUILD_ENV_FILE, <script-dir>/../, ./, /app/) — using hardcoded playwright revisions" >&2
 fi
 
-# Fallback playwright revisions (overridden by hermes-agent.env above).
-# Update these (in hermes-agent.env) when hermes-agent bumps playwright.
+# Fallback playwright revisions (overridden by .build.env above).
+# Update these (in .build.env) when hermes-agent bumps playwright.
 PLAYWRIGHT_FALLBACK_CHROMIUM_REV="${PLAYWRIGHT_FALLBACK_CHROMIUM_REV:-1187}"
 PLAYWRIGHT_FALLBACK_FFMPEG_REV="${PLAYWRIGHT_FALLBACK_FFMPEG_REV:-1013}"
 

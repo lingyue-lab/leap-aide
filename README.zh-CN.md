@@ -104,6 +104,8 @@ export HERMES_AGENT_REPO_URL="ssh://git@<path-to-your-internal-mirror-repo>/herm
 export HERMES_AGENT_COMMIT="fcbd1076a93841fa88855acce810e342a5b78101"
 ```
 
+SDK 的 commit pin 默认取自仓库根目录的 [`.build.env`](.build.env)。像上面这样 export 会覆盖该默认值；把 `.build.env` 里那一行注释掉则构建不带 pin，SDK 安装会跟随其克隆来源仓库的默认分支。同一个文件里还存放构建期 npm warmup 使用的 Playwright 回退版本。
+
 除了上述镜像，用户也可以自行添加 HTTP_PROXY HTTPS_PROXY NO_PROXY 环境变量来加速安装过程。
 
 ### 主机方式 ###

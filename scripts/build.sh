@@ -103,12 +103,14 @@ while [[ $# -gt 0 ]]; do
       echo ""
       echo "Container image build (standalone mode; everything is env-driven):"
       echo "  HERMES_AGENT_REPO_URL      hermes-agent git URL (empty = upstream)"
-      echo "  HERMES_AGENT_COMMIT        commit pin (default: backend/scripts/hermes-agent.env)"
+      echo "  HERMES_AGENT_COMMIT        commit pin (default: .build.env; unset ="
+      echo "                             install hermes-agent unpinned)"
       echo "  HERMES_INSTALLER_MIRROR    accelerator prefix for the hermes-agent"
       echo "                             installer fetch (empty = direct)"
       echo "  HERMES_HOME                hermes-agent data/seed dir at build time"
       echo "                             (default: /var/lib/leap-aide/hermes-seed)"
-      echo "  HERMES_VERSION             version badge (default: git describe --tags --always)"
+      echo "  LEAP_AIDE_VERSION          app version badge (default: git describe --tags --always)."
+      echo "                             NOT the hermes-agent SDK version — see HERMES_AGENT_COMMIT"
       echo "  BUILD_HTTP_PROXY/BUILD_HTTPS_PROXY/BUILD_NO_PROXY"
       echo "                             build-time proxy (empty = direct connect)."
       echo "                             Deliberately NOT HTTP_PROXY/HTTPS_PROXY/NO_PROXY:"
@@ -263,7 +265,7 @@ build_backend() {
 # here. See --help.
 #
 # Every Dockerfile ARG is forwarded as a --build-arg of the same name, always
-# explicitly, even when empty: the cicd stage's ARGs inherit into the runtime
+# explicitly, even when empty: the testing stage's ARGs inherit into the runtime
 # stage and must be cleared or they leak into the runtime layer's image config
 # (see the comment around Dockerfile:95). Exception: the six proxy ARGs are
 # fed from the BUILD_HTTP_PROXY/BUILD_HTTPS_PROXY/BUILD_NO_PROXY inputs (see
@@ -309,20 +311,27 @@ build_container_image() {
     warn "HTTP_PROXY/HTTPS_PROXY/NO_PROXY no longer drive the image build — use BUILD_HTTP_PROXY/BUILD_HTTPS_PROXY/BUILD_NO_PROXY"
   fi
 
-  # hermes-agent commit pin. Env wins (the contract documented in
-  # backend/scripts/hermes-agent.env); otherwise read the canonical pin.
+  # hermes-agent commit pin. Env wins (the contract documented in .build.env);
+  # otherwise read the repo default from the same file. An empty pin is a valid
+  # state — the SDK install then tracks its own default branch — but it is also
+  # what a stale path or a commented-out line produces, so warn rather than
+  # ship a silently unpinned image.
   local ha_commit="${HERMES_AGENT_COMMIT:-}"
-  if [ -z "$ha_commit" ] && [ -f "$PROJECT_ROOT/backend/scripts/hermes-agent.env" ]; then
-    ha_commit="$(grep '^HERMES_AGENT_COMMIT=' "$PROJECT_ROOT/backend/scripts/hermes-agent.env" \
+  if [ -z "$ha_commit" ] && [ -f "$PROJECT_ROOT/.build.env" ]; then
+    ha_commit="$(grep '^HERMES_AGENT_COMMIT=' "$PROJECT_ROOT/.build.env" \
       | cut -d= -f2- | tr -d '"' || true)"
   fi
-
-  # Version badge baked into backend/app/api/_version.py (Dockerfile:239-240).
-  local ha_version="${HERMES_VERSION:-}"
-  if [ -z "$ha_version" ]; then
-    ha_version="$(git -C "$PROJECT_ROOT" describe --tags --always 2>/dev/null || true)"
+  if [ -z "$ha_commit" ]; then
+    warn "no HERMES_AGENT_COMMIT resolved (not exported, and .build.env has no pin line) — the image will install hermes-agent unpinned"
   fi
-  ha_version="${ha_version:-unknown}"
+
+  # App version badge, baked into backend/app/api/_version.py by the
+  # LEAP_AIDE_VERSION ARG. LeapAide's own version — not hermes-agent's.
+  local app_version="${LEAP_AIDE_VERSION:-}"
+  if [ -z "$app_version" ]; then
+    app_version="$(git -C "$PROJECT_ROOT" describe --tags --always 2>/dev/null || true)"
+  fi
+  app_version="${app_version:-unknown}"
 
   local hermes_repo="${HERMES_AGENT_REPO_URL:-}"
 
@@ -347,7 +356,7 @@ build_container_image() {
     --build-arg "HERMES_AGENT_REPO_URL=$hermes_repo"
     --build-arg "HERMES_INSTALLER_MIRROR=${HERMES_INSTALLER_MIRROR:-}"
     --build-arg "HERMES_HOME=${HERMES_HOME:-/var/lib/leap-aide/hermes-seed}"
-    --build-arg "HERMES_VERSION=$ha_version"
+    --build-arg "LEAP_AIDE_VERSION=$app_version"
     --build-arg "BUILD_APT_MIRROR=${BUILD_APT_MIRROR:-}"
     --build-arg "BUILD_PIP_INDEX_URL=${BUILD_PIP_INDEX_URL:-}"
     --build-arg "BUILD_UV_PYTHON_MIRROR=${BUILD_UV_PYTHON_MIRROR:-}"
@@ -428,7 +437,7 @@ build_container_image() {
   _dlog "  build proxy           = ${build_http_proxy:-<direct>}"
   _dlog "  HERMES_AGENT_REPO_URL = ${hermes_repo:-<upstream>}"
   _dlog "  HERMES_AGENT_COMMIT   = ${ha_commit:-<unset>}"
-  _dlog "  HERMES_VERSION        = ${ha_version}"
+  _dlog "  LEAP_AIDE_VERSION     = ${app_version}"
   _dlog "  secrets               = ${secrets[*]:-<none>}"
   _dlog "  log                   = ${DOCKER_LOG_FILE}"
 

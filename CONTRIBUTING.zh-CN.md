@@ -47,6 +47,8 @@ LeapAide 的技术栈刻意保持"简洁"：服务端只用 Python 标准库，�
 
 每次提 PR 前先在本地完成所有测试，测试方法参考 [docs/testing.zh-CN.md](docs/testing.zh-CN.md) 。
 
+CI 也会在目标为 `main` 的 ready PR 每次推送时自动重跑同样的套件，并在每次推送到 `main` 本身时再跑一次。该检查只报告结果，目前还不是合并的必需项。
+
 ### 清晰的 PR 描述
 
 PR信息描述请具体参考 [.github/commit-template.txt](.github/commit-template.txt) 。

@@ -61,9 +61,10 @@ def _detect_webui_version() -> str:
          Returns the exact tag on tagged commits (e.g. ``v0.50.124``), a
          post-tag descriptor between releases (e.g. ``v0.50.124-1-ge91325d``),
          or a bare SHA when no tags exist (shallow clones, fresh forks).
-      2. ``api/_version.py`` — a fallback written by the Docker / CI release
-         workflow when ``.git`` is not present in the image.  Expected to define
-         ``__version__ = 'vX.Y.Z'``.
+      2. ``api/_version.py`` — a fallback written at image build time when
+         ``.git`` is not present in the image.  Expected to define
+         ``__version__ = 'X.Y.Z'``, the release tag without its leading ``v``
+         (the caller strips any ``v`` before display, so either form is safe).
       3. ``'unknown'`` — last resort; displayed as-is in the settings badge.
     """
     # Timeout capped at 3s: git describe on a healthy local repo is <50ms;
