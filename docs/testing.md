@@ -1,16 +1,18 @@
+<div align="center">
+
+**English** | [中文](testing.zh-CN.md)
+
+</div>
+
 # Leap Aide Testing Guide
 
-**English** | [简体中文](testing.zh-CN.md)
-
-This guide covers the automated test tiers, how to run them, and a lean manual
-smoke checklist for browser-visible behavior. For contribution workflow see
-[CONTRIBUTING.md](../CONTRIBUTING.md).
+This guide covers the automated test tiers, how to run them, and a lean manual browser smoke checklist. For the contribution workflow see [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ---
 
-## Test tiers
+## Automated Unit Tests
 
-All automated tests are driven by `./scripts/run-test.sh` from the repo root:
+All unit tests are driven by `./scripts/run-test.sh` from the repo root:
 
 | Command | Tier | Scope | Typical duration |
 |---|---|---|---|
@@ -20,103 +22,52 @@ All automated tests are driven by `./scripts/run-test.sh` from the repo root:
 | `./scripts/run-test.sh frontend [SUBCMD]` | — | Frontend vitest (`smoke` / `full` / `clean` / `setup`) | minutes |
 | `./scripts/run-test.sh manual` | L4 | Prints the browser manual checklist | — |
 | `./scripts/run-test.sh setup` | — | Install all test dependencies (Python + frontend) | — |
-| `./scripts/run-test.sh clean` | — | Wipe stale test state and ports | — |
+| `./scripts/run-test.sh clean` | — | Clean up stale test state and occupied ports | — |
 
-L2 domains: `session` | `model` | `workspace` | `cron` | `i18n` | `ui` |
+L2 domains (DOMAIN): `session` | `model` | `workspace` | `cron` | `i18n` | `ui`
 `streaming` | `auth` | `all`.
 
 Useful environment overrides:
 
 - `DRY_RUN=1` — print the commands without executing them
-- `PYTEST_EXTRA="..."` / `VITEST_EXTRA="..."` — append extra flags to the runner
+- `PYTEST_EXTRA="..."` / `VITEST_EXTRA="..."` — append extra arguments to the runner
 
-Run `./scripts/run-test.sh help` for the authoritative, up-to-date usage text.
+The output of `./scripts/run-test.sh help` is authoritative; it is the latest usage documentation.
 
----
-
-## Running pytest directly
-
-The backend suite lives in `backend/tests/` (with `backend/pytest.ini` at
-`backend/`):
-
-```bash
-cd backend
-python -m pytest tests/ -v
-python -m pytest tests/ -k <name>      # single test or module
-```
-
-Do not run `pytest tests/` from the repo root — there is no root-level `tests/`
-directory.
-
-Results are written to `backend/tests/.results/` and `frontend/tests/.results/`.
-
-### CI
-
-`.github/workflows/tests.yml` runs the backend suite on Python 3.11 / 3.12 /
-3.13, the frontend vitest suite, and a containerized job (buildah `cicd` image
-+ pytest inside the container). Agent-dependent tests auto-skip when the
-hermes-agent SDK is unavailable. Keep the local suite green before pushing;
-CI is a backstop, not the first line of defense.
+Test result files are written to `backend/tests/.results/` and `frontend/tests/.results/`.
 
 ---
 
-## Test isolation
+## Manual Smoke Tests
 
-- Tests spin up an isolated server on port **8788** with its own temporary
-  state directory (per-session temp dirs created by `backend/tests/conftest.py`).
-- Production state (`~/.hermes/webui`) and real cron jobs are never touched.
-- If a test run is interrupted and leaves a stale process behind,
-  `./scripts/run-test.sh clean` restores a clean slate.
+After changes that touch the UI, run the following tests manually:
 
----
+### Session Lifecycle
 
-## Manual smoke checklist (L4)
+- **Empty state**: the first load with no sessions shows an empty state.
+- **Create / rename / delete**: create a session with the `+` button, rename it, delete it. Deleting the *last (only)* session returns to the empty state.
+- **Pin / archive**: pinning moves a session to the top. After pinning, the observe button in the title bar is visible; clicking it opens the VNC desktop to watch the browser.
 
-Run this after UI-facing changes. Each item is one or two sentences; the goal
-is a fast pass over the surfaces that automated tests cover least.
+### Chat & Streaming
 
-### Session lifecycle
+- **Send & stream**: send a message; it appears as a real-time stream over WebSocket (`/api/ws/events`). Tool call cards render inline and expand/collapse.
+- **Reload mid-stream**: refresh the page while a response is streaming; the in-flight turn should recover and the conversation is not lost.
+- **Approval card**: in Manual mode, trigger a shell command that needs approval; the approval card offers allow once / this session / deny, and the agent continues accordingly.
 
-1. **Empty state** — first load with no sessions shows an empty state, and the
-   Boot flow does not auto-create a session.
-2. **Create / rename / delete** — create a session via the `+` button, rename
-   it, delete it. Deleting the *last* (only) session returns to the empty
-   state — never to a half-created session.
-3. **Pin / archive** — pin moves a session to the top; archive hides it and the
-   toggle brings it back. After pinning, the observe/pin control in the header
-   reflects the new state immediately (no stale UI after switching sessions).
+### Workspace & Panels
 
-### Chat and streaming
+- **Workspace browser**: click the top-right of the title to expand the directory tree, preview a text file, create + rename + delete files. When the workspace is a git repo, the git badge shows the branch and dirty-file count.
+- **Terminal panel**: open the terminal panel and run a simple command (`echo hi`).
+- **Theme & language**: switch the theme (system / dark / light) and language (English / 简体中文) in settings; both should persist across reload.
 
-4. **Send and stream** — send a message; tokens stream in live over WebSocket
-   (`/api/ws/events`). Tool call cards render inline and expand/collapse.
-5. **Reload mid-run** — refresh the page while a response is streaming; the
-   in-flight turn recovers without losing the conversation.
-6. **Approval card** — trigger a gated shell command; the approval card offers
-   allow once / session / always / deny and the agent resumes accordingly.
+### Settings
 
-### Workspace and panels
-
-7. **Workspace browser** — expand folders, preview a text file and an image,
-   create + rename + delete a file. Git badge shows branch/dirty count when
-   the workspace is a git repo.
-8. **Terminal panel** — open the terminal panel, run a simple command
-   (`echo hi`), resize the panel.
-9. **Theme and language** — switch theme (system / dark / light) and language
-   (English / 简体中文) in settings; both persist across reload.
-
-### Settings and device
-
-10. **Settings persistence** — change a setting, reload, confirm it stuck.
-11. **Mobile width** — at a narrow viewport (< 640px) the sidebar collapses
-    behind a drawer; chat and composer remain usable.
+- **Settings persistence**: change a setting, reload, confirm it is retained.
 
 ---
 
-## When to extend which layer
+## Adding Tests
 
-- Backend behavior (routes, models, streaming, workspace) → add pytest cases
-  in `backend/tests/` alongside the closest existing module.
-- Frontend store/component behavior → add vitest cases in `frontend/tests/`.
-- Anything about perceived UI flow → add one line to the smoke checklist above
-  rather than a brittle scripted test.
+- Backend behavior (routes, models, streaming, workspace): add pytest cases in `backend/tests/` next to the closest existing module.
+- Frontend store / component behavior: add vitest cases in `frontend/tests/`.
+- UI flows at the perceived level: add the relevant entry to the smoke checklist above.

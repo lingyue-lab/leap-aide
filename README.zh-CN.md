@@ -1,213 +1,157 @@
+<div align="center">
+
+[English](README.md) | **中文**
+
+</div>
+
 # Leap Aide
 
-[English](README.md) | **简体中文**
+Leap Aide 是一个开箱可用的智能体，可一键接入业界主流的LLM提供商。智能体当前基于 [Hermes Agent](https://hermes-agent.nousresearch.com/) 框架开发，提供自托管浏览器界面，因此 Leap Aide 具备所有 Hermes Agent 的能力，Hermes CLI 能做到的一切，都可在 Leap Aide  里完成。
 
-Leap Aide（Hermes Web UI）是 [Hermes agent](https://hermes-agent.nousresearch.com/) 的自托管浏览器界面：一个常驻在你的服务器上、持续记住所学内容的自主 agent。Hermes CLI 能做到的一切，都可以在这个 UI 里完成 —— 它直接复用你现有的 agent 配置和模型，无需任何额外设置。
+项目后端基于 Python  标准库（无 Web 框架），前端为 React 18 + TypeScript + Vite，遵循 Material 3前端设计规范。
 
-后端基于 Python 标准库（无 Web 框架），前端为 React 18 + TypeScript + Vite，采用 Material 3 设计，实时流式传输以 WebSocket 优先。
-
-界面为三栏布局：左侧边栏用于会话与导航，中间是聊天区，右侧是工作区文件浏览。模型、profile 与工作区控件位于**输入区页脚**；所有设置与会话工具集中在**控制中心**（入口在侧边栏底部）。
+界面为三栏布局，主界面左侧边栏用于会话与导航，中间是聊天区，右侧是工作区文件浏览。模型、工作区选择等控件位于**输入区页脚**；所有设置与会话工具集中在**配置中心**（入口在侧边栏底部）。
 
 <img alt="Leap Aide —— 三栏布局" src="docs/images/ui-overview.png" width="1200" />
 
 ---
 
-## 为什么选择 Hermes
+## 为什么使用 Leap Aide
 
-大多数 AI 工具每次会话都从零开始。Hermes 跨会话保留上下文，在你离线时照常运行定时任务，并且运行越久就越了解你的环境 —— 持久记忆、自托管 cron、消息应用接入、自我改进的技能，且不绑定任何模型提供商。
+相对于业界其它开源 Agent，Leap Aide 在目标上有着显著区别：
 
-| | OpenClaw | Claude Code | Codex CLI | OpenCode | Hermes |
-|---|---|---|---|---|---|
-| 持久记忆（自动） | 是 | 部分 | 部分 | 部分 | 是 |
-| 定时任务（自托管） | 是 | 否 | 否 | 否 | 是 |
-| 消息应用接入 | 是 | 部分 | 否 | 否 | 是（10+） |
-| Web UI（自托管） | 仅仪表盘 | 否 | 否 | 是 | 是 |
-| 自我改进的技能 | 部分 | 否 | 否 | 否 | 是 |
-| 提供商无关 | 是 | 否 | 是 | 是 | 是 |
+- 提供开箱可用的智能体 Web App，提供极致流畅、丝滑的用户体验。
+- 解决业界智能体使用过程的痛点，比如 Web 浏览器使用过程中登录认证繁琐等。
+- 通过扩展(工具、Skill 等)针对线上基础软件诊断场景(LLVM、JDK、操作系统、K8S等)进行增强，为线上 IT 系统提供强大、可靠的故障诊断能力。
 
-完整的定位说明与如实对比见 [docs/hermes.zh-CN.md](docs/hermes.zh-CN.md)。
+Leap Aide 整体 Web App 架构方案追求精简，UI 方案也追求符合使用直觉，提供极致丝滑的用户使用体验。
+
+针对业界智能体使用过程的痛点，Leap Aide 也提供了针对性的解决方案。比如，很多 AI 任务会使用第三方 Web 系统，一方面，这些 Web 系统往往会有着短信验证、手机 App 验证等复杂的登录机制，导致 AI 无法进入 Web 系统，另一方面，AI 如何使用 Web 系统对用户也不透明，用户无法实时跟踪 AI 在 Web 系统中进行了哪些操作，从而影响用户收集现场任务信息，导致最终的决策错误。Leap Aide 为每一个置顶的 LLM Session 提供了独立隔离的浏览器桌面环境，如果 LLM Session 中的任务涉及的网站需要登录认证，用户可以在观察窗口为 LLM Session 提前打开页面，人工使用微信、手机进行认证登录，这些操作产生的 Cookie 信息会被系统保留下来，这样后续 Agent 在自动化访问网站时就无需浪费 Token  进行各种注定会失败的登录尝试。另外，LLM Session 的观察者窗口中也会实时显示 Web 浏览器的跳转变化，从而确保用户能够实时掌握现场的一手信息。
+
+众所周知，线上 IT 系统依赖大量的基础软件，比如 LLVM 编译器、JDK 运行时、操作系统、K8S 集群管控系统等，很多线上 IT 故障都是来自于这些基础软件的错误。这些问题的诊断排查面临着很多障碍，比如网络环境隔离（线上系统高度敏感，往往权限受控且无法访问外网）、基础软件复杂且不透明（多为大型复杂开源软件，需要相关领域专家维护）等。项目提供专业工具、Skill、MCP 及上下文背景知识库等系统扩展，提供线上IT系统的故障诊断排查能力。
 
 ---
 
 ## 功能特性
 
-- **聊天与 agent** —— WebSocket token 流式传输、工具调用卡片、子 agent 卡片、思考/推理过程展示、Mermaid 图表、就地编辑与重试、运行中排队消息、取消进行中的轮次、文件附件、语音输入
-- **会话** —— 创建/重命名/复制/删除、搜索、置顶、归档、项目与标签、按日期分组、Markdown/JSON 导出与导入、CLI 会话桥接（金色 `cli` 徽章）、按会话显示 token/费用
-- **工作区浏览器** —— 树形视图 + 面包屑、就地预览（文本、代码、Markdown、图片）、文件创建/编辑/重命名/删除、git 分支/未提交变更徽章、可拖拽调宽的面板
-- **面板** —— 任务（cron）、技能、记忆、Profiles、待办、Spaces、终端面板、VNC/观察器
-- **审批** —— 危险的 shell 命令会弹出审批卡片（允许一次 / 本会话 / 始终允许 / 拒绝）
-- **Profiles** —— 每个 profile 独立的网关状态、模型、技能；创建时可自定义 endpoint（Ollama、LMStudio 等）；无需重启即可无缝切换
-- **安全** —— 可选口令门（HMAC 签名 cookie）、TLS 支持、安全响应头、20MB 上传限制、路径穿越防护
-- **个性化** —— 主题（跟随系统 / 深色 / 浅色）、i18n（English / 简体中文）、发送键偏好、移动端响应式布局
+### 聊天 ###
+- 基于WebSocket的消息流式实时传输展示。
+- 消息展示包括工具调用、思考/推理过程等详细轨迹信息。
+- 聊天输入框底部支持模型选择、推理力度选择、个性选择、Skills选择、Workspace选择。
+- 聊天输入框支持文字/语音输入，用户可以取消当前轮次对话。
+- 聊天输入框底部可以展示Token统计、上下占比，并支持自动/手动触发上下文压缩。
+- 聊天输入框底部支持Manual/Smart/YOLO审批模式切换，并可以管理审批规则。
+- 聊天进行过程中，用户可以根据配置选择中断、排队等待、Steer（在对话过程中见缝插针插入消息）当前轮次对话。
+- 用户可以通过配置接入OpenAI、Anthropic、Gemini、DeepSeek、GLM、KIMI等主流LLM提供商。
+- 支持通过slash /调用Skill和内部命令。
+
+### 会话 ###
+- 支持会话的创建、删除、重命名、搜索。
+- 所有会话在左侧边栏按照Workspace聚合分组展示。
+- 支持会话的置顶，置顶操作会为会话创建独立的隔离浏览器桌面环境，用户可通过观察者窗口操作、监视会话的行为。
+- 主Agent会话根据对话内容，自主决策是否生成子Agent会话，子Agent会话创建后，主Agent会话会有图标呼吸提示，并可以点击切换到子Agent Session。
+
+### 定时任务 ###
+- 支持定时任务的创建。
+- 定时任务创建支持用户选择模型、Workspace、技能、上下文来源、工具集。
+
+### 其它 ###
+- 支持用户搜索、上传技能。
+- 支持技能的浏览、编辑。
+- 支持Workspace的创建、浏览，如果Workspace是GIT目录，可以展示最近的GIT历史。
+- 支持Web Shell。
+- 支持Dark/Light外观风格切换。
 
 ---
 
 ## 快速开始
 
-前置条件：Python 3.11+、Node 20+，以及一份 hermes-agent 安装。
+### Docker方式(推荐) ###
+
+Web App启动运行：
 
 ```bash
-./scripts/build.sh          # build frontend into static/ + pre-compile backend
-./scripts/ctl.sh start      # start server + hermes gateway
-./scripts/ctl.sh status     # health check of the process
-```
-
-`./scripts/ctl.sh` 还支持 `stop`、`restart` 和 `log-path`。服务器默认绑定到 `127.0.0.1:8787`，打开 [http://localhost:8787](http://localhost:8787) 即可访问。
-
-其他入口：
-
-```bash
-./scripts/build.sh --watch          # frontend watch mode
-./scripts/build.sh --release        # minified production build
-./scripts/install.sh                # one-line installer (see its usage header)
-```
-
-> 引导脚本不支持原生 Windows。请使用 Linux、macOS 或 WSL2。
-
----
-
-## 安装
-
-一行安装脚本会准备好仓库、Python 环境和前端工具链，并接入 `scripts/ctl.sh`：
-
-```bash
-curl -fsSL <install-url>/scripts/install.sh | bash
-# pin a ref or target dir:
-curl -fsSL <install-url>/scripts/install.sh | bash -s -- --commit <sha> --dir /opt/leap-aide
-```
-
-完整的参数说明与环境变量覆盖见 `scripts/install.sh` 的用法头部注释。
-
----
-
-## Docker
-
-在本地构建运行时镜像：
-
-```bash
-./scripts/build.sh --docker-image leap-aide-runtime:0.1.2
-# or directly:
-docker buildx build --target runtime -t leap-aide-runtime:0.1.2 -f Dockerfile .
-```
-
-用 Docker Compose 运行（推荐）：
-
-```bash
-# Set WANTED_UID/WANTED_GID to your host user: id -u / id -g
 docker compose up -d
 ```
 
-`docker-compose.yml`（服务 `leap-aide`）把 `~/.hermes` 挂载到 `/home/leap-aide/.hermes`、`~/.hermes_workspace` 挂载到 `/workspace`，发布端口 `8787:8787`，并设置 `HERMES_WEBUI_STATE_DIR=/home/leap-aide/.hermes/webui`。可通过 `LEAP_AIDE_IMAGE=<registry>/<image>:<tag>` 覆盖镜像。
+Docker 容器启动成功后，用户直接访问 [http://localhost:8787](http://localhost:8787) 即可使用系统。默认登录密码为lingyue-lab。
 
-注意事项：
+当前配置把 `~/.hermes` 挂载到 `/home/leap-aide/.hermes`、`~/.hermes_workspace` 挂载到 `/workspace`。这两个持久化目录用于保存运行数据，确保服务重启能够正常恢复。本机环境和 Leap Aide的数据交换也通过`~/.hermes_workspace`进行。
 
-- hermes-agent venv **在构建时已烘焙进镜像**；entrypoint（`backend/scripts/docker-entrypoint.sh`）在检测到缺失时会立即失败 —— 按设计不存在运行时安装的回退路径。
-- compose 文件在所有网卡上绑定 `8787:8787`，并预设了 `HERMES_WEBUI_PASSWORD` —— 在把服务暴露到任何不可信环境之前，请务必修改这两项。
+更多详细配置见 `docker-compose.yml`，用户可根据需要更改发布端口以及更改系统配置。系统的配置全部通过环境变量进行。
 
-### 构建器要求
-
-`cicd` target 使用 BuildKit 的 `--mount=type=secret` 把 SSH 密钥注入 hermes-agent 安装过程（面向内部 git 服务器构建时）。这要求使用较新的、支持 BuildKit 的构建器：
-
-- **docker buildx** ≥ 23.0 —— 不设 `DOCKER_BUILDKIT=1` 的普通 `docker build` 不支持该特性
-- **buildah** ≥ 1.24（podman 继承其支持）
-
-面向默认上游 hermes-agent 构建时不需要 SSH 凭据 —— `--mount=type=secret` 是空操作（`required=false`）。面向内部 git 服务器时：
+构建 Docker 镜像：
 
 ```bash
-docker buildx build --target cicd \
-    --secret id=git_host_key,src=/path/to/host_key \
-    --secret id=git_identity_key,src=/path/to/id_ed25519 \
-    --build-arg HERMES_AGENT_REPO_URL=ssh://git@host:port/path \
-    -t leap-aide:cicd -f Dockerfile .
+./scripts/build.sh --docker-image leap-aide-runtime:X.Y.Z
 ```
+> [!NOTE]
+> 当前 `scripts/build.sh` Docker 镜像构建仅支持 buildah(version >= 1.24)。
 
-**切勿把带 `--secret` 构建的镜像推送到公共镜像仓库** —— 构建时的 secret 转发路径可能会记录文件路径（内网服务器的指纹本身就是一次小小的情报泄露）。
-
----
-
-## 远程访问
-
-服务器默认绑定到 `127.0.0.1`。在本地机器上可以走 SSH 隧道：
+如果网络环境不稳定，用户可以通过下面的 MIRROR 配置加速构建过程。如果你配置了 HERMES_AGENT_REPO_URL 为内部 Git 仓库来加速 Hermes Agent SDK 的 Git Clone，则需要将 BUILD_GIT_IDENTITY_KEY_FILE 指向你的Git私钥，该 Git  私钥通过`--mount=type=secret`的方式被使用，具体内容不会泄漏进 Docker 镜像，没有安全风险。HERMES_AGENT_REPO_URL 为空时，会使用 github 的 https 地址来克隆 Herems Agent SDK，无需配置 BUILD_GIT_IDENTITY_KEY_FILE。
 
 ```bash
-ssh -N -L 8787:127.0.0.1:8787 user@your.server.com
+export BUILD_APT_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/ubuntu"
+export BUILD_PIP_INDEX_URL="http://pypi.tuna.tsinghua.edu.cn/simple"
+export BUILD_NPM_REGISTRY="https://registry.npmmirror.com"
+export BUILD_PLAYWRIGHT_DOWNLOAD_HOST="https://registry.npmmirror.com/-/binary/playwright"
+# Must end with slash
+export BUILD_ELECTRON_MIRROR="https://registry.npmmirror.com/-/binary/electron/"
+export BUILD_ELECTRON_BUILDER_BINARIES_MIRROR="https://registry.npmmirror.com/-/binary/electron-builder-binaries"
+
+export BUILD_GIT_IDENTITY_KEY_FILE="$HOME/.ssh/id_ed25519"
+export HERMES_AGENT_REPO_URL="ssh://git@<path-to-your-internal-mirror-repo>/hermes-agent.git"
+export HERMES_AGENT_COMMIT="fcbd1076a93841fa88855acce810e342a5b78101"
 ```
 
-在手机上或不可信网络中，建议使用 Tailscale（或其他 WireGuard 组网）并配合口令门：
+除了上述镜像，用户也可以自行添加 HTTP_PROXY HTTPS_PROXY NO_PROXY 环境变量来加速安装过程。
+
+### 主机方式 ###
+
+主机环境的启动方式如下
 
 ```bash
-HERMES_WEBUI_HOST=0.0.0.0 HERMES_WEBUI_PASSWORD=your-secret ./scripts/ctl.sh restart
+# install all deps
+bash ./scripts/install.sh --deps-only
+
+# build frontend into static/ + pre-compile backend
+bash ./scripts/build.sh
+
+# start server + hermes gateway
+bash ./scripts/ctl.sh start
+
+# check health
+bash ./scripts/ctl.sh status
 ```
 
-然后打开 `http://<server-tailscale-ip>:8787`。UI 完全响应式，并针对移动端做了布局优化。
+打开 [http://localhost:8787](http://localhost:8787) 即可访问。
 
----
-
-## 配置
-
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `HERMES_WEBUI_HOST` | `127.0.0.1` | 绑定地址 |
-| `HERMES_WEBUI_PORT` | `8787` | 端口 |
-| `HERMES_WEBUI_STATE_DIR` | `~/.hermes/webui` | WebUI 状态目录（会话 JSON、设置、工作区） |
-| `HERMES_WEBUI_DEFAULT_WORKSPACE` | *（自动发现）* | 默认工作区路径 |
-| `HERMES_WEBUI_DEFAULT_MODEL` | *（空）* | 默认模型；留空表示"从已配置的提供商中自动发现" |
-| `HERMES_WEBUI_PASSWORD` | *（未设置）* | 设置后启用口令门 |
-| `HERMES_WEBUI_TLS_CERT` / `HERMES_WEBUI_TLS_KEY` | *（未设置）* | TLS 证书 / 密钥 |
-| `HERMES_WEBUI_AGENT_DIR` | *（自动发现）* | hermes-agent 安装位置 |
-| `HERMES_WEBUI_PYTHON` | *（自动发现）* | Python 可执行文件覆盖 |
-| `HERMES_WEBUI_ALLOWED_ORIGINS` | *（未设置）* | 额外允许的来源（origin） |
-| `HERMES_WEBUI_AUTO_INSTALL` | *（未设置）* | `=1` 表示启动时自动安装依赖 |
-| `HERMES_WEBUI_ONBOARDING_OPEN` | *（已设置）* | 打开首次运行向导 |
-| `HERMES_HOME` | `~/.hermes` | hermes-agent **状态**目录（配置、记忆、技能、`state.db`）—— 不是安装目录 |
-| `LOG_LEVEL` | `WARNING` | Python 日志级别 |
-
-健康检查：`curl http://127.0.0.1:8787/health`
-
----
+> [!NOTE]
+> 引导脚本不支持原生 Windows。请使用 Linux、macOS 或 WSL2。
 
 ## 测试
 
-```bash
-./scripts/run-test.sh smoke          # L1 core regression (< 5 min)
-./scripts/run-test.sh function all   # L2 one domain (session|model|workspace|…)
-./scripts/run-test.sh frontend       # vitest suite
-./scripts/run-test.sh help           # full usage
-```
-
-测试在 8788 端口的隔离服务器上运行，使用临时状态目录 —— 绝不会触碰生产数据。手动浏览器检查与各层级详情见 [docs/testing.zh-CN.md](docs/testing.zh-CN.md)。
+参见 [docs/testing.zh-CN.md](docs/testing.zh-CN.md)。
 
 ---
 
 ## 架构
 
-`backend/app/server.py` 是覆盖 `backend/app/api/` 各模块的薄 HTTP 壳；React 前端构建产物输出到 `static/`。流式传输以 WebSocket 优先，并提供一个 SSE 回放面。详细设计、API 地图与 ADR 见 [docs/architecture.zh-CN.md](docs/architecture.zh-CN.md)。
-
----
-
-## 文档
-
-| 文档 | English | 中文 |
-|---|---|---|
-| 为什么选择 Hermes（定位） | [docs/hermes.md](docs/hermes.md) | [docs/hermes.zh-CN.md](docs/hermes.zh-CN.md) |
-| 架构 + ADR | [docs/architecture.md](docs/architecture.md) | [docs/architecture.zh-CN.md](docs/architecture.zh-CN.md) |
-| 测试指南 | [docs/testing.md](docs/testing.md) | [docs/testing.zh-CN.md](docs/testing.zh-CN.md) |
-| 路线图 | [docs/roadmap.md](docs/roadmap.md) | [docs/roadmap.zh-CN.md](docs/roadmap.zh-CN.md) |
-| 已知问题与限制 | [docs/bugs.md](docs/bugs.md) | [docs/bugs.zh-CN.md](docs/bugs.zh-CN.md) |
-| 参与贡献 | [CONTRIBUTING.md](CONTRIBUTING.md) | [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md) |
-| 变更日志（仅英文） | [CHANGELOG.md](CHANGELOG.md) | — |
+参见[docs/architecture.zh-CN.md](docs/architecture.zh-CN.md)。
 
 ---
 
 ## 参与贡献
 
-参见 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md)。最好的贡献聚焦、经过充分测试，并且真正解决问题。如果你的变更会改变行为、架构或安装方式，请在同一 PR 中更新文档 —— 中英文两个版本都要更新。
+参见 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md)。
 
 ---
 
 ## 致谢
 
-Leap Aide 构建于开源的 Hermes Web UI 社区项目之上；每一个被合并和采纳的 PR 都塑造了你今天所看到的样子。感谢所有贡献者。
+Leap Aide 项目最早脱胎于 [hermes-webui](https://github.com/nesquena/hermes-webui) 项目，当前也保留了很多 hermes-webui 的代码，但由于项目目标不同，目前2个项目分叉越来越远，Leap Aide 未来也没有同步 hermes-webui 的计划。
+
+感谢 hermes-webui 社区。
 
 ---
 

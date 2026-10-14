@@ -1,271 +1,157 @@
+<div align="center">
+
+**English** | [中文](README.zh-CN.md)
+
+</div>
+
 # Leap Aide
 
-**English** | [简体中文](README.zh-CN.md)
+Leap Aide is an out-of-the-box agent that connects to mainstream LLM providers in one step. The agent is currently built on the [Hermes Agent](https://hermes-agent.nousresearch.com/) framework and provides a self-hosted browser interface, so Leap Aide has every Hermes Agent capability: anything the Hermes CLI can do can also be done in Leap Aide.
 
-Leap Aide (Hermes Web UI) is a self-hosted browser interface for the
-[Hermes agent](https://hermes-agent.nousresearch.com/): a persistent,
-autonomous agent that lives on your server and remembers what it learns.
-Everything you can do from the Hermes CLI you can do from this UI — it uses
-your existing agent setup and models, with no additional configuration.
+The backend is Python standard library (no web framework); the frontend is React 18 + TypeScript + Vite, following the Material 3 frontend design specification.
 
-Python-stdlib backend (no web framework), React 18 + TypeScript + Vite
-frontend, Material 3 design, WebSocket-first realtime streaming.
-
-Layout: three-panel. Left sidebar for sessions and navigation, center for
-chat, right for workspace file browsing. Model, profile, and workspace
-controls live in the **composer footer**; all settings and session tools are
-in the **Control Center** (launcher at the sidebar bottom).
+The UI is a three-panel layout: the left sidebar for sessions and navigation, the center chat area, and the right panel for workspace file browsing. Controls such as model and workspace selection live in the **composer footer**; all settings and session tools are centralized in the **Configuration Center** (entry at the bottom of the sidebar).
 
 <img alt="Leap Aide — three-panel layout" src="docs/images/ui-overview.png" width="1200" />
 
 ---
 
-## Why Hermes
+## Why Leap Aide
 
-Most AI tools reset every session. Hermes retains context across sessions,
-runs scheduled jobs while you're offline, and gets smarter about your
-environment the longer it runs — persistent memory, self-hosted cron,
-messaging-app access, self-improving skills, provider-agnostic.
+Compared with other open-source agents, Leap Aide has distinctly different goals:
 
-| | OpenClaw | Claude Code | Codex CLI | OpenCode | Hermes |
-|---|---|---|---|---|---|
-| Persistent memory (auto) | Yes | Partial | Partial | Partial | Yes |
-| Scheduled jobs (self-hosted) | Yes | No | No | No | Yes |
-| Messaging app access | Yes | Partial | No | No | Yes (10+) |
-| Web UI (self-hosted) | Dashboard only | No | No | Yes | Yes |
-| Self-improving skills | Partial | No | No | No | Yes |
-| Provider-agnostic | Yes | No | Yes | Yes | Yes |
+- Ship an out-of-the-box agent web app with an exceptionally smooth, fluid user experience.
+- Solve the pain points of using agents today, such as the friction of logging into web browsers.
+- Enhance production infrastructure-diagnosis scenarios (LLVM, JDK, OS, K8S, and so on) through extensions (tools, Skills, and more), providing powerful and reliable fault diagnosis for production IT systems.
 
-Full positioning and honest comparisons: [docs/hermes.md](docs/hermes.md) ·
-[中文](docs/hermes.zh-CN.md).
+Leap Aide's overall web app architecture aims to stay lean, and its UI aims to match user intuition — delivering an exceptionally smooth experience.
+
+Leap Aide also offers targeted solutions to the pain points of using agents today. Many AI tasks need to use third-party web systems. On one hand, those systems often have complex login mechanisms — SMS codes, mobile-app verification, and so on — that lock the AI out. On the other hand, how the AI uses those systems is opaque to the user: there is no way to follow in real time what the AI did on the site, which hurts on-site information gathering and can lead to wrong final decisions. Leap Aide provides every pinned LLM session with its own isolated browser desktop environment. If a task touches a website that requires login, the user can open the page ahead of time in the observer window and log in manually via WeChat or a mobile phone; the cookies produced by those operations are retained by the system, so later automated agent visits do not waste tokens on login attempts doomed to fail. The observer window also shows browser navigation changes in real time, keeping the user on top of first-hand on-site information.
+
+As everyone knows, production IT systems depend on a great deal of infrastructure software — the LLVM compiler, the JDK runtime, operating systems, K8S cluster management, and more — and many production IT failures originate in that software. Diagnosing these problems faces many obstacles: isolated network environments (production systems are highly sensitive, often access-controlled and unable to reach the public internet), and infrastructure software that is complex and opaque (mostly large, complex open-source projects that require domain experts to maintain). The project provides professional tools, Skills, MCP, and context/background knowledge bases as system extensions, giving the ability to diagnose and troubleshoot production IT systems.
 
 ---
 
 ## Features
 
-- **Chat & agent** — WebSocket token streaming, tool-call cards, subagent
-  cards, thinking/reasoning display, Mermaid diagrams, inline edit & retry,
-  queue messages mid-run, cancel running turns, file attachments, voice input
-- **Sessions** — create/rename/duplicate/delete, search, pin, archive,
-  projects & tags, date grouping, Markdown/JSON export & import, CLI session
-  bridge (gold `cli` badge), per-conversation token/cost display
-- **Workspace browser** — tree + breadcrumbs, inline preview (text, code,
-  Markdown, images), file create/edit/rename/delete, git branch/dirty badge,
-  drag-resizable panel
-- **Panels** — Tasks (cron), Skills, Memory, Profiles, Todos, Spaces,
-  terminal panel, VNC/observer
-- **Approvals** — dangerous shell commands get an approval card
-  (allow once / session / always / deny)
-- **Profiles** — per-profile gateway status, model, skills; custom endpoint
-  (Ollama, LMStudio, …) on create; seamless switching without restart
-- **Security** — optional password gate (HMAC-signed cookie), TLS support,
-  security headers, 20MB upload limit, path-traversal guards
-- **Customization** — theme (system / dark / light), i18n (English / 简体中文),
-  send-key preference, mobile-responsive layout
+### Chat ###
+- Real-time message streaming over WebSocket.
+- Messages render detailed trajectory information including tool calls and thinking/reasoning traces.
+- The composer footer supports model selection, reasoning effort, personality, Skills, and Workspace selection.
+- The composer supports text and voice input; users can cancel the current turn.
+- The composer footer shows token statistics and context usage share, and supports automatic or manual context compaction.
+- The composer footer supports Manual/Smart/YOLO approval-mode switching, with approval-rule management.
+- While a chat turn is running, users can — depending on configuration — interrupt, queue, or steer (squeeze a message into the running turn) the current turn.
+- Users can configure mainstream LLM providers such as OpenAI, Anthropic, Gemini, DeepSeek, GLM, and KIMI.
+- Skills and internal commands can be invoked with slash `/`.
+
+### Sessions ###
+- Create, delete, rename, and search sessions.
+- All sessions are grouped by Workspace in the left sidebar.
+- Sessions can be pinned; pinning creates an isolated browser desktop environment for the session, and users can operate on and watch the session through the observer window.
+- Based on the conversation, the main agent session decides on its own whether to spawn sub-agent sessions. Once a sub-agent session is created, the main agent session shows a breathing icon hint, and clicking it switches to the sub-agent session.
+
+### Scheduled Tasks ###
+- Create scheduled tasks.
+- When creating a scheduled task, users can choose the model, Workspace, skills, context source, and toolsets.
+
+### Other ###
+- Search and upload skills.
+- Browse and edit skills.
+- Create and browse Workspaces; if a Workspace is a git directory, recent git history can be shown.
+- Web Shell support.
+- Dark/Light appearance switching.
 
 ---
 
-## Quick start
+## Quick Start
 
-Prerequisites: Python 3.11+, Node 20+, and a hermes-agent installation.
+### Docker (recommended) ###
 
-```bash
-./scripts/build.sh          # build frontend into static/ + pre-compile backend
-./scripts/ctl.sh start      # start server + hermes gateway
-./scripts/ctl.sh status     # health check of the process
-```
-
-`./scripts/ctl.sh` also supports `stop`, `restart`, and `log-path`. The
-server binds to `127.0.0.1:8787` by default; open
-[http://localhost:8787](http://localhost:8787).
-
-Other entry points:
+To start and run the web app:
 
 ```bash
-./scripts/build.sh --watch          # frontend watch mode
-./scripts/build.sh --release        # minified production build
-./scripts/install.sh                # one-line installer (see its usage header)
-```
-
-> Native Windows is not supported for the bootstrap. Use Linux, macOS, or
-> WSL2.
-
----
-
-## Install
-
-The one-line installer provisions the repo, a Python environment, and the
-frontend toolchain, then wires up `scripts/ctl.sh`:
-
-```bash
-curl -fsSL <install-url>/scripts/install.sh | bash
-# pin a ref or target dir:
-curl -fsSL <install-url>/scripts/install.sh | bash -s -- --commit <sha> --dir /opt/leap-aide
-```
-
-See `scripts/install.sh`'s usage header for the authoritative flags and
-environment overrides.
-
----
-
-## Docker
-
-Build the runtime image locally:
-
-```bash
-./scripts/build.sh --docker-image leap-aide-runtime:0.1.2
-# or directly:
-docker buildx build --target runtime -t leap-aide-runtime:0.1.2 -f Dockerfile .
-```
-
-Run with Docker Compose (recommended):
-
-```bash
-# Set WANTED_UID/WANTED_GID to your host user: id -u / id -g
 docker compose up -d
 ```
 
-`docker-compose.yml` (service `leap-aide`) mounts `~/.hermes` →
-`/home/leap-aide/.hermes` and `~/.hermes_workspace` → `/workspace`, publishes
-`8787:8787`, and sets `HERMES_WEBUI_STATE_DIR=/home/leap-aide/.hermes/webui`.
-Override the image with `LEAP_AIDE_IMAGE=<registry>/<image>:<tag>`.
+After the Docker container starts successfully, open [http://localhost:8787](http://localhost:8787) to use the system. The default login password is `lingyue-lab`.
 
-Notes:
+The current configuration mounts `~/.hermes` to `/home/leap-aide/.hermes` and `~/.hermes_workspace` to `/workspace`. These two persistent directories hold runtime data so the service can recover properly across restarts. Data exchange between the host machine and Leap Aide also goes through `~/.hermes_workspace`.
 
-- The hermes-agent venv is **baked into the image at build time**; the
-  entrypoint (`backend/scripts/docker-entrypoint.sh`) fails fast when it is
-  missing — there is no runtime install fallback by design.
-- The compose file binds `8787:8787` on all interfaces and sets
-  `HERMES_WEBUI_PASSWORD` — change both before exposing the service anywhere
-  untrusted.
+See `docker-compose.yml` for more detailed configuration; change the published port and the system configuration as needed. All system configuration is done through environment variables.
 
-### Builder requirements
-
-The `cicd` target uses BuildKit's `--mount=type=secret` for SSH key injection
-into the hermes-agent installer (when building against an internal git
-server). This requires a recent BuildKit-enabled builder:
-
-- **docker buildx** ≥ 23.0 — plain `docker build` without `DOCKER_BUILDKIT=1`
-  does not support it
-- **buildah** ≥ 1.24 (podman inherits its support)
-
-Building against the default upstream hermes-agent needs no SSH credential —
-`--mount=type=secret` is a no-op (`required=false`). For an internal git
-server:
+Building the Docker image:
 
 ```bash
-docker buildx build --target cicd \
-    --secret id=git_host_key,src=/path/to/host_key \
-    --secret id=git_identity_key,src=/path/to/id_ed25519 \
-    --build-arg HERMES_AGENT_REPO_URL=ssh://git@host:port/path \
-    -t leap-aide:cicd -f Dockerfile .
+./scripts/build.sh --docker-image leap-aide-runtime:X.Y.Z
 ```
+> [!NOTE]
+> Docker image builds via `scripts/build.sh` currently support buildah only (version >= 1.24).
 
-**Never push images built with `--secret` to a public registry** — the
-build-time secret forwarding path may log file paths (an internal-server
-fingerprint is itself a small intelligence leak).
-
----
-
-## Accessing remotely
-
-The server binds to `127.0.0.1` by default. From your local machine use an
-SSH tunnel:
+If your network is unreliable, the MIRROR settings below can speed up the build. If you set HERMES_AGENT_REPO_URL to an internal Git repository to accelerate cloning the Hermes Agent SDK, point BUILD_GIT_IDENTITY_KEY_FILE at your Git private key. That key is used via `--mount=type=secret`, so its contents never leak into the Docker image — no security risk. When HERMES_AGENT_REPO_URL is empty, the Hermes Agent SDK is cloned from the GitHub HTTPS address and BUILD_GIT_IDENTITY_KEY_FILE is not needed.
 
 ```bash
-ssh -N -L 8787:127.0.0.1:8787 user@your.server.com
+export BUILD_APT_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/ubuntu"
+export BUILD_PIP_INDEX_URL="http://pypi.tuna.tsinghua.edu.cn/simple"
+export BUILD_NPM_REGISTRY="https://registry.npmmirror.com"
+export BUILD_PLAYWRIGHT_DOWNLOAD_HOST="https://registry.npmmirror.com/-/binary/playwright"
+# Must end with slash
+export BUILD_ELECTRON_MIRROR="https://registry.npmmirror.com/-/binary/electron/"
+export BUILD_ELECTRON_BUILDER_BINARIES_MIRROR="https://registry.npmmirror.com/-/binary/electron-builder-binaries"
+
+export BUILD_GIT_IDENTITY_KEY_FILE="$HOME/.ssh/id_ed25519"
+export HERMES_AGENT_REPO_URL="ssh://git@<path-to-your-internal-mirror-repo>/hermes-agent.git"
+export HERMES_AGENT_COMMIT="fcbd1076a93841fa88855acce810e342a5b78101"
 ```
 
-On a phone or untrusted network, prefer Tailscale (or similar WireGuard mesh)
-plus the password gate:
+Besides the mirrors above, you can also add HTTP_PROXY, HTTPS_PROXY, and NO_PROXY environment variables to speed up installation.
+
+### Host ###
+
+To run in a host environment:
 
 ```bash
-HERMES_WEBUI_HOST=0.0.0.0 HERMES_WEBUI_PASSWORD=your-secret ./scripts/ctl.sh restart
+# install all deps
+bash ./scripts/install.sh --deps-only
+
+# build frontend into static/ + pre-compile backend
+bash ./scripts/build.sh
+
+# start server + hermes gateway
+bash ./scripts/ctl.sh start
+
+# check health
+bash ./scripts/ctl.sh status
 ```
 
-then open `http://<server-tailscale-ip>:8787`. The UI is fully responsive
-with a mobile-optimized layout.
+Open [http://localhost:8787](http://localhost:8787) to access it.
 
----
-
-## Configuration
-
-| Variable | Default | Description |
-|---|---|---|
-| `HERMES_WEBUI_HOST` | `127.0.0.1` | Bind address |
-| `HERMES_WEBUI_PORT` | `8787` | Port |
-| `HERMES_WEBUI_STATE_DIR` | `~/.hermes/webui` | WebUI state (sessions JSON, settings, workspaces) |
-| `HERMES_WEBUI_DEFAULT_WORKSPACE` | *(discovered)* | Default workspace path |
-| `HERMES_WEBUI_DEFAULT_MODEL` | *(empty)* | Default model; empty means "discover from configured providers" |
-| `HERMES_WEBUI_PASSWORD` | *(unset)* | Set to enable the password gate |
-| `HERMES_WEBUI_TLS_CERT` / `HERMES_WEBUI_TLS_KEY` | *(unset)* | TLS certificate / key |
-| `HERMES_WEBUI_AGENT_DIR` | *(discovered)* | hermes-agent install location |
-| `HERMES_WEBUI_PYTHON` | *(discovered)* | Python executable override |
-| `HERMES_WEBUI_ALLOWED_ORIGINS` | *(unset)* | Extra allowed origins |
-| `HERMES_WEBUI_AUTO_INSTALL` | *(unset)* | `=1` enables dependency auto-install at startup |
-| `HERMES_WEBUI_ONBOARDING_OPEN` | *(set)* | Open the first-run wizard |
-| `HERMES_HOME` | `~/.hermes` | hermes-agent **state** directory (config, memory, skills, `state.db`) — not the install directory |
-| `LOG_LEVEL` | `WARNING` | Python logging level |
-
-Health check: `curl http://127.0.0.1:8787/health`
-
----
+> [!NOTE]
+> The bootstrap scripts do not support native Windows. Use Linux, macOS, or WSL2.
 
 ## Testing
 
-```bash
-./scripts/run-test.sh smoke          # L1 core regression (< 5 min)
-./scripts/run-test.sh function all   # L2 one domain (session|model|workspace|…)
-./scripts/run-test.sh frontend       # vitest suite
-./scripts/run-test.sh help           # full usage
-```
-
-Tests run against an isolated server on port 8788 with temporary state
-directories — production data is never touched. Manual browser checks and
-tier details: [docs/testing.md](docs/testing.md) ·
-[中文](docs/testing.zh-CN.md).
+See [docs/testing.md](docs/testing.md).
 
 ---
 
 ## Architecture
 
-`backend/app/server.py` is a thin HTTP shell over `backend/app/api/`
-modules; the React frontend builds into `static/`. Streaming is
-WebSocket-first with an SSE replay surface. Details, API map, and ADRs:
-[docs/architecture.md](docs/architecture.md) ·
-[中文](docs/architecture.zh-CN.md).
-
----
-
-## Docs
-
-| Document | English | 中文 |
-|---|---|---|
-| Why Hermes (positioning) | [docs/hermes.md](docs/hermes.md) | [docs/hermes.zh-CN.md](docs/hermes.zh-CN.md) |
-| Architecture + ADRs | [docs/architecture.md](docs/architecture.md) | [docs/architecture.zh-CN.md](docs/architecture.zh-CN.md) |
-| Testing guide | [docs/testing.md](docs/testing.md) | [docs/testing.zh-CN.md](docs/testing.zh-CN.md) |
-| Roadmap | [docs/roadmap.md](docs/roadmap.md) | [docs/roadmap.zh-CN.md](docs/roadmap.zh-CN.md) |
-| Bugs & known limitations | [docs/bugs.md](docs/bugs.md) | [docs/bugs.zh-CN.md](docs/bugs.zh-CN.md) |
-| Contributing | [CONTRIBUTING.md](CONTRIBUTING.md) | [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md) |
-| Changelog (English only) | [CHANGELOG.md](CHANGELOG.md) | — |
+See [docs/architecture.md](docs/architecture.md).
 
 ---
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) ·
-[中文](CONTRIBUTING.zh-CN.md). The best contributions are focused,
-well-tested, and solve a real problem. If your change alters behavior,
-architecture, or setup, update the docs — both the English and Chinese
-version — in the same PR.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
 ## Acknowledgements
 
-Leap Aide builds on the open-source Hermes Web UI community project; every
-merged and adapted PR shaped what you see here. Thank you to everyone who
-contributed.
+The Leap Aide project grew out of the [hermes-webui](https://github.com/nesquena/hermes-webui) project and still carries much of its code. Because the project goals differ, the two projects have been diverging further and further, and Leap Aide has no plans to sync with hermes-webui going forward.
+
+Thanks to the hermes-webui community.
 
 ---
 

@@ -1,24 +1,24 @@
+<div align="center">
+
+**English** | [中文](architecture.zh-CN.md)
+
+</div>
+
 # Leap Aide Architecture Guide
 
-**English** | [简体中文](architecture.zh-CN.md)
-
-Leap Aide (Hermes Web UI) is a browser interface for the Hermes agent: a
-Python-stdlib backend that imports the hermes-agent SDK directly (no HTTP hop
-to the agent), and a React/TypeScript frontend built with Vite. Realtime
-updates are WebSocket-first. This document describes the system as it exists
-today; historical narrative lives in [CHANGELOG.md](../CHANGELOG.md).
+Leap Aide's backend is pure Python standard library, calling the Hermes Agent SDK directly via Python import (no HTTP hop to Hermes Agent); the frontend is React/TypeScript built with Vite. Realtime updates rely on WebSocket.
 
 ---
 
-## 1. System overview
+## System Overview
 
 ```
 Browser (React 18 + TS + Vite + Zustand + Tailwind, M3)
    │  fetch /api/*          REST surface (~130 routes in routes.py)
    │  /api/ws/events        single WebSocket: token / tool / approval / done
-   │  /api/ws/terminal      WebSocket terminal channel
-   │  /api/ws/vnc[/<port>]  WebSocket VNC channel (observer panel)
-   │  GET …/stream/replay    SSE replay for session reconnect
+   │  /api/ws/terminal      terminal WebSocket channel
+   │  /api/ws/vnc[/<port>]  VNC WebSocket channel (observer panel)
+   │  GET …/stream/replay   SSE replay, used to reconnect mid-session on refresh
    ▼
 backend/app/server.py       thin HTTP shell: TLS, QuietHTTPServer, WS upgrade dispatch
 backend/app/api/            route + domain modules (Python stdlib only)
@@ -29,23 +29,15 @@ hermes-agent SDK            AIAgent.run_conversation(), tools, gateway
 ~/.hermes/webui/            webui state (sessions JSON, settings, workspaces)
 ```
 
-Key properties:
+Key principles:
 
-- **One process** — `ThreadingHTTPServer` with a thread per request; the agent
-  runs on daemon threads feeding per-session queues. No asyncio, no external
-  message broker.
-- **Direct SDK import** — the backend talks to hermes-agent as Python modules.
-  WebUI never writes to `state.db` through SQL except the `__webui` columns the
-  SDK does not know about.
-- **static/ is build output** — Vite builds `frontend/src` into `static/`
-  (`emptyOutDir: true`). Never edit files under `static/` by hand.
+- **Single process**: one thread per request; the agent runs on daemon threads, pushing events into per-session queues. No asyncio, no external message broker.
+- **Core features depend on the Hermes Agent SDK**: the backend calls the Hermes Agent SDK as Python modules; state.db is updated by the SDK, and the backend never writes or updates `state.db` through raw SQL.
+- **Frontend built with Vite**: Vite builds `frontend/src` into `static/`; never hand-edit files under `static/`.
 
 ---
 
-## 2. Backend layout
-
-Grouped by responsibility; `routes.py` is the single source of truth for the
-endpoint table, so this is a map, not a manifest.
+## Backend
 
 | Area | Modules | Role |
 |---|---|---|
@@ -54,114 +46,16 @@ endpoint table, so this is a map, not a manifest.
 | Streaming | `api/streaming.py`, `api/stream_manager.py`, `api/ws_events.py`, `api/notify_stream.py` | Agent invocation + per-session event queues; queue/stream lifecycle; the `/api/ws/events` bus; notify forwarding |
 | Config & models | `api/config.py`, `api/models.py`, `api/webui_schema.py`, `api/state_sync.py` | Discovery/globals/model detection; session model + CRUD + LRU cache; `__webui` schema columns; `/insights` sync into state.db |
 | Sessions | `api/agent_sessions.py`, `api/session_ops.py`, `api/session_display.py`, `api/session_watcher.py` | Session lifecycle around the SDK; ops/display helpers; background session watching |
-| Workspace | `api/workspace.py` | File ops, workspace registry, git detection, trust levels (see §5) |
+| Workspace | `api/workspace.py` | File ops, workspace registry, git detection, trust levels |
 | Auth & identity | `api/auth.py`, `api/profiles.py`, `api/onboarding.py` | Optional password gate + signed cookies; profile state; first-run wizard |
 | Panels | `api/terminal.py`, `api/vnc.py`, `api/observer.py`, `api/cli_viewer.py` | Terminal PTY channel; VNC channel; observer surface; CLI session listing |
 | Business | `api/slash_commands.py`, `api/clarify.py`, `api/metering.py`, `api/providers.py`, `api/commands.py`, `api/background.py`, `api/updates.py` | Slash-command dispatch; clarify dialogs; usage metering; provider/model gate; command registry exposure; background goals; update check |
 
-External dependency: `pyyaml` only (plus the hermes-agent SDK and its own
-deps, supplied via the agent venv).
+External dependencies: `pyyaml` only (plus the hermes-agent SDK and its own deps, supplied by the hermes-agent venv).
 
 ---
 
-## 3. Frontend layout
-
-```
-frontend/src/
-  stores/          Zustand stores — useSessionStore, useChatStore,
-                   useSettingsStore, useWorkspaceStore, useApprovalStore,
-                   useCronStore, useMemoryStore, useSkillStore,
-                   useTerminalStore, useProvidersGateStore, …
-  stores/wsManager.ts / streamManager.ts   /api/ws/events client + replay
-  services/api.ts  fetch wrapper for /api/*
-  components/      chat, sidebar, workspace, terminal, observer, settings,
-                   memory, skills, tasks, dialogs, layout, …
-  i18n/            i18next; locales en and zh-CN only
-scripts/generate-m3-theme.mjs   Material 3 theme generation
-  (material-color-utilities)
-```
-
-- State lives in Zustand stores, one domain per store. `useSessionStore`
-  keeps `currentSession` as a direct state field — any action mutating a
-  field on `sessions[]` must mirror that field onto `currentSession` when the
-  ids match, or the UI lags until the next session switch.
-- Theme is `system | dark | light`; legacy theme values are clamped to dark.
-- Vite dev server proxies `/api` (and WS) to the backend on port 8787.
-
----
-
-## 4. Streaming model
-
-**WebSocket-first.** The frontend holds one connection to `/api/ws/events`;
-the backend agent thread pushes `token`, `tool`, `approval`, `done`, `error`
-events into a per-session queue which the WS endpoint forwards. This replaced
-the earlier SSE-per-stream design.
-
-- `/api/ws/events` — main event bus (replaces SSE endpoints
-  `/api/chat/session/stream` and `…/notify`).
-- `/api/ws/terminal` — terminal PTY channel.
-- `/api/ws/vnc[/<port>]` — VNC channel for the observer panel.
-- `GET /api/chat/session/stream/replay` — SSE, kept only for session replay
-  and reconnect recovery.
-- `GET /api/chat/stream/status` — stream status query. There is no
-  `GET /api/chat/stream?stream_id=` endpoint.
-
-Chat round trip: `POST /api/chat/start` (session_id + message) → server
-creates the queue, spawns the agent thread (`AIAgent.run_conversation(task_id=…)`),
-returns a stream id → the WS bus delivers events as the agent produces them →
-on `done`, session messages are persisted.
-
----
-
-## 5. Session & state model
-
-- **WebUI state dir** — `HERMES_WEBUI_STATE_DIR`, default `~/.hermes/webui`:
-  `sessions/{id}.json`, settings, workspace registry.
-- **Agent state** — `HERMES_HOME`, default `~/.hermes`: config.yaml, memory,
-  skills, `state.db`. Note `HERMES_HOME` is the agent *state* directory, not
-  the install directory.
-- **Sessions** — JSON file per session; `state.db` (SQLite) is the
-  listing/SDK source of truth. The `__webui` columns webui adds to state.db
-  tables are the only SQL writes webui makes directly; everything else goes
-  through the SDK's high-level API.
-- **In-memory cache** — a module-level `SESSIONS` OrderedDict LRU (max 100)
-  guarded by a module-level `LOCK`. Every access to `SESSIONS` must hold the
-  lock.
-
----
-
-## 6. Auth & security
-
-- **Optional password gate** — `HERMES_WEBUI_PASSWORD`; HMAC-signed HTTP-only
-  cookie with 24h TTL (`api/auth.py`). Off by default for localhost/SSH-tunnel
-  use. TLS via `HERMES_WEBUI_TLS_CERT` / `HERMES_WEBUI_TLS_KEY`.
-- **HTTP surface** — security headers on all responses, 20MB POST body limit,
-  path-traversal defense via `safe_resolve(root, requested)` on every file
-  operation.
-
-### Workspace path trust levels
-
-`api/workspace.py` has two distinct trust functions — do not collapse them:
-
-- **`validate_workspace_to_add(path)`** — used by `/api/workspaces/add`
-  (explicit user registration). Permissive: blocks only non-existent,
-  non-directory, and system-root paths. The user is consciously registering
-  an external path (e.g. `/mnt/d/Projects` in WSL), so we trust intent.
-- **`resolve_trusted_workspace(path)`** — used for actual file read/write
-  inside an existing workspace. Strict: path must be under home, in the saved
-  workspace list, or under `BOOT_DEFAULT_WORKSPACE`. Prevents path traversal
-  and unauthorized file access.
-
-The distinction matters because add uses permissive validation to avoid the
-circular dependency: you cannot get a path into the saved list if you need
-the saved list to add it.
-
----
-
-## 7. API surface overview
-
-Endpoints are grouped by domain; consult `backend/app/api/routes.py` for the
-authoritative list (it is the single source of truth — this table is a map).
+## API
 
 | Domain | Prefix / endpoint | Semantics |
 |---|---|---|
@@ -173,100 +67,72 @@ authoritative list (it is the single source of truth — this table is a map).
 | Upload | `POST /api/upload` | Multipart upload (must check size *before* `read_body()`) |
 | Clarify | `/api/clarify/*` | Clarify dialog submit/clear |
 | Commands | `/api/commands` | Slash-command registry (hermes-agent COMMAND_REGISTRY + local handlers) |
-| Profiles | `/api/profiles*` | Profile CRUD and switching |
+| Profile | `/api/profiles*` | Profile CRUD and switching |
 | Auth | `/api/auth*`, `/login` | Password gate, session check |
 | Ops | `/api/settings*`, `/api/git-info`, `/api/updates*`, `/api/insights*` | Settings, git badge, update check, usage insights |
 | Panels | `/api/cron*`, `/api/skills*`, `/api/memory*`, `/api/terminal*`, `/api/vnc*`, `/api/observer*`, `/api/cli*` | Tasks/cron, skills, memory, terminal, VNC, observer, CLI session bridge |
 
 ---
 
-## 8. Configuration
+## Frontend (`frontend/src/`)
 
-Environment variables (host/port/state dir/password/TLS/agent dir/model
-defaults) are documented once in [README.md](../README.md#configuration) —
-keep the table there and link here, so it cannot drift in two places.
+- **React 18 + TypeScript + Vite**; state is managed by **Zustand** stores under `stores/`.
+- i18next handles internationalization.
+- Strictly follow the Google Material 3 frontend specification. When reviewing M3 compliance, refer to the component specifications, spacing, font sizes, and other standards in the documents below.
+    - https://www.yuque.com/advancedux/xr6e1n
+    - https://www.cyub.vip/blog/2026/02/14/material-design-3-material-you-%E5%AE%8C%E6%95%B4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97/
+- Core stores: `useSessionStore`, `useChatStore`, `useSettingsStore`, `useWorkspaceStore`, `useApprovalStore`.
+- API calls go through `services/api.ts`. The Vite dev server proxies `/api` to `localhost:8787`.
+- Build output goes to `../static/`, served directly by the Python backend.
 
-Discovery and defaults live in `backend/app/api/config.py`; launch-time
-environment handling is in `backend/app/bootstrap.py` and `scripts/ctl.sh`
-(the latter also sources a repo-root `.env` if present).
 
----
+## Data Flow (full chat path)
 
-## 9. Architecture Decision Records
-
-Condensed; each entry records a historical decision and its current status.
-
-### ADR-001: Single-File Server
-**Decision:** all server code in `server.py`.
-**Rationale:** no build step, easy agent modification, zero deployment
-complexity. **Trade-off:** maintenance burden grows with file size.
-**Status: Superseded** — split into `server.py` + `api/` modules.
-
-### ADR-002: HTML as Python Raw String
-**Decision:** frontend embedded in `server.py` as `r"""..."""`.
-**Rationale:** simplest way to serve a frontend without a static file server.
-**Trade-off:** no syntax highlighting, painful patching.
-**Status: Superseded** — frontend source lives in `frontend/src`, built into
-`static/`.
-
-### ADR-003: ThreadingHTTPServer
-**Decision:** Python stdlib synchronous threads, not asyncio.
-**Rationale:** no dependencies; synchronous agent calls fit threads naturally.
-**Trade-off:** memory scales with concurrent users; thread pool unbounded.
-**Status: In effect** — acceptable for single-user deployments.
-
-### ADR-004: SSE over WebSockets
-**Decision:** Server-Sent Events for streaming.
-**Rationale:** simpler than WebSockets, standard `EventSource` API.
-**Trade-off:** server-to-client only.
-**Status: Superseded** — WebSocket-first (`/api/ws/events`); SSE remains only
-for session replay.
-
-### ADR-005: Module-Level Approval State
-**Decision:** approval state shared as module-level dict in the SDK's
-`tools/approval.py`, cross-thread in one process.
-**Rationale:** pre-existing approval system; same-process sharing works.
-**Trade-off:** breaks under multi-process (gunicorn workers) or subprocess.
-**Status: In effect** — the webui registers a notify callback on the SDK's
-approval registry and polls as a fallback. Single-process constraint remains.
-
-### ADR-006: No Authentication
-**Decision:** no auth initially (localhost via SSH tunnel).
-**Rationale:** transport layer already authenticated.
-**Trade-off:** anyone with localhost access can use the server.
-**Status: Superseded** — optional password gate + TLS (`api/auth.py`).
-
-### ADR-007: Approval State via Environment Variables
-**Decision:** `HERMES_EXEC_ASK`, `HERMES_SESSION_KEY` etc. passed via
-`os.environ`.
-**Rationale:** `tools/approval.py` and the terminal tool read these env vars.
-**Trade-off:** process-global; concurrent chat requests can clobber each
-other.
-**Status: In effect (known debt)** — `_ENV_LOCK` serializes mutations but
-does not fully isolate execution; tracked in [bugs.md](bugs.md) #195.
+1. Frontend `send()` → `POST /api/chat/start`, carrying session_id + message
+2. The server creates a `queue.Queue`, starts a daemon thread running `_run_agent_streaming()`, and returns `stream_id`
+3. The frontend receives events over the WebSocket at `/api/ws/events`; on a mid-session refresh it recovers via SSE replay `GET /api/chat/session/stream/replay`
+4. The agent thread runs `AIAgent.run_conversation()`, putting token/tool/approval/done events into the queue
+5. `/api/ws/events` reads events from the queue and forwards them to the browser
+6. On `done`: update session messages, save to on-disk JSON
 
 ---
 
-## 10. Developer conventions
+## Database
 
-Working conventions and critical rules (delete ≠ create, `task_id=` not
-`session_id=`, lock around `SESSIONS`, `currentSession` mirroring, …) are
-maintained in [CLAUDE.md](../CLAUDE.md) — the authoritative copy. They are
-deliberately not duplicated here.
+- Both Leap Aide and the Hermes Agent SDK use state.db; the default path is `${HERMES_HOME}/state.db`.
+- Leap Aide extends the state.db schema beyond the Hermes Agent SDK, adding some extra columns to tables. Column names must end with `__webui`; only Leap Aide uses these columns.
+- All updates/writes to state.db must go through the Hermes Agent SDK's high-level API; connecting directly to state.db for low-level database updates/writes is not allowed. Since the Hermes Agent SDK is unaware of any `__webui` columns, none of the high-level APIs it provides read or write `__webui` columns. To implement features, Leap Aide is allowed to connect directly to state.db for updates/writes to `__webui` columns.
+- Leap Aide does not need to consider database forward compatibility or data migration — for example, changing the data type of an `X__webui` column from TEXT to INT. You may assume Leap Aide is running for the first time with no historical data.
+- Leap Aide does not need to repair historical data in the database. If old values in the db are invalid under new code, no automatic data repair is needed in the code — raise an error directly.
 
 ---
 
-## 11. Debugging
+## Configuration
 
-```bash
-./scripts/ctl.sh status            # process up? which pid/port
-./scripts/ctl.sh log-path          # where the server log lives
-./scripts/ctl.sh restart           # rebuild is separate: ./scripts/build.sh
+| Variable | Default | Description |
+|---|---|---|
+| `HERMES_WEBUI_HOST` | `127.0.0.1` | Bind address |
+| `HERMES_WEBUI_PORT` | `8787` | Port |
+| `HERMES_WEBUI_STATE_DIR` | `~/.hermes/webui` | State directory (sessions JSON, settings, workspaces) |
+| `HERMES_WEBUI_DEFAULT_WORKSPACE` | *(auto-discovered)* | Default workspace path |
+| `HERMES_WEBUI_DEFAULT_MODEL` | *(empty)* | Default model; empty means "discover from configured providers" |
+| `HERMES_WEBUI_PASSWORD` | *(unset)* | Setting it enables the password gate |
+| `HERMES_WEBUI_TLS_CERT` / `HERMES_WEBUI_TLS_KEY` | *(unset)* | TLS certificate / key |
+| `HERMES_WEBUI_AGENT_DIR` | *(auto-discovered)* | hermes-agent **install** directory |
+| `HERMES_HOME` | `~/.hermes` | hermes-agent **state** directory (config, memory, skills, `state.db`) |
+| `HERMES_WEBUI_PYTHON` | *(auto-discovered)* | Python executable override |
+| `HERMES_WEBUI_ALLOWED_ORIGINS` | *(unset)* | Extra allowed origins |
+| `HERMES_WEBUI_AUTO_INSTALL` | *(unset)* | `=1` enables dependency auto-install at startup |
+| `HERMES_WEBUI_ONBOARDING_OPEN` | *(set)* | Open the first-run wizard |
+| `LOG_LEVEL` | `WARNING` | Python logging level |
 
-DRY_RUN=1 ./scripts/run-test.sh smoke     # print what a test run would do
-cd backend && python -m pytest tests/ -k <name>
+---
 
-curl -s http://127.0.0.1:8787/health
-```
+## Architecture Decision Records (ADR)
 
-For manual browser checks see [testing.md](testing.md).
+Each entry records one historical decision and its current status.
+
+### ADR-001: Example
+**Decision:** TBD
+**Rationale:** TBD
+**Status:** TBD
