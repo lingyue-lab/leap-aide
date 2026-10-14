@@ -22,7 +22,7 @@
 #     New hidden files do NOT enter the image until you do.
 
 # --- Hidden entries at any depth: .git .github .claude .venv .pytest_cache
-# --- frontend/.vite backend/__pycache__ .buildah-storage-root ... ---
+# --- frontend/.vite .buildah-storage-root ... ---
 **/.*
 
 # --- Whitelist: hidden files that must survive the rule above. Docker's
