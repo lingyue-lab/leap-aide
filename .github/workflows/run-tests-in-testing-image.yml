@@ -1,4 +1,4 @@
-name: run-test-in-testing-image
+name: run-tests-in-testing-image
 
 # Pipeline: clone -> build the Dockerfile's `testing` stage -> push it to GHCR
 # -> launch that exact image and run `./scripts/run-test.sh backend full`, then

@@ -29,7 +29,7 @@ L2 domains (DOMAIN): `session` | `model` | `workspace` | `cron` | `i18n` | `ui`
 `streaming` | `auth` | `all`.
 
 CI runs the same suites inside the testing image built from the repo `Dockerfile`
-(`.github/workflows/run-test-in-testing-image.yml`): `backend full`, then
+(`.github/workflows/run-tests-in-testing-image.yml`): `backend full`, then
 `frontend full`.
 
 Useful environment overrides:

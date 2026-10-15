@@ -135,7 +135,7 @@ parse_runner_flags() {
         ;;
     esac
   done
-  BATCH_SIZE="${BATCH_SIZE:-1}"
+  BATCH_SIZE="${BATCH_SIZE:-100}"
   MAX_TESTS="${MAX_TESTS:-0}"
   ONLY_BATCH="${ONLY_BATCH:-}"
   BATCH_SKIP="${BATCH_SKIP:-0}"

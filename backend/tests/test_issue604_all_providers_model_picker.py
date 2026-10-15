@@ -1,16 +1,19 @@
 """Tests for #604 — model picker shows all configured providers."""
+import pathlib
 import re
+
+# Resolved from __file__, not the cwd: run-test.sh chdirs to the repo root, so
+# a bare "app/api/config.py" only resolves when pytest is launched from backend/.
+CONFIG_PY = pathlib.Path(__file__).parent.parent / "app" / "api" / "config.py"
 
 
 def _src() -> str:
-    with open("app/api/config.py") as f:
-        return f.read()
+    return CONFIG_PY.read_text(encoding="utf-8")
 
 
 def _get_provider_models_keys() -> set:
     """Extract top-level provider keys from _PROVIDER_MODELS dict."""
-    with open("app/api/config.py") as f:
-        lines = f.readlines()
+    lines = CONFIG_PY.read_text(encoding="utf-8").splitlines()
     keys = []
     in_dict = False
     for line in lines:

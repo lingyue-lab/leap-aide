@@ -12,7 +12,7 @@ import os
 import pathlib
 import re
 
-REPO = pathlib.Path(__file__).resolve().parents[3]
+REPO = pathlib.Path(__file__).resolve().parents[2]
 BUILD_ENV = REPO / ".build.env"
 BUILD_ENV_NAME = ".build.env"
 LEGACY_PATH = "backend/scripts/" + "hermes-agent.env"  # split: this file must not self-match
@@ -22,7 +22,7 @@ BUILD_SH = (REPO / "scripts" / "build.sh").read_text(encoding="utf-8")
 NPM_WARMUP_SH = (REPO / "scripts" / "npm_warmup.sh").read_text(encoding="utf-8")
 DOCKERIGNORE = (REPO / ".dockerignore").read_text(encoding="utf-8")
 TESTING_IMAGE_YML = (
-    REPO / ".github" / "workflows" / "run-test-in-testing-image.yml"
+    REPO / ".github" / "workflows" / "run-tests-in-testing-image.yml"
 ).read_text(encoding="utf-8")
 RELEASE_YML = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
@@ -145,7 +145,7 @@ class TestConsumersPointAtIt:
 
     def test_ci_workflows_grep_it(self):
         for name, text in (
-            ("run-test-in-testing-image.yml", TESTING_IMAGE_YML),
+            ("run-tests-in-testing-image.yml", TESTING_IMAGE_YML),
             ("release.yml", RELEASE_YML),
         ):
             assert BUILD_ENV_NAME in text, f"{name} must read the pin from {BUILD_ENV_NAME}"

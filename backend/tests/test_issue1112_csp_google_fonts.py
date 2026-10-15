@@ -1,10 +1,14 @@
 """Tests for #1112 — CSP allows Google Fonts stylesheet and font files."""
+import pathlib
 import re
+
+# Resolved from __file__, not the cwd: run-test.sh chdirs to the repo root, so
+# a bare "app/api/helpers.py" only resolves when pytest is launched from backend/.
+HELPERS_PY = pathlib.Path(__file__).parent.parent / "app" / "api" / "helpers.py"
 
 
 def _helpers_src() -> str:
-    with open("app/api/helpers.py") as f:
-        return f.read()
+    return HELPERS_PY.read_text(encoding="utf-8")
 
 
 class TestCSPGoogleFonts:

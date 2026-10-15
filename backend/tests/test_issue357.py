@@ -14,11 +14,10 @@ Two problems fixed:
 import pathlib
 import re
 
-# File moved from tests/test_issue357.py to backend/tests/regressions/ during the
-# FastAPI-style layout refactor. The original `parent.parent` walked up from
-# tests/ to repo root in one hop; from backend/tests/regressions/ we need 4
-# hops to reach the same checkout root.
-REPO = pathlib.Path(__file__).resolve().parents[3]
+# Repo-root-relative paths are resolved from __file__ rather than the process
+# cwd: `run-test.sh` chdirs to the repo root, but a bare `pytest backend/tests`
+# run from anywhere else must still find the Dockerfile.
+REPO = pathlib.Path(__file__).resolve().parents[2]
 DOCKERFILE = (REPO / "Dockerfile").read_text(encoding="utf-8")
 INIT_SCRIPT = (REPO / "backend" / "scripts" / "docker-entrypoint.sh").read_text(encoding="utf-8")
 

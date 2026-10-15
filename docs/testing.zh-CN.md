@@ -29,7 +29,7 @@ L2 域（DOMAIN）：`session` | `model` | `workspace` | `cron` | `i18n` | `ui` 
 `streaming` | `auth` | `all`。
 
 CI 会在由仓库 `Dockerfile` 构建出的 testing 镜像里跑同样的套件
-（`.github/workflows/run-test-in-testing-image.yml`）：先 `backend full`，再
+（`.github/workflows/run-tests-in-testing-image.yml`）：先 `backend full`，再
 `frontend full`。
 
 常用环境变量覆盖：

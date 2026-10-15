@@ -6,23 +6,26 @@ and adds them to the trusted set, so user-explicitly configured local endpoints
 (ollama, llama.cpp, vLLM, TabbyAPI, etc.) are not blocked.
 """
 import os
+import pathlib
 import pytest
+
+# Resolved from __file__, not the cwd: run-test.sh chdirs to the repo root, so
+# a bare "app/api/config.py" only resolves when pytest is launched from backend/.
+CONFIG_PY = pathlib.Path(__file__).parent.parent / "app" / "api" / "config.py"
 
 
 # ---------- Source-code analysis tests ----------
 
 def test_ssrf_trusted_hosts_variable_exists():
     """The _ssrf_trusted_hosts set must be built from custom_providers config."""
-    with open("app/api/config.py") as f:
-        src = f.read()
+    src = CONFIG_PY.read_text(encoding="utf-8")
     assert "_ssrf_trusted_hosts" in src
     assert "_ssrf_trusted_hosts: set[str] = set()" in src
 
 
 def test_ssrf_trusted_hosts_populated_from_custom_providers():
     """Trusted hosts are extracted by iterating custom_providers[].base_url."""
-    with open("app/api/config.py") as f:
-        src = f.read()
+    src = CONFIG_PY.read_text(encoding="utf-8")
     # Must read custom_providers from cfg
     assert 'cfg.get("custom_providers"' in src
     # Must extract base_url from each entry
@@ -35,24 +38,21 @@ def test_ssrf_trusted_hosts_populated_from_custom_providers():
 
 def test_ssrf_check_uses_trusted_hosts():
     """The SSRF check must consult _ssrf_trusted_hosts before blocking."""
-    with open("app/api/config.py") as f:
-        src = f.read()
+    src = CONFIG_PY.read_text(encoding="utf-8")
     # The is_known_local check must include _ssrf_trusted_hosts
     assert "in _ssrf_trusted_hosts" in src
 
 
 def test_ssrf_known_local_still_present():
     """Original hardcoded allowlist must still be present (no regression)."""
-    with open("app/api/config.py") as f:
-        src = f.read()
+    src = CONFIG_PY.read_text(encoding="utf-8")
     for keyword in ("ollama", "localhost", "127.0.0.1", "lmstudio", "lm-studio"):
         assert keyword in src, f"Missing hardcoded allowlist entry: {keyword}"
 
 
 def test_ssrf_block_still_present():
     """SSRF ValueError must still be raised for unknown private IPs."""
-    with open("app/api/config.py") as f:
-        src = f.read()
+    src = CONFIG_PY.read_text(encoding="utf-8")
     assert 'SSRF: resolved hostname to private IP' in src
 
 
