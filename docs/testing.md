@@ -32,6 +32,10 @@ CI runs the same suites inside the testing image built from the repo `Dockerfile
 (`.github/workflows/run-tests-in-testing-image.yml`): `backend full`, then
 `frontend full`.
 
+Every push to a ready PR targeting `main` runs them automatically; draft PRs are
+skipped, and a PR with a merge conflict gets no run at all. This check is not yet
+required to merge — it reports, it does not block.
+
 Useful environment overrides:
 
 - `DRY_RUN=1` — print the commands without executing them

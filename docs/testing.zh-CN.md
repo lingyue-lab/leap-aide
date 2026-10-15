@@ -32,6 +32,9 @@ CI 会在由仓库 `Dockerfile` 构建出的 testing 镜像里跑同样的套件
 （`.github/workflows/run-tests-in-testing-image.yml`）：先 `backend full`，再
 `frontend full`。
 
+每次向目标为 `main` 的 ready PR 推送都会自动运行；草稿 PR 会跳过，存在合并冲突的
+PR 则完全不会运行。该检查目前还不是合并的必需项——它只报告结果，不阻塞合并。
+
 常用环境变量覆盖：
 
 - `DRY_RUN=1` —— 只打印命令不执行

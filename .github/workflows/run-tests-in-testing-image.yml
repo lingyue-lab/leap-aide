@@ -19,22 +19,94 @@ name: run-tests-in-testing-image
 #
 # scripts/build.sh cannot build this image: it hardcodes `--target runtime`
 # (scripts/build.sh:414) and never pushes.
+#
+# When this runs: every push to a ready PR that targets `main`, plus
+# workflow_dispatch and a temporary wip-branch push. On `pull_request` GitHub
+# checks out refs/pull/N/merge, so the suites exercise the tree that would land
+# in main — `GITHUB_SHA` is that merge commit, which is what makes the
+# `sha-<sha>` tag below unique per (head, base) pair.
+#
+# Deliberate limits, recorded so they are not mistaken for bugs later:
+#   * Draft PRs are skipped (the `if:` on build-testing-image; `run-tests`
+#     inherits the skip through `needs:`). GitHub still records a run whose jobs
+#     are all skipped — that is noise, not a green signal.
+#   * This is NOT a required status check yet: it reports, it does not block.
+#     Promoting it takes two settings, not one — add both job names ("Build +
+#     push testing image", "Run tests in the testing image") as required checks
+#     on `main` AND enable "Require branches to be up to date before merging".
+#     Without the latter, main advancing on its own never re-runs the suite and
+#     the green check would be describing a stale merge.
+#   * A PR with a merge conflict gets NO run at all — GitHub cannot construct the
+#     merge ref. Nothing reports, so an absent check means "conflict", not
+#     "passed".
+#   * Fork PRs get a read-only token, and GitHub treats Dependabot PRs as fork
+#     PRs; both fail at the GHCR push, AFTER the full build. That red run is a
+#     permissions story, not a test result — read the `run-tests` job.
+#   * Every push publishes one more immutable `sha-*` tag of a multi-GB image to
+#     ghcr.io/<owner>/leap-aide-testing. Nothing prunes that package today, so
+#     the tag list needs either a periodic cleanup job
+#     (`actions/delete-package-versions`) or a retention policy on the package.
+#   * Nothing runs after the merge onto main: the PR run is the last signal
+#     before the commit lands. `push: branches: [main]` is the follow-up if a
+#     post-merge signal is ever wanted.
 
 on:
   workflow_dispatch:
+  pull_request:
+    # `branches` filters the PR's BASE branch — this reads "PRs targeting main",
+    # the most commonly misread key in an `on:` block. `main` is the GitHub
+    # repo's default branch; the internal Gitea mirror still defaults to
+    # `master`, so this is not a typo to "fix" back.
+    branches: [main]
+    # The explicit list is required: without `types`, only opened/synchronize/
+    # reopened fire, and `ready_for_review` — the moment a draft becomes
+    # eligible for this workflow — would never reach it.
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches:
       # Temporary for debugging on the wip branch; drop before merge (same
-      # pattern as build-runtime-image.yml).
+      # pattern as build-runtime-image.yml). While a PR is open from this
+      # branch every push fires BOTH this and the pull_request run: they are
+      # separate concurrency groups (refs/heads/... vs refs/pull/N/merge), so
+      # neither cancels the other and both pay a cold build.
       - wip/build-runtime-docker-image-workflow
 
 env:
   TESTING_IMAGE: ghcr.io/${{ github.repository_owner }}/leap-aide-testing
 
+# One run per ref: a push to a PR cancels the run it supersedes, which is the
+# only affordable behavior when a single run is hours long.
+#   * `github.workflow` keeps this from cancelling build-runtime-image or
+#     release-runtime-image on the same ref, and `github.ref` is already per-PR
+#     on pull_request events (refs/pull/N/merge), so two PRs never cancel each
+#     other. Do NOT copy this block into release-runtime-image.yml: that one
+#     relies on publishing the immutable tag before `latest` so a failed publish
+#     stays repairable, and cancel-in-progress would make "version published,
+#     `latest` cancelled" a routine outcome.
+#   * Cancelling is safe for the image: `buildah push` uploads blobs before the
+#     final manifest PUT, so a :sha-* tag either does not exist yet or is
+#     complete — there is no half-pushed tag to pull.
+#   * Superseded runs show as "cancelled" in the PR checks: superseded, not
+#     failed. Re-running an OLD attempt of a PR ("Re-run all jobs") joins this
+#     group too and therefore cancels the run that is current for that PR —
+#     which is where a mysteriously cancelled entry usually comes from.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-testing-image:
     name: Build + push testing image
     runs-on: ubuntu-latest
+    # Draft PRs are skipped: paying a cold buildah build (plus the suites below)
+    # for every iteration of an unfinished branch is the cost this workflow
+    # cannot afford, and a draft cannot merge anyway. There is no `draft` filter
+    # on the `pull_request` trigger — a job-level `if:` is the only mechanism.
+    # Non-PR events (dispatch, the wip push) short-circuit on the first operand.
+    # `run-tests` has no job-level `if:` of its own, so it is skipped
+    # transitively through `needs:`; if it ever grows one (e.g. a job-level
+    # `if: always()`), this guard must be repeated there or drafts start running.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     # Building the testing stage is the same work as the runtime image build
     # (npm ci, Playwright, vite build) — cold caches take tens of minutes.
     timeout-minutes: 120
@@ -88,7 +160,10 @@ jobs:
         id: meta
         # `sha-<short-sha>` is immutable per commit, so the test job pulls
         # exactly what this run pushed. One producer keeps the two jobs from
-        # drifting if the scheme ever changes.
+        # drifting if the scheme ever changes. On `pull_request` events that
+        # SHA is the merge commit (see the header), so the tag identifies the
+        # tested *tree*, not the merged commit that a squash merge will create.
+        # It also says nothing about which PR produced it.
         run: |
           echo "image=${TESTING_IMAGE}" >> "$GITHUB_OUTPUT"
           echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
@@ -212,6 +287,11 @@ jobs:
 
   run-tests:
     name: Run tests in the testing image
+    # No job-level `if:` on purpose: this job inherits the draft-PR skip from
+    # build-testing-image through `needs:` (see the `if:` there). The
+    # step-level `if: ${{ !cancelled() }}` further down does not propagate a
+    # job skip — it only keeps the frontend suite from being denied when the
+    # long backend one fails.
     needs: build-testing-image
     runs-on: ubuntu-latest
     # `full` backend is documented as "hours" (docs/testing.md). GitHub-hosted

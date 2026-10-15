@@ -47,6 +47,9 @@ Keep each PR focused. A small cluster of related fixes is fine. A bug fix plus a
 
 Complete all tests locally before every PR; see [docs/testing.md](docs/testing.md) for how.
 
+CI re-runs the same suites automatically on every push to a ready PR targeting `main`.
+That check reports the result but is not yet required to merge.
+
 ### Clear PR description
 
 For PR message content, refer to [.github/commit-template.txt](.github/commit-template.txt).
