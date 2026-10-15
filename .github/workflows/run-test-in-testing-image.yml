@@ -24,10 +24,9 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - master
       # Temporary for debugging on the wip branch; drop before merge (same
       # pattern as build-runtime-image.yml).
-      # - wip/build-runtime-docker-image-workflow
+      - wip/build-runtime-docker-image-workflow
 
 env:
   TESTING_IMAGE: ghcr.io/${{ github.repository_owner }}/leap-aide-testing
