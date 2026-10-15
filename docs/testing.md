@@ -19,6 +19,7 @@ All unit tests are driven by `./scripts/run-test.sh` from the repo root:
 | `./scripts/run-test.sh smoke` | L1 | Core regression suite | < 5 min |
 | `./scripts/run-test.sh function [DOMAIN]` | L2 | One functional area | 10–30 min |
 | `./scripts/run-test.sh full` | L3 | Full regression | hours |
+| `./scripts/run-test.sh backend [SUBCMD]` | — | Backend pytest (`smoke` / `function [DOMAIN]` / `full` / `sprint N` / `clean` / `setup`) | — |
 | `./scripts/run-test.sh frontend [SUBCMD]` | — | Frontend vitest (`smoke` / `full` / `clean` / `setup`) | minutes |
 | `./scripts/run-test.sh manual` | L4 | Prints the browser manual checklist | — |
 | `./scripts/run-test.sh setup` | — | Install all test dependencies (Python + frontend) | — |
@@ -26,6 +27,10 @@ All unit tests are driven by `./scripts/run-test.sh` from the repo root:
 
 L2 domains (DOMAIN): `session` | `model` | `workspace` | `cron` | `i18n` | `ui`
 `streaming` | `auth` | `all`.
+
+CI runs the same suites inside the testing image built from the repo `Dockerfile`
+(`.github/workflows/run-test-in-testing-image.yml`): `backend full`, then
+`frontend full`.
 
 Useful environment overrides:
 

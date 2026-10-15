@@ -700,7 +700,7 @@ WORKDIR /app
 # `command` + `args` per step, and the image provides pytest + Node +
 # frontend deps + hermes-agent SDK + Playwright Chromium + command wrappers
 # + scripts/run-test.sh + scripts/build.sh. Common invocations:
-#   command=["scripts/run-test.sh"]  args=["full"]              # backend pytest
+#   command=["scripts/run-test.sh"]  args=["backend", "full"]   # backend pytest
 #   command=["scripts/run-test.sh"]  args=["frontend", "full"]  # frontend vitest
 #   command=["scripts/build.sh"]     args=["--frontend"]        # bake ../static/
 #   command=["pytest"]               args=["backend/tests/", "-v"]

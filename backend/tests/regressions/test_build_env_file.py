@@ -21,7 +21,9 @@ INSTALL_SH = (REPO / "scripts" / "install.sh").read_text(encoding="utf-8")
 BUILD_SH = (REPO / "scripts" / "build.sh").read_text(encoding="utf-8")
 NPM_WARMUP_SH = (REPO / "scripts" / "npm_warmup.sh").read_text(encoding="utf-8")
 DOCKERIGNORE = (REPO / ".dockerignore").read_text(encoding="utf-8")
-TESTS_YML = (REPO / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
+TESTING_IMAGE_YML = (
+    REPO / ".github" / "workflows" / "run-test-in-testing-image.yml"
+).read_text(encoding="utf-8")
 RELEASE_YML = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
 # Directories that are either huge or not part of the source tree. buildah keeps
@@ -142,7 +144,10 @@ class TestConsumersPointAtIt:
         assert LEGACY_PATH not in NPM_WARMUP_SH
 
     def test_ci_workflows_grep_it(self):
-        for name, text in (("tests.yml", TESTS_YML), ("release.yml", RELEASE_YML)):
+        for name, text in (
+            ("run-test-in-testing-image.yml", TESTING_IMAGE_YML),
+            ("release.yml", RELEASE_YML),
+        ):
             assert BUILD_ENV_NAME in text, f"{name} must read the pin from {BUILD_ENV_NAME}"
             assert LEGACY_PATH not in text
 

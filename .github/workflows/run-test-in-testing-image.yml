@@ -1,0 +1,323 @@
+name: run-test-in-testing-image
+
+# Pipeline: clone -> build the Dockerfile's `testing` stage -> push it to GHCR
+# -> launch that exact image and run `./scripts/run-test.sh backend full`, then
+# `./scripts/run-test.sh frontend full`.
+#
+# The suites run inside the testing image because it is the only environment
+# that carries the hermes-agent SDK: on a bare runner conftest.py's
+# `requires_agent` markers auto-skip every agent-dependent test.
+#
+# Two jobs on purpose:
+#   * build-testing-image needs buildah inside a privileged container. The
+#     cicd-builder image ships buildah + crun but NO docker CLI
+#     (.github/images/cicd-builder/Dockerfile).
+#   * run-tests only needs the docker CLI that ubuntu-latest already has, and it
+#     pulls the image back from GHCR — so the suites exercise the *pushed*
+#     bytes. `docker run` of a locally-tagged image would never catch a broken
+#     push (missing manifest, bad credentials, wrong format).
+#
+# scripts/build.sh cannot build this image: it hardcodes `--target runtime`
+# (scripts/build.sh:414) and never pushes.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+      # Temporary for debugging on the wip branch; drop before merge (same
+      # pattern as build-runtime-image.yml).
+      # - wip/build-runtime-docker-image-workflow
+
+env:
+  TESTING_IMAGE: ghcr.io/${{ github.repository_owner }}/leap-aide-testing
+
+jobs:
+  build-testing-image:
+    name: Build + push testing image
+    runs-on: ubuntu-latest
+    # Building the testing stage is the same work as the runtime image build
+    # (npm ci, Playwright, vite build) — cold caches take tens of minutes.
+    timeout-minutes: 120
+    defaults:
+      run:
+        # Container jobs default to sh (dash); the script below uses bash
+        # arrays and ${var:offset:len}. bash ships in the cicd-builder image.
+        shell: bash
+    # CICD builder image (Ubuntu 24.04 + buildah + crun), prebuilt so each run
+    # does not pay an apt install. Maintained by the build-cicd-builder-image
+    # workflow (.github/images/cicd-builder).
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/leap-aide-cicd-builder:ubuntu-24.04
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      # buildah runs the Dockerfile's RUN steps with mount namespaces inside
+      # this job container; that needs real privileges, not just root.
+      options: --privileged
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      tag: ${{ steps.meta.outputs.tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history + tags so `git describe` yields a real HERMES_VERSION.
+          fetch-depth: 0
+
+      - name: Resolve hermes-agent pin
+        id: pin
+        # Read the shared commit pin from the source-of-truth file. Guard the
+        # read: a missing file means a broken checkout, while an absent pin
+        # line is a legitimate state (unpinned install). The substitution's
+        # exit status is cut's, not grep's, hence the explicit empty check.
+        run: |
+          if [ ! -f .build.env ]; then
+            echo "::error::.build.env is missing at the repo root"
+            exit 1
+          fi
+          commit=$(grep '^HERMES_AGENT_COMMIT=' .build.env | cut -d= -f2- | tr -d '"' || true)
+          if [ -z "$commit" ]; then
+            echo "::notice::no HERMES_AGENT_COMMIT in .build.env — building with hermes-agent unpinned"
+          fi
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve image tag
+        id: meta
+        # `sha-<short-sha>` is immutable per commit, so the test job pulls
+        # exactly what this run pushed. One producer keeps the two jobs from
+        # drifting if the scheme ever changes.
+        run: |
+          echo "image=${TESTING_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      # buildah login, not docker/login-action: this image has no docker CLI,
+      # and `buildah push` reads exactly the auth file `buildah login` writes.
+      - name: Log in to GitHub Container Registry
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | buildah login --username "${{ github.actor }}" --password-stdin ghcr.io
+
+      - name: Build testing image (buildah)
+        env:
+          HERMES_AGENT_COMMIT: ${{ steps.pin.outputs.commit }}
+          # Point the buildah store at the host bind mount (ext4). The job
+          # container's root is overlayfs, which the kernel refuses as an
+          # overlay upperdir and would break layer commits.
+          BUILDAH_ROOT: ${{ runner.temp }}/buildah-store
+          BUILDAH_RUNROOT: ${{ runner.temp }}/buildah-runroot
+          # Site-specific mirrors/proxies come from repo Variables; leave them
+          # unset for direct connections (see scripts/build.sh --help).
+          BUILD_HTTP_PROXY: ${{ vars.BUILD_HTTP_PROXY }}
+          BUILD_HTTPS_PROXY: ${{ vars.BUILD_HTTPS_PROXY }}
+          BUILD_NO_PROXY: ${{ vars.BUILD_NO_PROXY }}
+          BUILD_APT_MIRROR: ${{ vars.BUILD_APT_MIRROR }}
+          BUILD_PIP_INDEX_URL: ${{ vars.BUILD_PIP_INDEX_URL }}
+          BUILD_UV_PYTHON_MIRROR: ${{ vars.BUILD_UV_PYTHON_MIRROR }}
+          BUILD_NPM_REGISTRY: ${{ vars.BUILD_NPM_REGISTRY }}
+          BUILD_PLAYWRIGHT_DOWNLOAD_HOST: ${{ vars.BUILD_PLAYWRIGHT_DOWNLOAD_HOST }}
+          BUILD_ELECTRON_MIRROR: ${{ vars.BUILD_ELECTRON_MIRROR }}
+          BUILD_ELECTRON_BUILDER_BINARIES_MIRROR: ${{ vars.BUILD_ELECTRON_BUILDER_BINARIES_MIRROR }}
+          BUILD_NPM_WARMUP: ${{ vars.BUILD_NPM_WARMUP }}
+          HERMES_AGENT_REPO_URL: ${{ vars.HERMES_AGENT_REPO_URL }}
+          HERMES_INSTALLER_MIRROR: ${{ vars.HERMES_INSTALLER_MIRROR }}
+          # Deploy-key *content*, not a path: a CI runner has no ~/.ssh key
+          # file (unlike build.sh's BUILD_GIT_IDENTITY_KEY_FILE). Only consumed
+          # when HERMES_AGENT_REPO_URL is an ssh:// fork.
+          BUILD_GIT_IDENTITY_KEY: ${{ secrets.BUILD_GIT_IDENTITY_KEY }}
+        run: |
+          set -euo pipefail
+
+          # The job container sees the workspace as a foreign-uid mount, so
+          # bare git calls can die with exit 128 (dubious ownership). Build
+          # must never depend on version metadata being computable.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" 2>/dev/null || true
+
+          ref="${TESTING_IMAGE}:${{ steps.meta.outputs.tag }}"
+
+          # Version badge baked into backend/app/api/_version.py. Same fallback
+          # chain as scripts/build.sh.
+          hermes_version="$(git describe --tags --always 2>/dev/null || true)"
+          hermes_version="${hermes_version:-unknown}"
+
+          # git_identity_key is only needed for ssh:// forks: the Dockerfile
+          # mounts it with required=false, so an HTTPS/upstream build needs no
+          # secret at all. Fail loudly rather than let the clone die with an
+          # opaque "Permission denied (publickey)".
+          declare -a secrets=()
+          if [[ "${HERMES_AGENT_REPO_URL:-}" == ssh://* ]]; then
+            if [[ -z "${BUILD_GIT_IDENTITY_KEY:-}" ]]; then
+              echo "::error::HERMES_AGENT_REPO_URL is an ssh:// URL but secrets.BUILD_GIT_IDENTITY_KEY is empty — the hermes-agent clone would fail with 'Permission denied (publickey)'."
+              exit 1
+            fi
+            key="${RUNNER_TEMP}/git_identity_key"
+            printf '%s\n' "$BUILD_GIT_IDENTITY_KEY" > "$key"
+            chmod 600 "$key"
+            secrets+=(--secret "id=git_identity_key,src=${key}")
+          fi
+
+          # Build and tag/push must address the same store, or the image is
+          # invisible to the later call.
+          ba=(buildah --root "$BUILDAH_ROOT" --runroot "$BUILDAH_RUNROOT")
+
+          # --target testing: the stage with pytest + Node + frontend deps +
+          #   hermes-agent SDK + Playwright Chromium (Dockerfile:281-711).
+          # --layers: in-run layer cache, same as scripts/build.sh.
+          # NO --cache-from/--cache-to: buildah 1.33 (the version in the builder
+          #   image) implements only registry/local/inline caches — `type=gha`
+          #   is buildx syntax it does not understand, and was silently useless
+          #   in the old tests.yml docker-backend job.
+          # --network=host: matches scripts/build.sh's default (DOCKER_NETWORK)
+          #   and avoids a second NAT layer inside the privileged container, so
+          #   the site mirrors and proxy behave exactly as for the runtime build.
+          # --isolation is deliberately NOT passed: oci is buildah's default and
+          #   build.sh — the proven CI path for this same Dockerfile — omits it.
+          # --http-proxy=false: blocks buildah's default host-proxy injection;
+          #   proxies reach the build only via BUILD_* -> --build-arg.
+          # --ignorefile is deliberately NOT passed: the repo-root .dockerignore
+          #   is the single context filter for every stage.
+          "${ba[@]}" bud \
+            --target testing \
+            --layers --jobs 0 \
+            --network=host \
+            --http-proxy=false \
+            --build-arg "HTTP_PROXY=${BUILD_HTTP_PROXY:-}" \
+            --build-arg "HTTPS_PROXY=${BUILD_HTTPS_PROXY:-}" \
+            --build-arg "NO_PROXY=${BUILD_NO_PROXY:-}" \
+            --build-arg "http_proxy=${BUILD_HTTP_PROXY:-}" \
+            --build-arg "https_proxy=${BUILD_HTTPS_PROXY:-}" \
+            --build-arg "no_proxy=${BUILD_NO_PROXY:-}" \
+            --build-arg "HERMES_AGENT_COMMIT=${HERMES_AGENT_COMMIT:-}" \
+            --build-arg "HERMES_AGENT_REPO_URL=${HERMES_AGENT_REPO_URL:-}" \
+            --build-arg "HERMES_INSTALLER_MIRROR=${HERMES_INSTALLER_MIRROR:-}" \
+            --build-arg "HERMES_HOME=${HERMES_HOME:-/var/lib/leap-aide/hermes-seed}" \
+            --build-arg "HERMES_VERSION=${hermes_version}" \
+            --build-arg "BUILD_APT_MIRROR=${BUILD_APT_MIRROR:-}" \
+            --build-arg "BUILD_PIP_INDEX_URL=${BUILD_PIP_INDEX_URL:-}" \
+            --build-arg "BUILD_UV_PYTHON_MIRROR=${BUILD_UV_PYTHON_MIRROR:-}" \
+            --build-arg "BUILD_NPM_REGISTRY=${BUILD_NPM_REGISTRY:-}" \
+            --build-arg "BUILD_PLAYWRIGHT_DOWNLOAD_HOST=${BUILD_PLAYWRIGHT_DOWNLOAD_HOST:-}" \
+            --build-arg "BUILD_ELECTRON_MIRROR=${BUILD_ELECTRON_MIRROR:-}" \
+            --build-arg "BUILD_ELECTRON_BUILDER_BINARIES_MIRROR=${BUILD_ELECTRON_BUILDER_BINARIES_MIRROR:-}" \
+            --build-arg "BUILD_NPM_WARMUP=${BUILD_NPM_WARMUP:-0}" \
+            "${secrets[@]}" \
+            --tag "$ref" \
+            -f Dockerfile .
+
+          # Push in its own command so a failed push fails the job before the
+          # test job is even scheduled.
+          "${ba[@]}" push "$ref"
+
+  run-tests:
+    name: Run tests in the testing image
+    needs: build-testing-image
+    runs-on: ubuntu-latest
+    # `full` backend is documented as "hours" (docs/testing.md). GitHub-hosted
+    # jobs are hard-killed at 6h, so cap just under that to fail cleanly with
+    # artifacts already written instead of being SIGKILLed.
+    timeout-minutes: 350
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      # This job DOES have the docker CLI (ubuntu-latest), unlike the build
+      # job, so the standard login action works here.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull the image pushed by this run
+        env:
+          IMAGE_REF: ${{ needs.build-testing-image.outputs.image }}:${{ needs.build-testing-image.outputs.tag }}
+        run: |
+          set -euo pipefail
+          docker pull "$IMAGE_REF"
+          # Log the container contract the run below leans on: the testing
+          # image has no ENTRYPOINT/CMD and its last USER is leap-aide-init.
+          printf 'image default user: %s\n' "$(docker image inspect "$IMAGE_REF" --format '{{.Config.User}}')"
+          printf 'image entrypoint:   %s\n' "$(docker image inspect "$IMAGE_REF" --format '{{.Config.Entrypoint}}')"
+
+      - name: Note whether live-provider tests will run
+        env:
+          LEAP_AIDE_TEST_DEEPSEEK_KEY: ${{ secrets.LEAP_AIDE_TEST_DEEPSEEK_KEY }}
+        run: |
+          if [ -z "$LEAP_AIDE_TEST_DEEPSEEK_KEY" ]; then
+            echo "::notice::secrets.LEAP_AIDE_TEST_DEEPSEEK_KEY is unset — live-provider tests self-skip (backend/tests/conftest.py:207)."
+          fi
+
+      - name: Prepare result directories
+        # The container writes as leap-aide-init (uid/gid 1025), which cannot
+        # write a runner-owned 755 directory — hence 777. Paths mirror the
+        # in-container locations run-test.sh uses, with PROJECT_ROOT=/app.
+        env:
+          BACKEND_RESULTS: ${{ runner.temp }}/results/backend
+          FRONTEND_RESULTS: ${{ runner.temp }}/results/frontend
+        run: |
+          set -euo pipefail
+          mkdir -p "$BACKEND_RESULTS" "$FRONTEND_RESULTS"
+          chmod 777 "$BACKEND_RESULTS" "$FRONTEND_RESULTS"
+
+      - name: Run backend suite (run-test.sh backend full)
+        env:
+          IMAGE_REF: ${{ needs.build-testing-image.outputs.image }}:${{ needs.build-testing-image.outputs.tag }}
+          BACKEND_RESULTS: ${{ runner.temp }}/results/backend
+          LEAP_AIDE_TEST_DEEPSEEK_KEY: ${{ secrets.LEAP_AIDE_TEST_DEEPSEEK_KEY }}
+        run: |
+          set -euo pipefail
+          # No --user: run as the image's default user (leap-aide-init). Root
+          # would deviate from the documented Tekton invocation, and any other
+          # uid breaks HOME — TEST_STATE_DIR defaults to
+          # $HOME/.hermes/webui-test-<hash> (conftest.py:72-75) and a
+          # root-owned tree aborts collection with PermissionError.
+          # --shm-size=1g: Docker's 64MB /dev/shm makes Chromium (Playwright is
+          # in the testing image) die on page loads.
+          # --env NAME (no value) forwards the *client's* environment, so the
+          # key never appears in `docker run`'s argv.
+          # The bind mount is the .results dir ONLY — mounting tests/ would
+          # shadow the tests baked into the image.
+          docker run --rm \
+            --shm-size=1g \
+            --mount "type=bind,source=${BACKEND_RESULTS},target=/app/backend/tests/.results" \
+            --env LEAP_AIDE_TEST_DEEPSEEK_KEY \
+            "$IMAGE_REF" \
+            ./scripts/run-test.sh backend full
+
+      # !cancelled(), not always(): a multi-hour backend failure should not
+      # also deny the much shorter frontend signal, but a cancelled run need
+      # not start another container. The job still ends red either way.
+      - name: Run frontend suite (run-test.sh frontend full)
+        if: ${{ !cancelled() }}
+        env:
+          IMAGE_REF: ${{ needs.build-testing-image.outputs.image }}:${{ needs.build-testing-image.outputs.tag }}
+          FRONTEND_RESULTS: ${{ runner.temp }}/results/frontend
+        run: |
+          set -euo pipefail
+          # Same container contract; no live key needed — the frontend suite is
+          # jsdom-based vitest with no network calls.
+          docker run --rm \
+            --shm-size=1g \
+            --mount "type=bind,source=${FRONTEND_RESULTS},target=/app/frontend/tests/.results" \
+            "$IMAGE_REF" \
+            ./scripts/run-test.sh frontend full
+
+      - name: Upload junit XML
+        # always(): on a failed or timed-out suite the XML written so far is
+        # exactly what a diagnostician needs. The directories are created up
+        # front, so this step never has to tolerate a missing path.
+        #   backend:  junit-full-batchNN-<stamp>.xml (per batch) + aggregated
+        #   frontend: junit-full-<stamp>.xml
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testing-image-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/results/backend
+            ${{ runner.temp }}/results/frontend
+          if-no-files-found: warn
+          retention-days: 14

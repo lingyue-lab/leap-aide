@@ -19,6 +19,7 @@
 | `./scripts/run-test.sh smoke` | L1 | 核心回归套件 | < 5 分钟 |
 | `./scripts/run-test.sh function [DOMAIN]` | L2 | 单个功能域 | 10–30 分钟 |
 | `./scripts/run-test.sh full` | L3 | 全量回归 | 数小时 |
+| `./scripts/run-test.sh backend [SUBCMD]` | — | 后端 pytest（`smoke` / `function [DOMAIN]` / `full` / `sprint N` / `clean` / `setup`） | — |
 | `./scripts/run-test.sh frontend [SUBCMD]` | — | 前端 vitest（`smoke` / `full` / `clean` / `setup`） | 分钟级 |
 | `./scripts/run-test.sh manual` | L4 | 打印浏览器手动清单 | — |
 | `./scripts/run-test.sh setup` | — | 安装全部测试依赖（Python + 前端） | — |
@@ -26,6 +27,10 @@
 
 L2 域（DOMAIN）：`session` | `model` | `workspace` | `cron` | `i18n` | `ui` |
 `streaming` | `auth` | `all`。
+
+CI 会在由仓库 `Dockerfile` 构建出的 testing 镜像里跑同样的套件
+（`.github/workflows/run-test-in-testing-image.yml`）：先 `backend full`，再
+`frontend full`。
 
 常用环境变量覆盖：
 
