@@ -2,11 +2,15 @@
 Structural tests for the repo-root `.build.env` build defaults file.
 
 `.build.env` (formerly `backend/scripts/hermes-agent.env`) is read at build and
-install time by scripts/install.sh, scripts/npm_warmup.sh, scripts/build.sh and
-two CI workflows. Every one of those consumers degrades SILENTLY when the file
-is missing or renamed: install.sh stops pinning the hermes-agent SDK, the npm
-warmup falls back to hardcoded Playwright revisions, and the image builds
-unpinned. These tests pin the wiring down as text so a rename cannot half-land.
+install time by scripts/install.sh, scripts/npm_warmup.sh and scripts/build.sh,
+plus one CI workflow that greps it directly. Three workflows depend on it:
+run-tests-in-testing-image.yml greps it and feeds the value to --build-arg,
+while build-runtime-image.yml and release-runtime-image.yml reach it through
+scripts/build.sh, the consumer that resolves the pin on their behalf. Every one
+of those consumers degrades SILENTLY when the file is missing or renamed:
+install.sh stops pinning the hermes-agent SDK, the npm warmup falls back to
+hardcoded Playwright revisions, and the image builds unpinned. These tests pin
+the wiring down as text so a rename cannot half-land.
 """
 import os
 import pathlib
@@ -24,7 +28,14 @@ DOCKERIGNORE = (REPO / ".dockerignore").read_text(encoding="utf-8")
 TESTING_IMAGE_YML = (
     REPO / ".github" / "workflows" / "run-tests-in-testing-image.yml"
 ).read_text(encoding="utf-8")
-RELEASE_YML = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+# Neither of these greps .build.env itself: both shell out to scripts/build.sh,
+# which does (see test_build_sh_workflows_delegate_the_pin).
+BUILD_RUNTIME_YML = (
+    REPO / ".github" / "workflows" / "build-runtime-image.yml"
+).read_text(encoding="utf-8")
+RELEASE_RUNTIME_YML = (
+    REPO / ".github" / "workflows" / "release-runtime-image.yml"
+).read_text(encoding="utf-8")
 
 # Directories that are either huge or not part of the source tree. buildah keeps
 # image layers under the repo root on some setups (hundreds of GB), so the scan
@@ -144,20 +155,53 @@ class TestConsumersPointAtIt:
         assert LEGACY_PATH not in NPM_WARMUP_SH
 
     def test_ci_workflows_grep_it(self):
+        """Workflows that call buildah's build verb themselves must grep the pin
+        and feed it to --build-arg — there is no scripts/build.sh on that path to
+        do it for them."""
         for name, text in (
             ("run-tests-in-testing-image.yml", TESTING_IMAGE_YML),
-            ("release.yml", RELEASE_YML),
         ):
             assert BUILD_ENV_NAME in text, f"{name} must read the pin from {BUILD_ENV_NAME}"
             assert LEGACY_PATH not in text
 
-    def test_release_workflow_resolves_the_pin_in_a_shell_step(self):
-        """`with:` values are not shell-expanded by GitHub Actions.
+    def test_build_sh_workflows_delegate_the_pin(self):
+        """build-runtime-image.yml and release-runtime-image.yml build through
+        scripts/build.sh, which is what resolves HERMES_AGENT_COMMIT from
+        .build.env for them — one level deeper than the old release.yml, but
+        still one grep, in one place.
 
-        An inline `$(grep ...)` in `build-args:` reaches the builder as a
-        literal string, which is then handed to install.sh as `--hermes-commit`.
+        Two ways to silently unpin these images: stop calling build.sh, or
+        re-add the pin here as a build-arg. The second is exactly how the old
+        release.yml failed — `with:` values are NOT shell-expanded by GitHub
+        Actions, so an inline `$(grep ...)` was passed to the builder as a
+        literal string, and then to install.sh as `--hermes-commit`.
         """
-        assert "steps.pin.outputs.commit" in RELEASE_YML
-        assert not re.search(r"^\s*HERMES_AGENT_COMMIT=\$\(", RELEASE_YML, re.MULTILINE), (
-            "release.yml must resolve the pin in a `run:` step, not inline in build-args"
-        )
+        for name, text in (
+            ("build-runtime-image.yml", BUILD_RUNTIME_YML),
+            ("release-runtime-image.yml", RELEASE_RUNTIME_YML),
+        ):
+            assert "./scripts/build.sh --docker-image" in text, (
+                f"{name} must build via ./scripts/build.sh --docker-image — that is "
+                f"the only path by which the {BUILD_ENV_NAME} pin reaches the image"
+            )
+            assert "HERMES_AGENT_COMMIT" not in text, (
+                f"{name} must not resolve the pin itself; scripts/build.sh already "
+                f"does, from {BUILD_ENV_NAME} (an inline $(grep ...) in a `with:` "
+                f"block reaches the builder as a literal string)"
+            )
+            assert LEGACY_PATH not in text
+
+    def test_the_old_release_workflow_is_gone(self):
+        """A leftover release.yml would fire on the same tag push as
+        release-runtime-image.yml and publish a second, differently-versioned
+        image."""
+        assert not (REPO / ".github" / "workflows" / "release.yml").exists()
+
+    def test_release_and_daily_workflows_share_the_build_roster(self):
+        """release-runtime-image.yml is build-runtime-image.yml with a different
+        trigger and version. A BUILD_* variable added to one and not the other
+        means the released image is not the image the daily build exercises."""
+        def roster(text):
+            return sorted(re.findall(r"^\s+(BUILD_[A-Z_]+):", text, re.MULTILINE))
+
+        assert roster(RELEASE_RUNTIME_YML) == roster(BUILD_RUNTIME_YML)

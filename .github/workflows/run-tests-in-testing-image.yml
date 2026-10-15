@@ -64,7 +64,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Full history + tags so `git describe` yields a real HERMES_VERSION.
+          # Full history + tags so `git describe` yields a real LEAP_AIDE_VERSION.
           fetch-depth: 0
 
       - name: Resolve hermes-agent pin
@@ -137,10 +137,10 @@ jobs:
 
           ref="${TESTING_IMAGE}:${{ steps.meta.outputs.tag }}"
 
-          # Version badge baked into backend/app/api/_version.py. Same fallback
-          # chain as scripts/build.sh.
-          hermes_version="$(git describe --tags --always 2>/dev/null || true)"
-          hermes_version="${hermes_version:-unknown}"
+          # App version badge baked into backend/app/api/_version.py. Same
+          # fallback chain as scripts/build.sh.
+          app_version="$(git describe --tags --always 2>/dev/null || true)"
+          app_version="${app_version:-unknown}"
 
           # git_identity_key is only needed for ssh:// forks: the Dockerfile
           # mounts it with required=false, so an HTTPS/upstream build needs no
@@ -193,7 +193,7 @@ jobs:
             --build-arg "HERMES_AGENT_REPO_URL=${HERMES_AGENT_REPO_URL:-}" \
             --build-arg "HERMES_INSTALLER_MIRROR=${HERMES_INSTALLER_MIRROR:-}" \
             --build-arg "HERMES_HOME=${HERMES_HOME:-/var/lib/leap-aide/hermes-seed}" \
-            --build-arg "HERMES_VERSION=${hermes_version}" \
+            --build-arg "LEAP_AIDE_VERSION=${app_version}" \
             --build-arg "BUILD_APT_MIRROR=${BUILD_APT_MIRROR:-}" \
             --build-arg "BUILD_PIP_INDEX_URL=${BUILD_PIP_INDEX_URL:-}" \
             --build-arg "BUILD_UV_PYTHON_MIRROR=${BUILD_UV_PYTHON_MIRROR:-}" \

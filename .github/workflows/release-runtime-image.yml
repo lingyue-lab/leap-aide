@@ -1,0 +1,113 @@
+name: release-runtime-image
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release-runtime-image:
+    name: Release runtime Docker image
+    runs-on: ubuntu-latest
+    # Container jobs default to sh (dash); this script needs bash features
+    # (arrays, ${var:offset:len}, [[ =~ ]]). bash ships in the image — the
+    # Dockerfile itself runs /bin/bash.
+    defaults:
+      run:
+        shell: bash
+    # CICD builder image (Ubuntu 24.04 + buildah), prebuilt so each run does
+    # not pay an apt install. Maintained by the build-cicd-builder-image
+    # workflow (.github/images/cicd-builder).
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/leap-aide-cicd-builder:ubuntu-24.04
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      # buildah runs the Dockerfile's RUN steps with mount namespaces inside
+      # this job container; that needs real privileges, not just root.
+      options: --privileged
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A tag push checks out that tag. Full history + tags keep the
+          # `git describe` fallback in scripts/build.sh honest if the
+          # LEAP_AIDE_VERSION export below is ever dropped.
+          fetch-depth: 0
+
+      # buildah login, not docker/login-action: the cicd-builder image has
+      # buildah but no docker CLI, and buildah push reads exactly the auth
+      # file buildah login writes.
+      - name: Log in to GitHub Container Registry
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | buildah login --username "${{ github.actor }}" --password-stdin ghcr.io
+
+      # Release build for a `v*` tag: <version> is immutable, `latest` moves.
+      # Publish order matters: the immutable tag goes first, so `latest` only
+      # moves after a fully successful publish — a failed `latest` push leaves
+      # the exact version published and is repaired by re-running this job.
+      # Single arch (linux/amd64) — the runner's native arch, same as
+      # scripts/build.sh --docker-image and the daily build in
+      # build-runtime-image.yml. No workflow_dispatch on purpose: a dispatch on
+      # a branch would publish `:<branch>` and move `latest` off a released
+      # commit, and "Re-run all jobs" already retries this job with the
+      # original tag ref.
+      - name: Build and push release runtime image
+        env:
+          # Point the buildah store at the host bind-mount (ext4). The job
+          # container's root is overlayfs, which the kernel refuses as an
+          # overlay upperdir and would break layer commits.
+          BUILDAH_ROOT: ${{ runner.temp }}/buildah-store
+          BUILDAH_RUNROOT: ${{ runner.temp }}/buildah-runroot
+          # Site-specific mirrors/proxies come from repo Variables; leave
+          # them unset for direct connections (see scripts/build.sh --help).
+          BUILD_HTTP_PROXY: ${{ vars.BUILD_HTTP_PROXY }}
+          BUILD_HTTPS_PROXY: ${{ vars.BUILD_HTTPS_PROXY }}
+          BUILD_NO_PROXY: ${{ vars.BUILD_NO_PROXY }}
+          BUILD_APT_MIRROR: ${{ vars.BUILD_APT_MIRROR }}
+          BUILD_PIP_INDEX_URL: ${{ vars.BUILD_PIP_INDEX_URL }}
+          BUILD_UV_PYTHON_MIRROR: ${{ vars.BUILD_UV_PYTHON_MIRROR }}
+          BUILD_NPM_REGISTRY: ${{ vars.BUILD_NPM_REGISTRY }}
+          BUILD_PLAYWRIGHT_DOWNLOAD_HOST: ${{ vars.BUILD_PLAYWRIGHT_DOWNLOAD_HOST }}
+          BUILD_ELECTRON_MIRROR: ${{ vars.BUILD_ELECTRON_MIRROR }}
+          BUILD_ELECTRON_BUILDER_BINARIES_MIRROR: ${{ vars.BUILD_ELECTRON_BUILDER_BINARIES_MIRROR }}
+          HERMES_AGENT_REPO_URL: ${{ vars.HERMES_AGENT_REPO_URL }}
+          HERMES_INSTALLER_MIRROR: ${{ vars.HERMES_INSTALLER_MIRROR }}
+        run: |
+          # The job container sees the workspace as a foreign-uid mount, so
+          # bare git calls can die with exit 128 (dubious ownership). The
+          # version below comes from the ref, not from git, so the release does
+          # not depend on this — but the fallback must stay honest.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" 2>/dev/null || true
+
+          # v0.1.0 -> 0.1.0, used for BOTH the image tag and the version badge
+          # baked into backend/app/api/_version.py, so the two cannot disagree.
+          # The `v*` trigger matches refs, it does not validate them: it also
+          # matches a bare `v` (empty version) and `v0.1.0+build5`, whose `+` no
+          # OCI tag can carry. Fail here, naming the problem, instead of after a
+          # full build with the registry's "invalid reference" error. The
+          # pattern is the registry's own tag grammar, so v1.0 and v0.1.0-rc1
+          # still pass.
+          version="${GITHUB_REF_NAME#v}"
+          if ! [[ "$version" =~ ^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$ ]]; then
+            echo "::error::ref '${GITHUB_REF_NAME}' is not a usable release tag — expected e.g. v0.1.0"
+            exit 1
+          fi
+
+          # Exported here rather than set in `env:`: GitHub Actions expressions
+          # have no prefix-stripping function, and deriving the version twice
+          # would let the image tag and the badge drift apart.
+          export LEAP_AIDE_VERSION="$version"
+
+          image="ghcr.io/${{ github.repository_owner }}/leap-aide-runtime"
+          # build.sh pins the buildah store via --root/--runroot; tag/push
+          # must address the same store or the image is invisible to them.
+          ba=(buildah --root "$BUILDAH_ROOT" --runroot "$BUILDAH_RUNROOT")
+
+          ./scripts/build.sh --docker-image "${image}:${version}"
+          "${ba[@]}" tag "${image}:${version}" "${image}:latest"
+          "${ba[@]}" push "${image}:${version}"
+          "${ba[@]}" push "${image}:latest"

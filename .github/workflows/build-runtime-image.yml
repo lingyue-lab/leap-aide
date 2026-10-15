@@ -49,8 +49,8 @@ jobs:
       # the immutable daily-<date>-<sha> tag only exists to reproduce old
       # bugs. Publish order matters: the archive tag goes first, so `daily`
       # only moves after a fully successful publish. Semver releases and
-      # `latest` stay in release.yml. Single arch (linux/amd64) — the
-      # runner's native arch, same as scripts/build.sh --docker-image.
+      # `latest` stay in release-runtime-image.yml. Single arch (linux/amd64) —
+      # the runner's native arch, same as scripts/build.sh --docker-image.
       - name: Build and push daily runtime image
         env:
           # Point the buildah store at the host bind-mount (ext4). The job

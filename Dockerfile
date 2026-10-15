@@ -21,8 +21,9 @@
 # do not pass --ignore-file/--ignorefile.
 #
 # Why these engines: docker buildx is the most battle-tested path for multi-arch
-# GHA builds (release.yml uses it). buildah (Step 7 of the plan) is used by CI
-# for the ci target so we cross-validate Dockerfile portability.
+# GHA builds (build-cicd-builder-image.yml still uses it). buildah (Step 7 of the
+# plan) is used by CI for the testing and runtime targets, so we cross-validate
+# Dockerfile portability.
 #
 # Portability constraints (avoid BuildKit-only features):
 #   - No heredoc RUN. No RUN --mount=type=cache|ssh|bind. No --output.
@@ -253,11 +254,15 @@ USER root
 # Source tree (filtered by repo-root .dockerignore: .git, hidden dirs, node_modules, static/, .env*, ...)
 COPY --chown=leap-aide-init:leap-aide-init . /app
 
-# Bake the git version tag into the image so the settings badge works even
-# when .git is not present (it is excluded by .dockerignore).
-# CI passes: --build-arg HERMES_VERSION=$(git describe --tags --always)
-ARG HERMES_VERSION=unknown
-RUN echo "__version__ = '${HERMES_VERSION}'" > /app/backend/app/api/_version.py
+# Bake this app's own version tag into the image so the settings badge works
+# even when .git is not present (it is excluded by .dockerignore). Not the
+# hermes-agent SDK version — that one is pinned separately by
+# HERMES_AGENT_COMMIT below.
+# CI passes: --build-arg LEAP_AIDE_VERSION=<release tag minus its leading v>
+# (release-runtime-image.yml), or nothing at all — scripts/build.sh then falls
+# back to `git describe --tags --always`.
+ARG LEAP_AIDE_VERSION=unknown
+RUN echo "__version__ = '${LEAP_AIDE_VERSION}'" > /app/backend/app/api/_version.py
 
 # hermes-agent pin (commit SHA). See .build.env at the repo root for
 # rationale and the silent-fallback caveat when the SHA isn't reachable from
