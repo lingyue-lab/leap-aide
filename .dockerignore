@@ -10,7 +10,7 @@
 # survive this filter:
 #   backend/tests                        -> Dockerfile:358
 #   backend/scripts/docker-entrypoint.sh -> Dockerfile:727
-#   backend/scripts/hermes-agent.env     -> scripts/npm_warmup.sh
+#   .build.env                           -> scripts/{install,npm_warmup}.sh
 #
 # Rules of thumb:
 #   * Mirror .gitignore: what is not worth committing is not worth shipping.
@@ -35,6 +35,13 @@
 # --- NOTE: it carries HERMES_WEBUI_PASSWORD and TLS key paths and is baked
 # --- into an image layer; rotate those if the image is ever shared.
 !.env
+
+# --- .build.env is read at BUILD time, from inside the image: scripts/npm_warmup.sh
+# --- sources it (Dockerfile:517) and scripts/install.sh sources it during the
+# --- --deps-only RUN (Dockerfile:581). Dropping it does NOT fail the build — it
+# --- silently downgrades the warmup to its hardcoded playwright revisions and
+# --- leaves the SDK install unpinned.
+!.build.env
 
 # --- Python cache / packaging junk (not hidden, so not caught above).
 # --- `**/` prefix is required: unlike .gitignore, a bare `__pycache__/` in

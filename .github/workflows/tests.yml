@@ -79,8 +79,15 @@ jobs:
 
       - name: Build testing image with buildah
         run: |
-          # Read the shared commit pin from the source-of-truth env file.
-          _commit=$(grep '^HERMES_AGENT_COMMIT=' backend/scripts/hermes-agent.env | cut -d= -f2-)
+          # Read the shared commit pin from the source-of-truth file. Guard the
+          # read: a missing file would otherwise yield an empty build-arg and
+          # silently build an unpinned image (the substitution's exit status is
+          # cut's, not grep's, so the step would still succeed).
+          [ -f .build.env ] || { echo "::error::.build.env is missing at the repo root"; exit 1; }
+          _commit=$(grep '^HERMES_AGENT_COMMIT=' .build.env | cut -d= -f2- || true)
+          if [ -z "$_commit" ]; then
+            echo "::notice::no HERMES_AGENT_COMMIT in .build.env — building with hermes-agent unpinned"
+          fi
           # buildah needs --layers for layer-cache parity with docker buildx.
           # Context filter is the repo-root .dockerignore (single source of
           # truth for every stage) — do not pass --ignorefile.

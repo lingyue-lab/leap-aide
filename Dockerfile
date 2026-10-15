@@ -259,7 +259,7 @@ COPY --chown=leap-aide-init:leap-aide-init . /app
 ARG HERMES_VERSION=unknown
 RUN echo "__version__ = '${HERMES_VERSION}'" > /app/backend/app/api/_version.py
 
-# hermes-agent pin (commit SHA). See backend/scripts/hermes-agent.env for
+# hermes-agent pin (commit SHA). See .build.env at the repo root for
 # rationale and the silent-fallback caveat when the SHA isn't reachable from
 # the default branch.
 ARG HERMES_AGENT_COMMIT=
@@ -444,7 +444,7 @@ RUN echo "=== proxy + registry config ===" \
 #   - SKIPS leap-aide self-install (clone/symlink) — provided by /app already
 #   - RUNS apt-get system deps (nodejs, npm, git, locales, …)
 #   - RUNS hermes-agent install (curl|bash installer, pinned to
-#     HERMES_AGENT_COMMIT — see env file)
+#     HERMES_AGENT_COMMIT — see .build.env)
 #   - RUNS Playwright Chromium download (separate from hermes-agent's bundled
 #     playwright-core to avoid the Node v26 hang bug — matches install.sh:776)
 #   - RUNS browser-use CLI install
@@ -459,7 +459,7 @@ RUN echo "=== proxy + registry config ===" \
 # HOME=/home/leap-aide-init would redirect $HOME/.local style paths (uv tools,
 # caches) to leap-aide-init's home, which is not what we want.
 # Pass --hermes-commit (preferred for stability — see
-# backend/scripts/hermes-agent.env) and --hermes-repo-url (custom fork/mirror,
+# .build.env) and --hermes-repo-url (custom fork/mirror,
 # empty = upstream NousResearch) to install.sh. Uses POSIX `set --` so the
 # RUN works under /bin/sh (dash on Ubuntu) — Docker's default SHELL doesn't
 # support bash arrays.
@@ -574,6 +574,7 @@ RUN --mount=type=secret,id=git_identity_key,dst=/root/.ssh/id_ed25519_install,mo
        fi \
     && set -- --deps-only --dir /app \
               --skip-build --non-interactive --china-mirror \
+              --force-hermes-commit \
               --npm-registry "${BUILD_NPM_REGISTRY}" \
               ${_hermes_pin} ${_hermes_repo} \
     && export DEBUG_INSTALL=true \

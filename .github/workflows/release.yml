@@ -43,6 +43,23 @@ jobs:
             type=match,pattern=v(\d+\.\d+(?:\.\d+)?),group=1
             type=raw,value=latest
 
+      # Resolve the hermes-agent pin in a shell step. Values inside a `uses:`
+      # step's `with:` block are NOT shell-expanded by GitHub Actions, so the
+      # previous inline `$(grep ...)` in build-args was passed to the builder
+      # as a literal string — and then to install.sh's `--hermes-commit`.
+      - name: Resolve hermes-agent pin
+        id: pin
+        run: |
+          if [ ! -f .build.env ]; then
+            echo "::error::.build.env is missing at the repo root"
+            exit 1
+          fi
+          commit=$(grep '^HERMES_AGENT_COMMIT=' .build.env | cut -d= -f2- | tr -d '"' || true)
+          if [ -z "$commit" ]; then
+            echo "::notice::no HERMES_AGENT_COMMIT in .build.env — this release image installs hermes-agent unpinned"
+          fi
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
       # Build and push multi-arch image (amd64 + arm64)
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
@@ -55,6 +72,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             HERMES_VERSION=${{ github.ref_name }}
-            HERMES_AGENT_COMMIT=$(grep '^HERMES_AGENT_COMMIT=' backend/scripts/hermes-agent.env | cut -d= -f2-)
+            HERMES_AGENT_COMMIT=${{ steps.pin.outputs.commit }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

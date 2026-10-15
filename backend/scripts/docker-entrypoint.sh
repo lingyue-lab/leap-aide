@@ -358,12 +358,18 @@ fi
 
 # Optional commit-pin consistency check (warn-only). Catches "I bumped
 # hermes-agent on host but forgot to rebuild the image". HERMES_AGENT_COMMIT
-# is baked into the image from backend/scripts/hermes-agent.env.
+# is baked into the image from .build.env at the repo root. Skipped entirely
+# when no pin was set (an unpinned build tracks the SDK's default branch).
 if [ -n "${HERMES_AGENT_COMMIT:-}" ] && [ -d "$_agent_src/.git" ]; then
   _actual=$(git -C "$_agent_src" rev-parse HEAD 2>/dev/null || echo "")
-  _expected_short="${HERMES_AGENT_COMMIT:0:12}"
-  if [ -n "$_actual" ] && [ "$_actual" != "$_expected_short" ]; then
-    echo "!! WARNING: hermes-agent commit mismatch: expected ${_expected_short}, got ${_actual} — continuing"
+  # Prefix match via `case`: the pin may be a short SHA. Comparing the full
+  # 40-char HEAD against a truncated 12-char pin could never match, so this
+  # check used to warn on every correctly pinned image.
+  if [ -n "$_actual" ]; then
+    case "$_actual" in
+      "${HERMES_AGENT_COMMIT}"*) ;;
+      *) echo "!! WARNING: hermes-agent commit mismatch: expected ${HERMES_AGENT_COMMIT}, got ${_actual} — continuing" ;;
+    esac
   fi
 fi
 
