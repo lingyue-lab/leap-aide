@@ -111,13 +111,62 @@ os.environ['HERMES_WEBUI_STATE_DIR'] = str(TEST_STATE_DIR)
 os.environ['HERMES_WEBUI_DEFAULT_WORKSPACE'] = str(TEST_WORKSPACE)
 os.environ['HERMES_HOME'] = str(TEST_STATE_DIR)
 os.environ['HERMES_BASE_HOME'] = str(TEST_STATE_DIR)
+# ── Live-test opt-in ────────────────────────────────────────────────────────────
+# Tests that exercise a real chat completion need a live provider key.
+# Opt-in requires BOTH:
+#   TEST_USING_LIVE_KEY=1  — explicit switch, so a bare provider key in a
+#                            developer shell never auto-enables live tests
+#   <PROVIDER>_API_KEY     — at least one recognized credential (see
+#                            LIVE_PROVIDER_KEY_VARS below); the credential may
+#                            belong to any provider, not just DeepSeek
+# When enabled, conftest copies the runner's provider keys into the
+# server-subprocess env after the provider-key strip in test_server();
+# otherwise the live tests self-skip.
+LIVE_PROVIDER_KEY_VARS = (
+    "DEEPSEEK_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GOOGLE_API_KEY",
+)
+
+def _live_default_model() -> str:
+    """Default model matching an available live credential.
+
+    Priority keeps DeepSeek first so CI (which ships the DeepSeek secret)
+    keeps its current default even when other keys are also present. With
+    only OPENROUTER_API_KEY the slash-form default already routes through
+    OpenRouter, so the fall-through covers that case.
+    """
+    if os.environ.get("DEEPSEEK_API_KEY"):
+        return "@deepseek:deepseek-v4-flash"
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return "@anthropic:claude-sonnet-4-6"
+    if os.environ.get("OPENAI_API_KEY"):
+        return "@openai:gpt-5.4-mini"
+    if os.environ.get("GOOGLE_API_KEY"):
+        return "@google:gemini-2.5-flash"
+    return "deepseek/deepseek-v4-flash"
+
+LIVE_TESTS_ENABLED = bool(os.environ.get("TEST_USING_LIVE_KEY")) and any(
+    os.environ.get(_k) for _k in LIVE_PROVIDER_KEY_VARS
+)
+if os.environ.get("TEST_USING_LIVE_KEY") and not LIVE_TESTS_ENABLED:
+    import warnings as _warnings
+    _warnings.warn(
+        "TEST_USING_LIVE_KEY is set but no provider key "
+        f"({', '.join(LIVE_PROVIDER_KEY_VARS)}) is present — "
+        "live-provider tests will self-skip.",
+        stacklevel=1,
+    )
+
 # Default model for the test process (read by _pytest_port.TEST_DEFAULT_MODEL
 # at import time). Tests that want a different model pass it explicitly.
-# When LEAP_AIDE_TEST_DEEPSEEK_KEY is set we use the @provider:model form so
-# tests that don't pass an explicit one still route to the direct DeepSeek
+# With live opt-in we pick the @provider:model form matching the credential so
+# tests that don't pass an explicit model still route to that provider's
 # endpoint (see the server-subprocess note in test_server()).
-if os.environ.get('LEAP_AIDE_TEST_DEEPSEEK_KEY'):
-    os.environ.setdefault('HERMES_WEBUI_DEFAULT_MODEL', '@deepseek:deepseek-v4-flash')
+if LIVE_TESTS_ENABLED:
+    os.environ.setdefault('HERMES_WEBUI_DEFAULT_MODEL', _live_default_model())
 else:
     os.environ.setdefault('HERMES_WEBUI_DEFAULT_MODEL', 'deepseek/deepseek-v4-flash')
 
@@ -199,13 +248,6 @@ VENV_PYTHON  = _discover_python(HERMES_AGENT)
 # Work dir: agent dir if found, else repo root
 WORKDIR = str(HERMES_AGENT) if HERMES_AGENT else str(ACTUAL_REPO_ROOT)
 
-# ── Test API key availability ────────────────────────────────────────────────
-# Tests that exercise a real chat completion (test_chat_stream_*) need a live
-# provider key. Conftest forwards LEAP_AIDE_TEST_DEEPSEEK_KEY from the test
-# runner's environment into the server subprocess as DEEPSEEK_API_KEY; if the
-# runner didn't supply one, those tests self-skip.
-TEST_DEEPSEEK_KEY_AVAILABLE = bool(os.environ.get('LEAP_AIDE_TEST_DEEPSEEK_KEY'))
-
 # ── Agent availability detection ─────────────────────────────────────────────
 # Tests that require hermes-agent modules (cron, skills, approval, chat/stream)
 # are skipped when the agent isn't installed, instead of failing with 500 errors.
@@ -268,23 +310,25 @@ def pytest_collection_modifyitems(config, items):
     The previous implementation skipped an over-broad list whenever
     ``_check_agent_modules()`` returned False. That check now runs in the venv
     python and is accurate, so the broad list is gone -- only tests that need
-    a *real* chat completion (network call to DeepSeek V4 Flash) are gated
-    on the test runner providing ``LEAP_AIDE_TEST_DEEPSEEK_KEY``.
+    a *real* chat completion (network call to a live provider) are gated
+    on the test runner opting in via ``LIVE_TESTS_ENABLED``
+    (``TEST_USING_LIVE_KEY=1`` plus at least one provider key, any provider —
+    see ``LIVE_PROVIDER_KEY_VARS``).
 
-    Without that key the agent thread crashes synchronously during AIAgent
+    Without a live key the agent thread crashes synchronously during AIAgent
     init and pops the stream before the SSE consumer can attach, so
     ``/api/chat/stream`` returns 404 -- which the test interprets as
-    "AIAgent not imported" and fails on. Set ``LEAP_AIDE_TEST_DEEPSEEK_KEY``
+    "AIAgent not imported" and fails on. Set the switch plus a provider key
     in the shell that invokes pytest to run these.
     """
-    if TEST_DEEPSEEK_KEY_AVAILABLE:
+    if LIVE_TESTS_ENABLED:
         return
 
     _NEEDS_LIVE_KEY = {
         'test_chat_stream_opens_successfully',
     }
     skip_marker = pytest.mark.skip(
-        reason="requires LEAP_AIDE_TEST_DEEPSEEK_KEY env var (live DeepSeek key)"
+        reason="requires TEST_USING_LIVE_KEY=1 + a provider API key (live test)"
     )
     for item in items:
         if item.name in _NEEDS_LIVE_KEY:
@@ -421,8 +465,8 @@ def test_server():
 
     env = os.environ.copy()
     # Strip real provider keys so test subprocess never inherits production credentials.
-    # We *intentionally* inject a separate test-only key (LEAP_AIDE_TEST_DEEPSEEK_KEY)
-    # below if it's set in the test runner's environment — see that block.
+    # When live tests are opted in (LIVE_TESTS_ENABLED), the recognized keys are
+    # copied back in just below — see that block.
     for _k in list(env):
         if any(_k.startswith(p) for p in (
             'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY',
@@ -439,14 +483,16 @@ def test_server():
     # The fake key is never used to call OpenRouter — the auxiliary client
     # marks openrouter unhealthy on 401 and moves on, same outcome as before.
     env["OPENROUTER_API_KEY"] = "stub-openrouter-key-for-test-only"
-    # Optional test-only DeepSeek key. Set LEAP_AIDE_TEST_DEEPSEEK_KEY in the
-    # shell that invokes pytest (CI secret, dev machine .env, etc.) and the
-    # value is forwarded as DEEPSEEK_API_KEY into the server subprocess.
-    # Tests that actually exercise chat completions (test_chat_stream_*,
-    # test_approval_submit_and_respond) need a real key; SSE-open-only tests
-    # and approval-flow tests still pass without one because they don't
-    # consume tokens.
-    _test_deepseek_key = os.environ.get('LEAP_AIDE_TEST_DEEPSEEK_KEY')
+    # Live-test credentials: when opted in (LIVE_TESTS_ENABLED: the
+    # TEST_USING_LIVE_KEY switch plus at least one recognized provider key in
+    # the runner's env), copy those keys into the subprocess env AFTER the
+    # strip above — the only real credentials tests may ever carry. The live
+    # tests (test_chat_stream_*) need one of them to complete a real chat
+    # turn; everything else passes without them.
+    if LIVE_TESTS_ENABLED:
+        for _k in LIVE_PROVIDER_KEY_VARS:
+            if os.environ.get(_k):
+                env[_k] = os.environ[_k]
     env.update({
         "HERMES_WEBUI_PORT":              str(TEST_PORT),
         "HERMES_WEBUI_HOST":              "127.0.0.1",
@@ -456,15 +502,17 @@ def test_server():
         # /api/_test/cleanup_sessions (api/_test_helpers.py). Production
         # servers never set this flag, so those endpoints 404 outside tests.
         "HERMES_WEBUI_TEST_SEED":         "1",
-        # DeepSeek V4 Flash (cheap + fast). When a test key is injected below
-        # we switch to the @provider:model form so resolve_model_provider
-        # routes the call to DeepSeek's own endpoint (the slash form
-        # 'deepseek/deepseek-v4-flash' is the OpenRouter catalog id and would
-        # be routed to OpenRouter — which has no key here, so the agent thread
-        # crashes on 401 and the stream pops before SSE can attach, producing
-        # a 404 on /api/chat/stream). See api/config.py resolve_model_provider.
+        # DeepSeek V4 Flash (cheap + fast) via OpenRouter in the non-live
+        # default. With live opt-in we switch to the @provider:model form that
+        # matches the available credential (_live_default_model) so
+        # resolve_model_provider routes the call to that provider's own
+        # endpoint — the slash form 'deepseek/deepseek-v4-flash' is the
+        # OpenRouter catalog id and would be routed to OpenRouter, which may
+        # have no key, crashing the agent thread on 401 and popping the stream
+        # before SSE can attach (404 on /api/chat/stream). See
+        # api/config.py resolve_model_provider.
         "HERMES_WEBUI_DEFAULT_MODEL": (
-            "@deepseek:deepseek-v4-flash" if _test_deepseek_key
+            _live_default_model() if LIVE_TESTS_ENABLED
             else "deepseek/deepseek-v4-flash"
         ),
         "HERMES_HOME":                    str(TEST_STATE_DIR),
@@ -477,8 +525,6 @@ def test_server():
         # ~/.hermes/profiles/webui/ and overwrite real API keys.
         "HERMES_BASE_HOME":               str(TEST_STATE_DIR),
     })
-    if _test_deepseek_key:
-        env["DEEPSEEK_API_KEY"] = _test_deepseek_key
 
     # Pass agent dir if discovered so server.py doesn't have to re-discover
     if HERMES_AGENT:

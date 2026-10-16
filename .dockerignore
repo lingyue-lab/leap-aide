@@ -6,11 +6,13 @@
 # buildah picks this up automatically from the context root — do NOT pass
 # --ignorefile unless you deliberately want a different filter.
 #
-# HARD CONSTRAINTS — paths the Dockerfile or the build scripts read; they must
-# survive this filter:
+# HARD CONSTRAINTS — paths the Dockerfile, build scripts, or the in-image
+# structural tests read; they must survive this filter:
 #   backend/tests                        -> Dockerfile:358
 #   backend/scripts/docker-entrypoint.sh -> Dockerfile:727
 #   .build.env                           -> scripts/{install,npm_warmup}.sh
+#   .dockerignore                        -> backend/tests/test_build_env_file.py (in-image)
+#   .github/workflows/                   -> backend/tests/test_build_{env_file,version_wiring}.py (in-image)
 #
 # Rules of thumb:
 #   * Mirror .gitignore: what is not worth committing is not worth shipping.
@@ -23,12 +25,14 @@
 
 # --- Hidden entries at any depth: .git .github .claude .venv .pytest_cache
 # --- frontend/.vite .buildah-storage-root ... ---
+# --- (.dockerignore and .github/workflows are un-excluded again below — the
+# --- structural build tests read them from inside the testing image.) ---
 **/.*
 
-# --- Whitelist: hidden files that must survive the rule above. Docker's
+# --- Whitelist: hidden entries that must survive the rule above. Docker's
 # --- pattern matcher cannot tell a hidden directory from a hidden file, so
-# --- this list is how a hidden FILE opts back in. ORDER MATTERS: a `!` line
-# --- only overrides exclusions that appear EARLIER in this file.
+# --- this list is how a hidden FILE or DIRECTORY opts back in. ORDER MATTERS:
+# --- a `!` line only overrides exclusions that appear EARLIER in this file.
 # ---
 # --- .env is required at runtime — install.sh writes a systemd unit with
 # --- EnvironmentFile=$DEST/.env — so the runtime image must contain it.
@@ -42,6 +46,26 @@
 # --- silently downgrades the warmup to its hardcoded playwright revisions and
 # --- leaves the SDK install unpinned.
 !.build.env
+
+# --- .dockerignore is read at TEST time, from inside the testing image, by
+# --- backend/tests/test_build_env_file.py, which pins the ordering of the
+# --- whitelist rules below — including the requirement that !.build.env comes
+# --- AFTER **/.*. Shipping the file itself is harmless: it is pure comments
+# --- plus the filter buildah already applied to this context.
+!.dockerignore
+
+# --- .github/workflows is read at TEST time, from inside the testing image, by
+# --- the structural build-wiring tests (backend/tests/test_build_version_wiring.py
+# --- and test_build_env_file.py). `**/.*` drops .github entirely; without this
+# --- re-inclusion those tests cannot run where CI runs them — in-image, with
+# --- the source tree baked in. Nested re-inclusion: the parent must be
+# --- un-excluded before a child can be, so the order is un-exclude .github ->
+# --- exclude its children -> un-exclude workflows. Only workflows enter the
+# --- image — issue templates, commit-template.txt and .github/images stay
+# --- excluded.
+!.github
+.github/*
+!.github/workflows
 
 # --- Python cache / packaging junk (not hidden, so not caught above).
 # --- `**/` prefix is required: unlike .gitignore, a bare `__pycache__/` in

@@ -479,10 +479,10 @@ jobs:
 
       - name: Note whether live-provider tests will run
         env:
-          LEAP_AIDE_TEST_DEEPSEEK_KEY: ${{ secrets.LEAP_AIDE_TEST_DEEPSEEK_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
-          if [ -z "$LEAP_AIDE_TEST_DEEPSEEK_KEY" ]; then
-            echo "::notice::secrets.LEAP_AIDE_TEST_DEEPSEEK_KEY is unset — live-provider tests self-skip (backend/tests/conftest.py:207)."
+          if [ -z "$DEEPSEEK_API_KEY" ]; then
+            echo "::notice::secrets.DEEPSEEK_API_KEY is unset — live-provider tests self-skip (backend/tests/conftest.py LIVE_TESTS_ENABLED)."
           fi
 
       - name: Prepare result directories
@@ -501,7 +501,11 @@ jobs:
         env:
           IMAGE_REF: ${{ needs.build-testing-image.outputs.image }}:${{ needs.build-testing-image.outputs.tag }}
           BACKEND_RESULTS: ${{ runner.temp }}/results/backend
-          LEAP_AIDE_TEST_DEEPSEEK_KEY: ${{ secrets.LEAP_AIDE_TEST_DEEPSEEK_KEY }}
+          # Live-test opt-in: the switch plus the credential (rename of the
+          # former secrets.LEAP_AIDE_TEST_DEEPSEEK_KEY — conftest now reads the
+          # standard variable name, gated by TEST_USING_LIVE_KEY).
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          TEST_USING_LIVE_KEY: "1"
         run: |
           set -euo pipefail
           # No --user: run as the image's default user (leap-aide-init). Root
@@ -518,7 +522,8 @@ jobs:
           docker run --rm \
             --shm-size=1g \
             --mount "type=bind,source=${BACKEND_RESULTS},target=/app/backend/tests/.results" \
-            --env LEAP_AIDE_TEST_DEEPSEEK_KEY \
+            --env DEEPSEEK_API_KEY \
+            --env TEST_USING_LIVE_KEY \
             "$IMAGE_REF" \
             ./scripts/run-test.sh backend full
 

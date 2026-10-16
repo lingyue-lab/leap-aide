@@ -21,21 +21,26 @@ BUILD_ENV = REPO / ".build.env"
 BUILD_ENV_NAME = ".build.env"
 LEGACY_PATH = "backend/scripts/" + "hermes-agent.env"  # split: this file must not self-match
 
-INSTALL_SH = (REPO / "scripts" / "install.sh").read_text(encoding="utf-8")
-BUILD_SH = (REPO / "scripts" / "build.sh").read_text(encoding="utf-8")
-NPM_WARMUP_SH = (REPO / "scripts" / "npm_warmup.sh").read_text(encoding="utf-8")
-DOCKERIGNORE = (REPO / ".dockerignore").read_text(encoding="utf-8")
-TESTING_IMAGE_YML = (
-    REPO / ".github" / "workflows" / "run-tests-in-testing-image.yml"
-).read_text(encoding="utf-8")
-# Neither of these greps .build.env itself: both shell out to scripts/build.sh,
-# which does (see test_build_sh_workflows_delegate_the_pin).
-BUILD_RUNTIME_YML = (
-    REPO / ".github" / "workflows" / "build-runtime-image.yml"
-).read_text(encoding="utf-8")
-RELEASE_RUNTIME_YML = (
-    REPO / ".github" / "workflows" / "release-runtime-image.yml"
-).read_text(encoding="utf-8")
+_read_cache = {}
+
+
+def _read(relpath):
+    """Read a repo-root-relative file (cached).
+
+    A missing file must fail only the calling test with a clear hint instead of
+    aborting pytest collection for the whole batch: inside the testing image
+    /app is filtered by .dockerignore, so a dropped path would otherwise take
+    the batch down with FileNotFoundError.
+    """
+    if relpath not in _read_cache:
+        path = REPO / relpath
+        assert path.is_file(), (
+            f"{relpath} is missing under {REPO} — inside the testing image this "
+            f"usually means the repo-root .dockerignore excludes it; whitelist it "
+            f"with a `!` entry AFTER the `**/.*` rule"
+        )
+        _read_cache[relpath] = path.read_text(encoding="utf-8")
+    return _read_cache[relpath]
 
 # Directories that are either huge or not part of the source tree. buildah keeps
 # image layers under the repo root on some setups (hundreds of GB), so the scan
@@ -118,15 +123,16 @@ class TestDockerignoreWhitelist:
 
     def test_build_env_is_whitelisted_after_the_hidden_file_rule(self):
         """`**/.*` is fail-closed; a `!` line only overrides earlier rules."""
-        assert "!.env" in DOCKERIGNORE, "sanity: the .env whitelist entry is expected to exist"
-        hidden_rule = DOCKERIGNORE.index("**/.*")
-        whitelist = DOCKERIGNORE.index("!" + BUILD_ENV_NAME)
+        dockerignore = _read(".dockerignore")
+        assert "!.env" in dockerignore, "sanity: the .env whitelist entry is expected to exist"
+        hidden_rule = dockerignore.index("**/.*")
+        whitelist = dockerignore.index("!" + BUILD_ENV_NAME)
         assert whitelist > hidden_rule, (
             f"the !{BUILD_ENV_NAME} line must come AFTER the **/.* rule or it is ignored"
         )
 
     def test_hard_constraints_comment_names_the_new_path(self):
-        assert BUILD_ENV_NAME in DOCKERIGNORE.split("Rules of thumb")[0], (
+        assert BUILD_ENV_NAME in _read(".dockerignore").split("Rules of thumb")[0], (
             f"the HARD CONSTRAINTS block must list {BUILD_ENV_NAME}"
         )
 
@@ -134,32 +140,36 @@ class TestDockerignoreWhitelist:
 class TestConsumersPointAtIt:
 
     def test_install_sh_loads_it(self):
-        assert BUILD_ENV_NAME in INSTALL_SH, "install.sh must load .build.env"
-        assert LEGACY_PATH not in INSTALL_SH
+        install_sh = _read("scripts/install.sh")
+        assert BUILD_ENV_NAME in install_sh, "install.sh must load .build.env"
+        assert LEGACY_PATH not in install_sh
 
     def test_install_sh_has_no_hardcoded_pin_fallback(self):
         """An unset pin must mean "no --commit", not "some other SHA"."""
-        assert "f43eabee5f36e11448086ee8ee17c499958e81bf" not in INSTALL_SH, (
+        assert "f43eabee5f36e11448086ee8ee17c499958e81bf" not in _read("scripts/install.sh"), (
             "install.sh must not carry a hardcoded fallback pin — it drifted from "
             ".build.env once already and pinned installs that never saw this repo"
         )
 
     def test_build_sh_reads_it(self):
-        assert "$PROJECT_ROOT/" + BUILD_ENV_NAME in BUILD_SH
-        assert LEGACY_PATH not in BUILD_SH
+        build_sh = _read("scripts/build.sh")
+        assert "$PROJECT_ROOT/" + BUILD_ENV_NAME in build_sh
+        assert LEGACY_PATH not in build_sh
 
     def test_npm_warmup_reads_it_in_the_image(self):
-        assert "/app/" + BUILD_ENV_NAME in NPM_WARMUP_SH, (
+        npm_warmup_sh = _read("scripts/npm_warmup.sh")
+        assert "/app/" + BUILD_ENV_NAME in npm_warmup_sh, (
             "npm_warmup.sh runs inside the image — it needs the /app/.build.env candidate"
         )
-        assert LEGACY_PATH not in NPM_WARMUP_SH
+        assert LEGACY_PATH not in npm_warmup_sh
 
     def test_ci_workflows_grep_it(self):
         """Workflows that call buildah's build verb themselves must grep the pin
         and feed it to --build-arg — there is no scripts/build.sh on that path to
         do it for them."""
         for name, text in (
-            ("run-tests-in-testing-image.yml", TESTING_IMAGE_YML),
+            ("run-tests-in-testing-image.yml",
+             _read(".github/workflows/run-tests-in-testing-image.yml")),
         ):
             assert BUILD_ENV_NAME in text, f"{name} must read the pin from {BUILD_ENV_NAME}"
             assert LEGACY_PATH not in text
@@ -177,8 +187,10 @@ class TestConsumersPointAtIt:
         literal string, and then to install.sh as `--hermes-commit`.
         """
         for name, text in (
-            ("build-runtime-image.yml", BUILD_RUNTIME_YML),
-            ("release-runtime-image.yml", RELEASE_RUNTIME_YML),
+            ("build-runtime-image.yml",
+             _read(".github/workflows/build-runtime-image.yml")),
+            ("release-runtime-image.yml",
+             _read(".github/workflows/release-runtime-image.yml")),
         ):
             assert "./scripts/build.sh --docker-image" in text, (
                 f"{name} must build via ./scripts/build.sh --docker-image — that is "
@@ -204,4 +216,5 @@ class TestConsumersPointAtIt:
         def roster(text):
             return sorted(re.findall(r"^\s+(BUILD_[A-Z_]+):", text, re.MULTILINE))
 
-        assert roster(RELEASE_RUNTIME_YML) == roster(BUILD_RUNTIME_YML)
+        assert roster(_read(".github/workflows/release-runtime-image.yml")) == \
+            roster(_read(".github/workflows/build-runtime-image.yml"))
