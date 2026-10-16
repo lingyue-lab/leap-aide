@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: README
+    url: https://github.com/lingyue-lab/leap-aide#readme
+    about: Project overview and quick start — check here before opening an issue.
+  - name: Docs
+    url: https://github.com/lingyue-lab/leap-aide/tree/main/docs
+    about: Architecture, testing, and roadmap guides.
+  - name: Contributing Guide
+    url: https://github.com/lingyue-lab/leap-aide/blob/main/CONTRIBUTING.md
+    about: Read this before submitting a PR.

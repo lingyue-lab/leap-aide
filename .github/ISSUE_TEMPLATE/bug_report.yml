@@ -1,0 +1,91 @@
+name: "Bug Report"
+description: Report a bug — something that's broken, crashes, or behaves incorrectly.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please fill out the sections below so we can reproduce and fix it quickly.
+
+        Before submitting, please **search [existing issues](https://github.com/lingyue-lab/leap-aide/issues)** — someone may have already reported it.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear description of what's broken. Include error messages, logs, tracebacks or screenshots if relevant.
+      placeholder: |
+        What happened? What did you expect to happen instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal steps to trigger the bug.
+      placeholder: |
+        1. Run `docker compose up -d`
+        2. Enter chat panel, send the message "..."
+        3. Error appears: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What should have happened instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened? Include full error output if available.
+    validations:
+      required: true
+
+  - type: input
+    id: leap-aide-version
+    attributes:
+      label: LeapAide Version
+      description: Git commit ID, tag, or branch.
+      placeholder: "Run: git rev-parse --short HEAD"
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: How do you run LeapAide, and on what system?
+      placeholder: |
+        - Deployment: docker compose / built from source / other
+        - OS: e.g. Ubuntu 24.04, macOS 15, Windows 11
+        - Browser: e.g. Chrome 130, Firefox 131
+    validations:
+      required: true
+
+  - type: textarea
+    id: root-cause
+    attributes:
+      label: Root Cause Analysis (optional)
+      description: |
+        If you've dug into the code and identified the root cause, share it here.
+        Include file paths, line numbers, and code snippets if possible.
+
+  - type: textarea
+    id: proposed-fix
+    attributes:
+      label: Proposed Fix (optional)
+      description: If you have a fix in mind (or a PR ready), describe it here.
+
+  - type: checkboxes
+    id: pr-ready
+    attributes:
+      label: Are you willing to submit a PR for this?
+      options:
+        - label: I'd like to fix this myself and submit a PR
