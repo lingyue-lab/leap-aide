@@ -361,8 +361,9 @@ jobs:
       #     no second NAT layer inside the privileged container;
       #   * --env NAME (no value) forwards the client's environment like
       #     `docker run --env NAME`, so the key never lands in the script text.
-      #     On fork PRs the secret resolves empty anyway — live tests self-skip
-      #     (conftest.py gates on the key being present).
+      #     Live-test opt-in mirrors run-tests exactly: TEST_USING_LIVE_KEY plus
+      #     the provider credential — on fork PRs the secret resolves empty
+      #     anyway, so live tests self-skip (conftest LIVE_TESTS_ENABLED).
       # No `buildah rm`: the working container's tiny writable layer dies with
       # the ephemeral runner.
 
@@ -385,7 +386,11 @@ jobs:
           BUILDAH_ROOT: ${{ runner.temp }}/buildah-store
           BUILDAH_RUNROOT: ${{ runner.temp }}/buildah-runroot
           BACKEND_RESULTS: ${{ runner.temp }}/results/backend
-          LEAP_AIDE_TEST_DEEPSEEK_KEY: ${{ secrets.LEAP_AIDE_TEST_DEEPSEEK_KEY }}
+          # Live-test opt-in, same pair as run-tests: switch + credential
+          # (conftest reads the standard variable name, gated by
+          # TEST_USING_LIVE_KEY).
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          TEST_USING_LIVE_KEY: "1"
         run: |
           set -euo pipefail
           ref="${TESTING_IMAGE}:${{ steps.meta.outputs.tag }}"
@@ -395,7 +400,8 @@ jobs:
             --network=host \
             --mount type=tmpfs,tmpfs-size=1g,destination=/dev/shm \
             --volume "$BACKEND_RESULTS:/app/backend/tests/.results" \
-            --env LEAP_AIDE_TEST_DEEPSEEK_KEY \
+            --env DEEPSEEK_API_KEY \
+            --env TEST_USING_LIVE_KEY \
             "$cid" ./scripts/run-test.sh backend full
 
       # !cancelled(), not always(): mirror of the same guard in run-tests — a
