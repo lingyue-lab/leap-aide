@@ -22,11 +22,26 @@ import re
 REPO = pathlib.Path(__file__).resolve().parents[2]
 VERSION_ARG = "LEAP_AIDE_VERSION"
 
-DOCKERFILE = (REPO / "Dockerfile").read_text(encoding="utf-8")
-BUILD_SH = (REPO / "scripts" / "build.sh").read_text(encoding="utf-8")
-TESTING_IMAGE_YML = (
-    REPO / ".github" / "workflows" / "run-tests-in-testing-image.yml"
-).read_text(encoding="utf-8")
+_read_cache = {}
+
+
+def _read(relpath):
+    """Read a repo-root-relative file (cached).
+
+    A missing file must fail only the calling test with a clear hint instead of
+    aborting pytest collection for the whole batch: inside the testing image
+    /app is filtered by .dockerignore, so a dropped path would otherwise take
+    the batch down with FileNotFoundError.
+    """
+    if relpath not in _read_cache:
+        path = REPO / relpath
+        assert path.is_file(), (
+            f"{relpath} is missing under {REPO} — inside the testing image this "
+            f"usually means the repo-root .dockerignore excludes it; whitelist it "
+            f"with a `!` entry AFTER the `**/.*` rule"
+        )
+        _read_cache[relpath] = path.read_text(encoding="utf-8")
+    return _read_cache[relpath]
 
 # scripts/install.sh has an unrelated `_HERMES_VERSION_SPECIFIED` flag (it tracks
 # whether the hermes-agent installer was handed an explicit version), so the scan
@@ -37,24 +52,27 @@ STALE_ARG = re.compile(r"(?<!_)HERMES_VERSION")
 class TestVersionArgIsForwarded:
 
     def test_dockerfile_declares_it_and_bakes_it(self):
-        assert f"ARG {VERSION_ARG}=" in DOCKERFILE, (
+        dockerfile = _read("Dockerfile")
+        assert f"ARG {VERSION_ARG}=" in dockerfile, (
             f"the Dockerfile must declare ARG {VERSION_ARG} with a default, so a "
             f"bare `docker build` still produces a working image"
         )
-        assert f"${{{VERSION_ARG}}}" in DOCKERFILE, (
+        assert f"${{{VERSION_ARG}}}" in dockerfile, (
             f"api/_version.py must be written from the {VERSION_ARG} ARG — "
             f"declaring it without interpolating it bakes 'unknown'"
         )
 
     def test_build_sh_forwards_it(self):
-        assert f'--build-arg "{VERSION_ARG}=' in BUILD_SH, (
+        assert f'--build-arg "{VERSION_ARG}=' in _read("scripts/build.sh"), (
             f"scripts/build.sh must forward --build-arg {VERSION_ARG}; without it the "
             f"Dockerfile's 'unknown' default silently wins"
         )
 
     def test_testing_image_workflow_forwards_it(self):
         """This workflow invokes buildah itself, so build.sh cannot do it for it."""
-        assert f'--build-arg "{VERSION_ARG}=' in TESTING_IMAGE_YML, (
+        assert f'--build-arg "{VERSION_ARG}=' in _read(
+            ".github/workflows/run-tests-in-testing-image.yml"
+        ), (
             f"run-tests-in-testing-image.yml must forward --build-arg {VERSION_ARG}"
         )
 
@@ -62,12 +80,13 @@ class TestVersionArgIsForwarded:
 class TestNoStaleArgName:
 
     def test_retired_name_is_gone(self):
-        for name, text in (
-            ("Dockerfile", DOCKERFILE),
-            ("scripts/build.sh", BUILD_SH),
-            ("run-tests-in-testing-image.yml", TESTING_IMAGE_YML),
+        for name, relpath in (
+            ("Dockerfile", "Dockerfile"),
+            ("scripts/build.sh", "scripts/build.sh"),
+            ("run-tests-in-testing-image.yml",
+             ".github/workflows/run-tests-in-testing-image.yml"),
         ):
-            assert not STALE_ARG.search(text), (
+            assert not STALE_ARG.search(_read(relpath)), (
                 f"{name} still references the retired HERMES_VERSION build-arg — a "
                 f"half-landed rename leaves _version.py at 'unknown' with no error"
             )
