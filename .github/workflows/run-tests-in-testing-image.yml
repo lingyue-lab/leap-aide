@@ -9,18 +9,20 @@ name: run-tests-in-testing-image
 # `requires_agent` markers auto-skip every agent-dependent test.
 #
 # Two jobs on purpose:
-#   * build-testing-image needs buildah inside a privileged container. The
+#   * build-push-or-test-in-place needs buildah inside a privileged container. The
 #     cicd-builder image ships buildah + crun but NO docker CLI
 #     (.github/images/cicd-builder/Dockerfile).
-#   * run-tests only needs the docker CLI that ubuntu-latest already has, and it
+#   * run-tests-on-pulled-image only needs the docker CLI that ubuntu-latest
+#     already has, and it
 #     pulls the image back from GHCR — so the suites exercise the *pushed*
 #     bytes. `docker run` of a locally-tagged image would never catch a broken
 #     push (missing manifest, bad credentials, wrong format).
 #   * Exception: fork (cross-repo) PRs and Dependabot PRs carry a read-only
 #     token, so they cannot push to GHCR at all — for those runs the pipeline
 #     collapses to ONE job: no push, no pull-back, and both suites run in
-#     place inside build-testing-image right after the build (the steps at the
-#     end of that job). run-tests then skips. See the fork bullet below.
+#     place inside build-push-or-test-in-place right after the build (the steps
+#     at the end of that job). run-tests-on-pulled-image then skips. See the
+#     fork bullet below.
 #
 # scripts/build.sh cannot build this image: it hardcodes `--target runtime`
 # (scripts/build.sh:414) and never pushes.
@@ -32,13 +34,15 @@ name: run-tests-in-testing-image
 # below unique per (head, base) pair.
 #
 # Deliberate limits, recorded so they are not mistaken for bugs later:
-#   * Draft PRs are skipped (the `if:` on build-testing-image; `run-tests`
+#   * Draft PRs are skipped (the `if:` on build-push-or-test-in-place;
+#     `run-tests-on-pulled-image`
 #     inherits the skip through `needs:`). GitHub still records a run whose jobs
 #     are all skipped — that is noise, not a green signal.
 #   * This is NOT a required status check yet: it reports, it does not block.
-#     Promoting it takes two settings, not one — add both job names ("Build +
-#     push testing image", "Run tests in the testing image") as required checks
-#     on `main` AND enable "Require branches to be up to date before merging".
+#     Promoting it takes two settings, not one — add both job names ("Build
+#     testing image, then push it or run both suites in place", "Pull the
+#     pushed testing image, then run both suites") as required checks on
+#     `main` AND enable "Require branches to be up to date before merging".
 #     Without the latter, main advancing on its own never re-runs the suite and
 #     the green check would be describing a stale merge.
 #   * A PR with a merge conflict gets NO run at all — GitHub cannot construct the
@@ -48,8 +52,9 @@ name: run-tests-in-testing-image
 #     PRs the same way (read-only token, no secrets), so a GHCR push from
 #     either would be denied: "installation not allowed to Write organization
 #     package". Those runs therefore do NOT push at all — the build job runs
-#     both suites in place (see the last steps of build-testing-image) and
-#     run-tests skips. Trade-off, recorded deliberately: the pull-the-pushed-
+#     both suites in place (see the last steps of build-push-or-test-in-place) and
+#     run-tests-on-pulled-image skips. Trade-off, recorded deliberately:
+#     the pull-the-pushed-
 #     bytes round trip (the thing that catches a broken push) only happens for
 #     same-repo runs. Fork runs still exercise exactly the bytes the build
 #     produced — only the registry hop is skipped, and a denied push can no
@@ -107,15 +112,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-testing-image:
-    name: Build + push testing image
+  build-push-or-test-in-place:
+    name: Build testing image, then push it or run both suites in place
     runs-on: ubuntu-latest
     # Draft PRs are skipped: paying a cold buildah build (plus the suites below)
     # for every iteration of an unfinished branch is the cost this workflow
     # cannot afford, and a draft cannot merge anyway. There is no `draft` filter
     # on the `pull_request` trigger — a job-level `if:` is the only mechanism.
     # Non-PR events (dispatch, the wip push) short-circuit on the first operand.
-    # `run-tests` now HAS a job-level `if:` (skip in-place runs), but it
+    # `run-tests-on-pulled-image` now HAS a job-level `if:` (skip in-place
+    # runs), but it
     # embeds success(), so the draft skip above still propagates through
     # `needs:`. If that `if:` is ever rewritten, keep a success() in it or
     # drafts start running.
@@ -123,7 +129,8 @@ jobs:
     # Building the testing stage is the same work as the runtime image build
     # (npm ci, Playwright, vite build) — cold caches take tens of minutes.
     # 360, not the old 120: on fork/Dependabot runs this job ALSO runs both
-    # suites in place (backend `full` is documented as "hours"; run-tests caps
+    # suites in place (backend `full` is documented as "hours";
+    # run-tests-on-pulled-image caps
     # at 350 for the same reason and GitHub-hosted jobs hard-kill at 6h). The
     # cap now bounds build + in-place suites together — same-repo runs still
     # finish the build step well under what 120 used to allow.
@@ -151,7 +158,7 @@ jobs:
       image: ${{ steps.meta.outputs.image }}
       tag: ${{ steps.meta.outputs.tag }}
       # 'true' = read-only-token run (fork/Dependabot PR): nothing was pushed,
-      # so run-tests has nothing to pull and must skip.
+      # so run-tests-on-pulled-image has nothing to pull and must skip.
       in_place: ${{ steps.access.outputs.in_place }}
 
     steps:
@@ -160,7 +167,8 @@ jobs:
       # gets no secrets either), so their GHCR push would be denied with
       # "denied: installation not allowed to Write organization package".
       # Those runs skip the login/push and run the suites in place at the end
-      # of this job; run-tests reads this output and skips. Same-repo PRs,
+      # of this job; run-tests-on-pulled-image reads this output and skips.
+      # Same-repo PRs,
       # pushes to main and dispatches keep the full push -> pull -> test round
       # trip. Mirrors the header's fork bullet.
       - name: Check whether the token can push to GHCR
@@ -330,7 +338,8 @@ jobs:
             -f Dockerfile .
 
       # Its own step (was: its own command inside the build step) so a failed
-      # push fails the job visibly, before run-tests is scheduled — and so the
+      # push fails the job visibly, before run-tests-on-pulled-image is
+      # scheduled — and so the
       # step itself is visibly SKIPPED on read-only-token runs, which never
       # reach a push: a fork PR's denial ("installation not allowed to Write
       # organization package") used to land here AFTER the full build.
@@ -346,22 +355,25 @@ jobs:
           buildah --root "$BUILDAH_ROOT" --runroot "$BUILDAH_RUNROOT" push "$ref"
 
       # ── Read-only-token runs: run the suites in place ─────────────────────
-      # Fork/Dependabot PRs pushed nothing (see the access step), so run-tests
+      # Fork/Dependabot PRs pushed nothing (see the access step), so
+      # run-tests-on-pulled-image
       # has nothing to pull and is skipped; both suites run here instead,
       # straight from the buildah store, with the same container contract as
-      # run-tests' docker run:
+      # run-tests-on-pulled-image' docker run:
       #   * default image user (leap-aide-init, uid 1025) — buildah run honors
       #     the image USER and its HOME, verified; no --user needed;
       #   * 1g tmpfs at /dev/shm — buildah run's OCI default is 64M, on which
       #     Chromium (Playwright ships in this image) dies on page loads; same
-      #     reason run-tests passes --shm-size=1g;
+      #     reason run-tests-on-pulled-image passes --shm-size=1g;
       #   * results dir bind-mounted at the in-image .results path — the
-      #     container writes as uid 1025, hence 777, mirroring run-tests;
+      #     container writes as uid 1025, hence 777, mirroring
+      #     run-tests-on-pulled-image;
       #   * --network=host — same rationale as the build step's --network=host:
       #     no second NAT layer inside the privileged container;
       #   * --env NAME (no value) forwards the client's environment like
       #     `docker run --env NAME`, so the key never lands in the script text.
-      #     Live-test opt-in mirrors run-tests exactly: TEST_USING_LIVE_KEY plus
+      #     Live-test opt-in mirrors run-tests-on-pulled-image exactly:
+      #     TEST_USING_LIVE_KEY plus
       #     the provider credential — on fork PRs the secret resolves empty
       #     anyway, so live tests self-skip (conftest LIVE_TESTS_ENABLED).
       # No `buildah rm`: the working container's tiny writable layer dies with
@@ -386,7 +398,8 @@ jobs:
           BUILDAH_ROOT: ${{ runner.temp }}/buildah-store
           BUILDAH_RUNROOT: ${{ runner.temp }}/buildah-runroot
           BACKEND_RESULTS: ${{ runner.temp }}/results/backend
-          # Live-test opt-in, same pair as run-tests: switch + credential
+          # Live-test opt-in, same pair as run-tests-on-pulled-image: switch +
+          # credential
           # (conftest reads the standard variable name, gated by
           # TEST_USING_LIVE_KEY).
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
@@ -404,7 +417,8 @@ jobs:
             --env TEST_USING_LIVE_KEY \
             "$cid" ./scripts/run-test.sh backend full
 
-      # !cancelled(), not always(): mirror of the same guard in run-tests — a
+      # !cancelled(), not always(): mirror of the same guard in
+      # run-tests-on-pulled-image — a
       # multi-hour backend failure should not also deny the much shorter
       # frontend signal, but a cancelled run need not start another container.
       # The job still ends red either way.
@@ -426,7 +440,8 @@ jobs:
             "$cid" ./scripts/run-test.sh frontend full
 
       # always(): on a failed or timed-out suite the XML written so far is
-      # exactly what a diagnostician needs (mirrors run-tests' upload step).
+      # exactly what a diagnostician needs (mirrors run-tests-on-pulled-image'
+      # upload step).
       # Distinct artifact name — a run never has both uploads, but the suffix
       # keeps the in-place signal unmistakable in the UI.
       - name: Upload junit XML (in place)
@@ -440,20 +455,21 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  run-tests:
-    name: Run tests in the testing image
+  run-tests-on-pulled-image:
+    name: Pull the pushed testing image, then run both suites
     # The job-level `if` below exists solely for read-only-token runs
     # (fork/Dependabot PRs): they never pushed an image, so there is nothing
-    # to pull — their suites already ran in place inside build-testing-image.
+    # to pull — their suites already ran in place inside
+    # build-push-or-test-in-place.
     # success() preserves the previous semantics exactly: this job runs only
     # when the build job succeeded, which is also how the draft-PR skip (the
-    # `if:` on build-testing-image) keeps skipping this job through `needs:`
+    # `if:` on build-push-or-test-in-place) keeps skipping this job through `needs:`
     # (a skipped build job has no outputs and must not let this job run).
     # The step-level `if: ${{ !cancelled() }}` further down does not propagate
     # a job skip — it only keeps the frontend suite from being denied when the
     # long backend one fails.
-    needs: build-testing-image
-    if: ${{ success() && needs.build-testing-image.outputs.in_place != 'true' }}
+    needs: build-push-or-test-in-place
+    if: ${{ success() && needs.build-push-or-test-in-place.outputs.in_place != 'true' }}
     runs-on: ubuntu-latest
     # `full` backend is documented as "hours" (docs/testing.md). GitHub-hosted
     # jobs are hard-killed at 6h, so cap just under that to fail cleanly with
@@ -474,7 +490,7 @@ jobs:
 
       - name: Pull the image pushed by this run
         env:
-          IMAGE_REF: ${{ needs.build-testing-image.outputs.image }}:${{ needs.build-testing-image.outputs.tag }}
+          IMAGE_REF: ${{ needs.build-push-or-test-in-place.outputs.image }}:${{ needs.build-push-or-test-in-place.outputs.tag }}
         run: |
           set -euo pipefail
           docker pull "$IMAGE_REF"
@@ -505,7 +521,7 @@ jobs:
 
       - name: Run backend suite (run-test.sh backend full)
         env:
-          IMAGE_REF: ${{ needs.build-testing-image.outputs.image }}:${{ needs.build-testing-image.outputs.tag }}
+          IMAGE_REF: ${{ needs.build-push-or-test-in-place.outputs.image }}:${{ needs.build-push-or-test-in-place.outputs.tag }}
           BACKEND_RESULTS: ${{ runner.temp }}/results/backend
           # Live-test opt-in: the switch plus the credential (rename of the
           # former secrets.LEAP_AIDE_TEST_DEEPSEEK_KEY — conftest now reads the
@@ -539,7 +555,7 @@ jobs:
       - name: Run frontend suite (run-test.sh frontend full)
         if: ${{ !cancelled() }}
         env:
-          IMAGE_REF: ${{ needs.build-testing-image.outputs.image }}:${{ needs.build-testing-image.outputs.tag }}
+          IMAGE_REF: ${{ needs.build-push-or-test-in-place.outputs.image }}:${{ needs.build-push-or-test-in-place.outputs.tag }}
           FRONTEND_RESULTS: ${{ runner.temp }}/results/frontend
         run: |
           set -euo pipefail
