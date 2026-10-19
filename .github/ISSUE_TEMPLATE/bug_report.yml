@@ -1,6 +1,6 @@
 name: "Bug Report"
 description: Report a bug — something that's broken, crashes, or behaves incorrectly.
-title: "[Bug]: "
+title: "[Bug] "
 labels: ["bug"]
 body:
   - type: markdown
@@ -53,7 +53,6 @@ body:
     attributes:
       label: LeapAide Version
       description: Git commit ID, tag, or branch.
-      placeholder: "Run: git rev-parse --short HEAD"
     validations:
       required: true
 
