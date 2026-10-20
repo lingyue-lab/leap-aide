@@ -17,7 +17,14 @@ and .github/commit-template.txt for the expected description style.
 
 <!-- e.g. Closes #123, Refs #456. Remove this section if none. -->
 
-## Verification
+## Type of Change
+
+<!-- Check the one that applies. -->
+
+- [ ] Bug fix
+- [ ] New feature or improvement
+
+## How to Test
 
 <!-- How did you verify this change? e.g. "npm test + manual check of the
 chat panel per docs/testing.md". PRs must be verified locally before review. -->
