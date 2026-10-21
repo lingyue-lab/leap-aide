@@ -71,7 +71,14 @@ As everyone knows, production IT systems depend on a great deal of infrastructur
 To start and run the web app:
 
 ```bash
-docker compose up -d
+# Run the service as the invoking user's UID/GID — for rootless execution
+# (a normal, unprivileged account running the script)
+bash scripts/ctl.sh start-docker <image>
+# Run the service as the given UID/GID — for rootful execution (sudo or the
+# root account running the script)
+WANTED_UID=1000 WANTED_GID=1000 bash scripts/ctl.sh start-docker <image>
+# compose down
+bash scripts/ctl.sh stop-docker
 ```
 
 After the Docker container starts successfully, open [http://localhost:8787](http://localhost:8787) to use the system. The default login password is `lingyue-lab`.
@@ -104,7 +111,7 @@ export HERMES_AGENT_REPO_URL="ssh://git@<path-to-your-internal-mirror-repo>/herm
 export HERMES_AGENT_COMMIT="fcbd1076a93841fa88855acce810e342a5b78101"
 ```
 
-The SDK commit pin defaults to `HERMES_AGENT_COMMIT` in the repo-root [`.build.env`](.build.env). Exporting it (as above) overrides that default; commenting the line out in `.build.env` builds without a pin, so the SDK install tracks the default branch of the repository it is cloned from. The same file also holds the Playwright fallback revisions used by the build-time npm warmup.
+The SDK commit pin defaults to the repo-root [`.build.env`](.build.env). Exporting it (as above) overrides that default; commenting the line out in `.build.env` builds without a pin, so the SDK install tracks the default branch of the repository it is cloned from. The same file also holds the Playwright fallback revisions used by the build-time npm warmup.
 
 Besides the mirrors above, you can also add HTTP_PROXY, HTTPS_PROXY, and NO_PROXY environment variables to speed up installation.
 

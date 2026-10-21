@@ -187,10 +187,21 @@ build_frontend() {
 
   cd "$PROJECT_ROOT/frontend"
 
-  # Install dependencies
-  if [ ! -d "node_modules" ] || [ "$CLEAN" = true ]; then
+  # Install dependencies.
+  #
+  # node_modules/.bin and node_modules/.package-lock.json are written when
+  # npm *finishes* reifying the tree (bin linking is the last step). Their
+  # absence means the previous install was interrupted or failed mid-extract
+  # — a half-populated tree with some package dirs empty. Trusting the bare
+  # existence of node_modules let such a tree through, and `npm run build`
+  # then died with `tsc: not found`. Treat a tree without .bin as not
+  # installed so npm gets a chance to repair it.
+  if [ ! -d "node_modules" ] || [ ! -d "node_modules/.bin" ] || [ "$CLEAN" = true ]; then
     say "Installing npm dependencies..."
-    npm install --silent 2>/dev/null
+    # Deliberately not `--silent 2>/dev/null`: that hid install failures
+    # entirely (npm --silent suppresses even error-level output), which is
+    # exactly how a broken tree survived to the next run undiagnosed.
+    npm install --no-audit --no-fund
   fi
 
   # Build

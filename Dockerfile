@@ -182,6 +182,22 @@ WORKDIR /app
 # Sudo without password (same as install.sh)
 RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 
+# ── Free the distro default account (issue #6) ──────────────────────────────
+# ubuntu:24.04 (noble) ships 'ubuntu' at UID/GID 1000; 22.04 and earlier do
+# not. Compose maps leap-aide to the host UID (1000 on most Linux hosts), and
+# the entrypoint used `usermod -o`, so leap-aide was remapped onto an id that
+# was already taken. getpwuid() resolves the FIRST /etc/passwd match, so the
+# terminal prompt (`\u`), `whoami` and `ls -l` reported "ubuntu".
+# Drop the distro default account to keep UID/GID 1000 free. `userdel` without
+# -r avoids the "mail spool not found" error; the home dir is removed
+# explicitly.
+RUN if getent passwd ubuntu >/dev/null 2>&1; then userdel ubuntu; fi \
+    && rm -rf /home/ubuntu \
+    && if getent group ubuntu >/dev/null 2>&1; then groupdel ubuntu; fi \
+    && echo "== UID/GID 1000 after removing the distro default account:" \
+    && (getent passwd 1000 || echo "   (uid 1000 free)") \
+    && (getent group 1000 || echo "   (gid 1000 free)")
+
 # Users: leap-aide runs the server (UID/GID dynamically adjusted at runtime);
 # leap-aide-init is the intermediate UID-swap user (fixed UID/GID 1025).
 RUN groupadd -g 1024 leap-aide \
