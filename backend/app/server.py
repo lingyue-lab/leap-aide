@@ -196,14 +196,67 @@ def _warn(msg: str) -> None:
     _current_stage = ''
 
 
-def _prewarm_caches() -> None:
-    """Background pre-warming of expensive caches to avoid first-session latency.
+def _prewarm() -> None:
+    """Pre-warm the agent runtime before serving the first chat.
 
-    Spawns daemon threads so startup is not blocked.  Failures are logged
-    but never abort the server — subsequent requests fall back to the normal
-    lazy-init path (identical to the old behaviour).
+    Two phases:
+
+    1. Synchronous import warm-up (main thread): the chat path lazy-imports
+       a large chunk of the hermes-agent SDK inside functions (e.g.
+       agent.conversation_loop, agent.auxiliary_client, hermes_state,
+       gateway.session_context), so without this the FIRST chat after boot
+       pays ~2-3s of module loading on the request path.  Imports are local
+       and deterministic — no network — so they run inline rather than on a
+       thread (avoids concurrent-import hazards).  Individual failures are
+       logged and skipped; the lazy import on the chat path retries them.
+    2. Background cache warm-up (daemon threads): network-bound work
+       (models list, MCP discovery, tool definitions, connectivity probe)
+       that can take minutes on a slow boot network, so it must not block
+       listening.  Failures never abort the server — subsequent requests
+       fall back to the normal lazy-init path (issue #8).
+
+    Besides warming, this marks the coordination state in app.api.prewarm so
+    a chat sent within seconds of boot joins the in-flight prewarm instead of
+    racing it.
     """
     import threading
+
+    # ── Phase 1: synchronous import warm-up (main thread) ──
+    # Covers the lazy-import surface of one full agent turn: stream setup,
+    # AIAgent.run_conversation, tool execution dispatch, and auxiliary
+    # clients (title/approval).  Keep in sync with the lazy imports in
+    # app/api/streaming.py and run_agent.py.
+    _CHAT_PATH_IMPORTS = (
+        'gateway.session_context',   # set_session_vars in _run_agent_streaming
+        'hermes_state',              # SessionDB for session_search
+        'hermes_cli.runtime_provider',  # resolve_runtime_provider (API key)
+        'tools.approval',            # gateway notify registration
+        'tools.process_registry',    # process_loop drain
+        'tools.async_delegation',    # drain event claiming
+        'tools.mcp_tool',            # module only; discovery runs in prewarm-mcp
+        'agent.conversation_loop',   # lazy-imported by run_agent.run_conversation
+        'agent.chat_completion_helpers',
+        'agent.auxiliary_client',    # title/approval auxiliary clients
+        'agent.title_generator',
+    )
+    from importlib import import_module as _import_module
+    _imports_t0 = time.monotonic()
+    _import_failed = []
+    for _mod in _CHAT_PATH_IMPORTS:
+        try:
+            _import_module(_mod)
+        except Exception as _e:
+            _import_failed.append(f'{_mod}: {type(_e).__name__}')
+    if _import_failed:
+        logger.warning('Pre-warm: agent imports partial (%.1fs, failed: %s)',
+                       time.monotonic() - _imports_t0, '; '.join(_import_failed))
+    else:
+        logger.info('Pre-warm: agent imports ready (%.1fs, %d modules)',
+                    time.monotonic() - _imports_t0, len(_CHAT_PATH_IMPORTS))
+
+    # ── Phase 2: background cache warm-up (daemon threads) ──
+    from app.api import prewarm as _prewarm_coord
+    _prewarm_coord.begin_prewarm()
 
     def _warm_models():
         t0 = time.monotonic()
@@ -227,9 +280,45 @@ def _prewarm_caches() -> None:
         except Exception:
             logger.warning('Pre-warm: MCP discovery failed (%.1fs)',
                            time.monotonic() - t0, exc_info=True)
+        finally:
+            # Always release chat threads waiting in wait_for_mcp_discovery,
+            # even when discovery failed (issue #8).
+            _prewarm_coord.mark_mcp_done()
+
+    def _warm_tool_defs():
+        # Runs AFTER MCP discovery: MCP server registration bumps the SDK
+        # registry generation, which is part of the get_tool_definitions
+        # memo key — a snapshot taken before discovery would miss the memo
+        # on the first chat (issue #8).
+        if _prewarm_coord.tool_definitions_disabled():
+            _prewarm_coord.mark_tool_defs_done()
+            return
+        if not _prewarm_coord.wait_for_mcp_discovery(timeout=150.0):
+            logger.warning('Pre-warm: MCP discovery still running after 150s; '
+                           'snapshotting tool definitions anyway')
+        try:
+            from app.api.config import get_config, _resolve_cli_toolsets
+            # Same helper + args the chat path passes to AIAgent
+            # (streaming._resolve_cli_toolsets on the active profile config),
+            # so the memo keys match.
+            _prewarm_coord.warm_tool_definitions(list(_resolve_cli_toolsets(get_config())))
+        except Exception:
+            logger.warning('Pre-warm: tool definitions warmup failed to start',
+                           exc_info=True)
+            _prewarm_coord.mark_tool_defs_done()
+
+    def _warm_connectivity():
+        # GET <active provider base_url>/models with a 5s cap; proves the
+        # outbound path (DNS/TLS/proxy/IPv4 preference) works before the
+        # first chat rather than as a 30s ConnectTimeout then (issue #8).
+        # Disabled via HERMES_WEBUI_CONNECTIVITY_PROBE=0 inside the probe.
+        from app.api.providers import probe_provider_connectivity
+        probe_provider_connectivity()
 
     threading.Thread(target=_warm_models, name='prewarm-models', daemon=True).start()
     threading.Thread(target=_warm_mcp, name='prewarm-mcp', daemon=True).start()
+    threading.Thread(target=_warm_tool_defs, name='prewarm-tooldefs', daemon=True).start()
+    threading.Thread(target=_warm_connectivity, name='prewarm-connectivity', daemon=True).start()
 
 
 def main() -> None:
@@ -244,13 +333,20 @@ def main() -> None:
         datefmt='%Y-%m-%d %H:%M:%S',
     )
 
-    from app.api.config import print_startup_config, verify_hermes_imports, _HERMES_FOUND
+    from app.api.config import (
+        print_startup_config,
+        apply_network_preferences,
+        verify_hermes_imports,
+        _HERMES_FOUND,
+    )
 
     # ── Banner ──
 
     # ── Stage 1: Load config ──
     _stage(1, 'Loading config')
     print_startup_config()
+    # Patch getaddrinfo before any prewarm thread does network I/O (issue #8).
+    apply_network_preferences()
     _done()
 
     # ── Stage 2: Fix credential permissions ──
@@ -366,8 +462,8 @@ def main() -> None:
     except BaseException as e:
         _fail(f'{type(e).__name__}: {e}')
 
-    # ── Pre-warm expensive caches in background ──
-    _prewarm_caches()
+    # ── Pre-warm imports (sync) + expensive caches (background) ──
+    _prewarm()
 
     # ── Signal handlers ──
     # httpd.shutdown() must be called from a different thread than serve_forever()

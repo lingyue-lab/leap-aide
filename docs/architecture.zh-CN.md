@@ -124,6 +124,10 @@ hermes-agent SDK            AIAgent.run_conversation()、tools、gateway
 | `HERMES_WEBUI_ALLOWED_ORIGINS` | *（未设置）* | 额外允许的来源（origin） |
 | `HERMES_WEBUI_AUTO_INSTALL` | *（未设置）* | `=1` 表示启动时自动安装依赖 |
 | `HERMES_WEBUI_ONBOARDING_OPEN` | *（已设置）* | 打开首次运行向导 |
+| `HERMES_WEBUI_PREWARM_TOOL_DEFS` | *（默认启用）* | 启动期工具定义快照；`=0` 关闭（首条消息改付工具检查开销） |
+| `HERMES_WEBUI_PREWARM_WAIT_S` | `10` | 聊天线程等待预热工具定义的最长秒数；`=0` 不等待 |
+| `HERMES_WEBUI_FORCE_IPV4` | *（默认启用）* | 出网连接优先 IPv4（规避 IPv6 黑洞挂起）；`=0` 关闭 |
+| `HERMES_WEBUI_CONNECTIVITY_PROBE` | *（默认启用）* | 后台提供商连通性探测（启动时 + 保存 key 后）；`=0` 关闭 |
 | `LOG_LEVEL` | `WARNING` | Python 日志级别 |
 
 ---

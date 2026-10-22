@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -238,6 +239,185 @@ def _provider_is_oauth(provider_id: str) -> bool:
     return provider_id in _OAUTH_PROVIDERS
 
 
+# SECTION: Connectivity probe (issue #8)
+
+
+def _resolve_probe_endpoint(provider_id: str | None) -> tuple[str, str, str] | None:
+    """Resolve ``(base_url, api_key, provider_id)`` for the connectivity probe.
+
+    base_url chain: ``providers.<id>.base_url`` → ``model.base_url`` (only
+    when this provider is the active one) → ``custom_providers[].base_url``
+    → the shared OpenAI-compatible endpoint table in ``routes.py`` (lazily
+    imported to avoid a circular import — routes imports this module at
+    module level).  That table already covers well-known endpoints such as
+    ``https://api.deepseek.com/v1``, the endpoint issue #8 stalled on, so no
+    new hardcoded map is introduced here.
+
+    Returns ``None`` when no endpoint can be resolved — the probe is
+    skipped rather than guessing a URL.
+    """
+    cfg = get_config()
+    model_cfg = cfg.get("model", {})
+    if not isinstance(model_cfg, dict):
+        model_cfg = {}
+
+    pid = (provider_id or "").strip().lower()
+    if not pid:
+        # No explicit provider: probe whatever is active.  config.yaml first,
+        # then the auth store fallback — both local reads, no network.
+        active = str(model_cfg.get("provider") or "").strip()
+        if not active:
+            try:
+                from app.api.config import _config_only_catalog_fields
+                _, active, _store = _config_only_catalog_fields()
+                active = str(active or "")
+            except Exception:
+                active = ""
+        pid = active.strip().lower()
+    if not pid:
+        return None
+
+    base_url = ""
+    # 1. providers.<id>.base_url
+    providers_cfg = cfg.get("providers", {})
+    if isinstance(providers_cfg, dict):
+        prov = providers_cfg.get(pid, {})
+        if isinstance(prov, dict):
+            base_url = str(prov.get("base_url") or "").strip()
+    # 2. model.base_url — only meaningful when this provider is the active one
+    if not base_url:
+        active = str(model_cfg.get("provider") or "").strip().lower()
+        if active and active == pid:
+            base_url = str(model_cfg.get("base_url") or "").strip()
+    # 3. custom_providers[].base_url (same match logic as _provider_has_key)
+    if not base_url:
+        for cp in cfg.get("custom_providers", []) or []:
+            if not isinstance(cp, dict):
+                continue
+            cp_name = (cp.get("name") or "").strip().lower().replace(" ", "-")
+            if f"custom:{cp_name}" == pid or cp.get("name", "").strip().lower() == pid:
+                base_url = str(cp.get("base_url") or "").strip()
+                break
+    # 4. Well-known OpenAI-compatible endpoint table (lazily imported)
+    if not base_url:
+        try:
+            from app.api.routes import _OPENAI_COMPAT_ENDPOINTS
+            base_url = _OPENAI_COMPAT_ENDPOINTS.get(pid, "")
+        except Exception:
+            base_url = ""
+    if not base_url:
+        return None
+
+    api_key = _resolve_probe_key(cfg, pid, model_cfg)
+    return base_url.rstrip("/"), api_key, pid
+
+
+def _resolve_probe_key(cfg: dict, provider_id: str, model_cfg: dict) -> str:
+    """Return the API key value for the connectivity probe.
+
+    Mirrors ``_provider_has_key()``'s source order but yields the value:
+    ``.env`` / process env var → ``model.api_key`` (active provider only) →
+    ``providers.<id>.api_key`` → ``custom_providers[].api_key``.
+    Returns ``""`` when nothing is configured.
+    """
+    env_var = _PROVIDER_ENV_VAR.get(provider_id)
+    if env_var:
+        env_values = _load_env_file(_get_hermes_home() / ".env")
+        key = str(env_values.get(env_var) or "").strip()
+        if key:
+            return key
+        key = str(os.getenv(env_var) or "").strip()
+        if key:
+            return key
+    active = str(model_cfg.get("provider") or "").strip().lower()
+    if active and active == provider_id:
+        key = str(model_cfg.get("api_key") or "").strip()
+        if key:
+            return key
+    providers_cfg = cfg.get("providers", {})
+    if isinstance(providers_cfg, dict):
+        prov = providers_cfg.get(provider_id, {})
+        if isinstance(prov, dict):
+            key = str(prov.get("api_key") or "").strip()
+            if key:
+                return key
+    custom_providers = cfg.get("custom_providers", [])
+    if isinstance(custom_providers, list):
+        for cp in custom_providers:
+            if isinstance(cp, dict):
+                cp_name = (cp.get("name") or "").strip().lower().replace(" ", "-")
+                if f"custom:{cp_name}" == provider_id or cp.get("name", "").strip().lower() == provider_id:
+                    key = str(cp.get("api_key") or "").strip()
+                    if key:
+                        return key
+    return ""
+
+
+def probe_provider_connectivity(provider_id: str | None = None, *, timeout: float = 5.0) -> str:
+    """Lightweight reachability/key probe: ``GET <base_url>/models`` (issue #8).
+
+    Runs ONLY from background threads (boot prewarm, post key-save) so an
+    unreachable provider or a bad key surfaces in the log at startup or at
+    save time instead of as a silent 30s ConnectTimeout on the first chat.
+
+    Returns one of:
+
+    - ``'ok'``      endpoint reachable — network + TLS are fine
+    - ``'auth'``    reachable but rejected the configured key (HTTP 401/403)
+    - ``'network'`` connection failed (offline, DNS, proxy, blackholed IPv6)
+    - ``'skipped'`` disabled via env, or no endpoint to probe
+
+    Never raises; never called on a request path.
+    """
+    if os.environ.get("HERMES_WEBUI_CONNECTIVITY_PROBE", "").strip().lower() in ("0", "false", "no"):
+        return "skipped"
+
+    t0 = time.monotonic()
+    try:
+        resolved = _resolve_probe_endpoint(provider_id)
+        if resolved is None:
+            logger.debug("Connectivity probe skipped: no endpoint for provider %s",
+                         provider_id or "(active)")
+            return "skipped"
+        base_url, api_key, pid = resolved
+
+        import urllib.error
+        import urllib.request
+
+        req = urllib.request.Request(
+            base_url + "/models",
+            headers={"Accept": "application/json"},
+        )
+        if api_key:
+            req.add_header("Authorization", f"Bearer {api_key}")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                resp.read(1024)  # drain a little so the connection closes cleanly
+            logger.info("Connectivity probe: %s reachable (%.2fs)",
+                        pid, time.monotonic() - t0)
+            return "ok"
+        except urllib.error.HTTPError as exc:
+            # Any HTTP status (even 404) proves network + TLS are fine; only
+            # 401/403 *with* a configured key indicate a bad credential.
+            if exc.code in (401, 403) and api_key:
+                logger.warning(
+                    "Connectivity probe: %s reachable but auth rejected (HTTP %d, "
+                    "%.2fs) — check the API key", pid, exc.code, time.monotonic() - t0)
+                return "auth"
+            logger.info("Connectivity probe: %s reachable (%.2fs, HTTP %d)",
+                        pid, time.monotonic() - t0, exc.code)
+            return "ok"
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            logger.warning(
+                "Connectivity probe: %s unreachable (%.2fs): %s — check outbound "
+                "network/proxy (IPv4 preference is enabled by default, so a failure "
+                "here is not an IPv6 issue)", pid, time.monotonic() - t0, exc)
+            return "network"
+    except Exception:
+        logger.warning("Connectivity probe failed", exc_info=True)
+        return "network"
+
+
 # SECTION: Public API
 
 
@@ -402,6 +582,19 @@ def set_provider_key(provider_id: str, api_key: str | None) -> dict[str, Any]:
     # Using invalidate_models_cache() instead of reload_config() to avoid
     # disrupting active streaming sessions that may be reading config.cfg.
     invalidate_models_cache()
+
+    # Fire-and-forget connectivity probe so a bad key or an unreachable
+    # endpoint shows up in the log now instead of stalling the first chat
+    # for 30s (issue #8).  Daemon thread — the response contract is
+    # unchanged and the caller never waits on the network.
+    if api_key:
+        import threading as _threading
+        _threading.Thread(
+            target=probe_provider_connectivity,
+            args=(provider_id,),
+            name=f"probe-{provider_id}",
+            daemon=True,
+        ).start()
 
     return {
         "ok": True,

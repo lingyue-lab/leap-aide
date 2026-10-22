@@ -502,6 +502,9 @@ def test_server():
         # /api/_test/cleanup_sessions (api/_test_helpers.py). Production
         # servers never set this flag, so those endpoints 404 outside tests.
         "HERMES_WEBUI_TEST_SEED":         "1",
+        # issue #8: no background provider connectivity probes from the test
+        # server — tests must not emit external network requests by default.
+        "HERMES_WEBUI_CONNECTIVITY_PROBE": "0",
         # DeepSeek V4 Flash (cheap + fast) via OpenRouter in the non-live
         # default. With live opt-in we switch to the @provider:model form that
         # matches the available credential (_live_default_model) so

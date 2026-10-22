@@ -124,6 +124,10 @@ External dependencies: `pyyaml` only (plus the Hermes Agent SDK and its own deps
 | `HERMES_WEBUI_ALLOWED_ORIGINS` | *(unset)* | Extra allowed origins |
 | `HERMES_WEBUI_AUTO_INSTALL` | *(unset)* | `=1` enables dependency auto-install at startup |
 | `HERMES_WEBUI_ONBOARDING_OPEN` | *(set)* | Open the first-run wizard |
+| `HERMES_WEBUI_PREWARM_TOOL_DEFS` | *(enabled)* | Boot-time tool-definition snapshot; `=0` disables (first chat then pays the tool-check cost) |
+| `HERMES_WEBUI_PREWARM_WAIT_S` | `10` | Max seconds a chat waits for the prewarmed tool definitions; `=0` never waits |
+| `HERMES_WEBUI_FORCE_IPV4` | *(enabled)* | Prefer IPv4 for outbound connections (skips blackholed-IPv6 stalls); `=0` disables |
+| `HERMES_WEBUI_CONNECTIVITY_PROBE` | *(enabled)* | Background provider reachability probe at boot and after saving a key; `=0` disables |
 | `LOG_LEVEL` | `WARNING` | Python logging level |
 
 ---

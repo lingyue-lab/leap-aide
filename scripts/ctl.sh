@@ -536,7 +536,11 @@ USAGE
 
     local deadline=$((SECONDS + 30))
     while (( SECONDS < deadline )); do
-      if "$_ENGINE" exec "$cid" sh -c 'touch /workspace/.uid_probe' >/dev/null 2>&1; then
+      # Exec as WANTED_UID — the uid the service actually runs as — not the
+      # image's default USER (leap-aide-init). The default user cannot write a
+      # 755 /workspace owned by another uid, so the probe file never appears and
+      # the check times out even when the service itself runs fine.
+      if "$_ENGINE" exec -u "$WANTED_UID" "$cid" sh -c 'touch /workspace/.uid_probe' >/dev/null 2>&1; then
         actual=$(stat -c '%u' "$probe" 2>/dev/null || true)
         if [[ -n "$actual" ]]; then
           break

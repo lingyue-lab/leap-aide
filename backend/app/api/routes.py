@@ -63,6 +63,7 @@ from app.api.config import (
     _resolve_cli_toolsets,
     _INDEX_HTML_PATH,
     get_available_models,
+    peek_available_models,
     load_settings,
     IMAGE_EXTS,
     MD_EXTS,
@@ -269,12 +270,24 @@ def _resolve_compatible_session_model(model_id: str | None) -> tuple[str, bool]:
     agent to OpenAI Codex), reusing that stale model causes chat startup to hit
     the wrong backend and fail. Normalize only obvious cross-provider mismatches;
     preserve bare model IDs and OpenRouter/custom setups.
+
+    Uses peek_available_models() — a blocking catalog build here would delay
+    the /api/chat/start HTTP response before begin_stream even runs (issue #8).
     """
-    catalog = get_available_models()
+    catalog = peek_available_models()
     default_model = str(catalog.get("default_model") or DEFAULT_MODEL or "").strip()
     model = str(model_id or "").strip()
     if not model:
         return default_model, bool(default_model)
+
+    # Cold cache: peek answered from the config-only catalog — there are no
+    # groups to check routability against, so every cross-provider rewrite
+    # below would be a guess (issue #8: while the boot prewarm held the
+    # catalog lock, a valid anthropic/... model was rewritten to the default
+    # on GET /api/session).  Skip normalization; the warm catalog normalizes
+    # on a later request.
+    if catalog.get("config_only"):
+        return model, False
 
     active_provider = _normalize_provider_id(catalog.get("active_provider"))
     # Also keep the raw active_provider slug for cross-provider detection with

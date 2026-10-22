@@ -72,3 +72,7 @@ frontend/node_modules/.vite/
 .hermes/
 .podman-storage-root/
 .storage.conf
+
+# Site-local compose overrides (host network MTU, mirrors; see
+# docker-compose.local.yml.example)
+docker-compose.local.yml
