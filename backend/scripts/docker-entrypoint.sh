@@ -200,11 +200,57 @@ if [ "A${whoami}" == "Aleap-aide-init" ]; then
   echo "-- Running as leap-aide-init, will switch leap-aide to the desired UID/GID"
   # The script is started as leap-aide-init -- UID/GID 1025/1025
 
+  # Root mode (issue #6 follow-up): WANTED_UID=0 with WANTED_GID=0 means "run as
+  # root inside the container". That is the expected mapping under rootless
+  # podman, where the container's uid 0 IS the invoking host user. The remap is
+  # skipped on purpose: `usermod -u 0` fails without -o, and with -o it would
+  # add a second uid 0 entry, making getpwuid(0) ambiguous again (issue #6).
+  if [ "${WANTED_UID}" = "0" ] || [ "${WANTED_GID}" = "0" ]; then
+    if [ "${WANTED_UID}" != "0" ] || [ "${WANTED_GID}" != "0" ]; then
+      error_exit "WANTED_UID=0 requires WANTED_GID=0 (root mode is all-or-nothing)"
+    fi
+    echo "!! WARNING: the service will run as root inside the container."
+    echo "!! WARNING: expected for rootless podman (container uid 0 == the host user);"
+    echo "!! WARNING: under rootful podman this is a privilege regression - use a real uid."
+    save_env /tmp/leap-aide-init_env.txt
+    # sudo resets the environment: pass the two values explicitly. Everything
+    # else (HERMES_HOME, HERMES_WEBUI_STATE_DIR, ...) is restored by load_env()
+    # in the second half, which runs before those variables are consumed.
+    sudo WANTED_UID="${WANTED_UID}" WANTED_GID="${WANTED_GID}" bash "${script_fullname}" \
+      || error_exit "root re-exec failed"
+    ok_exit "Clean exit"
+  fi
+
+  # Issue #6: `usermod -o` created a DUPLICATE uid whenever WANTED_UID was
+  # already taken (ubuntu:24.04 ships 'ubuntu' at 1000, and compose defaults
+  # WANTED_UID to the host uid). getpwuid() then resolves to the FIRST
+  # /etc/passwd match, so the prompt (`\u`) and `whoami` reported 'ubuntu'.
+  # Free the id before remapping; refuse to duplicate one owned by anything
+  # other than the distro default account.
+  _uid_owner=$(getent passwd "$WANTED_UID" | grep -v '^leap-aide:' | cut -d: -f1 | head -1 || true)
+  if [ -n "$_uid_owner" ]; then
+    if [ "$_uid_owner" = "ubuntu" ]; then
+      echo "-- Releasing UID $WANTED_UID from the distro default 'ubuntu' account"
+      sudo userdel ubuntu 2>/dev/null || error_exit "Failed to delete the 'ubuntu' account holding UID $WANTED_UID"
+    else
+      error_exit "UID $WANTED_UID is already used by '$_uid_owner' -- set WANTED_UID to a free id (issue #6)"
+    fi
+  fi
+  _gid_owner=$(getent group "$WANTED_GID" | grep -v '^leap-aide:' | cut -d: -f1 | head -1 || true)
+  if [ -n "$_gid_owner" ]; then
+    if [ "$_gid_owner" = "ubuntu" ]; then
+      echo "-- Releasing GID $WANTED_GID from the distro default 'ubuntu' group"
+      sudo groupdel ubuntu 2>/dev/null || error_exit "Failed to delete the 'ubuntu' group holding GID $WANTED_GID"
+    else
+      error_exit "GID $WANTED_GID is already used by '$_gid_owner' -- set WANTED_GID to a free id (issue #6)"
+    fi
+  fi
+
   # We are altering the UID/GID of the leap-aide user to the desired ones and restarting as that user
   # using usermod for the already created leap-aide user, knowing it is not already in use
   # per usermod manual: "You must make certain that the named user is not executing any processes when this command is being executed"
-  sudo groupmod -o -g ${WANTED_GID} leap-aide || error_exit "Failed to set GID of leap-aide user"
-  sudo usermod -o -u ${WANTED_UID} leap-aide || error_exit "Failed to set UID of leap-aide user"
+  sudo groupmod -g ${WANTED_GID} leap-aide || error_exit "Failed to set GID of leap-aide user"
+  sudo usermod -u ${WANTED_UID} leap-aide || error_exit "Failed to set UID of leap-aide user"
   sudo chown -R ${WANTED_UID}:${WANTED_GID} /home/leap-aide || error_exit "Failed to set owner of /home/leap-aide"
   save_env /tmp/leap-aide-init_env.txt
   # restart the script as leap-aide set with the correct UID/GID this time
@@ -223,6 +269,8 @@ if [ "$WANTED_UID" != "$new_uid" ]; then error_exit "leap-aide MUST be running a
 
 # We are therefore running as leap-aide
 echo ""; echo "== Running as leap-aide"
+# Make identity mismatches visible in `docker logs` at a glance (issue #6).
+echo "-- Running as $(id -un) (uid $(id -u), gid $(id -g))"
 
 # Load environment variables one by one if they do not exist from /tmp/leap-aide-init_env.txt
 it=/tmp/leap-aide-init_env.txt

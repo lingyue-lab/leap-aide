@@ -67,3 +67,8 @@ backend/tests/.results/
 # Frontend test artifacts
 frontend/tests/.results/
 frontend/node_modules/.vite/
+
+# Local container/agent runtime state (host-specific, never shared)
+.hermes/
+.podman-storage-root/
+.storage.conf

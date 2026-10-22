@@ -17,8 +17,12 @@ services:
       # You can set enviroments to override .env.
       # Set to your host user ID: run `id -u` and `id -g` to find them.
       # Without this, the container may not be able to read your mounted files.
-      - WANTED_UID=${UID:-1000}
-      - WANTED_GID=${GID:-1000}
+      # Host uid/gid that must own files inside the mounted directories.
+      # `scripts/ctl.sh start-docker` injects the invoking user's ids and handles
+      # rootless podman (userns keep-id). 1000 keeps the historical default for
+      # plain `docker compose up -d`.
+      - WANTED_UID=${WANTED_UID:-1000}
+      - WANTED_GID=${WANTED_GID:-1000}
       - HERMES_WEBUI_AGENT_DIR=/usr/local/lib/hermes-agent
       - HERMES_WEBUI_HOST=0.0.0.0
       # Where to store sessions, workspaces, and other state.
