@@ -117,7 +117,7 @@ def test_bare_gemini_session_model_normalizes_to_active_provider_default(monkeyp
 
     monkeypatch.setattr(
         routes,
-        "get_available_models",
+        "peek_available_models",
         lambda: {
             "active_provider": "openai-codex",
             "default_model": "gpt-5.4-mini",
@@ -138,7 +138,7 @@ def test_prefixed_google_session_model_normalizes_to_active_provider_default(mon
 
     monkeypatch.setattr(
         routes,
-        "get_available_models",
+        "peek_available_models",
         lambda: {
             "active_provider": "openai-codex",
             "default_model": "gpt-5.4-mini",
@@ -159,7 +159,7 @@ def test_legacy_at_provider_session_model_normalizes_when_provider_hidden(monkey
 
     monkeypatch.setattr(
         routes,
-        "get_available_models",
+        "peek_available_models",
         lambda: {
             "active_provider": "openai-codex",
             "default_model": "gpt-5.5",
@@ -187,7 +187,7 @@ def test_active_at_provider_session_model_strips_redundant_hint(monkeypatch):
 
     monkeypatch.setattr(
         routes,
-        "get_available_models",
+        "peek_available_models",
         lambda: {
             "active_provider": "openai-codex",
             "default_model": "gpt-5.5",
@@ -215,7 +215,7 @@ def test_routable_non_active_at_provider_session_model_is_preserved(monkeypatch)
 
     monkeypatch.setattr(
         routes,
-        "get_available_models",
+        "peek_available_models",
         lambda: {
             "active_provider": "openai-codex",
             "default_model": "gpt-5.5",
@@ -248,7 +248,7 @@ def test_stale_at_provider_model_falls_back_when_family_mismatches(monkeypatch):
 
     monkeypatch.setattr(
         routes,
-        "get_available_models",
+        "peek_available_models",
         lambda: {
             "active_provider": "openai-codex",
             "default_model": "gpt-5.5",
@@ -276,7 +276,7 @@ def test_google_active_provider_keeps_valid_gemini_session_model(monkeypatch):
 
     monkeypatch.setattr(
         routes,
-        "get_available_models",
+        "peek_available_models",
         lambda: {
             "active_provider": "google",
             "default_model": "gemini-3.1-pro-preview",
@@ -297,7 +297,7 @@ def test_session_model_normalizer_persists_corrected_model(monkeypatch):
 
     monkeypatch.setattr(
         routes,
-        "get_available_models",
+        "peek_available_models",
         lambda: {
             "active_provider": "openai-codex",
             "default_model": "gpt-5.4-mini",
@@ -327,7 +327,7 @@ def test_session_model_display_resolver_is_read_only(monkeypatch):
 
     monkeypatch.setattr(
         routes,
-        "get_available_models",
+        "peek_available_models",
         lambda: {
             "active_provider": "openai-codex",
             "default_model": "gpt-5.4-mini",
@@ -396,7 +396,7 @@ def test_unknown_prefix_model_passes_through_unchanged(monkeypatch):
 
     monkeypatch.setattr(
         routes,
-        "get_available_models",
+        "peek_available_models",
         lambda: {
             "active_provider": "openai-codex",
             "default_model": "gpt-5.4-mini",
@@ -425,7 +425,7 @@ def test_empty_model_session_does_not_trigger_save(monkeypatch):
 
     monkeypatch.setattr(
         routes,
-        "get_available_models",
+        "peek_available_models",
         lambda: {
             "active_provider": "openai-codex",
             "default_model": "gpt-5.4-mini",
@@ -461,7 +461,7 @@ def test_stale_openai_model_cleared_for_custom_only_provider(monkeypatch):
 
     monkeypatch.setattr(
         routes,
-        "get_available_models",
+        "peek_available_models",
         lambda: {
             "active_provider": "custom",
             "default_model": "",
@@ -493,7 +493,7 @@ def test_stale_openai_model_cleared_for_custom_provider_with_default(monkeypatch
 
     monkeypatch.setattr(
         routes,
-        "get_available_models",
+        "peek_available_models",
         lambda: {
             "active_provider": "custom",
             "default_model": "agent37/default",
@@ -519,7 +519,7 @@ def test_openrouter_model_preserved_when_openrouter_group_present(monkeypatch):
 
     monkeypatch.setattr(
         routes,
-        "get_available_models",
+        "peek_available_models",
         lambda: {
             "active_provider": "openrouter",
             "default_model": "openai/gpt-5.4-mini",
@@ -545,7 +545,7 @@ def test_custom_namespace_model_always_preserved_on_custom_provider(monkeypatch)
 
     monkeypatch.setattr(
         routes,
-        "get_available_models",
+        "peek_available_models",
         lambda: {
             "active_provider": "custom",
             "default_model": "agent37/default",

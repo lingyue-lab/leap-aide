@@ -668,6 +668,19 @@ def apply_onboarding_setup(body: dict) -> dict:
         logger.debug("Failed to reload hermes_cli config")
 
     reload_config()
+
+    # Fire-and-forget connectivity probe (issue #8).  The issue scenario is
+    # fresh boot → onboarding saves the key → first chat stalls on connect;
+    # probing right after the save surfaces network/auth problems in the log
+    # immediately.  Daemon thread, never blocks the response.
+    try:
+        import threading as _threading
+        from app.api.providers import probe_provider_connectivity
+        _threading.Thread(target=probe_provider_connectivity,
+                          name="probe-onboarding", daemon=True).start()
+    except Exception:
+        logger.debug("Failed to start connectivity probe", exc_info=True)
+
     return get_onboarding_status()
 
 

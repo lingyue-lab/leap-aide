@@ -1,0 +1,42 @@
+# Site-local compose overrides — copy to docker-compose.local.yml and edit.
+#
+#   cp docker-compose.local.yml.example docker-compose.local.yml
+#
+# docker-compose.local.yml is gitignored. Pass it as an extra -f on every
+# start/stop (ctl.sh appends -f flags to the base docker-compose.yml):
+#
+#   bash scripts/ctl.sh start-docker -f docker-compose.local.yml [IMAGE] ...
+#   bash scripts/ctl.sh stop-docker -f docker-compose.local.yml
+#
+# Use it for anything that depends on the deployment host — network MTU,
+# registry mirrors, proxies — so site specifics never leak into the
+# repository.
+#
+# ── Container MTU ────────────────────────────────────────────────────────────
+# Only needed when the host uplink MTU is below 1500 (PPPoE 1492, IPIP
+# tunnel 1480, ...). With the default container MTU of 1500 the container
+# advertises MSS 1460, remote endpoints send 1500-byte packets, and the
+# host silently drops them — TLS handshakes stall 30s+ on the first chat
+# after idle (server certificate chains always contain large segments).
+#
+# Set mtu to a value <= the host uplink MTU. Check the uplink with:
+#   cat /sys/class/net/<iface>/mtu
+#
+# Both driver_opts keys are intentional: podman/netavark reads "mtu" and
+# ignores the docker-style key; the docker engine reads the com.docker.*
+# key and ignores the bare one — so one file works for both engines.
+#
+# NOTE: compose never updates an already-created network, and
+# podman-compose `down` leaves the old network behind. After changing the
+# value, remove the network once so the next start recreates it with the
+# new MTU (the network is named <compose-project>_default, i.e. the repo
+# directory name; podman shown, `docker network rm` works the same):
+#   bash scripts/ctl.sh stop-docker -f docker-compose.local.yml
+#   podman network rm leap-aide-internal_default
+#   bash scripts/ctl.sh start-docker -f docker-compose.local.yml [IMAGE] ...
+
+networks:
+  default:
+    driver_opts:
+      mtu: "1480"
+      com.docker.network.driver.mtu: "1480"

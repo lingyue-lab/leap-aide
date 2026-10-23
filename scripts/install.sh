@@ -1312,6 +1312,46 @@ else
   ok "Python dependencies installed (system-wide)"
 fi
 
+# ── Core lazy dependencies (issue #8) ────────────────────────────────────────
+# The first chat's tool-definition path probes feature availability, and the
+# SDK answers a missing package with a ~26s runtime `uv pip install` (which
+# fails with silent EACCES in read-only container venvs). Pre-install the two
+# lazy deps that path always touches so the probe collapses to a fast import
+# check. Specs are read from the pinned hermes checkout's tools/lazy_deps.py
+# so they track HERMES_AGENT_COMMIT; the fallback literals below must be kept
+# in sync with tools/lazy_deps.py:141 ("tts.edge") and :190 ("image.fal").
+# Failure is non-fatal (unlike requirements.txt): a missing lazy dep only
+# disables its feature and the first chat falls back to the lazy-install path.
+_lazy_specs="$( (cd "$AGENT_DIR" && "$AGENT_DIR/venv/bin/python" -c \
+  'from tools.lazy_deps import LAZY_DEPS; print(*(LAZY_DEPS["tts.edge"] + LAZY_DEPS["image.fal"]))') \
+  2>/dev/null || true)"
+if [ -z "$_lazy_specs" ]; then
+  _lazy_specs="edge-tts==7.2.7 fal-client==0.13.1"
+  warn "Could not read LAZY_DEPS from the hermes checkout — using fallback specs (keep in sync with tools/lazy_deps.py)"
+fi
+# shellcheck disable=SC2086  # specs are intentionally word-split
+if [ "$USE_VENV" = true ]; then
+  if "$_uv_bin" pip install --python "$AGENT_DIR/venv/bin/python" $_lazy_specs; then
+    if "$AGENT_DIR/venv/bin/python" -c "import edge_tts" 2>/dev/null; then
+      ok "Core lazy dependencies installed (edge-tts importable)"
+    else
+      warn "Lazy deps installed but 'import edge_tts' failed — first chat may retry a lazy install"
+    fi
+  else
+    warn "Core lazy-dep install failed — first chat will retry the lazy install (issue #8 timings may persist)"
+  fi
+else
+  if pip3 install --quiet $_lazy_specs $_pip_trusted; then
+    if python3 -c "import edge_tts" 2>/dev/null; then
+      ok "Core lazy dependencies installed (edge-tts importable)"
+    else
+      warn "Lazy deps installed but 'import edge_tts' failed — first chat may retry a lazy install"
+    fi
+  else
+    warn "Core lazy-dep install failed — first chat will retry the lazy install (issue #8 timings may persist)"
+  fi
+fi
+
 # ── Step 5: Install wrappers ──
 say ""
 say "${B}Installing command wrappers...${R}"

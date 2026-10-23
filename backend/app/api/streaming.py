@@ -857,6 +857,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
     q = stream_manager.get_stream_by_id(stream_id)
     if q is None:
         return
+    _stream_t0 = time.monotonic()  # issue #8: time-to-first-token reference
     s = None
     _rt = {}
     old_cwd = None
@@ -868,7 +869,14 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
     # discover_mcp_tools() is called here (rather than at server startup) so that
     # the hermes-agent package is fully initialized before we try to connect.
     # It is safe to call multiple times — already-connected servers are skipped.
+    # Join the startup MCP prewarm first (issue #8): discovery takes a
+    # cross-process flock, and a chat racing the server's own prewarm-mcp
+    # thread spins the SDK's 240 x 0.5s lock-retry loop even within the same
+    # process.  Bounded wait (no-op when no prewarm is active); we still run
+    # discovery afterwards so config changes added after boot are picked up.
     try:
+        from app.api.prewarm import wait_for_mcp_discovery
+        wait_for_mcp_discovery(timeout=150.0)
         from tools.mcp_tool import discover_mcp_tools
         discover_mcp_tools()
     except Exception:
@@ -1106,7 +1114,8 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                     )
 
         try:
-            _token_sent = False  # tracks whether any streamed tokens were sent
+            _first_output_logged = False  # gates one-shot [ttft]: first LLM output of ANY kind
+            _text_token_logged = False    # gates one-shot [first-text]: first visible text token
             _reasoning_text = ''  # accumulates reasoning/thinking trace for persistence
             _live_tool_calls = []  # tool progress fallback when final messages omit tool IDs
             _message_started = False  # tracks whether current assistant message row has been started
@@ -1166,7 +1175,8 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
 
             def on_token(text):
                 try:
-                    nonlocal _token_sent, _message_started, _all_message_ts
+                    nonlocal _first_output_logged, _text_token_logged
+                    nonlocal _message_started, _all_message_ts
                     nonlocal _text_emitted_this_turn, _on_token_turn_id
                     if text is None:
                         # ── End-of-stream sentinel ────────────────────
@@ -1196,7 +1206,20 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         _ts = time.time()
                         _all_message_ts.append(_ts)
                         put('message_start', {'ts': _ts})
-                    _token_sent = True
+                    # One-shot observability (issue #8): [ttft] measures time
+                    # to the first LLM output of ANY kind (text, reasoning, or
+                    # tool call) — matching what the user perceives as "the
+                    # reply started". [first-text] separately tracks when the
+                    # first visible text token arrived, which lags [ttft] by
+                    # any reasoning/tool turns the model ran first.
+                    if not _first_output_logged:
+                        _first_output_logged = True
+                        logger.info('[ttft] stream=%s first output (text) after %.1fs',
+                                    stream_id[:8], time.monotonic() - _stream_t0)
+                    if not _text_token_logged:
+                        _text_token_logged = True
+                        logger.info('[first-text] stream=%s first text token after %.1fs',
+                                    stream_id[:8], time.monotonic() - _stream_t0)
                     # Accumulate partial text so cancel_stream() can persist it (#893)
                     if stream_id in STREAM_PARTIAL_TEXT:
                         STREAM_PARTIAL_TEXT[stream_id] += str(text)
@@ -1213,6 +1236,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             # For streaming chat, invoked when reasoning token is arrived.
             def on_reasoning(text):
                 try:
+                    nonlocal _first_output_logged
                     nonlocal _message_started, _all_message_ts
                     nonlocal _text_emitted_this_turn, _on_token_turn_id
                     if text is None:
@@ -1233,6 +1257,12 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         _ts = time.time()
                         _all_message_ts.append(_ts)
                         put('message_start', {'ts': _ts})
+                    # First LLM output of the stream — counts for [ttft] even
+                    # though it is reasoning rather than visible text.
+                    if not _first_output_logged:
+                        _first_output_logged = True
+                        logger.info('[ttft] stream=%s first output (reasoning) after %.1fs',
+                                    stream_id[:8], time.monotonic() - _stream_t0)
                     _append_reasoning_text(text)
                     put('reasoning', {'text': str(text)})
                     # Track reasoning tokens in the meter so TPS reflects all AI output
@@ -1250,6 +1280,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             _checkpoint_activity = [0]
 
             def on_tool(*cb_args, **cb_kwargs):
+                nonlocal _first_output_logged
                 nonlocal _message_started, _all_message_ts
                 nonlocal _turn_id, _text_emitted_this_turn, _tool_batch_id
                 event_type = None
@@ -1533,6 +1564,11 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         _ts = time.time()
                         _all_message_ts.append(_ts)
                         put('message_start', {'ts': _ts})
+                    # A tool call is LLM output too — counts for [ttft].
+                    if not _first_output_logged:
+                        _first_output_logged = True
+                        logger.info('[ttft] stream=%s first output (tool:%s) after %.1fs',
+                                    stream_id[:8], name, time.monotonic() - _stream_t0)
                     # Generate a unique tid for this tool call
                     tid = f"tool-{name}-{int(time.time() * 1000)}-{len(_live_tool_calls)}"
                     _live_tool_calls.append({
@@ -1786,6 +1822,14 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             # Mirrors gateway _agent_cache.  Keeps _user_turn_count alive so
             # injectionFrequency: "first-turn" actually suppresses after turn 1.
             if ephemeral:
+                # Join the startup tool-definitions prewarm before paying the
+                # cold get_tool_definitions cost — its check_fn gauntlet runs
+                # lazy `uv pip install` and vision-provider probes on a cache
+                # miss (issue #8).  Bounded wait; on expiry we compute inline
+                # as before.  Skipped on cached-agent turns below, which never
+                # call get_tool_definitions.
+                from app.api.prewarm import wait_for_tool_definitions
+                wait_for_tool_definitions()
                 agent = _AIAgent(**_agent_kwargs)
                 agent.compression_enabled = False  # WebUI manages compression
                 # Wire the SDK title callback (see agent/turn_context.py).
@@ -1860,6 +1904,11 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         agent._interrupt_message = None
                     agent.compression_enabled = False  # WebUI manages compression
                 else:
+                    # Cache miss — fresh construction runs get_tool_definitions
+                    # (cold: every tool's check_fn).  Join the startup prewarm
+                    # first (issue #8); bounded, falls through on expiry.
+                    from app.api.prewarm import wait_for_tool_definitions
+                    wait_for_tool_definitions()
                     agent = _AIAgent(**_agent_kwargs)
                     agent.compression_enabled = False  # WebUI manages compression
                     # Wire the SDK title callback. The SDK reads
@@ -2308,12 +2357,12 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                     m.get('role') == 'assistant' and str(m.get('content') or '').strip()
                     for m in _result_messages
                 )
-                # _token_sent tracks whether on_token() was called (any streamed text).
+                # _text_token_logged tracks whether on_token() streamed any text.
                 # Skip the no-response error when the stream was cancelled — the agent
                 # may have been interrupted before producing any output, which is expected.
                 if cancel_event.is_set():
                     put('cancel', {'message': 'Cancelled by user'})
-                elif not _assistant_added and not _token_sent:
+                elif not _assistant_added and not _text_token_logged:
                     # Extract error from multiple possible locations in the result dict.
                     # hermes-agent stores errors in 'error', 'failed', or 'final_response'.
                     _result_error = ''

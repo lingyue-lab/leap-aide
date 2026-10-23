@@ -761,6 +761,16 @@ ENV npm_config_registry= \
 # seed dir. Runtime re-points it at the state dir (the compose volume).
 ENV HERMES_HOME=/home/leap-aide/.hermes
 
+# Immutable-image seal for lazy runtime installs (issue #8): the agent venv is
+# root-owned while the server runs as leap-aide-init, so a lazy `uv pip install`
+# would burn ~26s and die with EACCES anyway. Sealed, it fails fast with an
+# actionable hint instead. Pre-installed core lazy deps (edge-tts, fal-client —
+# install.sh Step 4) are unaffected: ensure() returns early once they import.
+# Durable-target installs keep working if the operator sets
+# HERMES_LAZY_INSTALL_TARGET; override the seal per-container with
+# -e HERMES_DISABLE_LAZY_INSTALLS=0.
+ENV HERMES_DISABLE_LAZY_INSTALLS=1
+
 # ── Trim test framework ──────────────────────────────────────────────────────
 # testing stage installs pytest+pytest-timeout for tests. Remove them from runtime.
 RUN _trusted="--trusted-host pypi.org --trusted-host files.pythonhosted.org"; \

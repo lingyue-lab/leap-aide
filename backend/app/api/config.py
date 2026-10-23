@@ -396,6 +396,53 @@ def print_startup_config() -> None:
         )
 
 
+def apply_network_preferences() -> bool:
+    """Apply network.* process-wide preferences from hermes config.yaml (issue #8).
+
+    The SDK only calls apply_ipv4_preference() from gateway/run.py and
+    cron/scheduler.py — its WebUI/server paths never do, so the documented
+    network.force_ipv4 switch had no effect for WebUI LLM calls.
+
+    IPv4 preference is ON by default here: with broken/unreachable IPv6,
+    Python tries AAAA records first and hangs for the full TCP timeout before
+    falling back to IPv4 — the suspected trigger of the 30s ConnectTimeout on
+    first chat in issue #8.  The SDK's patch falls back to unfiltered
+    resolution for hosts without an A record, so pure-IPv6 hosts keep working.
+    Disable with HERMES_WEBUI_FORCE_IPV4=0 (or network.force_ipv4: false).
+
+    Returns True when the preference was applied.
+    """
+    try:
+        env = str(os.environ.get("HERMES_WEBUI_FORCE_IPV4", "")).strip().lower()
+        if env in ("0", "false", "no"):
+            logger.info("IPv4 preference: disabled via HERMES_WEBUI_FORCE_IPV4")
+            return False
+        if env in ("1", "true", "yes"):
+            force = True
+        else:
+            network_cfg = cfg.get("network")
+            force = not (isinstance(network_cfg, dict) and network_cfg.get("force_ipv4") is False)
+        if not force:
+            logger.info("IPv4 preference: disabled via config network.force_ipv4: false")
+            return False
+
+        from hermes_constants import apply_ipv4_preference
+
+        # Public SDK helper — idempotent, and force=False would be a no-op.
+        apply_ipv4_preference(force=True)
+        logger.info(
+            "IPv4 preference: enabled (getaddrinfo prefers A records; "
+            "HERMES_WEBUI_FORCE_IPV4=0 disables)"
+        )
+        return True
+    except ImportError:
+        logger.warning("IPv4 preference: skipped — hermes_constants not importable")
+        return False
+    except Exception:
+        logger.warning("IPv4 preference: failed", exc_info=True)
+        return False
+
+
 def verify_hermes_imports() -> tuple:
     """
     Attempt to import the key Hermes modules.
@@ -995,12 +1042,14 @@ def get_effective_default_model(config_data: dict | None = None) -> str:
 def get_first_available_model() -> str:
     """Return the first available model ID from the model list.
 
-    Calls get_available_models() and picks the first model from the
-    first provider group.  Falls back to get_effective_default_model()
-    when the model list is empty or unavailable.
+    Uses peek_available_models() (non-blocking; issue #8) and picks the
+    first model from the first provider group.  Falls back to
+    get_effective_default_model() when the model list is empty or
+    unavailable — on a cold cache this returns the default immediately
+    instead of triggering a live catalog build on the chat-start path.
     """
     try:
-        available = get_available_models()
+        available = peek_available_models()
         groups = available.get('groups', [])
         if groups:
             models = groups[0].get('models', [])
@@ -1035,7 +1084,10 @@ def normalize_model_prefix(model_id: str) -> str:
         return model
 
     try:
-        catalog = get_available_models()
+        # Non-blocking peek (issue #8): groups are best-effort here — on a
+        # cold cache the bare name is returned unchanged and normalized on a
+        # later request once the catalog is warm.
+        catalog = peek_available_models()
     except Exception:
         return model
 
@@ -1382,6 +1434,55 @@ def _model_supports_extended_thinking(model_id: str, provider: str = "") -> bool
     return False
 
 
+def _config_only_catalog_fields() -> tuple:
+    """Local-only catalog fields shared by the cold build and the peek accessor.
+
+    Reads config.yaml's ``model`` section plus the auth.json
+    ``active_provider`` fallback — pure disk reads, no network.  Extracted
+    verbatim from the prefix of get_available_models()'s cold path so the
+    latency-critical chat-start path can answer without triggering a live
+    provider fetch (issue #8).
+
+    Returns ``(default_model, active_provider, auth_store)``.
+    """
+    active_provider = None
+    default_model = get_effective_default_model(cfg)
+
+    # 1. Read config.yaml model section
+    model_cfg = cfg.get("model", {})
+    if isinstance(model_cfg, str):
+        pass  # default_model already set by get_effective_default_model
+    elif isinstance(model_cfg, dict):
+        active_provider = model_cfg.get("provider")
+        cfg_default = model_cfg.get("default", "")
+        if cfg_default:
+            default_model = cfg_default
+
+    # Normalize active_provider to its canonical key
+    if active_provider:
+        active_provider = _resolve_provider_alias(active_provider)
+
+    # 2. Read auth store (active_provider fallback)
+    auth_store = {}
+    try:
+        from app.api.profiles import get_active_hermes_home as _gah
+
+        auth_store_path = _gah() / "auth.json"
+    except ImportError:
+        auth_store_path = HOME / ".hermes" / "auth.json"
+    if auth_store_path.exists():
+        try:
+            import json as _j
+
+            auth_store = _j.loads(auth_store_path.read_text(encoding="utf-8"))
+            if not active_provider:
+                active_provider = _resolve_provider_alias(auth_store.get("active_provider"))
+        except Exception:
+            logger.debug("Failed to load auth store from %s", auth_store_path)
+
+    return default_model, active_provider, auth_store
+
+
 def get_available_models() -> dict:
     """
     Return available models grouped by provider.
@@ -1411,44 +1512,17 @@ def get_available_models() -> dict:
     # Extracted so it runs inside _available_models_cache_lock (RLock) to
     # prevent thundering-herd: only one thread rebuilds while others wait.
     def _build_available_models_uncached() -> dict:
-        active_provider = None
-        default_model = get_effective_default_model(cfg)
+        default_model, active_provider, auth_store = _config_only_catalog_fields()
         groups = []
 
-        # 1. Read config.yaml model section
+        # 1. Read config.yaml model section (base_url only — provider/default
+        #    were resolved by _config_only_catalog_fields above)
         cfg_base_url = ""  # must be defined before conditional blocks (#117)
         model_cfg = cfg.get("model", {})
-        cfg_base_url = ""
         if isinstance(model_cfg, str):
             pass  # default_model already set by get_effective_default_model
         elif isinstance(model_cfg, dict):
-            active_provider = model_cfg.get("provider")
-            cfg_default = model_cfg.get("default", "")
             cfg_base_url = model_cfg.get("base_url", "")
-            if cfg_default:
-                default_model = cfg_default
-
-        # Normalize active_provider to its canonical key
-        if active_provider:
-            active_provider = _resolve_provider_alias(active_provider)
-
-        # 2. Read auth store (active_provider fallback + credential_pool inspection)
-        auth_store = {}
-        try:
-            from app.api.profiles import get_active_hermes_home as _gah
-
-            auth_store_path = _gah() / "auth.json"
-        except ImportError:
-            auth_store_path = HOME / ".hermes" / "auth.json"
-        if auth_store_path.exists():
-            try:
-                import json as _j
-
-                auth_store = _j.loads(auth_store_path.read_text(encoding="utf-8"))
-                if not active_provider:
-                    active_provider = _resolve_provider_alias(auth_store.get("active_provider"))
-            except Exception:
-                logger.debug("Failed to load auth store from %s", auth_store_path)
 
         # 3. Detect available providers.
         detected_providers = set()
@@ -2026,6 +2100,118 @@ def get_available_models() -> dict:
             _cache_build_cv.notify_all()
         _save_models_cache_to_disk(result)
         return copy.deepcopy(result)
+
+
+# How long peek_available_models() waits for an in-flight cold build before
+# falling back to a config-only catalog.  The builder holds
+# _available_models_cache_lock for the ENTIRE live build, so this budget is
+# spent acquiring that lock (not the cv wait).  Kept short: up to three such
+# calls can occur on one chat-start request (new_session, model resolve,
+# prefix normalize), so waits stack — 1.0s each keeps the worst case ~3s,
+# under the 5s client timeouts used by the test suite and the frontend
+# (issue #8 smoke regression: an unbounded lock wait timed out session/new).
+_PEEK_WAIT_S = 1.0
+
+
+def peek_available_models(*, wait_seconds: float = _PEEK_WAIT_S) -> dict:
+    """Non-blocking catalog accessor for latency-critical request paths.
+
+    Mirrors get_available_models()'s fast paths (config mtime reload, memory
+    cache, disk cache, bounded wait for an in-flight build) but NEVER
+    triggers a live provider fetch: with nothing cached it answers from the
+    config-only catalog (default_model + active_provider, empty groups,
+    ``config_only: True`` so consumers can tell a fallback from a real
+    empty catalog).
+
+    For callers that only need ``default_model``/``active_provider`` and can
+    treat ``groups`` as best-effort (chat-start model resolution, prefix
+    normalization).  The model picker's ``/api/models`` keeps the blocking
+    builder.  Never raises (issue #8: /api/chat/start must not block on the
+    cold model catalog).
+    """
+    global _available_models_cache, _available_models_cache_ts
+
+    def _config_only() -> dict:
+        default_model, active_provider, _auth_store = _config_only_catalog_fields()
+        return {
+            "active_provider": active_provider,
+            "default_model": default_model,
+            "groups": [],
+            # Flags a config-only fallback (no live catalog was consulted).
+            # Consumers that need group-level routability — cross-provider
+            # session-model rewrites — must skip their decision instead of
+            # guessing on empty groups (issue #8: a valid anthropic/... model
+            # was rewritten to the default while the boot prewarm still held
+            # the catalog lock).
+            "config_only": True,
+        }
+
+    try:
+        # Config mtime check — same cheap guard as get_available_models()
+        # so a config edit is observed without building anything.
+        try:
+            _current_mtime = Path(_get_config_path()).stat().st_mtime
+        except OSError:
+            _current_mtime = 0.0
+        if _current_mtime != _cfg_mtime:
+            reload_config()
+
+        # Disk load BEFORE lock (fast), then memory cache under the lock —
+        # same ordering as get_available_models()'s fast path.
+        should_wait = _cache_build_in_progress
+        disk = None
+        if _available_models_cache is None:
+            disk = _load_models_cache_from_disk()
+
+        # Bounded lock acquisition.  get_available_models() holds this lock
+        # for the ENTIRE cold build (live provider fetches can run for many
+        # seconds — the startup prewarm holds it ~5s+ under load), so a plain
+        # `with` here would park the request path behind the builder with no
+        # limit — the exact latency this helper exists to avoid (issue #8:
+        # /api/session/new timed out at 5s waiting on the boot prewarm's
+        # build).  If the lock isn't free within wait_seconds, answer from
+        # the config-only catalog instead of queueing behind the builder.
+        _t_acquire = time.monotonic()
+        acquired = _available_models_cache_lock.acquire(timeout=wait_seconds)
+        try:
+            if not acquired:
+                return _config_only()
+            # Rare race: we got the lock but a build slipped in — spend only
+            # the REMAINING budget on the cv wait so the total stays bounded.
+            if should_wait:
+                _cache_build_cv.wait_for(
+                    lambda: not _cache_build_in_progress,
+                    timeout=max(0.0, wait_seconds - (time.monotonic() - _t_acquire)),
+                )
+            now = time.monotonic()
+            if _available_models_cache is not None and (
+                now - _available_models_cache_ts
+            ) < _AVAILABLE_MODELS_CACHE_TTL:
+                return copy.deepcopy(_available_models_cache)
+            if disk is not None:
+                _available_models_cache = disk
+                _available_models_cache_ts = now
+                _save_models_cache_to_disk(disk)
+                return copy.deepcopy(disk)
+
+            return _config_only()
+        finally:
+            if acquired:
+                _available_models_cache_lock.release()
+    except Exception:
+        logger.warning(
+            "peek_available_models failed; returning config-only catalog",
+            exc_info=True,
+        )
+        try:
+            return _config_only()
+        except Exception:
+            return {
+                "active_provider": None,
+                "default_model": str(DEFAULT_MODEL or ""),
+                "groups": [],
+                "config_only": True,
+            }
 
 
 # ── Static file path ─────────────────────────────────────────────────────────

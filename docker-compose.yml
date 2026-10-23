@@ -40,3 +40,8 @@ services:
       - https_proxy=
       - no_proxy=
     restart: unless-stopped
+
+# Host-dependent settings (container MTU for uplinks below 1500, registry
+# mirrors, ...) do NOT belong here — put them in docker-compose.local.yml
+# (gitignored) and pass `-f docker-compose.local.yml` to ctl.sh start/stop.
+# See docker-compose.local.yml.example for a starting point.
