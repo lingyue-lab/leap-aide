@@ -81,7 +81,7 @@ bash scripts/ctl.sh stop-docker
 
 Docker 容器启动成功后，用户直接访问 [http://localhost:8787](http://localhost:8787) 即可使用系统。默认登录密码为 `lingyue-lab`。
 
-当前配置把 `~/.hermes` 挂载到 `/home/leap-aide/.hermes`、`~/.hermes_workspace` 挂载到 `/workspace`。这两个持久化目录用于保存运行数据，确保服务重启能够正常恢复。本机环境和 LeapAide的数据交换也通过`~/.hermes_workspace`进行。
+当前配置把 `~/.hermes` 挂载到 `/home/leap-aide/.hermes`、`~/.hermes_workspaces` 挂载到 `/workspaces`。这两个持久化目录用于保存运行数据，确保服务重启能够正常恢复。本机环境和 LeapAide的数据交换也通过`~/.hermes_workspaces`进行。
 
 更多详细配置见 `docker-compose.yml`，用户可根据需要更改发布端口以及更改系统配置。系统的配置全部通过环境变量进行。
 

@@ -307,43 +307,31 @@ def switch_profile(name: str, *, process_wide: bool = True) -> dict:
     elif isinstance(model_cfg, dict):
         default_model = model_cfg.get('default')
 
-    # Read the target profile's workspace directly from *home* rather than via
-    # get_last_workspace() which routes through the thread-local/process-global active
-    # profile — both of which still point to the OLD profile during process_wide=False
-    # switches (the Set-Cookie has been sent but hasn't been processed by a new request
-    # yet).  We derive workspace in priority order:
-    #   1. {home}/webui_state/last_workspace.txt  (previously chosen workspace for this profile)
-    #   2. cfg terminal.cwd / workspace / default_workspace keys
-    #   3. Boot-time DEFAULT_WORKSPACE constant
+    # Read the target profile's workspace directly from *home*'s config rather
+    # than via a workspace helper that routes through the thread-local/
+    # process-global active profile — both of which still point to the OLD
+    # profile during process_wide=False switches (the Set-Cookie has been sent
+    # but hasn't been processed by a new request yet).  Derive in priority
+    # order:
+    #   1. cfg workspace / default_workspace keys (explicit profile config)
+    #   2. Boot-time DEFAULT_WORKSPACE constant
+    # terminal.cwd is a CLI/gateway concept and is not part of this chain
+    # (same rule as profile_default_workspace), and there is no global
+    # last-workspace state (workspace ownership lives on each session's
+    # state.db cwd).
     # Use the module-level ``Path`` (imported at line 17) rather than re-importing
     # it locally — keeps the exception fallback simple and avoids a latent NameError
     # if a future refactor moves the inner imports.
     default_workspace = None
     try:
         from app.api.config import DEFAULT_WORKSPACE as _DW
-        lw_file = home / 'webui_state' / 'last_workspace.txt'
-        if lw_file.exists():
-            _p = lw_file.read_text(encoding='utf-8').strip()
-            if _p:
-                _pp = Path(_p).expanduser()
+        for _key in ('workspace', 'default_workspace'):
+            _v = cfg.get(_key)
+            if _v:
+                _pp = Path(str(_v)).expanduser().resolve()
                 if _pp.is_dir():
-                    default_workspace = str(_pp.resolve())
-        if default_workspace is None:
-            for _key in ('workspace', 'default_workspace'):
-                _v = cfg.get(_key)
-                if _v:
-                    _pp = Path(str(_v)).expanduser().resolve()
-                    if _pp.is_dir():
-                        default_workspace = str(_pp)
-                        break
-        if default_workspace is None:
-            _tc = cfg.get('terminal', {})
-            if isinstance(_tc, dict):
-                _cwd = _tc.get('cwd', '')
-                if _cwd and str(_cwd) not in ('.', ''):
-                    _pp = Path(str(_cwd)).expanduser().resolve()
-                    if _pp.is_dir():
-                        default_workspace = str(_pp)
+                    default_workspace = str(_pp)
+                    break
         if default_workspace is None:
             default_workspace = str(_DW)
     except Exception:

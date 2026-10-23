@@ -34,7 +34,7 @@ case "${1:-}" in
   inspect) printf '%s\n' "${STUB_RUNNING:-true}"; exit 0 ;;
   exec)
     [[ "${STUB_EXEC_FAIL:-0}" == "1" ]] && exit 1
-    mkdir -p "$HOME/.hermes_workspace"; : >"$HOME/.hermes_workspace/.uid_probe"; exit 0 ;;
+    mkdir -p "$HOME/.hermes_workspaces"; : >"$HOME/.hermes_workspaces/.uid_probe"; exit 0 ;;
   logs)    printf 'stub container log: boom\n'; exit 0 ;;
   compose)
     if [[ "${2:-}" == "version" ]]; then exit "${STUB_PODMAN_COMPOSE_OK:-1}"; fi
@@ -53,7 +53,7 @@ case "${1:-}" in
   inspect) printf '%s\n' "${STUB_RUNNING:-true}"; exit 0 ;;
   exec)
     [[ "${STUB_EXEC_FAIL:-0}" == "1" ]] && exit 1
-    mkdir -p "$HOME/.hermes_workspace"; : >"$HOME/.hermes_workspace/.uid_probe"; exit 0 ;;
+    mkdir -p "$HOME/.hermes_workspaces"; : >"$HOME/.hermes_workspaces/.uid_probe"; exit 0 ;;
   logs)    printf 'stub container log: boom\n'; exit 0 ;;
   compose)
     if [[ "${2:-}" == "version" ]]; then exit "${STUB_DOCKER_COMPOSE_OK:-0}"; fi
@@ -70,8 +70,8 @@ for a in "$@"; do
     cp "$a" "${STUB_OVERRIDE_CAPTURE:?}"
   fi
   if [[ "$a" == "exec" ]]; then
-    mkdir -p "$HOME/.hermes_workspace"
-    : >"$HOME/.hermes_workspace/.uid_probe"
+    mkdir -p "$HOME/.hermes_workspaces"
+    : >"$HOME/.hermes_workspaces/.uid_probe"
   fi
 done
 exit 0
@@ -88,7 +88,7 @@ class CtlDockerWrapperTest(unittest.TestCase):
         shutil.copy2(COMPOSE, self.root / "docker-compose.yml")
 
         self.home = self.root / "home"
-        (self.home / ".hermes_workspace").mkdir(parents=True)
+        (self.home / ".hermes_workspaces").mkdir(parents=True)
 
         self.bin = self.root / "bin"
         self.bin.mkdir()

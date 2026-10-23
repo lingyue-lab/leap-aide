@@ -15,7 +15,8 @@ interface WorkspaceState {
   previewEditing: boolean;
   workspaces: Workspace[];
   workspacesLoaded: boolean;
-  lastWorkspace: string | null;
+  /** Panel selection only — pure frontend state (workspace ownership lives
+   *  on each session's state.db cwd; there is no global last workspace). */
   currentWorkspace: string | null;
   workspacesTabActive: boolean;
   showFileTree: boolean;
@@ -57,7 +58,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   previewEditing: false,
   workspaces: [],
   workspacesLoaded: false,
-  lastWorkspace: null,
   currentWorkspace: null,
   workspacesTabActive: false,
   showFileTree: false,
@@ -212,13 +212,20 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       const response = await fetch('/api/workspaces', { credentials: 'include' });
       if (!response.ok) throw new Error('Failed to load workspaces');
       const data = await response.json();
-      const lastWs: string | null = data.last_workspace || null;
-      set({ workspaces: data.workspaces || [], workspacesLoaded: true, lastWorkspace: lastWs, currentWorkspace: lastWs });
-      if (lastWs) {
+      const workspaces: Workspace[] = data.workspaces || [];
+      // Panel selection initializes to the built-in Default workspace —
+      // pure frontend state, no persisted "last workspace".
+      const builtin = workspaces.find((w) => w.builtin) || null;
+      set({
+        workspaces,
+        workspacesLoaded: true,
+        currentWorkspace: builtin ? builtin.path : null,
+      });
+      if (builtin) {
         try {
           await Promise.all([
-            get().loadDir(lastWs),
-            get().loadWorkspaceInfo(lastWs),
+            get().loadDir(builtin.path),
+            get().loadWorkspaceInfo(builtin.path),
           ]);
         } catch (_) {/* silent */}
       }
@@ -228,18 +235,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   selectWorkspace: async (path) => {
-    // Update local state immediately; backend call is best-effort
-    set({ lastWorkspace: path, currentWorkspace: path, currentDir: path, previewPath: null, previewContent: null, previewType: null, workspaceInfoLoading: true, workspaceInfo: null });
-    try {
-      await fetch('/api/workspaces/select', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path }),
-        credentials: 'include',
-      });
-    } catch (_err) {
-      // Fail silently - local state already updated
-    }
+    // Purely local: the panel's "current selection" is frontend state.
+    // Workspace ownership belongs to each session (state.db cwd), so
+    // there is no global last-workspace to persist on selection.
+    set({ currentWorkspace: path, currentDir: path, previewPath: null, previewContent: null, previewType: null, workspaceInfoLoading: true, workspaceInfo: null });
     // Load directory listing and workspace info (no auto-preview)
     try {
       await Promise.all([

@@ -400,8 +400,6 @@ def main() -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     SESSION_DIR.mkdir(parents=True, exist_ok=True)
     DEFAULT_WORKSPACE.mkdir(parents=True, exist_ok=True)
-    from app.api.config import BUILTIN_DEFAULT_WORKSPACE
-    BUILTIN_DEFAULT_WORKSPACE.mkdir(parents=True, exist_ok=True)
     _done()
 
     # ── Stage 6: Start gateway watcher ──

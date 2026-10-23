@@ -15,7 +15,6 @@ from app.api.config import (
     LOCK, DEFAULT_WORKSPACE, DEFAULT_MODEL, PROJECTS_FILE, HOME,
     get_effective_default_model, get_first_available_model,
 )
-from app.api.workspace import get_last_workspace, get_first_non_external_workspace
 from app.api.agent_sessions import read_importable_agent_session_rows
 from app.api.stream_manager import stream_manager
 
@@ -1057,7 +1056,9 @@ def new_session(workspace=None, model=None, profile=None, defer_notify=False):
     """Create a new session with sensible defaults and persist to state.db.
 
     Defaults are resolved as follows (caller-supplied values take precedence):
-      - workspace: first non-external workspace in the user's list
+      - workspace: the built-in Default workspace (issue #7) — there is no
+        global "last workspace"; workspace ownership lives on each session
+        (state.db cwd), and welcome-state/"+" sessions default to Default
       - model: first available model from the provider list
       - reasoning_effort: "high"
       - personality: None (global default)
@@ -1093,7 +1094,7 @@ def new_session(workspace=None, model=None, profile=None, defer_notify=False):
     except Exception:
         default_mode = "manual"
     s = Session(
-        workspace=workspace or get_first_non_external_workspace(),
+        workspace=workspace or str(DEFAULT_WORKSPACE),
         model=effective_model,
         profile=profile,
         mode=default_mode,
@@ -1535,8 +1536,14 @@ def import_cli_session(
     profile=None,
     created_at=None,
     updated_at=None,
+    workspace=None,
 ):
     """Create a new WebUI session populated with CLI messages.
+
+    *workspace* is the CLI session's cwd from state.db (via
+    get_cli_sessions()); when absent, fall back to the built-in Default
+    workspace — there is no global "last workspace" state.
+
     Returns the Session object.
     """
     from app.api.config import normalize_model_prefix
@@ -1561,7 +1568,7 @@ def import_cli_session(
     s = Session(
         session_id=session_id,
         title=title,
-        workspace=get_last_workspace(),
+        workspace=workspace or str(DEFAULT_WORKSPACE),
         model=normalize_model_prefix(model),
         messages=messages,
         profile=profile,
