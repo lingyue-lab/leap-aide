@@ -241,11 +241,13 @@ export function extractThinkingText(message: Message): string {
     thinkingText = message.reasoning;
   }
 
-  // 3. Parse inline thinking tags from plain text
+  // 3. Parse inline thinking tags from plain text.
+  //    Only a *leading* <think> block counts as reasoning: a literal <think>
+  //    in the middle of prose (e.g. a code sample) must stay in the body.
   if (!thinkingText && typeof content === 'string') {
-    const thinkMatches = [...content.matchAll(/ Phili([\s\S]*?)<\/think>/g)];
-    if (thinkMatches.length > 0) {
-      thinkingText = thinkMatches.map(m => m[1].trim()).filter(t => t).join('\n\n');
+    const leadingThink = content.match(/^\s*<think>([\s\S]*?)<\/think>/);
+    if (leadingThink) {
+      thinkingText = leadingThink[1].trim();
     }
     if (!thinkingText) {
       const gemmaMatches = [...content.matchAll(/<\|channel>thought\n([\s\S]*?)<channel\|>/g)];
@@ -769,14 +771,15 @@ function MessageRowComponent({ message, messages = [], toolCalls = [], isStreami
       thinkingText = message.reasoning;
     }
 
-    // 3. Parse inline thinking tags from plain text: Phili... Phili (DeepSeek, QwQ, MiniMax, etc.)
+    // 3. Parse inline thinking tags from plain text: <think>... </think> (DeepSeek, QwQ, MiniMax, etc.)
     //    and Gemma 4 channel tokens: <|channel>thought\n...<channel|>
+    //    Only a *leading* <think> block is treated as reasoning, so a literal
+    //    <think> mentioned mid-prose is never stripped from the body.
     if (!thinkingText && typeof content === 'string') {
-      // Use global match for all Phili blocks
-      const thinkMatches = [...content.matchAll(/ Phili([\s\S]*?)<\/think>/g)];
-      if (thinkMatches.length > 0) {
-        thinkingText = thinkMatches.map(m => m[1].trim()).filter(t => t).join('\n\n');
-        content = content.replace(/ Phili[\s\S]*?<\/think>\s*/g, '').trimStart();
+      const leadingThink = content.match(/^\s*<think>([\s\S]*?)<\/think>/);
+      if (leadingThink) {
+        thinkingText = leadingThink[1].trim();
+        content = content.replace(/^\s*<think>[\s\S]*?<\/think>\s*/, '');
       }
       if (!thinkingText) {
         const gemmaMatches = [...content.matchAll(/<\|channel>thought\n([\s\S]*?)<channel\|>/g)];
@@ -860,8 +863,8 @@ function MessageRowComponent({ message, messages = [], toolCalls = [], isStreami
     if (textBlocks.length > 0) {
       // Combine text blocks and strip any inline thinking tags
       let combinedText = textBlocks.map(b => b.text || '').join('\n');
-      // Remove Phili tags from display (they're shown in thinking card)
-      combinedText = combinedText.replace(/ Phili[\s\S]*?<\/think>\s*/g, '').trimStart();
+      // Strip only a leading <think> block; a literal <think> mid-prose stays.
+      combinedText = combinedText.replace(/^\s*<think>[\s\S]*?<\/think>\s*/, '');
       combinedText = combinedText.replace(/<\|channel>thought\n[\s\S]*?<channel\|>\s*/g, '').trimStart();
       if (combinedText.trim()) {
         // User messages are shown verbatim (raw text), not markdown-rendered.
