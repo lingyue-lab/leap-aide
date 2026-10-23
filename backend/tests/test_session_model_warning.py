@@ -18,9 +18,14 @@ both ``caplog`` (warning behaviour) and the returned value (display correctness)
 Environment
 -----------
 The module anchors itself to ONE deterministic environment: an autouse fixture
-sets a fake ``DEEPSEEK_API_KEY`` so provider detection puts the static
-``_PROVIDER_MODELS`` deepseek list into the model catalog (zero network — the
-list is hardcoded in api/config.py). Display-normalization assertions can
+sets a fake ``DEEPSEEK_API_KEY`` and then WARMS the model catalog via the
+blocking ``get_available_models()`` so provider detection puts the static
+``_PROVIDER_MODELS`` deepseek list into the cache (zero network — the list is
+hardcoded in api/config.py). The warm step is required, not optional: both
+``_resolve_compatible_session_model`` and ``normalize_model_prefix`` read the
+catalog through the non-blocking ``peek_available_models()`` (issue #8), which
+on a cold cache answers config-only with empty groups and never builds — the
+bare name would come back unnormalized. Display-normalization assertions can
 therefore be exact, and this module is green whether or not the runner happens
 to export provider keys. Do NOT gate these tests on live-key opt-in
 (``TEST_USING_LIVE_KEY``): they never call a provider.
@@ -38,14 +43,30 @@ def _deepseek_configured(monkeypatch):
     """Anchor the module to a "DeepSeek is configured" environment.
 
     The deepseek catalog group comes from the static _PROVIDER_MODELS list in
-    api/config.py, so a fake key only flips provider detection —
-    get_available_models() never makes a network call. This makes the display
-    normalization assertions exact and independent of whatever provider keys
-    the test runner happens to export.
+    api/config.py, so a fake key only flips provider detection — the build
+    below never fetches a provider model list over the network. Warming is
+    also what makes the display normalization assertions exact and independent
+    of whatever provider keys the test runner happens to export.
+
+    Ordering: conftest's autouse ``_invalidate_models_cache_after_test`` runs
+    before this module-level fixture (conftest fixtures are instantiated
+    first), so the warm here is NOT wiped by the per-test pre-invalidation.
     """
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-only-not-a-real-key")
-    from app.api.config import invalidate_models_cache
+    # The cold build probes the EC2 IMDS endpoint for AWS credentials
+    # (bedrock detection) — ~4s of socket timeout on hosts with no IMDS.
+    # Irrelevant to these display tests, so skip the probe entirely.
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    from app.api.config import get_available_models, invalidate_models_cache
     invalidate_models_cache()  # drop any catalog cached by a prior test
+    # Warm the cache: peek_available_models() never builds, so without this
+    # the resolver and normalize_model_prefix see an empty config-only catalog.
+    catalog = get_available_models()
+    group_ids = {(g.get("provider_id") or "").lower() for g in catalog.get("groups") or []}
+    assert "deepseek" in group_ids, (
+        "expected the fixture's fake DEEPSEEK_API_KEY to yield a deepseek "
+        f"catalog group, got provider ids {sorted(group_ids)!r}"
+    )
 
 
 def _make_session(model: str, session_id: str = "s_test") -> SessionModel:
