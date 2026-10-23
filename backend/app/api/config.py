@@ -50,11 +50,42 @@ SESSIONS_DISPLAY_DIR = STATE_DIR / "sessions_display"
 WORKSPACES_FILE = STATE_DIR / "workspaces.json"
 SESSION_INDEX_FILE = SESSION_DIR / "_index.json"
 SETTINGS_FILE = STATE_DIR / "settings.json"
-LAST_WORKSPACE_FILE = STATE_DIR / "last_workspace.txt"
 PROJECTS_FILE = STATE_DIR / "projects.json"
-BUILTIN_DEFAULT_WORKSPACE = STATE_DIR / "workspaces" / "default"
-
 logger = logging.getLogger(__name__)
+
+
+def _resolve_default_workspace() -> Path:
+    """Single source of truth for the default workspace (issue #7).
+
+    HERMES_WEBUI_DEFAULT_WORKSPACE wins when set and usable: an existing
+    directory (covers read-only :ro mounts — docker-entrypoint.sh supports
+    them) or one we can create. Otherwise the managed fallback
+    STATE_DIR/workspaces/default.
+    """
+    fallback = STATE_DIR / "workspaces" / "default"
+    raw = os.getenv("HERMES_WEBUI_DEFAULT_WORKSPACE")
+    if not raw:
+        return fallback
+    try:
+        path = Path(raw).expanduser().resolve()
+        if path.is_dir():
+            return path
+        path.mkdir(parents=True, exist_ok=True)
+        if path.is_dir():
+            return path
+        logger.warning(
+            "HERMES_WEBUI_DEFAULT_WORKSPACE is not a directory: %s (using %s)",
+            path, fallback,
+        )
+    except OSError as exc:
+        logger.warning(
+            "Cannot use HERMES_WEBUI_DEFAULT_WORKSPACE=%s: %s (using %s)",
+            raw, exc, fallback,
+        )
+    return fallback
+
+
+DEFAULT_WORKSPACE = _resolve_default_workspace()
 
 
 # ── Compression constants ────────────────────────────────────────────────────
@@ -289,74 +320,6 @@ reload_config()
 cfg = _cfg_cache  # alias for backward compat with existing references
 
 
-# ── Default workspace discovery ───────────────────────────────────────────────
-def _workspace_candidates(raw: str | Path | None = None) -> list[Path]:
-    """Return ordered candidate workspace paths, de-duplicated."""
-    candidates: list[Path] = []
-
-    def add(candidate: str | Path | None) -> None:
-        if candidate in (None, ""):
-            return
-        try:
-            path = Path(candidate).expanduser().resolve()
-        except Exception:
-            return
-        if path not in candidates:
-            candidates.append(path)
-
-    add(raw)
-    if os.getenv("HERMES_WEBUI_DEFAULT_WORKSPACE"):
-        add(os.getenv("HERMES_WEBUI_DEFAULT_WORKSPACE"))
-
-    home_workspace = HOME / "workspace"
-    home_work = HOME / "work"
-    if home_workspace.exists():
-        add(home_workspace)
-    if home_work.exists():
-        add(home_work)
-
-    add(home_workspace)
-    add(STATE_DIR / "workspace")
-    return candidates
-
-
-
-def _ensure_workspace_dir(path: Path) -> bool:
-    """Best-effort check that a workspace directory exists and is writable."""
-    try:
-        path = path.expanduser().resolve()
-        path.mkdir(parents=True, exist_ok=True)
-        return path.is_dir() and os.access(path, os.R_OK | os.W_OK | os.X_OK)
-    except Exception:
-        return False
-
-
-
-def resolve_default_workspace(raw: str | Path | None = None) -> Path:
-    """Return the first usable workspace path, creating it when possible."""
-    for candidate in _workspace_candidates(raw):
-        if _ensure_workspace_dir(candidate):
-            return candidate
-    raise RuntimeError(
-        "Could not create or access any usable workspace directory. "
-        "Set HERMES_WEBUI_DEFAULT_WORKSPACE to a writable path."
-    )
-
-
-
-def _discover_default_workspace() -> Path:
-    """
-    Resolve the default workspace in order:
-      1. HERMES_WEBUI_DEFAULT_WORKSPACE env var
-      2. ~/workspace if it already exists
-      3. ~/work if it already exists
-      4. ~/workspace (create if needed)
-      5. STATE_DIR / workspace
-    """
-    return resolve_default_workspace()
-
-
-DEFAULT_WORKSPACE = _discover_default_workspace()
 DEFAULT_MODEL = os.getenv("HERMES_WEBUI_DEFAULT_MODEL", "")  # Empty = use provider default; avoids showing unavailable OpenAI model to non-OpenAI users (#646)
 
 
@@ -2445,7 +2408,6 @@ def _get_session_agent_lock(session_id: str) -> threading.Lock:
 # ── Settings persistence ─────────────────────────────────────────────────────
 
 _SETTINGS_DEFAULTS = {
-    "default_workspace": str(DEFAULT_WORKSPACE),
     "onboarding_completed": False,
     "send_key": "enter",  # 'enter' or 'ctrl+enter'
     "show_cli_sessions": True,  # show hermes CLI sessions from state.db in the sidebar
@@ -2473,7 +2435,7 @@ _SETTINGS_DEFAULTS = {
     "default_mode": "manual",  # approval mode for new sessions: manual | smart | yolo
     "session_ttl": "86400",  # login cookie TTL in seconds (default 24h)
 }
-_SETTINGS_LEGACY_DROP_KEYS = {"assistant_language", "bubble_layout", "default_model", "show_token_usage", "sync_to_insights"}
+_SETTINGS_LEGACY_DROP_KEYS = {"assistant_language", "bubble_layout", "default_model", "show_token_usage", "sync_to_insights", "default_workspace"}
 _SETTINGS_THEME_VALUES = {"light", "dark", "system"}
 _SETTINGS_SKIN_VALUES = {
     "default",
@@ -2716,19 +2678,17 @@ def save_settings(settings: dict) -> dict:
             skin_value = None
     current["theme"], current["skin"] = _normalize_appearance(theme_value, skin_value)
 
-    current["default_workspace"] = str(
-        resolve_default_workspace(current.get("default_workspace"))
-    )
+    # default_workspace is no longer a persisted setting (issue #7): the
+    # default workspace derives solely from HERMES_WEBUI_DEFAULT_WORKSPACE.
+    # Any stale value sent by older clients is ignored (not an allowed key)
+    # and dropped from disk on the next write via load_settings().
+    current.pop("default_workspace", None)
     persisted = {k: v for k, v in current.items() if k != "default_model"}
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
     SETTINGS_FILE.write_text(
         json.dumps(persisted, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    # Update runtime defaults so new sessions use them immediately
-    global DEFAULT_WORKSPACE
-    if "default_workspace" in current:
-        DEFAULT_WORKSPACE = resolve_default_workspace(current["default_workspace"])
     current["default_model"] = get_effective_default_model()
     # Sync in-memory cache so next load_settings() returns fresh data immediately
     global _settings_cache, _settings_mtime
@@ -2740,31 +2700,9 @@ def save_settings(settings: dict) -> dict:
     return current
 
 
-# Apply saved settings on startup (override env-derived defaults)
-# Exception: if HERMES_WEBUI_DEFAULT_WORKSPACE is explicitly set in the
-# environment, it wins over whatever settings.json has stored.  Persisted
-# config must never shadow an explicit env-var override (Docker deployments
-# rely on this — otherwise deleting settings.json is the only escape).
-_startup_settings = load_settings()
-try:
-    _settings_file_exists = SETTINGS_FILE.exists()
-except OSError:
-    _settings_file_exists = False
-if _settings_file_exists:
-    if not os.getenv("HERMES_WEBUI_DEFAULT_WORKSPACE"):
-        DEFAULT_WORKSPACE = resolve_default_workspace(
-            _startup_settings.get("default_workspace")
-        )
-    _startup_settings.pop("default_model", None)  # always drop stale value; model comes from config.yaml
-    if _startup_settings.get("default_workspace") != str(DEFAULT_WORKSPACE):
-        _startup_settings["default_workspace"] = str(DEFAULT_WORKSPACE)
-        try:
-            SETTINGS_FILE.write_text(
-                json.dumps(_startup_settings, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-        except Exception:
-            pass
+# NOTE (issue #7): DEFAULT_WORKSPACE is no longer overridden from settings.json
+# at startup. It is resolved once from HERMES_WEBUI_DEFAULT_WORKSPACE at import
+# time and is now a true constant.
 
 # ── SESSIONS in-memory cache (LRU OrderedDict) ───────────────────────────────
 SESSIONS: collections.OrderedDict = collections.OrderedDict()

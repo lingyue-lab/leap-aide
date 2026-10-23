@@ -66,7 +66,17 @@ function WelcomeState() {
   // reads `undefined` for `placeholderSid`, returns early, and the send
   // button is silently dead — clicking it fires no POST /api/chat/start.
   useEffect(() => {
-    if (!pendingNewSession) enterPendingNewSession();
+    if (pendingNewSession) return;
+    // Ensure the workspace list is loaded first so the placeholder resolves
+    // the built-in Default workspace for the composer footer chip.  App boot
+    // also loads it; this guard covers the first-load race where the
+    // placeholder would otherwise get no workspace at all.
+    const wsState = useWorkspaceStore.getState();
+    if (wsState.workspacesLoaded) {
+      enterPendingNewSession();
+    } else {
+      wsState.loadWorkspaces().then(() => enterPendingNewSession());
+    }
   }, [pendingNewSession, enterPendingNewSession]);
 
   // Eagerly fetch the model catalog so the picker shows a default selection

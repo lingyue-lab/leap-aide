@@ -83,7 +83,7 @@ bash scripts/ctl.sh stop-docker
 
 After the Docker container starts successfully, open [http://localhost:8787](http://localhost:8787) to use the system. The default login password is `lingyue-lab`.
 
-The current configuration mounts `~/.hermes` to `/home/leap-aide/.hermes` and `~/.hermes_workspace` to `/workspace`. These two persistent directories hold runtime data so the service can recover properly across restarts. Data exchange between the host machine and LeapAide also goes through `~/.hermes_workspace`.
+The current configuration mounts `~/.hermes` to `/home/leap-aide/.hermes` and `~/.hermes_workspaces` to `/workspaces`. These two persistent directories hold runtime data so the service can recover properly across restarts. Data exchange between the host machine and LeapAide also goes through `~/.hermes_workspaces`.
 
 See `docker-compose.yml` for more detailed configuration; change the published port and the system configuration as needed. All system configuration is done through environment variables.
 

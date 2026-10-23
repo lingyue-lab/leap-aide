@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { Session, SessionListItem } from '@/types';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 import { useChatStore } from '@/stores/useChatStore';
+import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 
 interface SessionState {
   sessions: SessionListItem[];
@@ -145,10 +146,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // useSettingsStore.ts.  Without this the composer footer shows no
     // selected model in welcome state.
     const defaultModel = useSettingsStore.getState().settings?.model;
+    // New sessions default to the built-in Default workspace — no
+    // inheritance from the current session (workspace ownership lives on
+    // state.db cwd; the WebUI's only default is builtin Default, issue #7).
+    // Falls back to undefined → backend new_session() resolves Default.
+    const builtinDefaultWs = useWorkspaceStore.getState().workspaces
+      .find((w) => w.builtin)?.path;
     const placeholder: Session = {
       session_id: placeholderSid,
       title: 'Untitled',
-      workspace: workspace || state.currentSession?.workspace || undefined,
+      workspace: workspace || builtinDefaultWs || undefined,
       model: state.currentSession?.model ?? defaultModel ?? 'anthropic/claude-sonnet-4-5',
       reasoning_effort: null,
       personality: null,

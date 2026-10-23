@@ -12,7 +12,7 @@ services:
       # Persistent state directory
       - ${HOME}/.hermes:/home/leap-aide/.hermes
       # Persistent workspace directory
-      - ${HOME}/.hermes_workspace:/workspace
+      - ${HOME}/.hermes_workspaces:/workspaces
     environment:
       # You can set enviroments to override .env.
       # Set to your host user ID: run `id -u` and `id -g` to find them.
@@ -32,7 +32,7 @@ services:
       # live under the mounted ~/.hermes volume. Mirrors the entrypoint default.
       - HERMES_HOME=/home/leap-aide/.hermes
       - HERMES_WEBUI_PASSWORD=lingyue-lab
-      - HERMES_WEBUI_DEFAULT_WORKSPACE=/workspace
+      - HERMES_WEBUI_DEFAULT_WORKSPACE=/workspaces
       - HTTP_PROXY=
       - HTTPS_PROXY=
       - NO_PROXY=

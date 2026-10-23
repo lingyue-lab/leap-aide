@@ -15,7 +15,7 @@ import type { DelegateChildSession } from '@/types';
 
 export default function SessionList() {
   const { t } = useTranslation('common');
-  const { sessions, currentSessionId, currentSession, loadSessions, createSession, selectSession } = useSessionStore();
+  const { sessions, currentSessionId, loadSessions, createSession, selectSession } = useSessionStore();
   const delegateChildrenVersion = useSessionStore((s) => s.delegateChildrenVersion);
   const { workspaces, workspacesLoaded } = useWorkspaceStore();
   const [searchQuery, setSearchQuery] = useState('');
@@ -230,10 +230,9 @@ export default function SessionList() {
     // no-op: user already in welcome state (welcome is a single-way door —
     // clicking + again does nothing; they must type or refresh).
     if (useSessionStore.getState().pendingNewSession) return;
-    // Inherit workspace from the current active session; fallback to Home (undefined → backend default)
-    const activeWs = sessions.find((s) => s.session_id === currentSessionId)?.workspace
-      || currentSession?.workspace;
-    await createSession(activeWs || undefined);
+    // No workspace inheritance: new sessions resolve the built-in Default
+    // workspace inside enterPendingNewSession (state.db cwd owns workspace).
+    await createSession();
   };
 
   const runSearch = useCallback(async (query: string) => {

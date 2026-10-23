@@ -792,7 +792,6 @@ def cleanup_test_sessions():
     """
     Yields a list for tests to register created session IDs.
     Deletes all registered sessions after each test.
-    Resets last_workspace to the test workspace to prevent state bleed.
     """
     created: list[str] = []
     yield created
@@ -809,12 +808,6 @@ def cleanup_test_sessions():
         # known source wipes any zero-message sessions left behind by previous
         # tests, keeping the in-memory SESSIONS cache from leaking across tests.
         _post(TEST_BASE, "/api/sessions/cleanup", {"source": "webui", "older_than_days": 1})
-    except Exception:
-        pass
-
-    try:
-        last_ws_file = TEST_STATE_DIR / "last_workspace.txt"
-        last_ws_file.write_text(str(TEST_WORKSPACE), encoding='utf-8')
     except Exception:
         pass
 

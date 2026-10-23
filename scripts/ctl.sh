@@ -520,7 +520,7 @@ USAGE
   # immediately — e.g. a uid collision). Write one file from inside the
   # container, check who owns it on the host, and bail out the moment the
   # container dies.
-  local probe="$HOME/.hermes_workspace/.uid_probe"
+  local probe="$HOME/.hermes_workspaces/.uid_probe"
   local expected="$WANTED_UID"
   local actual="" cid=""
 
@@ -538,9 +538,9 @@ USAGE
     while (( SECONDS < deadline )); do
       # Exec as WANTED_UID — the uid the service actually runs as — not the
       # image's default USER (leap-aide-init). The default user cannot write a
-      # 755 /workspace owned by another uid, so the probe file never appears and
+      # 755 /workspaces owned by another uid, so the probe file never appears and
       # the check times out even when the service itself runs fine.
-      if "$_ENGINE" exec -u "$WANTED_UID" "$cid" sh -c 'touch /workspace/.uid_probe' >/dev/null 2>&1; then
+      if "$_ENGINE" exec -u "$WANTED_UID" "$cid" sh -c 'touch /workspaces/.uid_probe' >/dev/null 2>&1; then
         actual=$(stat -c '%u' "$probe" 2>/dev/null || true)
         if [[ -n "$actual" ]]; then
           break
@@ -556,8 +556,8 @@ USAGE
     rm -f "$probe" 2>/dev/null || true
 
     if [[ -z "$actual" ]]; then
-      warn "postflight: could not verify /workspace ownership within 30s (container ${cid})"
-      warn "  check: $_ENGINE exec ${cid} stat -c '%u' /workspace"
+      warn "postflight: could not verify /workspaces ownership within 30s (container ${cid})"
+      warn "  check: $_ENGINE exec ${cid} stat -c '%u' /workspaces"
       exit 1
     elif [[ "$actual" != "$expected" ]]; then
       warn "ownership mismatch: container writes files as host uid ${actual}, expected ${expected}"

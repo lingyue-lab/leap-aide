@@ -24,7 +24,7 @@ from app.api.config import (
     verify_hermes_imports,
 )
 from app.api.providers import _write_env_file  # shared impl with _ENV_LOCK (#1164)
-from app.api.workspace import get_last_workspace, load_workspaces
+from app.api.workspace import load_workspaces
 
 logger = logging.getLogger(__name__)
 
@@ -486,7 +486,11 @@ def get_onboarding_status() -> dict:
     imports_ok, missing, errors = verify_hermes_imports()
     runtime = _status_from_runtime(cfg, imports_ok)
     workspaces = load_workspaces()
-    last_workspace = get_last_workspace()
+    # No global last-workspace state exists anymore (workspace ownership
+    # lives on each session's state.db cwd); the only WebUI default is the
+    # built-in Default workspace.  The "last" response key is kept for
+    # compatibility but always carries that default.
+    last_workspace = str(DEFAULT_WORKSPACE)
     available_models = get_available_models()
 
     # HERMES_WEBUI_SKIP_ONBOARDING=1 lets hosting providers (e.g. Agent37) ship

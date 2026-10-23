@@ -121,7 +121,6 @@ def _get_ai_agent():
             pass
     return AIAgent
 from app.api.models import get_session
-from app.api.workspace import set_last_workspace
 
 # Fields that are safe to send to LLM provider APIs.
 # Everything else (attachments, timestamp, _ts, etc.) is display-only
