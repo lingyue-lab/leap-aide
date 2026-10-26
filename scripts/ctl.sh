@@ -576,28 +576,39 @@ USAGE
   # answers once boot finishes; daemonless podman never runs the compose
   # healthcheck probes, so readiness must be proven from the host. /health
   # answers 503 {"status":"initializing"} until init completes, then 200.
-  local health_ok="false" health_t0=${SECONDS} scheme hcode
-  info "waiting for /health on localhost:${WEBUI_PORT} (503 until the server is ready)"
-  while (( SECONDS - health_t0 < 180 )); do
-    for scheme in https http; do
-      # --noproxy: host proxy env vars must not intercept localhost probes.
-      hcode=$(curl -sk --noproxy '*' --max-time 3 -o /dev/null -w '%{http_code}' \
-               "${scheme}://localhost:${WEBUI_PORT}/health" 2>/dev/null || echo 000)
-      if [[ "$hcode" == "200" ]]; then health_ok="true"; break; fi
+  # CTL_HEALTH_WAIT_TIMEOUT: seconds to wait (default 180); 0 skips the wait —
+  # used by the stubbed-engine wrapper tests, which never serve /health.
+  local health_timeout="${CTL_HEALTH_WAIT_TIMEOUT:-180}"
+  if (( health_timeout <= 0 )); then
+    info "health wait skipped (CTL_HEALTH_WAIT_TIMEOUT=$health_timeout)"
+  else
+    local health_ok="false" health_t0=${SECONDS} scheme hcode
+    local cid=$(_container_id)
+    info "waiting for /health on localhost:${WEBUI_PORT} (503 until the server is ready)"
+    while (( SECONDS - health_t0 < health_timeout )); do
+      for scheme in https http; do
+        # --noproxy: host proxy env vars must not intercept localhost probes.
+        hcode=$(curl -sk --noproxy '*' --max-time 3 -o /dev/null -w '%{http_code}' \
+                 "${scheme}://localhost:${WEBUI_PORT}/health" 2>/dev/null || echo 000)
+        if [[ "$hcode" == "200" ]]; then health_ok="true"; break; fi
+      done
+      [[ "$health_ok" == "true" ]] && break
+      # A container that dies while we wait must fail fast instead of burning
+      # the whole timeout. inspect by id (not ps -q) so a stopped container
+      # stays visible; fall back to a fresh lookup if no id was found yet.
+      if [[ -z "$cid" ]]; then cid=$(_container_id); fi
+      if [[ -n "$cid" ]] && ! _container_running "$cid"; then
+        warn "container exited during boot; check: $_ENGINE logs $cid"
+        exit 1
+      fi
+      sleep 1
     done
-    [[ "$health_ok" == "true" ]] && break
-    cid=$(_container_id)
-    if [[ -n "$cid" ]] && [[ "$("$_ENGINE" inspect -f '{{.State.Status}}' "$cid" 2>/dev/null)" != "running" ]]; then
-      warn "container exited during boot; check: $_ENGINE logs $cid"
+    if [[ "$health_ok" != "true" ]]; then
+      warn "/health did not report ok within ${health_timeout}s; container left running for inspection"
       exit 1
     fi
-    sleep 1
-  done
-  if [[ "$health_ok" != "true" ]]; then
-    warn "/health did not report ok within 180s; container left running for inspection"
-    exit 1
+    info "healthy: /health ok after $((SECONDS - health_t0))s"
   fi
-  info "healthy: /health ok after $((SECONDS - health_t0))s"
 
   if [[ "$follow" == "true" ]]; then
     _compose_run "${files[@]}" logs -f
