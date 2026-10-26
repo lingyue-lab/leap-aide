@@ -49,41 +49,100 @@ function _emit(event: NotifyEventType, data: any) {
 // SSE notify connection removed - using WebSocket only
 
 /**
+ * Baseline buffer (issue #16).
+ *
+ * The synchronous-XHR era relied on the main thread being blocked during
+ * loadSessions(): any notify events that arrived while the baseline was
+ * loading were queued by the browser and processed only after it finished.
+ * loadSessions() is async now, so we restore that guarantee explicitly:
+ * while a baseline load is pending, non-subscribe events are buffered;
+ * once the load settles they are replayed in arrival order.  A second
+ * subscribe_success during a pending baseline is chained (its own load
+ * becomes the new baseline) and buffering continues across both.
+ */
+let _baselinePending = false;
+let _baselinePromise: Promise<void> | null = null;
+let _baselineToken = 0;
+let _buffer: Array<{ event: string; data: any }> = [];
+
+function _replayBuffer() {
+  const buffered = _buffer;
+  _buffer = [];
+  for (const item of buffered) {
+    _processNotify(item.event, item.data);
+  }
+}
+
+async function _loadBaseline(): Promise<void> {
+  // Hardening: clear stale stream states from before disconnection.
+  // Only clear streams that are busy but NOT streaming — those are truly
+  // stale (stream ended while disconnected). Streams with streaming=true
+  // may still be active on the backend; let done/no_stream handle them.
+  // Runs after the baseline lands so active_stream_id reflects the fresh
+  // snapshot (same order as the old synchronous implementation).
+  await useSessionStore.getState().loadSessions();
+
+  const sessions = useSessionStore.getState().sessions;
+  const activeStreamSessionIds = new Set(
+    sessions.filter(s => s.active_stream_id).map(s => s.session_id)
+  );
+  const streamSessionIds = StreamManager.getActiveSessionIds();
+  for (const sid of streamSessionIds) {
+    const state = StreamManager.getSessionStreamState(sid);
+    // Only clear if busy=true AND streaming=false (truly stale).
+    // If streaming=true, the stream might still be active —
+    // done/no_stream will handle cleanup.
+    if (state?.busy && !state?.streaming && !activeStreamSessionIds.has(sid)) {
+      console.warn(`[notifyManager] Clearing stale stream state for session ${sid}`);
+      StreamManager.clearSessionStream(sid);
+    }
+  }
+}
+
+/**
  * Handle a notify event from WebSocket.
  * Called by wsManager when it receives a notify channel message.
  */
 export function handleNotifyEvent(event: string, data: any): void {
   console.log(`[${ts()}] [WS/NOTIFY] ${event}:`, data);
 
-  switch (event) {
-    case 'subscribe_success':
-      // Synchronous baseline: loadSessions() blocks until complete, including
-      // subagent sessions with active_stream_id. This ensures the baseline is
-      // fully populated before any subsequent begin_stream / upsert_session
-      // events are processed.
-      useSessionStore.getState().loadSessions();
+  if (_baselinePending && event !== 'subscribe_success') {
+    // Baseline in flight: preserve the old synchronous-XHR ordering
+    // guarantee by holding incremental events until it lands.
+    _buffer.push({ event, data });
+    return;
+  }
 
-      // Hardening: clear stale stream states from before disconnection.
-      // Only clear streams that are busy but NOT streaming — those are truly
-      // stale (stream ended while disconnected). Streams with streaming=true
-      // may still be active on the backend; let done/no_stream handle them.
-      {
-        const sessions = useSessionStore.getState().sessions;
-        const activeStreamSessionIds = new Set(
-          sessions.filter(s => s.active_stream_id).map(s => s.session_id)
-        );
-        const streamSessionIds = StreamManager.getActiveSessionIds();
-        for (const sid of streamSessionIds) {
-          const state = StreamManager.getSessionStreamState(sid);
-          // Only clear if busy=true AND streaming=false (truly stale).
-          // If streaming=true, the stream might still be active —
-          // done/no_stream will handle cleanup.
-          if (state?.busy && !state?.streaming && !activeStreamSessionIds.has(sid)) {
-            console.warn(`[notifyManager] Clearing stale stream state for session ${sid}`);
-            StreamManager.clearSessionStream(sid);
-          }
+  if (event === 'subscribe_success') {
+    // Token guards the teardown: only the NEWEST baseline clears
+    // `_baselinePending` and replays the buffer, so a chained second
+    // subscribe_success keeps buffering across both loads (no gap where
+    // events would race the second snapshot).
+    const token = ++_baselineToken;
+    const prev = _baselinePromise ?? Promise.resolve();
+    _baselinePending = true;
+    _baselinePromise = (async () => {
+      try {
+        await prev; // chain behind any in-flight baseline — newest wins
+        await _loadBaseline();
+      } finally {
+        if (token === _baselineToken) {
+          _baselinePending = false;
+          _baselinePromise = null;
+          _replayBuffer();
         }
       }
+    })();
+    return;
+  }
+
+  _processNotify(event, data);
+}
+
+function _processNotify(event: string, data: any): void {
+  switch (event) {
+    case 'subscribe_success':
+      // Handled by handleNotifyEvent above (baseline buffer orchestration).
       break;
 
     case 'begin_stream':

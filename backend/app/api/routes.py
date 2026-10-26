@@ -62,6 +62,7 @@ from app.api.config import (
     SERVER_START_TIME,
     _resolve_cli_toolsets,
     _INDEX_HTML_PATH,
+    _API_MODELS_WAIT_S,
     get_available_models,
     peek_available_models,
     load_settings,
@@ -759,7 +760,11 @@ def handle_get(handler, parsed) -> bool:
         )
 
     if parsed.path == "/api/models":
-        return j(handler, get_available_models())
+        # Bounded wait for an in-flight cold build (issue #16): degrade to
+        # a building:True answer after _API_MODELS_WAIT_S instead of parking
+        # the request for the full 48-160s provider discovery.  The frontend
+        # store polls until the real catalog lands.
+        return j(handler, get_available_models(wait_seconds=_API_MODELS_WAIT_S))
 
     # ── Config file raw YAML (GET) ──
     if parsed.path == "/api/config/raw":
@@ -1050,13 +1055,30 @@ def handle_get(handler, parsed) -> bool:
             reverse=True,
         )
         safe_merged = []
+        # Batch the bare-model normalization: ONE peek per request instead of
+        # one per row (issue #16: during a cold catalog build each per-row
+        # peek could wait up to 1s, so N bare-model sessions made
+        # GET /api/sessions take N seconds and the sync-XHR frontend froze).
+        _needs_model_catalog = any(
+            s.get("model") and not s["model"].startswith("@") and "/" not in s["model"]
+            for s in merged
+        )
+        _catalog = None
+        if _needs_model_catalog:
+            try:
+                _catalog = peek_available_models()
+            except Exception:
+                # Degraded catalog: rows keep their bare names (normalized on
+                # a later request once the catalog is warm).  Passing the
+                # stub (not None) keeps rows from re-peeking individually.
+                _catalog = {"active_provider": None, "default_model": "", "groups": []}
         for s in merged:
             item = dict(s)
             if isinstance(item.get("title"), str):
                 item["title"] = _redact_text(item["title"])
             # Normalize bare model names for frontend display
             if item.get("model") and not item["model"].startswith("@") and "/" not in item["model"]:
-                item["model"] = Session._normalize_model(item["model"])
+                item["model"] = Session._normalize_model(item["model"], catalog=_catalog)
             safe_merged.append(item)
 
         # Batch query delegate children for all sessions

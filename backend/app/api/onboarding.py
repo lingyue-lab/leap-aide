@@ -11,6 +11,7 @@ from app.api.auth import is_auth_enabled
 from app.api.config import (
     DEFAULT_MODEL,
     DEFAULT_WORKSPACE,
+    _API_MODELS_WAIT_S,
     _FALLBACK_MODELS,
     _HERMES_FOUND,
     _PROVIDER_DISPLAY,
@@ -491,7 +492,9 @@ def get_onboarding_status() -> dict:
     # built-in Default workspace.  The "last" response key is kept for
     # compatibility but always carries that default.
     last_workspace = str(DEFAULT_WORKSPACE)
-    available_models = get_available_models()
+    # Bounded wait (issue #16): the status endpoint must answer during a
+    # cold catalog build; a building:True degrade is fine for the wizard.
+    available_models = get_available_models(wait_seconds=_API_MODELS_WAIT_S)
 
     # HERMES_WEBUI_SKIP_ONBOARDING=1 lets hosting providers (e.g. Agent37) ship
     # a pre-configured instance without the wizard blocking the first load.

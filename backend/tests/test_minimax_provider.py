@@ -94,23 +94,28 @@ def test_minimax_provider_models_has_highspeed():
 # ── MINIMAX_API_KEY env var detection ─────────────────────────────────────────
 
 def test_minimax_api_key_in_env_scan_tuple():
-    """MINIMAX_API_KEY must be included in the env var scan performed by
-    get_available_models(), so users who export MINIMAX_API_KEY see the
+    """MINIMAX_API_KEY must be included in the env var scan performed by the
+    models catalog build, so users who export MINIMAX_API_KEY see the
     MiniMax provider in the dropdown without editing ~/.hermes/.env."""
-    import inspect, ast, textwrap
-    src = inspect.getsource(config.get_available_models)
+    import inspect
+    # Issue #16 hoisted the live build out of get_available_models() into
+    # _build_available_models_uncached() (single-flight background worker);
+    # the env scan tuple lives with the build now.
+    src = inspect.getsource(config._build_available_models_uncached)
     assert 'MINIMAX_API_KEY' in src, (
-        "MINIMAX_API_KEY not found in get_available_models() source — "
-        "it must be added to the env var scan tuple so os.environ is checked."
+        "MINIMAX_API_KEY not found in _build_available_models_uncached() "
+        "source — it must be added to the env var scan tuple so os.environ "
+        "is checked."
     )
 
 
 def test_minimax_cn_api_key_in_env_scan_tuple():
     """MINIMAX_CN_API_KEY must also be scanned (mainland China API key variant)."""
     import inspect
-    src = inspect.getsource(config.get_available_models)
+    src = inspect.getsource(config._build_available_models_uncached)
     assert 'MINIMAX_CN_API_KEY' in src, (
-        "MINIMAX_CN_API_KEY not found in get_available_models() source."
+        "MINIMAX_CN_API_KEY not found in _build_available_models_uncached() "
+        "source."
     )
 
 

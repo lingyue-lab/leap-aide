@@ -406,6 +406,68 @@ def apply_network_preferences() -> bool:
         return False
 
 
+# Idempotence guard for apply_aws_metadata_preference (boot-time only).
+_aws_metadata_probe_done = False
+
+
+def apply_aws_metadata_preference() -> bool:
+    """Probe for the EC2 IMDS endpoint and disable it when unreachable (issue #16).
+
+    On non-AWS hosts the bedrock provider's credential check (botocore
+    ``has_aws_credentials``) probes the link-local IMDS endpoint
+    169.254.169.254 and eats a 1-2s connection timeout per model-catalog
+    build — one of the slow legs of the 48-160s cold build.  A single
+    0.5s TCP probe at boot tells us whether IMDS is worth consulting; when
+    it is not, set the standard botocore opt-outs so every later credential
+    check short-circuits:
+
+      AWS_EC2_METADATA_DISABLED=true
+      AWS_MAX_ATTEMPTS=1
+      AWS_METADATA_SERVICE_NUM_ATTEMPTS=1
+
+    Env vars set by the operator always win (no override via
+    os.environ.setdefault); disable the probe entirely with
+    HERMES_WEBUI_AWS_IMDS_PROBE=0.  On real EC2/ECS the probe succeeds and
+    nothing is changed.  Does not modify the SDK.  Call from main() before
+    any botocore import (i.e. before the model-catalog prewarm starts).
+    """
+    global _aws_metadata_probe_done
+    if _aws_metadata_probe_done:
+        return False
+    _aws_metadata_probe_done = True
+    try:
+        if str(os.environ.get("HERMES_WEBUI_AWS_IMDS_PROBE", "")).strip().lower() in ("0", "false", "no"):
+            logger.info("AWS IMDS probe: disabled via HERMES_WEBUI_AWS_IMDS_PROBE")
+            return False
+        if os.environ.get("AWS_EC2_METADATA_DISABLED"):
+            # Operator already opted out (or in) — don't second-guess.
+            return False
+
+        import socket as _socket
+
+        try:
+            # Short connect timeout: an unreachable link-local address is
+            # normally refused/routed-to-nowhere in well under 500ms.
+            with _socket.create_connection(("169.254.169.254", 80), timeout=0.5):
+                pass
+            logger.info("AWS IMDS probe: reachable — leaving credential discovery untouched")
+            return True
+        except OSError:
+            os.environ.setdefault("AWS_EC2_METADATA_DISABLED", "true")
+            os.environ.setdefault("AWS_MAX_ATTEMPTS", "1")
+            os.environ.setdefault("AWS_METADATA_SERVICE_NUM_ATTEMPTS", "1")
+            logger.info(
+                "AWS IMDS probe: unreachable — disabled IMDS credential "
+                "discovery for this process (AWS_EC2_METADATA_DISABLED=true; "
+                "set it yourself to override, HERMES_WEBUI_AWS_IMDS_PROBE=0 "
+                "to skip this probe)"
+            )
+            return False
+    except Exception:
+        logger.warning("AWS IMDS probe: failed", exc_info=True)
+        return False
+
+
 def verify_hermes_imports() -> tuple:
     """
     Attempt to import the key Hermes modules.
@@ -1023,7 +1085,7 @@ def get_first_available_model() -> str:
     return get_effective_default_model()
 
 
-def normalize_model_prefix(model_id: str) -> str:
+def normalize_model_prefix(model_id: str, *, catalog: dict | None = None) -> str:
     """Ensure bare model names carry an ``@provider:`` prefix when applicable.
 
     Models from non-default provider groups are presented in the dropdown as
@@ -1038,6 +1100,11 @@ def normalize_model_prefix(model_id: str) -> str:
       - Contains ``/`` (OpenRouter-style) → return as-is.
       - Bare name → look up in catalog; if found under a non-default provider
         group, return ``@provider:model``.  Otherwise return as-is.
+
+    Args:
+        catalog: pre-fetched catalog to consult (batch callers such as
+            GET /api/sessions pass one peek result for all rows, issue #16).
+            When None, a single-row non-blocking peek is done per call.
     """
     model = (model_id or "").strip()
     if not model:
@@ -1046,13 +1113,14 @@ def normalize_model_prefix(model_id: str) -> str:
     if model.startswith("@") or "/" in model:
         return model
 
-    try:
-        # Non-blocking peek (issue #8): groups are best-effort here — on a
-        # cold cache the bare name is returned unchanged and normalized on a
-        # later request once the catalog is warm.
-        catalog = peek_available_models()
-    except Exception:
-        return model
+    if catalog is None:
+        try:
+            # Non-blocking peek (issue #8): groups are best-effort here — on a
+            # cold cache the bare name is returned unchanged and normalized on a
+            # later request once the catalog is warm.
+            catalog = peek_available_models()
+        except Exception:
+            return model
 
     active_provider = (catalog.get("active_provider") or "").lower()
     for group in catalog.get("groups") or []:
@@ -1220,9 +1288,34 @@ def set_hermes_default_model(model_id: str) -> dict:
 _available_models_cache: dict | None = None
 _available_models_cache_ts: float = 0.0
 _AVAILABLE_MODELS_CACHE_TTL: float = 86400.0  # 24 hours
-_available_models_cache_lock = threading.RLock()  # must be RLock: cold path refactoring moved slow work inside this lock, requiring re-entry
+# Cache lock guards ONLY millisecond-scale cache-state ops (reference swaps,
+# timestamps, the build-in-progress flag, generation counter).  The live
+# catalog build (SDK provider discovery, IMDS/HTTP probes) runs OUTSIDE this
+# lock on a background worker thread — readers never park behind a build
+# (issue #16: the old design held this lock across the whole ~160s build).
+_available_models_cache_lock = threading.RLock()
 _cache_build_cv = threading.Condition(_available_models_cache_lock)  # shares underlying RLock so notify_all() is safe inside with _available_models_cache_lock
-_cache_build_in_progress = False  # True while a cold path is actively building
+# Single-flight guard for the live build: the caller that flips
+# _cache_build_in_progress False->True (under the cache lock) is the one that
+# spawns the worker; everyone else is a pure CV waiter.  The flag is only ever
+# cleared by the worker when the build has fully finished (published, failed,
+# or abandoned), so waiters never observe "not building" while a worker is
+# still winding down.
+_cache_build_in_progress = False
+# Incremented on every invalidation (config change, provider edit, manual
+# invalidate).  A build started under an older generation discards its result
+# instead of publishing stale data over the invalidation.
+_models_cache_generation = 0
+# Error raised by the most recent failed build (cleared when a new build
+# starts).  Lets the call that spawned the failed worker re-raise it.
+_models_build_error: BaseException | None = None
+
+# Bound on how long a request-path caller waits for an in-flight build
+# before degrading to a stale/disk/config-only answer flagged
+# ``building: True`` (issue #16: /api/models used to block for the full
+# 48-160s cold build).  The boot prewarm passes wait_seconds=None and waits
+# for the real catalog.
+_API_MODELS_WAIT_S = float(os.getenv("HERMES_WEBUI_MODELS_WAIT_S", "3.0"))
 
 # Cache for credential pool results -- calling load_pool() per-provider per-server
 # session is expensive (~10s for zai due to endpoint probing).  The credential pool
@@ -1290,12 +1383,15 @@ def invalidate_models_cache():
     result from the disk cache because the disk hit is checked before the memory
     cache rebuild runs.
     """
-    global _cache_build_in_progress, _available_models_cache, _available_models_cache_ts, _cache_build_cv
+    global _available_models_cache, _available_models_cache_ts, _models_cache_generation
     with _available_models_cache_lock:
         _available_models_cache = None
         _available_models_cache_ts = 0.0
-        _cache_build_in_progress = False
-        _cache_build_cv.notify_all()
+        # Bump the generation so an in-flight build discards its (now stale)
+        # result and retries.  Do NOT clear _cache_build_in_progress here —
+        # that flag is owned by the build worker; clobbering it would wake
+        # waiters while the stale build is still running (issue #16).
+        _models_cache_generation += 1
         # Clear the credential pool cache too. The cache key is provider_id
         # only, so without this, tests (and live provider key edits) see a
         # stale CredentialPool from a prior auth_store payload — the test_
@@ -1318,10 +1414,13 @@ def invalidate_provider_models_cache(provider_id: str):
     Args:
         provider_id: canonical provider id (e.g. 'openai', 'anthropic', 'custom:my-key')
     """
-    global _available_models_cache, _available_models_cache_ts, _CREDENTIAL_POOL_CACHE
+    global _available_models_cache, _available_models_cache_ts, _CREDENTIAL_POOL_CACHE, _models_cache_generation
     with _available_models_cache_lock:
         _available_models_cache = None
         _available_models_cache_ts = 0.0
+        # Invalidate-vs-build race guard (issue #16): an in-flight build
+        # started before this point must not publish over the invalidation.
+        _models_cache_generation += 1
         _provider_models_invalidated_ts[provider_id] = time.time()
         # Also evict the credential pool so the next cold path re-loads it.
         # Must evict both the original key and its canonical form (load_pool
@@ -1446,7 +1545,541 @@ def _config_only_catalog_fields() -> tuple:
     return default_model, active_provider, auth_store
 
 
-def get_available_models() -> dict:
+def _build_available_models_uncached() -> dict:
+    """Build the full model catalog from providers (the slow path).
+
+    Runs on the dedicated background build worker thread — never on an HTTP
+    request thread and never inside ``_available_models_cache_lock`` (issue
+    #16: the old design held that lock across this entire function, parking
+    every /api/models and peek caller for the whole SDK provider loop,
+    boto3/IMDS probes, and custom-endpoint fetches).
+
+    Pure producer: returns the catalog dict; publication into the module
+    cache is handled by the worker under the cache lock.
+    """
+
+    default_model, active_provider, auth_store = _config_only_catalog_fields()
+    groups = []
+
+    # 1. Read config.yaml model section (base_url only — provider/default
+    #    were resolved by _config_only_catalog_fields above)
+    cfg_base_url = ""  # must be defined before conditional blocks (#117)
+    model_cfg = cfg.get("model", {})
+    if isinstance(model_cfg, str):
+        pass  # default_model already set by get_effective_default_model
+    elif isinstance(model_cfg, dict):
+        cfg_base_url = model_cfg.get("base_url", "")
+
+    # 3. Detect available providers.
+    detected_providers = set()
+    # Providers added via an explicit credential_pool entry. These have
+    # no env var or config.yaml key, so _provider_has_key() returns False
+    # even though the credential is valid. Track them so the post-filter
+    # below does not drop them.
+    _pool_explicit_providers: set[str] = set()
+    if active_provider:
+        detected_providers.add(active_provider)
+
+    try:
+        _pool = auth_store.get("credential_pool", {}) if isinstance(auth_store, dict) else {}
+        if isinstance(_pool, dict) and _pool:
+            try:
+                from agent.credential_pool import load_pool as _load_pool
+
+                for _pid in list(_pool.keys()):
+                    try:
+                        _canonical_pid = _resolve_provider_alias(str(_pid))
+                        # Check credential pool cache first
+                        _cached = _CREDENTIAL_POOL_CACHE.get(_pid)
+                        if _cached is not None:
+                            _cp_ts, _cp_pool = _cached
+                            if (time.time() - _cp_ts) < 86400.0:
+                                _all_entries = _cp_pool.entries()
+                            else:
+                                _lp_t0 = time.monotonic()
+                                _cp_pool = _load_pool(_pid)
+                                _CREDENTIAL_POOL_CACHE[_pid] = (time.time(), _cp_pool)
+                                _all_entries = _cp_pool.entries()
+                        else:
+                            _lp_t0 = time.monotonic()
+                            _cp_pool = _load_pool(_pid)
+                            _CREDENTIAL_POOL_CACHE[_pid] = (time.time(), _cp_pool)
+                            _all_entries = _cp_pool.entries()
+                        _explicit = [
+                            e for e in _all_entries
+                            if not _is_ambient_gh_cli_entry(
+                                str(getattr(e, "source", "") or ""),
+                                str(getattr(e, "label", "") or ""),
+                                str(getattr(e, "key_source", "") or ""),
+                            )
+                        ]
+                        if _explicit:
+                            detected_providers.add(_canonical_pid)
+                            _pool_explicit_providers.add(_canonical_pid)
+                    except Exception:
+                        logger.debug("credential_pool.load_pool(%s) failed", _pid)
+            except ImportError:
+                for _pid, _entries in _pool.items():
+                    if not isinstance(_entries, list) or len(_entries) == 0:
+                        continue
+                    _has_explicit_cred = any(
+                        isinstance(_entry, dict)
+                        and not _is_ambient_gh_cli_entry(
+                            str(_entry.get("source", "") or ""),
+                            str(_entry.get("label", "") or ""),
+                            str(_entry.get("key_source", "") or ""),
+                        )
+                        for _entry in _entries
+                    )
+                    if _has_explicit_cred:
+                        _canonical = _resolve_provider_alias(str(_pid))
+                        detected_providers.add(_canonical)
+                        _pool_explicit_providers.add(_canonical)
+    except Exception:
+        logger.debug("Failed to inspect credential_pool from auth store")
+
+    all_env: dict = {}
+
+    _hermes_auth_used = False
+    try:
+        from hermes_cli.models import list_available_providers as _lap
+        from hermes_cli.auth import get_auth_status as _gas
+
+        for _p in _lap():
+            if not _p.get("authenticated"):
+                continue
+            try:
+                _src = _gas(_p["id"]).get("key_source", "")
+                if _src == "gh auth token":
+                    continue
+            except Exception:
+                logger.debug("Failed to get key source for provider %s", _p.get("id", "unknown"))
+            detected_providers.add(_p["id"])
+        _hermes_auth_used = True
+    except Exception:
+        logger.debug("Failed to detect auth providers from hermes")
+
+    if not _hermes_auth_used:
+        try:
+            from app.api.profiles import get_active_hermes_home as _gah2
+
+            hermes_env_path = _gah2() / ".env"
+        except ImportError:
+            hermes_env_path = HOME / ".hermes" / ".env"
+        env_keys = {}
+        if hermes_env_path.exists():
+            try:
+                for line in hermes_env_path.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        env_keys[k.strip()] = v.strip().strip('"').strip("'")
+            except Exception:
+                logger.debug("Failed to parse hermes env file")
+        all_env = {**env_keys}
+        for k in (
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "OPENROUTER_API_KEY",
+            "GOOGLE_API_KEY",
+            "GEMINI_API_KEY",
+            "GLM_API_KEY",
+            "KIMI_API_KEY",
+            "DEEPSEEK_API_KEY",
+            "OPENCODE_ZEN_API_KEY",
+            "OPENCODE_GO_API_KEY",
+            "MINIMAX_API_KEY",
+            "MINIMAX_CN_API_KEY",
+            "XAI_API_KEY",
+            "MISTRAL_API_KEY",
+        ):
+            val = os.getenv(k)
+            if val:
+                all_env[k] = val
+        if all_env.get("ANTHROPIC_API_KEY"):
+            detected_providers.add("anthropic")
+        if all_env.get("OPENAI_API_KEY"):
+            detected_providers.add("openai")
+            # openai-codex uses ChatGPT OAuth (not OPENAI_API_KEY) for its default endpoint.
+            # Detecting it here lets users who have both credentials configured find it in the
+            # picker without a manual config.yaml edit. Users without Codex OAuth will see
+            # picker entries but hit auth errors at inference time (#1189 known limitation).
+            detected_providers.add("openai-codex")
+        if all_env.get("OPENROUTER_API_KEY"):
+            detected_providers.add("openrouter")
+        if all_env.get("GOOGLE_API_KEY"):
+            detected_providers.add("google")
+        if all_env.get("GEMINI_API_KEY"):
+            detected_providers.add("gemini")
+        if all_env.get("GLM_API_KEY"):
+            detected_providers.add("zai")
+        if all_env.get("KIMI_API_KEY"):
+            detected_providers.add("kimi-coding")
+        if all_env.get("MINIMAX_API_KEY") or all_env.get("MINIMAX_CN_API_KEY"):
+            detected_providers.add("minimax")
+        if all_env.get("DEEPSEEK_API_KEY"):
+            detected_providers.add("deepseek")
+        if all_env.get("XAI_API_KEY"):
+            detected_providers.add("x-ai")
+        if all_env.get("MISTRAL_API_KEY"):
+            detected_providers.add("mistralai")
+        if all_env.get("OPENCODE_ZEN_API_KEY"):
+            detected_providers.add("opencode-zen")
+        if all_env.get("OPENCODE_GO_API_KEY"):
+            detected_providers.add("opencode-go")
+
+    # Also detect providers explicitly listed in config.yaml providers section.
+    # A user may configure a provider key via config.yaml providers.<name>.api_key
+    # without setting the corresponding env var. (#604)
+    _cfg_providers = cfg.get("providers", {})
+    if isinstance(_cfg_providers, dict):
+        for _pid_key in _cfg_providers:
+            if _pid_key in _PROVIDER_MODELS or _pid_key in cfg.get("providers", {}):
+                detected_providers.add(_pid_key)
+
+    # Post-filter: only keep providers that actually have a configured API key
+    # or are OAuth-based.  This removes false positives from hermes_cli's
+    # get_auth_status() which may report providers as authenticated even when
+    # no key is configured.
+    try:
+        from app.api.providers import _provider_has_key, _provider_is_oauth
+
+        _filtered = set()
+        for _pid in detected_providers:
+            if _pid == active_provider:
+                _filtered.add(_pid)
+            elif _pid in _pool_explicit_providers:
+                # Provider has at least one explicit credential_pool entry.
+                # _provider_has_key() only checks env vars + config.yaml, so
+                # it returns False here even though the credential is valid.
+                _filtered.add(_pid)
+            elif _provider_is_oauth(_pid):
+                _filtered.add(_pid)
+            elif _provider_has_key(_pid):
+                _filtered.add(_pid)
+        detected_providers = _filtered
+    except ImportError:
+        logger.debug("Could not import providers module for key filtering")
+
+    # 4. Fetch models from custom endpoint if base_url is configured
+    auto_detected_models = []
+    if cfg_base_url:
+        try:
+            import ipaddress
+            import urllib.request
+
+            base_url = cfg_base_url.strip()
+            if base_url.endswith("/v1"):
+                endpoint_url = base_url + "/models"
+            else:
+                endpoint_url = base_url.rstrip("/") + "/v1/models"
+
+            provider = "custom"
+            parsed = urlparse(base_url if "://" in base_url else f"http://{base_url}")
+            host = (parsed.netloc or parsed.path).lower()
+
+            if parsed.hostname:
+                try:
+                    addr = ipaddress.ip_address(parsed.hostname)
+                    if addr.is_private or addr.is_loopback or addr.is_link_local:
+                        if "ollama" in host or "127.0.0.1" in host or "localhost" in host:
+                            provider = "ollama"
+                        elif "lmstudio" in host or "lm-studio" in host:
+                            provider = "lmstudio"
+                        else:
+                            provider = "local"
+                except ValueError:
+                    pass
+
+            headers = {}
+            api_key = ""
+            if isinstance(model_cfg, dict):
+                api_key = (model_cfg.get("api_key") or "").strip()
+            if not api_key:
+                providers_cfg = cfg.get("providers", {})
+                if isinstance(providers_cfg, dict):
+                    for provider_key in filter(None, [active_provider, "custom"]):
+                        provider_cfg = providers_cfg.get(provider_key, {})
+                        if isinstance(provider_cfg, dict):
+                            api_key = (provider_cfg.get("api_key") or "").strip()
+                            if api_key:
+                                break
+            if not api_key:
+                api_key_vars = (
+                    "HERMES_API_KEY",
+                    "HERMES_OPENAI_API_KEY",
+                    "OPENAI_API_KEY",
+                    "LOCAL_API_KEY",
+                    "OPENROUTER_API_KEY",
+                    "API_KEY",
+                )
+                for key in api_key_vars:
+                    api_key = (all_env.get(key) or os.getenv(key) or "").strip()
+                    if api_key:
+                        break
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            elif provider not in ("ollama", "lmstudio", "local"):
+                # Public endpoint without API key — skip model fetch
+                # to avoid listing models that would fail at runtime.
+                raise ValueError(f"No API key configured for {base_url}")
+
+            import socket
+
+            # Build set of hostnames from custom_providers config — these are
+            # user-explicitly configured endpoints and should not be blocked by SSRF.
+            _ssrf_trusted_hosts: set[str] = set()
+            _custom_providers_cfg = cfg.get("custom_providers", [])
+            if isinstance(_custom_providers_cfg, list):
+                for _cp in _custom_providers_cfg:
+                    if not isinstance(_cp, dict):
+                        continue
+                    _cp_base = (_cp.get("base_url") or "").strip()
+                    if _cp_base:
+                        _cp_parsed = urlparse(_cp_base if "://" in _cp_base else f"http://{_cp_base}")
+                        if _cp_parsed.hostname:
+                            _ssrf_trusted_hosts.add(_cp_parsed.hostname.lower())
+
+            parsed_url = urlparse(
+                endpoint_url if "://" in endpoint_url else f"http://{endpoint_url}"
+            )
+            if parsed_url.scheme not in ("", "http", "https"):
+                raise ValueError(f"Invalid URL scheme: {parsed_url.scheme}")
+            if parsed_url.hostname:
+                try:
+                    resolved_ips = socket.getaddrinfo(parsed_url.hostname, None)
+                    for _, _, _, _, addr in resolved_ips:
+                        addr_obj = ipaddress.ip_address(addr[0])
+                        if addr_obj.is_private or addr_obj.is_loopback or addr_obj.is_link_local:
+                            is_known_local = any(
+                                k in (parsed_url.hostname or "").lower()
+                                for k in (
+                                    "ollama",
+                                    "localhost",
+                                    "127.0.0.1",
+                                    "lmstudio",
+                                    "lm-studio",
+                                )
+                            ) or (parsed_url.hostname or "").lower() in _ssrf_trusted_hosts
+                            if not is_known_local:
+                                raise ValueError(
+                                    f"SSRF: resolved hostname to private IP {addr[0]}"
+                                )
+                except socket.gaierror:
+                    pass
+            req = urllib.request.Request(endpoint_url, method="GET")
+            req.add_header("User-Agent", "OpenAI/Python 1.0")
+            for k, v in headers.items():
+                req.add_header(k, v)
+            with urllib.request.urlopen(req, timeout=10) as response:  # nosec B310
+                data = json.loads(response.read().decode("utf-8"))
+
+            models_list = []
+            if "data" in data and isinstance(data["data"], list):
+                models_list = data["data"]
+            elif "models" in data and isinstance(data["models"], list):
+                models_list = data["models"]
+
+            for model in models_list:
+                if not isinstance(model, dict):
+                    continue
+                model_id = (
+                    model.get("id", "")
+                    or model.get("name", "")
+                    or model.get("model", "")
+                )
+                model_name = model.get("name", "") or model.get("model", "") or model_id
+                if model_id and model_name:
+                    label = _format_ollama_label(model_id) if provider in ("ollama", "ollama-cloud") else model_name
+                    auto_detected_models.append({"id": model_id, "label": label})
+                    detected_providers.add(provider.lower())
+        except Exception:
+            logger.debug("Custom endpoint unreachable or misconfigured for provider: %s", provider)
+
+    _custom_providers_cfg = cfg.get("custom_providers", [])
+    _named_custom_groups: dict = {}
+    if isinstance(_custom_providers_cfg, list):
+        _seen_custom_ids = {m["id"] for m in auto_detected_models}
+        for _cp in _custom_providers_cfg:
+            if not isinstance(_cp, dict):
+                continue
+            _cp_name = (_cp.get("name") or "").strip()
+            _slug = ("custom:" + _cp_name.lower().replace(" ", "-")) if _cp_name else None
+
+            # Collect model IDs: singular "model" field first, then "models" dict keys
+            _cp_model_ids: list[str] = []
+            _cp_model = _cp.get("model", "")
+            if _cp_model:
+                _cp_model_ids.append(_cp_model)
+            _cp_models_dict = _cp.get("models")
+            if isinstance(_cp_models_dict, dict):
+                for _m_id in _cp_models_dict:
+                    if isinstance(_m_id, str) and _m_id.strip() and _m_id not in _cp_model_ids:
+                        _cp_model_ids.append(_m_id.strip())
+
+            for _cp_model in _cp_model_ids:
+                if _cp_model and _cp_model not in _seen_custom_ids:
+                    _cp_label = _get_label_for_model(_cp_model, [])
+                    _seen_custom_ids.add(_cp_model)
+                    if _slug:
+                        if _slug not in _named_custom_groups:
+                            _named_custom_groups[_slug] = (_cp_name, [])
+                        detected_providers.add(_slug)
+                        _named_custom_groups[_slug][1].append(
+                            {"id": _cp_model, "label": _cp_label}
+                        )
+                    else:
+                        auto_detected_models.append({"id": _cp_model, "label": _cp_label})
+                        detected_providers.add("custom")
+
+    _has_custom_providers = isinstance(_custom_providers_cfg, list) and len(_custom_providers_cfg) > 0
+    if active_provider and active_provider != "custom" and not _has_custom_providers:
+        detected_providers.discard("custom")
+        for _slug in list(detected_providers):
+            if _slug.startswith("custom:") and not _has_custom_providers:
+                detected_providers.discard(_slug)
+    elif active_provider == "custom" and _has_custom_providers:
+        _has_unnamed = any(
+            isinstance(_cp, dict) and not (_cp.get("name") or "").strip()
+            for _cp in _custom_providers_cfg
+        )
+        if not _has_unnamed:
+            detected_providers.discard("custom")
+
+    # 5. Build model groups
+    if detected_providers:
+        for pid in sorted(detected_providers):
+            if pid.startswith("custom:") and pid in _named_custom_groups:
+                _nc_display, _nc_models = _named_custom_groups[pid]
+                if _nc_models:
+                    groups.append({"provider": _nc_display, "provider_id": pid, "models": _nc_models})
+                continue
+            provider_name = _PROVIDER_DISPLAY.get(pid, pid.title())
+            if pid == "openrouter":
+                groups.append(
+                    {
+                        "provider": "OpenRouter",
+                        "provider_id": "openrouter",
+                        "models": [
+                            {"id": m["id"], "label": m["label"]}
+                            for m in _FALLBACK_MODELS
+                        ],
+                    }
+                )
+            elif pid == "ollama-cloud":
+                raw_models = []
+                try:
+                    from hermes_cli.models import provider_model_ids as _provider_model_ids
+
+                    raw_models = [
+                        {"id": mid, "label": _format_ollama_label(mid)}
+                        for mid in (_provider_model_ids("ollama-cloud") or [])
+                    ]
+                except Exception:
+                    logger.warning("Failed to load Ollama Cloud models from hermes_cli")
+
+                if raw_models:
+                    models = _apply_provider_prefix(raw_models, pid, active_provider)
+                    groups.append(
+                        {
+                            "provider": provider_name,
+                            "provider_id": pid,
+                            "models": models,
+                        }
+                    )
+            elif pid in _PROVIDER_MODELS or pid in cfg.get("providers", {}):
+                raw_models = copy.deepcopy(_PROVIDER_MODELS.get(pid, []))
+
+                provider_cfg = cfg.get("providers", {}).get(pid, {})
+                if isinstance(provider_cfg, dict) and "models" in provider_cfg:
+                    cfg_models = provider_cfg["models"]
+                    if isinstance(cfg_models, dict):
+                        raw_models = [{"id": k, "label": k} for k in cfg_models.keys()]
+                    elif isinstance(cfg_models, list):
+                        raw_models = [{"id": k, "label": k} for k in cfg_models]
+                models = _apply_provider_prefix(raw_models, pid, active_provider)
+                groups.append(
+                    {
+                        "provider": provider_name,
+                        "provider_id": pid,
+                        "models": models,
+                    }
+                )
+            else:
+                if auto_detected_models:
+                    groups.append(
+                        {
+                            "provider": provider_name,
+                            "provider_id": pid,
+                            "models": auto_detected_models,
+                        }
+                    )
+    else:
+        if default_model:
+            # Only show default model if its provider has a configured key
+            _dm_provider = default_model.split("/")[0] if "/" in default_model else active_provider
+            _dm_has_key = False
+            try:
+                from app.api.providers import _provider_has_key as _phk
+                _dm_has_key = _phk(_dm_provider) if _dm_provider else False
+            except ImportError:
+                _dm_has_key = True  # conservative: show if can't check
+            if _dm_has_key:
+                label = _get_label_for_model(default_model, groups)
+                groups.append(
+                    {"provider": "Default", "provider_id": "default", "models": [{"id": default_model, "label": label}]}
+                )
+
+    if default_model:
+        # Only inject default model if its provider has a configured key
+        _dm_prov2 = default_model.split("/")[0] if "/" in default_model else active_provider
+        _dm_ok2 = False
+        try:
+            from app.api.providers import _provider_has_key as _phk2
+            _dm_ok2 = _phk2(_dm_prov2) if _dm_prov2 else False
+        except ImportError:
+            _dm_ok2 = True
+        _norm = lambda mid: (mid.split("/", 1)[-1] if "/" in mid else mid).replace("-", ".")
+        all_ids_norm = {_norm(m["id"]) for g in groups for m in g.get("models", [])}
+        if _norm(default_model) not in all_ids_norm and _dm_ok2:
+            label = _get_label_for_model(default_model, groups)
+            target_display = (
+                _PROVIDER_DISPLAY.get(active_provider, active_provider or "").lower()
+                if active_provider
+                else ""
+            )
+            injected = False
+            for g in groups:
+                if target_display and g.get("provider", "").lower() == target_display:
+                    g["models"].insert(0, {"id": default_model, "label": label})
+                    injected = True
+                    break
+            if not injected and groups:
+                groups.append(
+                    {
+                        "provider": "Default",
+                        "provider_id": active_provider or "default",
+                        "models": [{"id": default_model, "label": label}],
+                    }
+                )
+
+    # Enrich all models with supports_extended_thinking flag for UI chip state
+    for g in groups:
+        provider_id = g.get("provider_id", "")
+        for m in g.get("models", []):
+            if "supports_extended_thinking" not in m:
+                m["supports_extended_thinking"] = _model_supports_extended_thinking(
+                    m.get("id", ""), provider_id
+                )
+
+    return {
+        "active_provider": active_provider,
+        "default_model": default_model,
+        "groups": groups,
+    }
+
+
+def get_available_models(*, wait_seconds: float | None = None) -> dict:
     """
     Return available models grouped by provider.
 
@@ -1456,13 +2089,23 @@ def get_available_models() -> dict:
       3. Fetch models from custom endpoint if base_url is configured
       4. Fall back to hardcoded model list (OpenRouter-style)
 
+    Args:
+        wait_seconds: upper bound on how long this call blocks waiting for
+            an in-flight catalog build before degrading to the best cached
+            answer (stale memory, disk snapshot, or config-only catalog)
+            flagged ``building: True`` so the frontend keeps polling.
+            ``None`` waits indefinitely (boot prewarm, tests).  The live
+            build itself always runs on a background worker thread, so no
+            caller ever pays the provider-discovery cost on its own thread
+            (issue #16).
+
     Returns: {
         'active_provider': str|None,
         'default_model': str,
         'groups': [{'provider': str, 'models': [{'id': str, 'label': str}]}]
     }
     """
-    global _cache_build_in_progress, _available_models_cache, _available_models_cache_ts, _cache_build_cv
+    global _cache_build_in_progress, _available_models_cache, _available_models_cache_ts, _cache_build_cv, _models_cache_generation, _models_build_error
     # Config mtime check — must come before any config reads.
     # (Test #585 verifies _current_mtime appears before active_provider = None)
     try:
@@ -1471,608 +2114,200 @@ def get_available_models() -> dict:
         _current_mtime = 0.0
     if _current_mtime != _cfg_mtime:
         reload_config()
-    # ── COLD PATH helper ─────────────────────────────────────────────────────
-    # Extracted so it runs inside _available_models_cache_lock (RLock) to
-    # prevent thundering-herd: only one thread rebuilds while others wait.
-    def _build_available_models_uncached() -> dict:
-        default_model, active_provider, auth_store = _config_only_catalog_fields()
-        groups = []
-
-        # 1. Read config.yaml model section (base_url only — provider/default
-        #    were resolved by _config_only_catalog_fields above)
-        cfg_base_url = ""  # must be defined before conditional blocks (#117)
-        model_cfg = cfg.get("model", {})
-        if isinstance(model_cfg, str):
-            pass  # default_model already set by get_effective_default_model
-        elif isinstance(model_cfg, dict):
-            cfg_base_url = model_cfg.get("base_url", "")
-
-        # 3. Detect available providers.
-        detected_providers = set()
-        # Providers added via an explicit credential_pool entry. These have
-        # no env var or config.yaml key, so _provider_has_key() returns False
-        # even though the credential is valid. Track them so the post-filter
-        # below does not drop them.
-        _pool_explicit_providers: set[str] = set()
-        if active_provider:
-            detected_providers.add(active_provider)
-
-        try:
-            _pool = auth_store.get("credential_pool", {}) if isinstance(auth_store, dict) else {}
-            if isinstance(_pool, dict) and _pool:
-                try:
-                    from agent.credential_pool import load_pool as _load_pool
-
-                    for _pid in list(_pool.keys()):
-                        try:
-                            _canonical_pid = _resolve_provider_alias(str(_pid))
-                            # Check credential pool cache first
-                            _cached = _CREDENTIAL_POOL_CACHE.get(_pid)
-                            if _cached is not None:
-                                _cp_ts, _cp_pool = _cached
-                                if (time.time() - _cp_ts) < 86400.0:
-                                    _all_entries = _cp_pool.entries()
-                                else:
-                                    _lp_t0 = time.monotonic()
-                                    _cp_pool = _load_pool(_pid)
-                                    _CREDENTIAL_POOL_CACHE[_pid] = (time.time(), _cp_pool)
-                                    _all_entries = _cp_pool.entries()
-                            else:
-                                _lp_t0 = time.monotonic()
-                                _cp_pool = _load_pool(_pid)
-                                _CREDENTIAL_POOL_CACHE[_pid] = (time.time(), _cp_pool)
-                                _all_entries = _cp_pool.entries()
-                            _explicit = [
-                                e for e in _all_entries
-                                if not _is_ambient_gh_cli_entry(
-                                    str(getattr(e, "source", "") or ""),
-                                    str(getattr(e, "label", "") or ""),
-                                    str(getattr(e, "key_source", "") or ""),
-                                )
-                            ]
-                            if _explicit:
-                                detected_providers.add(_canonical_pid)
-                                _pool_explicit_providers.add(_canonical_pid)
-                        except Exception:
-                            logger.debug("credential_pool.load_pool(%s) failed", _pid)
-                except ImportError:
-                    for _pid, _entries in _pool.items():
-                        if not isinstance(_entries, list) or len(_entries) == 0:
-                            continue
-                        _has_explicit_cred = any(
-                            isinstance(_entry, dict)
-                            and not _is_ambient_gh_cli_entry(
-                                str(_entry.get("source", "") or ""),
-                                str(_entry.get("label", "") or ""),
-                                str(_entry.get("key_source", "") or ""),
-                            )
-                            for _entry in _entries
-                        )
-                        if _has_explicit_cred:
-                            _canonical = _resolve_provider_alias(str(_pid))
-                            detected_providers.add(_canonical)
-                            _pool_explicit_providers.add(_canonical)
-        except Exception:
-            logger.debug("Failed to inspect credential_pool from auth store")
-
-        all_env: dict = {}
-
-        _hermes_auth_used = False
-        try:
-            from hermes_cli.models import list_available_providers as _lap
-            from hermes_cli.auth import get_auth_status as _gas
-
-            for _p in _lap():
-                if not _p.get("authenticated"):
-                    continue
-                try:
-                    _src = _gas(_p["id"]).get("key_source", "")
-                    if _src == "gh auth token":
-                        continue
-                except Exception:
-                    logger.debug("Failed to get key source for provider %s", _p.get("id", "unknown"))
-                detected_providers.add(_p["id"])
-            _hermes_auth_used = True
-        except Exception:
-            logger.debug("Failed to detect auth providers from hermes")
-
-        if not _hermes_auth_used:
-            try:
-                from app.api.profiles import get_active_hermes_home as _gah2
-
-                hermes_env_path = _gah2() / ".env"
-            except ImportError:
-                hermes_env_path = HOME / ".hermes" / ".env"
-            env_keys = {}
-            if hermes_env_path.exists():
-                try:
-                    for line in hermes_env_path.read_text(encoding="utf-8").splitlines():
-                        line = line.strip()
-                        if line and not line.startswith("#") and "=" in line:
-                            k, v = line.split("=", 1)
-                            env_keys[k.strip()] = v.strip().strip('"').strip("'")
-                except Exception:
-                    logger.debug("Failed to parse hermes env file")
-            all_env = {**env_keys}
-            for k in (
-                "ANTHROPIC_API_KEY",
-                "OPENAI_API_KEY",
-                "OPENROUTER_API_KEY",
-                "GOOGLE_API_KEY",
-                "GEMINI_API_KEY",
-                "GLM_API_KEY",
-                "KIMI_API_KEY",
-                "DEEPSEEK_API_KEY",
-                "OPENCODE_ZEN_API_KEY",
-                "OPENCODE_GO_API_KEY",
-                "MINIMAX_API_KEY",
-                "MINIMAX_CN_API_KEY",
-                "XAI_API_KEY",
-                "MISTRAL_API_KEY",
-            ):
-                val = os.getenv(k)
-                if val:
-                    all_env[k] = val
-            if all_env.get("ANTHROPIC_API_KEY"):
-                detected_providers.add("anthropic")
-            if all_env.get("OPENAI_API_KEY"):
-                detected_providers.add("openai")
-                # openai-codex uses ChatGPT OAuth (not OPENAI_API_KEY) for its default endpoint.
-                # Detecting it here lets users who have both credentials configured find it in the
-                # picker without a manual config.yaml edit. Users without Codex OAuth will see
-                # picker entries but hit auth errors at inference time (#1189 known limitation).
-                detected_providers.add("openai-codex")
-            if all_env.get("OPENROUTER_API_KEY"):
-                detected_providers.add("openrouter")
-            if all_env.get("GOOGLE_API_KEY"):
-                detected_providers.add("google")
-            if all_env.get("GEMINI_API_KEY"):
-                detected_providers.add("gemini")
-            if all_env.get("GLM_API_KEY"):
-                detected_providers.add("zai")
-            if all_env.get("KIMI_API_KEY"):
-                detected_providers.add("kimi-coding")
-            if all_env.get("MINIMAX_API_KEY") or all_env.get("MINIMAX_CN_API_KEY"):
-                detected_providers.add("minimax")
-            if all_env.get("DEEPSEEK_API_KEY"):
-                detected_providers.add("deepseek")
-            if all_env.get("XAI_API_KEY"):
-                detected_providers.add("x-ai")
-            if all_env.get("MISTRAL_API_KEY"):
-                detected_providers.add("mistralai")
-            if all_env.get("OPENCODE_ZEN_API_KEY"):
-                detected_providers.add("opencode-zen")
-            if all_env.get("OPENCODE_GO_API_KEY"):
-                detected_providers.add("opencode-go")
-
-        # Also detect providers explicitly listed in config.yaml providers section.
-        # A user may configure a provider key via config.yaml providers.<name>.api_key
-        # without setting the corresponding env var. (#604)
-        _cfg_providers = cfg.get("providers", {})
-        if isinstance(_cfg_providers, dict):
-            for _pid_key in _cfg_providers:
-                if _pid_key in _PROVIDER_MODELS or _pid_key in cfg.get("providers", {}):
-                    detected_providers.add(_pid_key)
-
-        # Post-filter: only keep providers that actually have a configured API key
-        # or are OAuth-based.  This removes false positives from hermes_cli's
-        # get_auth_status() which may report providers as authenticated even when
-        # no key is configured.
-        try:
-            from app.api.providers import _provider_has_key, _provider_is_oauth
-
-            _filtered = set()
-            for _pid in detected_providers:
-                if _pid == active_provider:
-                    _filtered.add(_pid)
-                elif _pid in _pool_explicit_providers:
-                    # Provider has at least one explicit credential_pool entry.
-                    # _provider_has_key() only checks env vars + config.yaml, so
-                    # it returns False here even though the credential is valid.
-                    _filtered.add(_pid)
-                elif _provider_is_oauth(_pid):
-                    _filtered.add(_pid)
-                elif _provider_has_key(_pid):
-                    _filtered.add(_pid)
-            detected_providers = _filtered
-        except ImportError:
-            logger.debug("Could not import providers module for key filtering")
-
-        # 4. Fetch models from custom endpoint if base_url is configured
-        auto_detected_models = []
-        if cfg_base_url:
-            try:
-                import ipaddress
-                import urllib.request
-
-                base_url = cfg_base_url.strip()
-                if base_url.endswith("/v1"):
-                    endpoint_url = base_url + "/models"
-                else:
-                    endpoint_url = base_url.rstrip("/") + "/v1/models"
-
-                provider = "custom"
-                parsed = urlparse(base_url if "://" in base_url else f"http://{base_url}")
-                host = (parsed.netloc or parsed.path).lower()
-
-                if parsed.hostname:
-                    try:
-                        addr = ipaddress.ip_address(parsed.hostname)
-                        if addr.is_private or addr.is_loopback or addr.is_link_local:
-                            if "ollama" in host or "127.0.0.1" in host or "localhost" in host:
-                                provider = "ollama"
-                            elif "lmstudio" in host or "lm-studio" in host:
-                                provider = "lmstudio"
-                            else:
-                                provider = "local"
-                    except ValueError:
-                        pass
-
-                headers = {}
-                api_key = ""
-                if isinstance(model_cfg, dict):
-                    api_key = (model_cfg.get("api_key") or "").strip()
-                if not api_key:
-                    providers_cfg = cfg.get("providers", {})
-                    if isinstance(providers_cfg, dict):
-                        for provider_key in filter(None, [active_provider, "custom"]):
-                            provider_cfg = providers_cfg.get(provider_key, {})
-                            if isinstance(provider_cfg, dict):
-                                api_key = (provider_cfg.get("api_key") or "").strip()
-                                if api_key:
-                                    break
-                if not api_key:
-                    api_key_vars = (
-                        "HERMES_API_KEY",
-                        "HERMES_OPENAI_API_KEY",
-                        "OPENAI_API_KEY",
-                        "LOCAL_API_KEY",
-                        "OPENROUTER_API_KEY",
-                        "API_KEY",
-                    )
-                    for key in api_key_vars:
-                        api_key = (all_env.get(key) or os.getenv(key) or "").strip()
-                        if api_key:
-                            break
-                if api_key:
-                    headers["Authorization"] = f"Bearer {api_key}"
-                elif provider not in ("ollama", "lmstudio", "local"):
-                    # Public endpoint without API key — skip model fetch
-                    # to avoid listing models that would fail at runtime.
-                    raise ValueError(f"No API key configured for {base_url}")
-
-                import socket
-
-                # Build set of hostnames from custom_providers config — these are
-                # user-explicitly configured endpoints and should not be blocked by SSRF.
-                _ssrf_trusted_hosts: set[str] = set()
-                _custom_providers_cfg = cfg.get("custom_providers", [])
-                if isinstance(_custom_providers_cfg, list):
-                    for _cp in _custom_providers_cfg:
-                        if not isinstance(_cp, dict):
-                            continue
-                        _cp_base = (_cp.get("base_url") or "").strip()
-                        if _cp_base:
-                            _cp_parsed = urlparse(_cp_base if "://" in _cp_base else f"http://{_cp_base}")
-                            if _cp_parsed.hostname:
-                                _ssrf_trusted_hosts.add(_cp_parsed.hostname.lower())
-
-                parsed_url = urlparse(
-                    endpoint_url if "://" in endpoint_url else f"http://{endpoint_url}"
-                )
-                if parsed_url.scheme not in ("", "http", "https"):
-                    raise ValueError(f"Invalid URL scheme: {parsed_url.scheme}")
-                if parsed_url.hostname:
-                    try:
-                        resolved_ips = socket.getaddrinfo(parsed_url.hostname, None)
-                        for _, _, _, _, addr in resolved_ips:
-                            addr_obj = ipaddress.ip_address(addr[0])
-                            if addr_obj.is_private or addr_obj.is_loopback or addr_obj.is_link_local:
-                                is_known_local = any(
-                                    k in (parsed_url.hostname or "").lower()
-                                    for k in (
-                                        "ollama",
-                                        "localhost",
-                                        "127.0.0.1",
-                                        "lmstudio",
-                                        "lm-studio",
-                                    )
-                                ) or (parsed_url.hostname or "").lower() in _ssrf_trusted_hosts
-                                if not is_known_local:
-                                    raise ValueError(
-                                        f"SSRF: resolved hostname to private IP {addr[0]}"
-                                    )
-                    except socket.gaierror:
-                        pass
-                req = urllib.request.Request(endpoint_url, method="GET")
-                req.add_header("User-Agent", "OpenAI/Python 1.0")
-                for k, v in headers.items():
-                    req.add_header(k, v)
-                with urllib.request.urlopen(req, timeout=10) as response:  # nosec B310
-                    data = json.loads(response.read().decode("utf-8"))
-
-                models_list = []
-                if "data" in data and isinstance(data["data"], list):
-                    models_list = data["data"]
-                elif "models" in data and isinstance(data["models"], list):
-                    models_list = data["models"]
-
-                for model in models_list:
-                    if not isinstance(model, dict):
-                        continue
-                    model_id = (
-                        model.get("id", "")
-                        or model.get("name", "")
-                        or model.get("model", "")
-                    )
-                    model_name = model.get("name", "") or model.get("model", "") or model_id
-                    if model_id and model_name:
-                        label = _format_ollama_label(model_id) if provider in ("ollama", "ollama-cloud") else model_name
-                        auto_detected_models.append({"id": model_id, "label": label})
-                        detected_providers.add(provider.lower())
-            except Exception:
-                logger.debug("Custom endpoint unreachable or misconfigured for provider: %s", provider)
-
-        _custom_providers_cfg = cfg.get("custom_providers", [])
-        _named_custom_groups: dict = {}
-        if isinstance(_custom_providers_cfg, list):
-            _seen_custom_ids = {m["id"] for m in auto_detected_models}
-            for _cp in _custom_providers_cfg:
-                if not isinstance(_cp, dict):
-                    continue
-                _cp_name = (_cp.get("name") or "").strip()
-                _slug = ("custom:" + _cp_name.lower().replace(" ", "-")) if _cp_name else None
-
-                # Collect model IDs: singular "model" field first, then "models" dict keys
-                _cp_model_ids: list[str] = []
-                _cp_model = _cp.get("model", "")
-                if _cp_model:
-                    _cp_model_ids.append(_cp_model)
-                _cp_models_dict = _cp.get("models")
-                if isinstance(_cp_models_dict, dict):
-                    for _m_id in _cp_models_dict:
-                        if isinstance(_m_id, str) and _m_id.strip() and _m_id not in _cp_model_ids:
-                            _cp_model_ids.append(_m_id.strip())
-
-                for _cp_model in _cp_model_ids:
-                    if _cp_model and _cp_model not in _seen_custom_ids:
-                        _cp_label = _get_label_for_model(_cp_model, [])
-                        _seen_custom_ids.add(_cp_model)
-                        if _slug:
-                            if _slug not in _named_custom_groups:
-                                _named_custom_groups[_slug] = (_cp_name, [])
-                            detected_providers.add(_slug)
-                            _named_custom_groups[_slug][1].append(
-                                {"id": _cp_model, "label": _cp_label}
-                            )
-                        else:
-                            auto_detected_models.append({"id": _cp_model, "label": _cp_label})
-                            detected_providers.add("custom")
-
-        _has_custom_providers = isinstance(_custom_providers_cfg, list) and len(_custom_providers_cfg) > 0
-        if active_provider and active_provider != "custom" and not _has_custom_providers:
-            detected_providers.discard("custom")
-            for _slug in list(detected_providers):
-                if _slug.startswith("custom:") and not _has_custom_providers:
-                    detected_providers.discard(_slug)
-        elif active_provider == "custom" and _has_custom_providers:
-            _has_unnamed = any(
-                isinstance(_cp, dict) and not (_cp.get("name") or "").strip()
-                for _cp in _custom_providers_cfg
-            )
-            if not _has_unnamed:
-                detected_providers.discard("custom")
-
-        # 5. Build model groups
-        if detected_providers:
-            for pid in sorted(detected_providers):
-                if pid.startswith("custom:") and pid in _named_custom_groups:
-                    _nc_display, _nc_models = _named_custom_groups[pid]
-                    if _nc_models:
-                        groups.append({"provider": _nc_display, "provider_id": pid, "models": _nc_models})
-                    continue
-                provider_name = _PROVIDER_DISPLAY.get(pid, pid.title())
-                if pid == "openrouter":
-                    groups.append(
-                        {
-                            "provider": "OpenRouter",
-                            "provider_id": "openrouter",
-                            "models": [
-                                {"id": m["id"], "label": m["label"]}
-                                for m in _FALLBACK_MODELS
-                            ],
-                        }
-                    )
-                elif pid == "ollama-cloud":
-                    raw_models = []
-                    try:
-                        from hermes_cli.models import provider_model_ids as _provider_model_ids
-
-                        raw_models = [
-                            {"id": mid, "label": _format_ollama_label(mid)}
-                            for mid in (_provider_model_ids("ollama-cloud") or [])
-                        ]
-                    except Exception:
-                        logger.warning("Failed to load Ollama Cloud models from hermes_cli")
-
-                    if raw_models:
-                        models = _apply_provider_prefix(raw_models, pid, active_provider)
-                        groups.append(
-                            {
-                                "provider": provider_name,
-                                "provider_id": pid,
-                                "models": models,
-                            }
-                        )
-                elif pid in _PROVIDER_MODELS or pid in cfg.get("providers", {}):
-                    raw_models = copy.deepcopy(_PROVIDER_MODELS.get(pid, []))
-
-                    provider_cfg = cfg.get("providers", {}).get(pid, {})
-                    if isinstance(provider_cfg, dict) and "models" in provider_cfg:
-                        cfg_models = provider_cfg["models"]
-                        if isinstance(cfg_models, dict):
-                            raw_models = [{"id": k, "label": k} for k in cfg_models.keys()]
-                        elif isinstance(cfg_models, list):
-                            raw_models = [{"id": k, "label": k} for k in cfg_models]
-                    models = _apply_provider_prefix(raw_models, pid, active_provider)
-                    groups.append(
-                        {
-                            "provider": provider_name,
-                            "provider_id": pid,
-                            "models": models,
-                        }
-                    )
-                else:
-                    if auto_detected_models:
-                        groups.append(
-                            {
-                                "provider": provider_name,
-                                "provider_id": pid,
-                                "models": auto_detected_models,
-                            }
-                        )
-        else:
-            if default_model:
-                # Only show default model if its provider has a configured key
-                _dm_provider = default_model.split("/")[0] if "/" in default_model else active_provider
-                _dm_has_key = False
-                try:
-                    from app.api.providers import _provider_has_key as _phk
-                    _dm_has_key = _phk(_dm_provider) if _dm_provider else False
-                except ImportError:
-                    _dm_has_key = True  # conservative: show if can't check
-                if _dm_has_key:
-                    label = _get_label_for_model(default_model, groups)
-                    groups.append(
-                        {"provider": "Default", "provider_id": "default", "models": [{"id": default_model, "label": label}]}
-                    )
-
-        if default_model:
-            # Only inject default model if its provider has a configured key
-            _dm_prov2 = default_model.split("/")[0] if "/" in default_model else active_provider
-            _dm_ok2 = False
-            try:
-                from app.api.providers import _provider_has_key as _phk2
-                _dm_ok2 = _phk2(_dm_prov2) if _dm_prov2 else False
-            except ImportError:
-                _dm_ok2 = True
-            _norm = lambda mid: (mid.split("/", 1)[-1] if "/" in mid else mid).replace("-", ".")
-            all_ids_norm = {_norm(m["id"]) for g in groups for m in g.get("models", [])}
-            if _norm(default_model) not in all_ids_norm and _dm_ok2:
-                label = _get_label_for_model(default_model, groups)
-                target_display = (
-                    _PROVIDER_DISPLAY.get(active_provider, active_provider or "").lower()
-                    if active_provider
-                    else ""
-                )
-                injected = False
-                for g in groups:
-                    if target_display and g.get("provider", "").lower() == target_display:
-                        g["models"].insert(0, {"id": default_model, "label": label})
-                        injected = True
-                        break
-                if not injected and groups:
-                    groups.append(
-                        {
-                            "provider": "Default",
-                            "provider_id": active_provider or "default",
-                            "models": [{"id": default_model, "label": label}],
-                        }
-                    )
-
-        # Enrich all models with supports_extended_thinking flag for UI chip state
-        for g in groups:
-            provider_id = g.get("provider_id", "")
-            for m in g.get("models", []):
-                if "supports_extended_thinking" not in m:
-                    m["supports_extended_thinking"] = _model_supports_extended_thinking(
-                        m.get("id", ""), provider_id
-                    )
-
-        return {
-            "active_provider": active_provider,
-            "default_model": default_model,
-            "groups": groups,
-        }
 
     # ── FAST PATH ─────────────────────────────────────────────────────────────
-    # Mark that a build may be in progress BEFORE acquiring the lock.
-    # If another thread has already started the cold path, we will wait for
-    # its result rather than running the cold path concurrently.
-    should_wait = _cache_build_in_progress
-
     # Check config mtime OUTSIDE the lock so this cheap check doesn't serialize
-    # concurrent requests.  Must come before any config reads in the cold path.
+    # concurrent requests.
     try:
         _current_mtime = Path(_get_config_path()).stat().st_mtime
     except OSError:
         _current_mtime = 0.0
     _cfg_changed = _current_mtime != _cfg_mtime
 
-    # Disk load BEFORE lock: ~0.1ms, lets concurrent requests skip entirely.
-    # Then acquire lock and check memory cache.  Cold path runs inside the lock
-    # so only one thread rebuilds while others wait.
-    disk_groups = None
-    if _available_models_cache is None:
-        disk_groups = _load_models_cache_from_disk()
-
     with _available_models_cache_lock:
-        # If another thread is already building, wait for its result instead
-        # of re-entering the cold path (avoids duplicate 10s zai load_pool calls).
-        if should_wait:
-            _cache_build_cv.wait_for(
-                lambda: not _cache_build_in_progress and _available_models_cache is not None,
-                timeout=60
-            )
-            if _available_models_cache is not None and (time.monotonic() - _available_models_cache_ts) < _AVAILABLE_MODELS_CACHE_TTL:
-                return copy.deepcopy(_available_models_cache)
-
-        # Reload config if changed
+        # Reload config if changed; an in-flight build read the old config,
+        # so bump the generation to make it discard its result (issue #16).
         if _cfg_changed:
             reload_config()
             _available_models_cache = None
             _available_models_cache_ts = 0.0
-
-        # Serve from memory cache if fresh
+            _models_cache_generation += 1
+        # Serve from memory cache if fresh.  Hold the lock only for this
+        # reference grab + deepcopy (milliseconds) — never for the build.
         now = time.monotonic()
         if _available_models_cache is not None and (now - _available_models_cache_ts) < _AVAILABLE_MODELS_CACHE_TTL:
             return copy.deepcopy(_available_models_cache)
 
-        # Cold path: disk cache hit — use it (fast, no lock contention)
-        if disk_groups is not None:
-            _available_models_cache = disk_groups
-            _available_models_cache_ts = now
-            _save_models_cache_to_disk(disk_groups)
-            return copy.deepcopy(disk_groups)
+    # Disk load OUTSIDE the lock (~0.1ms read): a warm disk snapshot avoids
+    # the build entirely right after a restart.  Memory is only consulted
+    # when None — a TTL-*expired* memory cache still forces a live rebuild
+    # so stale provider data is never resurrected from disk (test_ttl_cache).
+    if _available_models_cache is None:
+        _gen_before_disk = _models_cache_generation
+        disk_groups = _load_models_cache_from_disk()
+        if disk_groups is not None and _gen_before_disk == _models_cache_generation:
+            landed = False
+            with _available_models_cache_lock:
+                now = time.monotonic()
+                if _available_models_cache is None:
+                    _available_models_cache = disk_groups
+                    _available_models_cache_ts = now
+                    landed = True
+                elif (now - _available_models_cache_ts) < _AVAILABLE_MODELS_CACHE_TTL:
+                    return copy.deepcopy(_available_models_cache)
+            if landed:
+                # Rewrite via tmp+rename so a concurrent reader never sees a
+                # torn file (same as the old in-lock path).
+                _save_models_cache_to_disk(disk_groups)
+                return copy.deepcopy(disk_groups)
 
-        # Cold path: full rebuild — only one thread reaches here at a time
-        with _cache_build_cv:
+    # ── COLD PATH: single-flight background build ─────────────────────────────
+    # The caller that flips the in-progress flag spawns the worker; everyone
+    # (the spawner included) then waits on the CV, bounded by wait_seconds.
+    # The flag flip is the single-flight guard — no second worker can start
+    # until this one clears it.
+    spawned = False
+    with _available_models_cache_lock:
+        if not _cache_build_in_progress:
             _cache_build_in_progress = True
+            _models_build_error = None
+            spawned = True
+    if spawned:
         try:
-            result = _build_available_models_uncached()
+            threading.Thread(
+                target=_models_build_worker, name="models-catalog-build", daemon=True
+            ).start()
         except Exception:
-            # Always reset the flag so waiting threads don't block for 60s
-            with _cache_build_cv:
+            # Thread spawn failed (resource exhaustion): unwedge the flag so
+            # later callers are not parked on the CV forever.
+            with _available_models_cache_lock:
                 _cache_build_in_progress = False
                 _cache_build_cv.notify_all()
             raise
-        with _cache_build_cv:
-            _available_models_cache = result
-            _available_models_cache_ts = time.monotonic()
+
+    # ── WAITER PATH ───────────────────────────────────────────────────────────
+    # Never blocks on the cache lock (the build runs outside it) — only on
+    # the CV, for at most wait_seconds.
+    with _cache_build_cv:
+        if wait_seconds is None:
+            _cache_build_cv.wait_for(lambda: not _cache_build_in_progress)
+        else:
+            _cache_build_cv.wait_for(
+                lambda: not _cache_build_in_progress, timeout=wait_seconds
+            )
+
+    with _available_models_cache_lock:
+        now = time.monotonic()
+        if (_available_models_cache is not None
+                and (now - _available_models_cache_ts) < _AVAILABLE_MODELS_CACHE_TTL):
+            return copy.deepcopy(_available_models_cache)
+        # Not fresh: either the build is still running (bounded waiter gave
+        # up), it failed, or it was invalidated mid-flight.
+        stale = copy.deepcopy(_available_models_cache) if _available_models_cache is not None else None
+        error = _models_build_error if spawned else None
+
+    if error is not None:
+        # The build this call started failed — surface it to the caller the
+        # same way the old in-thread builder did (boot prewarm logs the
+        # failure).  Non-spawning waiters degrade instead (issue #16: one
+        # broken provider must not take the whole picker down).
+        raise error
+
+    result = stale
+    if result is None:
+        disk_groups = _load_models_cache_from_disk()
+        if disk_groups is not None:
+            result = copy.deepcopy(disk_groups)
+    if result is None:
+        default_model, active_provider, _auth_store = _config_only_catalog_fields()
+        result = {
+            "active_provider": active_provider,
+            "default_model": default_model,
+            "groups": [],
+            # Flags a fallback so consumers (the frontend store) keep
+            # polling instead of treating the empty catalog as final.
+            "config_only": True,
+        }
+    result["building"] = True
+    return result
+
+
+def _models_build_worker() -> None:
+    """Background worker that owns the live catalog build (issue #16).
+
+    Exactly one worker runs at a time — the spawner flipped
+    ``_cache_build_in_progress`` to True under the cache lock before
+    starting us, and we are the only one allowed to clear it.  If an
+    invalidation lands mid-build (generation moved), the stale result is
+    discarded and the build retried once while the flag stays set so
+    waiters remain parked.  Never raises — failures are recorded in
+    ``_models_build_error`` and surfaced by get_available_models() to the
+    call that spawned us.
+    """
+    global _cache_build_in_progress, _available_models_cache, _available_models_cache_ts, _cache_build_cv, _models_cache_generation, _models_build_error
+    # Ownership of the single-flight flag: every normal exit path below clears
+    # the flag itself and sets `released`.  The finally backstop then only
+    # fires if this worker died abnormally (still holding the flag) — it must
+    # never clear the flag owned by a NEWER worker spawned after we published
+    # (that race fired during our post-publish disk save and made the next
+    # caller degrade instead of joining the fresh build).
+    released = False
+    try:
+        for _attempt in range(2):
+            with _available_models_cache_lock:
+                gen = _models_cache_generation
+            try:
+                result = _build_available_models_uncached()
+            except Exception as exc:
+                with _available_models_cache_lock:
+                    _models_build_error = exc
+                    _cache_build_in_progress = False
+                    _cache_build_cv.notify_all()
+                released = True
+                logger.warning("models catalog build failed", exc_info=True)
+                return
+            with _available_models_cache_lock:
+                published = gen == _models_cache_generation
+                if published:
+                    _available_models_cache = result
+                    _available_models_cache_ts = time.monotonic()
+                    _cache_build_in_progress = False
+                    _cache_build_cv.notify_all()
+            if published:
+                released = True
+                # Disk write stays outside the lock (tmp+rename atomic swap).
+                _save_models_cache_to_disk(result)
+                return
+            logger.debug(
+                "models catalog invalidated mid-build; rebuilding "
+                "(attempt %d/2)", _attempt + 1
+            )
+        # Two invalidated attempts — give up; waiters degrade with
+        # building:True and the next call retries.
+        with _available_models_cache_lock:
             _cache_build_in_progress = False
             _cache_build_cv.notify_all()
-        _save_models_cache_to_disk(result)
-        return copy.deepcopy(result)
+        released = True
+        logger.warning("models catalog build abandoned after repeated invalidation")
+    finally:
+        # Backstop: if this worker died abnormally the flag is still ours
+        # (True, no newer worker can have spawned) — unwedge it so later
+        # callers are not parked on the CV forever.
+        if not released:
+            with _available_models_cache_lock:
+                _cache_build_in_progress = False
+                _cache_build_cv.notify_all()
 
 
 # How long peek_available_models() waits for an in-flight cold build before
-# falling back to a config-only catalog.  The builder holds
-# _available_models_cache_lock for the ENTIRE live build, so this budget is
-# spent acquiring that lock (not the cv wait).  Kept short: up to three such
-# calls can occur on one chat-start request (new_session, model resolve,
-# prefix normalize), so waits stack — 1.0s each keeps the worst case ~3s,
-# under the 5s client timeouts used by the test suite and the frontend
-# (issue #8 smoke regression: an unbounded lock wait timed out session/new).
+# falling back to a config-only catalog.  Since the issue #16 restructure the
+# live build runs OUTSIDE _available_models_cache_lock, so this budget is
+# spent on the CV wait (joining the build) plus the (now millisecond-scale)
+# lock acquisition.  Kept short: up to three such calls can occur on one
+# chat-start request (new_session, model resolve, prefix normalize), so
+# waits stack — 1.0s each keeps the worst case ~3s, under the 5s client
+# timeouts used by the test suite and the frontend (issue #8 smoke
+# regression: an unbounded lock wait timed out session/new).
 _PEEK_WAIT_S = 1.0
 
 
@@ -2088,9 +2323,9 @@ def peek_available_models(*, wait_seconds: float = _PEEK_WAIT_S) -> dict:
 
     For callers that only need ``default_model``/``active_provider`` and can
     treat ``groups`` as best-effort (chat-start model resolution, prefix
-    normalization).  The model picker's ``/api/models`` keeps the blocking
-    builder.  Never raises (issue #8: /api/chat/start must not block on the
-    cold model catalog).
+    normalization).  ``/api/models`` uses get_available_models() with a
+    bounded wait instead.  Never raises (issue #8: /api/chat/start must not
+    block on the cold model catalog).
     """
     global _available_models_cache, _available_models_cache_ts
 
@@ -2126,14 +2361,13 @@ def peek_available_models(*, wait_seconds: float = _PEEK_WAIT_S) -> dict:
         if _available_models_cache is None:
             disk = _load_models_cache_from_disk()
 
-        # Bounded lock acquisition.  get_available_models() holds this lock
-        # for the ENTIRE cold build (live provider fetches can run for many
-        # seconds — the startup prewarm holds it ~5s+ under load), so a plain
-        # `with` here would park the request path behind the builder with no
-        # limit — the exact latency this helper exists to avoid (issue #8:
-        # /api/session/new timed out at 5s waiting on the boot prewarm's
-        # build).  If the lock isn't free within wait_seconds, answer from
-        # the config-only catalog instead of queueing behind the builder.
+        # Bounded lock acquisition.  Since the issue #16 restructure the
+        # live build no longer runs under this lock (it lives on a background
+        # worker), but keep the acquisition bounded anyway: this helper
+        # exists so a latency-critical request never queues behind anything
+        # (issue #8: /api/session/new timed out at 5s waiting on the boot
+        # prewarm's build).  If the lock isn't free within wait_seconds,
+        # answer from the config-only catalog instead of queueing.
         _t_acquire = time.monotonic()
         acquired = _available_models_cache_lock.acquire(timeout=wait_seconds)
         try:

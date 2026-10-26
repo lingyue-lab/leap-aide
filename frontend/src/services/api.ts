@@ -271,8 +271,8 @@ export const settingsService = {
 
 // Models API 服务
 export const modelsService = {
-  getModels: async () => {
-    return api<import('@/types').ModelsResponse>('/api/models');
+  getModels: async (init?: RequestInit) => {
+    return api<import('@/types').ModelsResponse>('/api/models', init);
   },
 
   getLiveModels: async (provider: string) => {

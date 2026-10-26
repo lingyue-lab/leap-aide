@@ -96,22 +96,13 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
     setSettingsTabActive(false);
   };
 
-  const switchPanel = async (panel: NavPanel) => {
-    // Chat and cron jobs (Tasks) both require at least one configured
-    // model provider — gate them via the shared precondition runner.
-    // Other tabs (skills, memory, workspaces, terminal, settings) work
-    // fine without a provider and are not gated.
-    if (panel === 'chat' || panel === 'tasks') {
-      let outcome: 'passed' | 'navigated' = 'passed';
-      try {
-        outcome = await gateProviders();
-      } catch {
-        // Dialog or check threw — fail open so the user is not locked
-        // out by a transient infrastructure error.
-        outcome = 'passed';
-      }
-      if (outcome !== 'passed') return;
-    }
+  const switchPanel = (panel: NavPanel) => {
+    // Issue #16 UI invariant: switching panels NEVER awaits the network.
+    // The previous implementation awaited gateProviders() (a fetch, possibly
+    // a cold /api/providers) before calling onPanelChange — during a slow
+    // catalog build that froze navigation for seconds.  Switch first,
+    // then run the gate in the background; when providers are missing the
+    // guide dialog still appears, but it only gates SENDING, not switching.
     cancelEditing();
     onPanelChange(panel);
     clearAllTabStates();
@@ -141,6 +132,17 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
         markSessionSeen(currentSessionId);
       }
     }
+
+    // Chat and Tasks need at least one configured model provider. The gate
+    // runs AFTER the switch, in the background — if providers are missing
+    // the guide dialog still pops (with a "Configure providers" CTA that
+    // navigates to Settings), but it never blocks the panel switch itself.
+    if (panel === 'chat' || panel === 'tasks') {
+      void gateProviders().catch(() => {
+        // Dialog or check threw — fail open; the panel is already switched
+        // and sending is separately guarded by the composer.
+      });
+    }
   };
 
   return (
@@ -153,7 +155,7 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
             className={`nav-tab ${activePanel === tab.panel ? 'active' : ''}`}
             data-panel={tab.panel}
             data-label={t(tab.labelKey)}
-            onClick={() => { void switchPanel(tab.panel); }}
+            onClick={() => switchPanel(tab.panel)}
             title={t(tab.titleKey)}
             aria-label={t(tab.titleKey)}
           >

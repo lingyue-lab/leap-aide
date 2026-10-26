@@ -75,6 +75,12 @@ interface SessionState {
   setPendingNewSessionPromoting: (v: boolean) => void;
 }
 
+// Issue #16: loadSessions() is async now (was a synchronous XHR that froze
+// the main thread).  Overlapping loads are ordered by this sequence number —
+// every call takes the next `_loadSeq`, and only the call whose seq still
+// matches when the response lands may apply it.
+let _loadSeq = 0;
+
 export const useSessionStore = create<SessionState>((set, get) => ({
   sessions: [],
   currentSessionId: null,
@@ -89,18 +95,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   pinningSession: null,
 
   loadSessions: async () => {
+    // Issue #16: async fetch (was a synchronous XHR that froze the main
+    // thread for its whole duration — the "page dead while switching
+    // panels" bug).  Ordering vs. concurrent loads is kept by a monotonic
+    // sequence number: only the newest request may apply its response.
+    // Ordering vs. notify events (begin_stream / upsert_session) is kept by
+    // notifyManager's baseline buffer — see handleNotifyEvent.
+    const seq = ++_loadSeq;
     set({ loading: true, error: null });
     try {
-      // Synchronous XHR: blocks until response arrives. This ensures the
-      // baseline state is fully populated before any subsequent notify events
-      // (begin_stream, upsert_session) are processed. The brief UI freeze
-      // (~100-300ms) only occurs once per WebSocket (re)connection.
-      const xhr = new XMLHttpRequest();
-      xhr.open('GET', '/api/sessions', false); // false = synchronous
-      xhr.withCredentials = true;
-      xhr.send();
-      if (xhr.status !== 200) throw new Error('Failed to load sessions');
-      const data = JSON.parse(xhr.responseText);
+      const res = await fetch('/api/sessions', { credentials: 'include' });
+      if (!res.ok) throw new Error('Failed to load sessions');
+      const data = await res.json();
+      if (seq !== _loadSeq) return; // superseded by a newer loadSessions()
       const sessions: SessionListItem[] = data.sessions || [];
       // After loading sessions from DB, ensure the active session's title
       // stays in sync between sidebar (sessions[]) and topbar (currentSession).
@@ -116,6 +123,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       }
       set({ sessions, loading: false });
     } catch (err) {
+      if (seq !== _loadSeq) return;
       set({ error: (err as Error).message, loading: false });
     }
   },

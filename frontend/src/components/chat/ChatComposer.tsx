@@ -5,7 +5,7 @@ import { useSettingsStore } from '@/stores/useSettingsStore';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 import { useSkillStore } from '@/stores/useSkillStore';
-import { modelsService, personalityService } from '@/services/api';
+import { personalityService } from '@/services/api';
 import ModeSelector from '@/components/common/ModeSelector';
 import ApprovalIndicator from '@/components/common/ApprovalIndicator';
 import SingleSelection from '@/components/common/SingleSelection';
@@ -15,12 +15,13 @@ import { useModeShortcut } from '@/hooks/useModeShortcut';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { gateProviders } from '@/utils/providersGate';
 import { useProvidersGateStore } from '@/stores/useProvidersGateStore';
+import { useModelsStore } from '@/stores/useModelsStore';
 import { markSessionSeen } from '@/utils/sessionSeen';
 import SlashCommandDropdown from '@/components/chat/SlashCommandDropdown';
 import { useIsBusy } from '@/utils/sessionBusy';
 import { useWorkspaceDisplay } from '@/hooks/useWorkspaceDisplay';
 import type { SlashCommandItem } from '@/components/chat/SlashCommandDropdown';
-import type { ModelGroup, Personality } from '@/types';
+import type { Personality } from '@/types';
 import { Icon } from '@/components/common/Icons';
 
 interface ChatComposerProps {
@@ -56,16 +57,19 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [input, setInput] = useState('');
   const [isDragOver, setIsDragOver] = useState(false);
-  const [modelGroups, setModelGroups] = useState<ModelGroup[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
+  // Shared model catalog (issue #16): all components read the same store —
+  // concurrent mounts share one request and the TTL cache.
+  const modelGroups = useModelsStore((s) => s.data?.groups ?? []);
+  const modelsLoading = useModelsStore((s) => s.status === 'loading');
+  const loadModels = useModelsStore((s) => s.load);
+  const cancelModelsLoad = useModelsStore((s) => s.cancel);
+  const invalidateModels = useModelsStore((s) => s.invalidate);
   const cardVisible = cardVisibleProp ?? false;
 
-  // Eagerly load model list for /model arg completion
+  // Eagerly load model list for /model arg completion (store-deduped).
   useEffect(() => {
-    modelsService.getModels()
-      .then((resp) => setModelGroups(resp.groups ?? []))
-      .catch(() => {});
-  }, []);
+    void loadModels();
+  }, [loadModels]);
 
   // Extract flat model ID list for slash-command dynamic arg completion
   const modelIds = useMemo(() => {
@@ -370,28 +374,20 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const activeDisplayModelId = selectedModelId ?? effectiveModel;
 
-  // Load models data
-  const [modelDataLoaded, setModelDataLoaded] = useState(false);
-  const loadModels = useCallback(() => {
-    if (modelDataLoaded) return;
-    setModelsLoading(true);
-    modelsService.getModels()
-      .then((resp) => setModelGroups(resp.groups ?? []))
-      .catch(() => setModelGroups([]))
-      .finally(() => { setModelsLoading(false); setModelDataLoaded(true); });
-  }, [modelDataLoaded]);
-
-  // Reset the model cache when the providers gate transitions (configured
-  // toggles between true / false). Without this, the user who first
-  // opened the chat with no providers (modelGroups was empty,
-  // modelDataLoaded was set true by the failed fetch) would never see a
-  // real model list after configuring a provider — they'd have to reload
-  // the page. Skipping the initial null state avoids a spurious reset on
-  // first mount before the boot check resolves.
+  // Invalidate + reload the shared catalog when the providers gate
+  // transitions (configured toggles between true / false). Without this,
+  // the user who first opened the chat with no providers (empty catalog
+  // cached as ready by the failed fetch) would never see a real model list
+  // after configuring a provider — they'd have to reload the page. Skipping
+  // the initial null state avoids a spurious reset on first mount before
+  // the boot check resolves.
   const gateConfigured = useProvidersGateStore((s) => s.configured);
   useEffect(() => {
-    if (gateConfigured !== null) setModelDataLoaded(false);
-  }, [gateConfigured]);
+    if (gateConfigured !== null) {
+      invalidateModels();
+      void loadModels();
+    }
+  }, [gateConfigured, invalidateModels, loadModels]);
 
   const handleModelSelect = useCallback(async (modelId: string | null) => {
     if (!modelId) return;
@@ -760,6 +756,7 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
               }))}
               onSelect={handleModelSelect}              loading={modelsLoading}
               onOpen={handleModelMenuOpen}
+              onCancelLoading={cancelModelsLoad}
               emptyText="No models available"
               header="Model"
             />

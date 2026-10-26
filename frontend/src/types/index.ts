@@ -296,6 +296,11 @@ export interface ModelsResponse {
   groups: ModelGroup[];
   default_model?: string;
   active_provider?: string;
+  // Present only when the backend degraded (cold build still in flight or
+  // failed): the groups may be stale/partial, so consumers should keep
+  // polling instead of treating this as the final catalog.
+  building?: boolean;
+  config_only?: boolean;
 }
 
 export interface ModelGroup {

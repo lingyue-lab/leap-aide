@@ -500,12 +500,17 @@ class Session:
         return snapshot
 
     @staticmethod
-    def _normalize_model(model: str) -> str:
+    def _normalize_model(model: str, *, catalog: dict | None = None) -> str:
         """Normalize bare model names to @provider:model format.
 
         Bare names like "deepseek-v4-pro" cannot uniquely identify a model
         across providers. This method adds the @provider: prefix when the
         model belongs to a non-default provider group.
+
+        Args:
+            catalog: pre-fetched model catalog for batch callers (GET
+                /api/sessions passes one peek result for all rows so each
+                row doesn't pay its own peek during a cold build, issue #16).
         """
         if not model:
             return model
@@ -514,7 +519,7 @@ class Session:
             return model
         try:
             from app.api.config import normalize_model_prefix
-            return normalize_model_prefix(model)
+            return normalize_model_prefix(model, catalog=catalog)
         except Exception:
             return model
 
