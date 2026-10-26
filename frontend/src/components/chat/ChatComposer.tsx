@@ -796,7 +796,6 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
                   <Icon name="folder_open" size={18} />
                 }
                 triggerLabel={currentWorkspacePath ? effectiveWorkspaceName : 'Workspace'}
-                showNone
                 options={workspaces
                   .filter((ws: any) => !(isWebUISession && ws.external))
                   .map((ws: any) => ({

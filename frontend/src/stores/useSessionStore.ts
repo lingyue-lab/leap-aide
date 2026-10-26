@@ -405,6 +405,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   assignWorkspace: async (id, workspace) => {
+    // Welcome-state placeholder: this session exists only on the client — the
+    // backend mints the real id on the first /api/chat/start. POSTing here
+    // would 404 ("Session not found") and leave the chip stuck on its previous
+    // value. Keep the pick in the local placeholder instead; WelcomeState
+    // forwards currentSession.workspace as body.workspace on the first send,
+    // so the real session is created with it (issue #4).
+    const pending = get().pendingNewSession;
+    if (pending && pending.session_id === id) {
+      set((state) => ({
+        currentSession:
+          state.currentSession?.session_id === id
+            ? { ...state.currentSession, workspace }
+            : state.currentSession,
+        pendingNewSession: { ...pending, workspace },
+      }));
+      return;
+    }
     const response = await fetch('/api/session/workspace', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
