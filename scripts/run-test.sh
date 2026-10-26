@@ -594,7 +594,7 @@ domain_targets() {
   case "$domain" in
     session)   echo "backend/tests/test_session_*.py backend/tests/test_sessions_api.py backend/tests/test_gateway_sessions.py backend/tests/test_gateway_sync.py backend/tests/test_parallel_session_switch.py backend/tests/test_empty_session_no_disk_write.py" ;;
     model)     echo "backend/tests/test_provider_management.py backend/tests/test_credential_pool_providers.py backend/tests/test_model_resolver.py backend/tests/test_byok_model_dropdown.py backend/tests/test_provider_mismatch.py backend/tests/test_minimax_provider.py" ;;
-    workspace) echo "backend/tests/test_workspace_*.py backend/tests/test_default_workspace_fallback.py backend/tests/test_workspace_blocked_roots_macos.py" ;;
+    workspace) echo "backend/tests/test_workspace_*.py backend/tests/test_default_workspace_fallback.py backend/tests/test_workspace_blocked_roots_macos.py backend/tests/test_issue7_default_workspace.py" ;;
     cron)      echo "backend/tests/test_cron_*.py" ;;
     i18n)      echo "backend/tests/test_chinese_locale.py" ;;
     ui)        echo "backend/tests/test_pwa_manifest_csp.py" ;;

@@ -177,7 +177,6 @@ class TestOnboardingStatusUnsupportedProvider:
             mock.patch.object(mod, "verify_hermes_imports", return_value=(True, [], {})),
             mock.patch.object(mod, "_status_from_runtime", return_value=runtime),
             mock.patch.object(mod, "load_workspaces", return_value=[]),
-            mock.patch.object(mod, "get_last_workspace", return_value=None),
             mock.patch.object(mod, "get_available_models", return_value=[]),
             mock.patch.object(mod, "_get_config_path", return_value=fake_config_path),
             mock.patch.object(pathlib.Path, "exists", return_value=True),

@@ -453,8 +453,6 @@ def _sessions_file():
 from app.api.workspace import (
     load_workspaces,
     save_workspaces,
-    get_last_workspace,
-    set_last_workspace,
     list_dir,
     list_workspace_suggestions,
     read_file_content,
@@ -778,6 +776,10 @@ def handle_get(handler, parsed) -> bool:
         settings = load_settings()
         # Never expose the stored password hash to clients
         settings.pop("password_hash", None)
+        # Read-only echo of the effective default workspace (issue #7): the
+        # value derives solely from HERMES_WEBUI_DEFAULT_WORKSPACE and is no
+        # longer a persisted setting.
+        settings["default_workspace"] = str(DEFAULT_WORKSPACE)
         # Inject the running version so the UI badge stays in sync with git tags
         # without any manual release step.
         try:
@@ -1089,23 +1091,26 @@ def handle_get(handler, parsed) -> bool:
         user_workspaces = load_workspaces()
         user_paths = {w['path'] for w in user_workspaces}
 
-        # The default workspace (from config.yaml terminal.cwd) is external
+        # The profile default (explicit config.yaml workspace keys) is
+        # external — except the built-in Default entry: external entries are
+        # filtered out of the WebUI workspace picker, and Default must stay
+        # selectable (it is where WebUI sessions start). See issue #7.
+        # terminal.cwd is not part of this: CLI workspaces only appear below
+        # as runtime-derived EXT entries from state.db sessions.
+        try:
+            _builtin_ws = str(DEFAULT_WORKSPACE.resolve())
+        except Exception:
+            _builtin_ws = ''
         try:
             _default_ws = profile_default_workspace()
         except Exception:
             _default_ws = ''
         for w in user_workspaces:
-            if w['path'] == _default_ws:
+            resolved = str(Path(w['path']).resolve())
+            if w['path'] == _default_ws and resolved != _builtin_ws:
                 w['external'] = True
-
-        # Mark the built-in default workspace
-        try:
-            from app.api.config import BUILTIN_DEFAULT_WORKSPACE
-            for w in user_workspaces:
-                if Path(w['path']).resolve() == BUILTIN_DEFAULT_WORKSPACE.resolve():
-                    w['builtin'] = True
-        except Exception:
-            pass
+            if _builtin_ws and resolved == _builtin_ws:
+                w['builtin'] = True
 
         # Derive external workspaces from gateway/CLI sessions that have real cwd
         derived: list[dict] = []
@@ -1129,7 +1134,6 @@ def handle_get(handler, parsed) -> bool:
         return j(
             handler, {
                 "workspaces": user_workspaces + derived,
-                "last": get_last_workspace(),
             }
         )
 
@@ -2156,13 +2160,6 @@ def handle_post(handler, parsed) -> bool:
     if parsed.path == "/api/workspaces/rename":
         return _handle_workspace_rename(handler, body)
 
-    if parsed.path == "/api/workspaces/select":
-        path_str = body.get("path", "").strip()
-        if not path_str:
-            return bad(handler, "path is required")
-        set_last_workspace(path_str)
-        return j(handler, {"ok": True, "last_workspace": path_str})
-
     # ── Approval (POST) ──
     if parsed.path == "/api/approval/respond":
         return _handle_approval_respond(handler, body)
@@ -2292,6 +2289,8 @@ def handle_post(handler, parsed) -> bool:
 
         saved = save_settings(body)
         saved.pop("password_hash", None)  # never expose hash to client
+        # Read-only echo (issue #7) — see GET /api/settings
+        saved["default_workspace"] = str(DEFAULT_WORKSPACE)
 
         # When auto_compress_token_threshold changes, sync to agent config.yaml
         # so path-3 (in-agent) compression picks up the new threshold on the
@@ -2458,7 +2457,8 @@ def handle_post(handler, parsed) -> bool:
                     body["session_id"],
                     exc_info=True,
                 )
-        set_last_workspace(new_ws)
+        # Footer workspace assignment writes only state.db cwd (workspace
+        # ownership belongs to the session); no global last-workspace state.
         return j(handler, {"ok": True, "session": s.compact()})
 
     # ── Session skills binding (POST) ──
@@ -3313,20 +3313,75 @@ def _content_disposition_value(disposition: str, filename: str) -> str:
     )
 
 
-def _handle_media(handler, parsed):
-    """Serve a local file by absolute path for inline display in the chat.
+# Media limits — kept in lockstep with the Hermes Agent SDK
+# (hermes_cli/web_server.py: _MEDIA_CONTENT_TYPES / _MEDIA_MAX_BYTES).
+_MEDIA_CONTENT_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".bmp": "image/bmp",
+    ".ico": "image/x-icon",
+}
+_MEDIA_MAX_BYTES = 25 * 1024 * 1024  # 25 MiB, same cap as the SDK
 
-    Security:
-    - Path must resolve to an allowed root (hermes home, /tmp, common dirs)
-    - Auth-gated when auth is enabled
-    - Only image MIME types are served inline; all others force download
-    - SVG always served as attachment (XSS risk)
-    - No path traversal: resolved path must stay within an allowed root
+
+def _media_roots_for_session(session_id: str):
+    """Return the /api/media whitelist roots for one session, or None when
+    the session has no state.db row.
+
+    roots = {HERMES_HOME}/{images,screenshots,cache} ∪ {/tmp} ∪ resolve_cwd(sid)
+    where resolve_cwd(sid) = state.db row.cwd, falling back to the gateway
+    working directory (_resolve_gateway_workspace) when cwd is empty.
+
+    Per-session by design: no other workspace (Default included) is
+    whitelisted globally — workspace ownership lives on state.db cwd.
+    """
+    import os as _os
+    from app.api.models import _get_session_db, _resolve_gateway_workspace
+
+    db = _get_session_db()
+    if db is None:
+        return None
+    row = db.get_session(session_id)
+    if row is None:
+        return None
+    cwd = row.get("cwd") or ""
+    if cwd:
+        session_root = str(Path(cwd).expanduser().resolve())
+    else:
+        session_root = _resolve_gateway_workspace()
+    hermes_home = Path(
+        _os.getenv("HERMES_HOME", str(Path.home() / ".hermes"))
+    ).expanduser()
+    return [
+        (hermes_home / "images").resolve(),
+        (hermes_home / "screenshots").resolve(),
+        (hermes_home / "cache").resolve(),
+        Path("/tmp").resolve(),
+        Path(session_root).resolve(),
+    ]
+
+
+def _handle_media(handler, parsed):
+    """Serve an image by absolute path for inline display in the chat.
+
+    Security (per-session whitelist):
+    - Requires an explicit session_id whose row exists in state.db
+      (missing session_id → 400, unknown session → 404)
+    - Allowed roots: HERMES_HOME/{images,screenshots,cache}, /tmp, and the
+      session's own workspace (state.db cwd → gateway cwd fallback). Other
+      workspaces — Default included — are never whitelisted, so reassigning
+      a session's workspace drops access to images under the old one (403)
+    - Image-extension allowlist + 25 MiB size cap (SDK parity); non-images
+      are rejected (415) instead of being served as downloads
+    - Auth-gated when auth is enabled; no path traversal (resolved path
+      must stay within an allowed root); SVG forced to attachment (XSS)
     """
     import os as _os
     from app.api.auth import is_auth_enabled, parse_cookie, verify_session
-    _HOME = Path(_os.path.expanduser("~"))
-    _HERMES_HOME = Path(_os.getenv("HERMES_HOME", str(_HOME / ".hermes"))).expanduser()
 
     # Auth check
     if is_auth_enabled():
@@ -3343,29 +3398,20 @@ def _handle_media(handler, parsed):
     raw_path = qs.get("path", [""])[0].strip()
     if not raw_path:
         return bad(handler, "path parameter required", 400)
+    session_id = qs.get("session_id", [""])[0].strip()
+    if not session_id:
+        return bad(handler, "session_id parameter required", 400)
 
-    # Resolve the path and check it is within an allowed root
+    # Resolve the path (follows symlinks — resolved form must stay in a root)
     try:
         target = Path(raw_path).resolve()
     except Exception:
         return bad(handler, "Invalid path", 400)
 
-    # Allowed roots: hermes home, /tmp, and active workspace.
-    # Intentionally NOT the entire home dir — that would expose ~/.ssh,
-    # ~/.aws, browser profiles, etc. to any authenticated user.
-    allowed_roots = [
-        _HERMES_HOME.resolve(),
-        Path("/tmp").resolve(),
-        (_HOME / ".hermes").resolve(),
-    ]
-    # Also allow the active workspace directory (where screenshots land)
-    try:
-        from app.api.workspace import get_last_workspace
-        ws = Path(get_last_workspace()).resolve()
-        if ws.is_dir():
-            allowed_roots.append(ws)
-    except Exception:
-        pass
+    allowed_roots = _media_roots_for_session(session_id)
+    if allowed_roots is None:
+        return j(handler, {"error": "session not found"}, status=404)
+
     within_allowed = any(
         _os.path.commonpath([str(target), str(root)]) == str(root)
         for root in allowed_roots
@@ -3377,16 +3423,17 @@ def _handle_media(handler, parsed):
     if not target.exists() or not target.is_file():
         return j(handler, {"error": "not found"}, status=404)
 
-    # Determine MIME type
-    ext = target.suffix.lower()
-    mime = MIME_MAP.get(ext, "application/octet-stream")
+    # Image-extension allowlist only — anything else is rejected outright
+    mime = _MEDIA_CONTENT_TYPES.get(target.suffix.lower())
+    if mime is None:
+        return bad(handler, "Unsupported media type", 415)
 
-    # Only serve image types inline; everything else is a download
-    _INLINE_IMAGE_TYPES = {
-        "image/png", "image/jpeg", "image/gif", "image/webp",
-        "image/x-icon", "image/bmp",
-    }
-    _DOWNLOAD_TYPES = {"image/svg+xml"}  # SVG: XSS risk, force download
+    try:
+        size = target.stat().st_size
+    except OSError:
+        return j(handler, {"error": "not found"}, status=404)
+    if size > _MEDIA_MAX_BYTES:
+        return bad(handler, "Media too large", 413)
 
     try:
         raw_bytes = target.read_bytes()
@@ -3402,17 +3449,14 @@ def _handle_media(handler, parsed):
     handler.send_header("Connection", "close")
     _security_headers(handler)
 
-    if mime in _DOWNLOAD_TYPES or mime not in _INLINE_IMAGE_TYPES:
-        handler.send_header(
-            "Content-Disposition",
-            _content_disposition_value("attachment", target.name),
-        )
-    else:
-        handler.send_header(
-            "Content-Disposition",
-            _content_disposition_value("inline", target.name),
-        )
-
+    # SVG: XSS risk when rendered as a document — force download.
+    handler.send_header(
+        "Content-Disposition",
+        _content_disposition_value(
+            "attachment" if mime == "image/svg+xml" else "inline",
+            target.name,
+        ),
+    )
     handler.end_headers()
     handler.wfile.write(raw_bytes)
 
@@ -4733,7 +4777,9 @@ def _handle_file_rename(handler, body):
 
 def _is_external_workspace(ws_path: str) -> bool:
     """Return True if the workspace path is external (default workspace or gateway/CLI derived)."""
-    # Default workspace from config.yaml is always external
+    # Profile default (config.yaml workspace keys) is always external.
+    # Callers check the built-in Default path first, so builtin never
+    # reaches the external-based error branch.
     try:
         if ws_path == profile_default_workspace():
             return True
@@ -4752,8 +4798,7 @@ def _is_external_workspace(ws_path: str) -> bool:
 def _is_builtin_default_workspace(ws_path: str) -> bool:
     """Return True if the workspace path is the built-in default workspace."""
     try:
-        from app.api.config import BUILTIN_DEFAULT_WORKSPACE
-        return Path(ws_path).resolve() == BUILTIN_DEFAULT_WORKSPACE.resolve()
+        return Path(ws_path).resolve() == DEFAULT_WORKSPACE.resolve()
     except Exception:
         return False
 
@@ -6076,11 +6121,13 @@ def _handle_session_import_cli(handler, body):
     if not msgs:
         return bad(handler, "Session not found in CLI store", 404)
 
-    # Get profile, model, timestamps, and title from CLI session metadata
+    # Get profile, model, timestamps, title, and workspace (state.db cwd)
+    # from CLI session metadata
     profile = None
     created_at = None
     updated_at = None
     cli_title = None
+    cli_workspace = None
     for cs in get_cli_sessions():
         if cs["session_id"] == sid:
             profile = cs.get("profile")
@@ -6088,6 +6135,7 @@ def _handle_session_import_cli(handler, body):
             created_at = cs.get("created_at")
             updated_at = cs.get("updated_at")
             cli_title = cs.get("title")
+            cli_workspace = cs.get("workspace")
             break
 
     # Use the CLI session title if available (e.g., cron job name). Title
@@ -6102,6 +6150,7 @@ def _handle_session_import_cli(handler, body):
         profile=profile,
         created_at=created_at,
         updated_at=updated_at,
+        workspace=cli_workspace,
     )
     s.is_cli_session = True
     s._cli_origin = sid

@@ -1,11 +1,14 @@
 """
 Hermes Web UI -- Workspace and file system helpers.
 
-Workspace lists and last-used workspace are stored per-profile so each
-profile has its own workspace configuration.  State files live at
-``{profile_home}/webui_state/workspaces.json`` and
-``{profile_home}/webui_state/last_workspace.txt``.  The global STATE_DIR
+Workspace lists are stored per-profile so each profile has its own
+workspace configuration.  State files live at
+``{profile_home}/webui_state/workspaces.json``.  The global STATE_DIR
 paths are used as fallback when no profile module is available.
+
+There is no global "last workspace" state: workspace ownership lives on
+each session (state.db ``cwd``), and the WebUI's only default is the
+built-in Default workspace (issue #7).
 """
 import json
 import logging
@@ -18,9 +21,8 @@ logger = logging.getLogger(__name__)
 
 from app.api.config import (
     WORKSPACES_FILE as _GLOBAL_WS_FILE,
-    LAST_WORKSPACE_FILE as _GLOBAL_LW_FILE,
     DEFAULT_WORKSPACE as _BOOT_DEFAULT_WORKSPACE,
-    BUILTIN_DEFAULT_WORKSPACE as _BUILTIN_DEFAULT_WS,
+    STATE_DIR as _STATE_DIR,
     MAX_FILE_BYTES, IMAGE_EXTS, MD_EXTS
 )
 
@@ -51,9 +53,10 @@ def _workspaces_file() -> Path:
     return _profile_state_dir() / 'workspaces.json'
 
 
-def _last_workspace_file() -> Path:
-    """Return the last_workspace.txt path for the active profile."""
-    return _profile_state_dir() / 'last_workspace.txt'
+# Placeholder values for config terminal.cwd — same contract as
+# gateway/cwd_placeholder.py in hermes-agent: they mean "defer to the
+# backend", not a concrete directory.
+_CWD_PLACEHOLDERS = ('.', 'auto', 'cwd')
 
 
 def profile_default_workspace() -> str:
@@ -62,9 +65,13 @@ def profile_default_workspace() -> str:
     Checks keys in priority order:
       1. 'workspace'         — explicit webui workspace key
       2. 'default_workspace' — alternate explicit key
-      3. 'terminal.cwd'      — hermes-agent terminal working dir (most common)
 
     Falls back to the boot-time DEFAULT_WORKSPACE constant.
+
+    ``terminal.cwd`` is intentionally NOT consulted: it is the CLI/gateway
+    working directory (hermes side), not a WebUI workspace. CLI workspaces
+    surface only as runtime-derived external (EXT) entries built from
+    state.db sessions — see the /api/workspaces handler.
     """
     try:
         from app.api.config import get_config
@@ -76,20 +83,36 @@ def profile_default_workspace() -> str:
                 p = Path(str(ws)).expanduser().resolve()
                 if p.is_dir():
                     return str(p)
-        # Fall through to terminal.cwd — the agent's configured working directory
-        terminal_cfg = cfg.get('terminal', {})
-        if isinstance(terminal_cfg, dict):
-            cwd = terminal_cfg.get('cwd', '')
-            if cwd and str(cwd) not in ('.', ''):
-                p = Path(str(cwd)).expanduser().resolve()
-                if p.is_dir():
-                    return str(p)
     except (ImportError, Exception):
         logger.debug("Failed to load profile default workspace config")
     return str(_BOOT_DEFAULT_WORKSPACE)
 
 
 # ── Public API ──────────────────────────────────────────────────────────────
+
+def _stale_terminal_cwd_home() -> str:
+    """Return the resolved config ``terminal.cwd`` when it is a concrete dir.
+
+    Older versions persisted this CLI/gateway working directory into
+    workspaces.json as the 'Home' entry. ``terminal.cwd`` no longer feeds
+    the WebUI workspace list (CLI workspaces are derived at runtime as EXT
+    entries instead), so this path identifies stale entries to drop on load.
+    Returns '' when unset, a placeholder, or unreadable.
+    """
+    try:
+        from app.api.config import get_config
+        cfg = get_config()
+        terminal_cfg = cfg.get('terminal', {})
+        if isinstance(terminal_cfg, dict):
+            cwd = str(terminal_cfg.get('cwd', '')).strip()
+            if cwd and cwd not in _CWD_PLACEHOLDERS:
+                p = Path(cwd).expanduser().resolve()
+                if p.is_dir():
+                    return str(p)
+    except Exception:
+        logger.debug("Failed to read terminal.cwd for workspace migration")
+    return ''
+
 
 def _clean_workspace_list(workspaces: list) -> list:
     """Sanitize a workspace list:
@@ -98,9 +121,13 @@ def _clean_workspace_list(workspaces: list) -> list:
       (e.g. ~/.hermes/profiles/X/... should not appear on a different profile).
     - Rename any entry whose name is literally 'default' to 'Home' (avoids
       confusion with the 'default' profile name).
+    - Drop the stale 'Home' entry older versions persisted from config
+      terminal.cwd (the CLI/gateway working dir — now derived as EXT at
+      runtime). The built-in Default path is kept for renaming below.
     Returns the cleaned list (may be empty).
     """
     hermes_profiles = (Path.home() / '.hermes' / 'profiles').resolve()
+    stale_cwd_home = _stale_terminal_cwd_home()
     result = []
     for w in workspaces:
         path = w.get('path', '')
@@ -125,8 +152,13 @@ def _clean_workspace_list(workspaces: list) -> list:
         except ValueError:
             pass  # not under profiles/ at all — keep it
         # Rename confusing 'default' label to 'Home' (but keep the builtin workspace as 'Default')
-        if name.lower() == 'default' and str(p) != _BUILTIN_DEFAULT_WORKSPACE_PATH:
+        if name.lower() == 'default' and str(p) != _BOOT_DEFAULT_WORKSPACE_PATH:
             name = 'Home'
+        # Drop the stale terminal.cwd 'Home' entry (see _stale_terminal_cwd_home).
+        # The builtin path is exempt: _ensure_builtin_default renames it to 'Default'.
+        if stale_cwd_home and name == 'Home' and str(p) == stale_cwd_home \
+                and str(p) != _BOOT_DEFAULT_WORKSPACE_PATH:
+            continue
         result.append({'path': str(p), 'name': name})
     return result
 
@@ -153,19 +185,23 @@ def _migrate_global_workspaces() -> list:
         return []
 
 
-_BUILTIN_DEFAULT_WORKSPACE_PATH = str(_BUILTIN_DEFAULT_WS.resolve()) if _BUILTIN_DEFAULT_WS else ''
+_BOOT_DEFAULT_WORKSPACE_PATH = str(_BOOT_DEFAULT_WORKSPACE.resolve()) if _BOOT_DEFAULT_WORKSPACE else ''
+# Pre-refactor hardcoded built-in path (issue #7) — kept as the migration
+# marker for stale workspaces.json entries written when the built-in default
+# ignored HERMES_WEBUI_DEFAULT_WORKSPACE.
+_LEGACY_DEFAULT_WORKSPACE_PATH = str((_STATE_DIR / 'workspaces' / 'default').resolve())
 
 
 def _ensure_builtin_default(workspaces: list) -> list:
     """Ensure the built-in default workspace is present and the directory exists."""
-    if not _BUILTIN_DEFAULT_WORKSPACE_PATH:
+    if not _BOOT_DEFAULT_WORKSPACE_PATH:
         return workspaces
     try:
-        Path(_BUILTIN_DEFAULT_WORKSPACE_PATH).mkdir(parents=True, exist_ok=True)
+        Path(_BOOT_DEFAULT_WORKSPACE_PATH).mkdir(parents=True, exist_ok=True)
     except OSError:
         return workspaces
     for w in workspaces:
-        if w.get('path') == _BUILTIN_DEFAULT_WORKSPACE_PATH:
+        if w.get('path') == _BOOT_DEFAULT_WORKSPACE_PATH:
             # Ensure correct name (may have been saved as 'Home' before)
             if w.get('name') != 'Default':
                 w['name'] = 'Default'
@@ -173,13 +209,40 @@ def _ensure_builtin_default(workspaces: list) -> list:
                     save_workspaces(workspaces)
                 except Exception:
                     pass
-            return workspaces
-    workspaces.insert(0, {'path': _BUILTIN_DEFAULT_WORKSPACE_PATH, 'name': 'Default'})
-    try:
-        save_workspaces(workspaces)
-    except Exception:
-        pass
+            break
+    else:
+        workspaces.insert(0, {'path': _BOOT_DEFAULT_WORKSPACE_PATH, 'name': 'Default'})
+        try:
+            save_workspaces(workspaces)
+        except Exception:
+            pass
+    _relabel_colliding_legacy_default(workspaces)
     return workspaces
+
+
+def _relabel_colliding_legacy_default(workspaces: list) -> None:
+    """Issue #7 migration: once HERMES_WEBUI_DEFAULT_WORKSPACE moved the
+    built-in default elsewhere, _clean_workspace_list demotes the stale entry
+    at the old built-in path to 'Home'. If that collides with a real 'Home'
+    entry, relabel the legacy one so the panel never shows two identical
+    names. The legacy directory itself is never touched.
+
+    Must run AFTER _ensure_builtin_default's rename/insert: the transient
+    [Home@legacy, Home@default] state during a normal load is not a collision.
+    """
+    if not _LEGACY_DEFAULT_WORKSPACE_PATH or \
+            _LEGACY_DEFAULT_WORKSPACE_PATH == _BOOT_DEFAULT_WORKSPACE_PATH:
+        return
+    if sum(1 for w in workspaces if w.get('name') == 'Home') < 2:
+        return
+    for w in workspaces:
+        if w.get('path') == _LEGACY_DEFAULT_WORKSPACE_PATH and w.get('name') == 'Home':
+            w['name'] = 'Default (old)'
+            try:
+                save_workspaces(workspaces)
+            except Exception:
+                pass
+            return
 
 
 def load_workspaces() -> list:
@@ -219,51 +282,6 @@ def save_workspaces(workspaces: list) -> None:
     ws_file = _workspaces_file()
     ws_file.parent.mkdir(parents=True, exist_ok=True)
     ws_file.write_text(json.dumps(workspaces, ensure_ascii=False, indent=2), encoding='utf-8')
-
-
-def get_last_workspace() -> str:
-    lw_file = _last_workspace_file()
-    if lw_file.exists():
-        try:
-            p = lw_file.read_text(encoding='utf-8').strip()
-            if p and Path(p).is_dir():
-                return p
-        except Exception:
-            logger.debug("Failed to read last workspace from %s", lw_file)
-    # Fallback: try global file
-    if _GLOBAL_LW_FILE.exists():
-        try:
-            p = _GLOBAL_LW_FILE.read_text(encoding='utf-8').strip()
-            if p and Path(p).is_dir():
-                return p
-        except Exception:
-            logger.debug("Failed to read global last workspace")
-    return profile_default_workspace()
-
-
-def set_last_workspace(path: str) -> None:
-    try:
-        lw_file = _last_workspace_file()
-        lw_file.parent.mkdir(parents=True, exist_ok=True)
-        lw_file.write_text(str(path), encoding='utf-8')
-    except Exception:
-        logger.debug("Failed to set last workspace")
-
-
-def get_first_non_external_workspace() -> str:
-    """Return the first non-external workspace path.
-
-    The default workspace (profile_default_workspace) is considered
-    external.  Returns the first user-added workspace that is not the
-    default.  Falls back to profile_default_workspace() when no
-    non-external workspace exists.
-    """
-    workspaces = load_workspaces()
-    default_ws = profile_default_workspace()
-    for w in workspaces:
-        if w.get('path') != default_ws:
-            return w['path']
-    return default_ws
 
 
 def _safe_resolve(p: Path) -> Path:

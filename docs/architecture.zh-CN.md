@@ -114,7 +114,7 @@ hermes-agent SDK            AIAgent.run_conversation()、tools、gateway
 | `HERMES_WEBUI_HOST` | `127.0.0.1` | 绑定地址 |
 | `HERMES_WEBUI_PORT` | `8787` | 端口 |
 | `HERMES_WEBUI_STATE_DIR` | `~/.hermes/webui` | 状态目录（会话 JSON、设置、工作区） |
-| `HERMES_WEBUI_DEFAULT_WORKSPACE` | *（自动发现）* | 默认工作区路径 |
+| `HERMES_WEBUI_DEFAULT_WORKSPACE` | `~/.hermes/webui/workspaces/default` | 默认工作区路径（内置 "Default" 条目的唯一事实来源） |
 | `HERMES_WEBUI_DEFAULT_MODEL` | *（空）* | 默认模型；留空表示"从已配置的提供商中自动发现" |
 | `HERMES_WEBUI_PASSWORD` | *（未设置）* | 设置后启用口令门 |
 | `HERMES_WEBUI_TLS_CERT` / `HERMES_WEBUI_TLS_KEY` | *（未设置）* | TLS 证书 / 密钥 |

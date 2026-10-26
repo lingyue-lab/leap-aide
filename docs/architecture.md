@@ -114,7 +114,7 @@ External dependencies: `pyyaml` only (plus the Hermes Agent SDK and its own deps
 | `HERMES_WEBUI_HOST` | `127.0.0.1` | Bind address |
 | `HERMES_WEBUI_PORT` | `8787` | Port |
 | `HERMES_WEBUI_STATE_DIR` | `~/.hermes/webui` | State directory (sessions JSON, settings, workspaces) |
-| `HERMES_WEBUI_DEFAULT_WORKSPACE` | *(auto-discovered)* | Default workspace path |
+| `HERMES_WEBUI_DEFAULT_WORKSPACE` | `~/.hermes/webui/workspaces/default` | Default workspace path (single source of truth for the built-in "Default" entry) |
 | `HERMES_WEBUI_DEFAULT_MODEL` | *(empty)* | Default model; empty means "discover from configured providers" |
 | `HERMES_WEBUI_PASSWORD` | *(unset)* | Setting it enables the password gate |
 | `HERMES_WEBUI_TLS_CERT` / `HERMES_WEBUI_TLS_KEY` | *(unset)* | TLS certificate / key |

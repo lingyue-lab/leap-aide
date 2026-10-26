@@ -93,11 +93,11 @@ if [ -z "${WANTED_UID+x}" ] || [ "${WANTED_UID}" = "1024" ]; then
   done
 fi
 if [ -z "${WANTED_UID+x}" ] || [ "${WANTED_UID}" = "1024" ]; then
-  # Priority 2: /workspace bind-mount
-  if [ -d "/workspace" ]; then
-    _detected_uid=$(stat -c '%u' "/workspace" 2>/dev/null || echo "")
+  # Priority 2: /workspaces bind-mount
+  if [ -d "/workspaces" ]; then
+    _detected_uid=$(stat -c '%u' "/workspaces" 2>/dev/null || echo "")
     if [ -n "$_detected_uid" ] && [ "$_detected_uid" != "0" ]; then
-      echo "-- Auto-detected workspace UID: $_detected_uid (from /workspace)"
+      echo "-- Auto-detected workspace UID: $_detected_uid (from /workspaces)"
       WANTED_UID=$_detected_uid
     fi
   fi
@@ -125,11 +125,11 @@ if [ -z "${WANTED_GID+x}" ] || [ "${WANTED_GID}" = "1024" ]; then
   done
 fi
 if [ -z "${WANTED_GID+x}" ] || [ "${WANTED_GID}" = "1024" ]; then
-  # Priority 2: /workspace bind-mount
-  if [ -d "/workspace" ]; then
-    _detected_gid=$(stat -c '%g' "/workspace" 2>/dev/null || echo "")
+  # Priority 2: /workspaces bind-mount
+  if [ -d "/workspaces" ]; then
+    _detected_gid=$(stat -c '%g' "/workspaces" 2>/dev/null || echo "")
     if [ -n "$_detected_gid" ] && [ "$_detected_gid" != "0" ]; then
-      echo "-- Auto-detected workspace GID: $_detected_gid (from /workspace)"
+      echo "-- Auto-detected workspace GID: $_detected_gid (from /workspaces)"
       WANTED_GID=$_detected_gid
     fi
   fi
@@ -363,7 +363,7 @@ it="$HERMES_HOME/.testfile"; touch $it || error_exit "Failed to verify HERMES_HO
 rm -f $it || error_exit "Failed to delete test file in $HERMES_HOME"
 
 echo ""; echo "-- HERMES_WEBUI_DEFAULT_WORKSPACE: Default workspace directory shown on first launch"
-if [ -z "${HERMES_WEBUI_DEFAULT_WORKSPACE+x}" ]; then echo "HERMES_WEBUI_DEFAULT_WORKSPACE not set, setting to /workspace"; export HERMES_WEBUI_DEFAULT_WORKSPACE="/workspace"; fi;
+if [ -z "${HERMES_WEBUI_DEFAULT_WORKSPACE+x}" ]; then echo "HERMES_WEBUI_DEFAULT_WORKSPACE not set, setting to /workspaces"; export HERMES_WEBUI_DEFAULT_WORKSPACE="/workspaces"; fi;
 echo "-- HERMES_WEBUI_DEFAULT_WORKSPACE: $HERMES_WEBUI_DEFAULT_WORKSPACE"
 # Use sudo for mkdir — Docker may auto-create bind-mount directories as root (#357).
 # Skip mkdir if the directory already exists (e.g. a read-only mount — #670).
