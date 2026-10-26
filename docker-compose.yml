@@ -40,6 +40,27 @@ services:
       - https_proxy=
       - no_proxy=
     restart: unless-stopped
+    # In-container `ctl.sh stop` waits up to SHUTDOWN_TIMEOUT=8s for the
+    # server/gateway to exit; the engine default of 10s leaves too little
+    # headroom and used to SIGKILL the tree mid-shutdown.
+    stop_grace_period: 30s
+    # Truthful readiness: /health answers 503 {"status":"initializing"} until
+    # the server finishes post-bind init (issue #3), so `healthy` only shows
+    # once the UI actually answers. The image serves HTTPS (self-signed cert
+    # via baked .env) — hence curl -sk for the https probe with a plain-http
+    # fallback for TLS-less deployments.
+    healthcheck:
+      test: ["CMD-SHELL",
+             "curl -skf https://localhost:8787/health | grep -q '\"status\":\"ok\"' ||
+              curl -sf  http://localhost:8787/health | grep -q '\"status\":\"ok\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 120s
+      # Note: daemonless podman (`podman run -d` via podman-compose) never
+      # schedules these probes — the container stays "(starting)" forever;
+      # only docker / podman-over-API runs them. `ctl.sh start-docker`
+      # therefore waits on /health from the host side for podman users.
 
 # Host-dependent settings (container MTU for uplinks below 1500, registry
 # mirrors, ...) do NOT belong here — put them in docker-compose.local.yml

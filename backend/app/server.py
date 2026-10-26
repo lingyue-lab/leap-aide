@@ -15,9 +15,10 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
-from app.api.auth import check_auth
+from app.api.auth import check_auth, PUBLIC_PATHS
 from app.api.config import HOST, PORT, STATE_DIR, SESSION_DIR, DEFAULT_WORKSPACE
 from app.api.helpers import j, get_profile_cookie
+from app.api.prewarm import server_ready
 from app.api.profiles import set_request_profile, clear_request_profile
 from app.api.routes import handle_get, handle_post
 from app.api.startup import auto_install_agent_deps, fix_credential_permissions
@@ -29,11 +30,18 @@ class QuietHTTPServer(ThreadingHTTPServer):
     request_queue_size = 128  # Increase backlog for concurrent SSE connections
 
     def handle_error(self, request, client_address):
-        """Override to suppress logging for common client disconnect errors."""
+        """Suppress noisy disconnect logs; keep them at DEBUG for diagnosis.
+
+        Chrome's ERR_TOO_MANY_RETRIES boot race (issue #3) shows up here as
+        SSL/reset errors, which were previously dropped without a trace.
+        Default LOG_LEVEL=WARNING keeps production logs quiet; ctl.sh start
+        runs with DEBUG so boot-time resets are visible when investigating.
+        """
         exc_type, exc_value, _ = sys.exc_info()
 
         # Silently ignore common connection errors caused by client disconnects
         if exc_type in (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
+            logger.debug('Connection reset from %s: %s', client_address, exc_value, exc_info=True)
             return
 
         # Also handle socket errors that indicate client disconnect
@@ -41,11 +49,13 @@ class QuietHTTPServer(ThreadingHTTPServer):
             # errno 54 is Connection reset by peer on macOS/BSD
             # errno 104 is Connection reset by peer on Linux
             if exc_value.errno in (54, 104, 32):  # ECONNRESET, EPIPE
+                logger.debug('Socket disconnect from %s: %s', client_address, exc_value, exc_info=True)
                 return
 
         # Handle SSL errors from abrupt client disconnects (e.g., browser refresh during streaming)
         import ssl
         if exc_type is ssl.SSLError:
+            logger.debug('SSL error from %s: %s', client_address, exc_value, exc_info=True)
             return
 
         # For other errors, use default logging
@@ -81,10 +91,22 @@ class Handler(BaseHTTPRequestHandler):
             set_request_profile(cookie_profile)
         try:
             parsed = urlparse(self.path)
-            # Static asset requests use a shorter timeout to release threads quickly
-            if parsed.path.startswith('/assets/') or parsed.path.startswith('/static/'):
-                self.timeout = 5
+            # Note: Handler.timeout (30s) is applied to the socket in
+            # socketserver's setup() before routing runs, so a per-path
+            # self.timeout here would be a no-op — and a real 5s socket
+            # timeout would cut slow clients mid-download of large assets
+            # (the ERR_TOO_MANY_RETRIES failure mode from commit d10f55b1).
             if not check_auth(self, parsed): return
+
+            # During the listen→ready window (issue #3) answer non-public
+            # API calls with 503 instead of letting them touch state that
+            # init stages 8/9 are still building.  Public paths (/login,
+            # /health, /api/auth/*) and static/HTML routes pass through so
+            # the first page load completes without retries.
+            if (not server_ready() and parsed.path.startswith('/api/')
+                    and parsed.path not in PUBLIC_PATHS):
+                return j(self, {'error': 'initializing'}, status=503,
+                         extra_headers={'Retry-After': '1'})
 
             # ── WebSocket terminal upgrade ─────────────────────────────────────
             if parsed.path == '/api/ws/terminal':
@@ -140,6 +162,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             parsed = urlparse(self.path)
             if not check_auth(self, parsed): return
+            # Same listen→ready gate as do_GET (issue #3).
+            if (not server_ready() and parsed.path.startswith('/api/')
+                    and parsed.path not in PUBLIC_PATHS):
+                return j(self, {'error': 'initializing'}, status=503,
+                         extra_headers={'Retry-After': '1'})
             result = handle_post(self, parsed)
             if result is False:
                 return j(self, {'error': 'not found'}, status=404)
@@ -433,57 +460,90 @@ def main() -> None:
     else:
         _done()
 
-    # ── Stage 8: Validate state.db schema ──────────────────────────────
-    # Check __webui column types before any code that swallows exceptions.
-    # If types are wrong, the database is from an incompatible version.
-    _stage(8, 'Validating state.db schema')
-    try:
-        from app.api.webui_schema import check_webui_column_types, IncompatibleSchemaError
-        from app.api.models import _get_session_db
-        db = _get_session_db()
-        if db is not None:
-            check_webui_column_types(db)
-        _done()
-    except IncompatibleSchemaError as e:
-        _fail(str(e))
-        sys.exit(1)
-    except Exception as e:
-        _done(f'skipped ({e})')
-
-    # ── Stage 9: Start session displays ──
-    _stage(9, 'Starting session displays')
-    try:
-        from app.api.session_display import ensure_pinned_displays, sync_gateway_session_cwd
-        sync_gateway_session_cwd()
-        ensure_pinned_displays()
-        _done()
-    except BaseException as e:
-        _fail(f'{type(e).__name__}: {e}')
-
-    # ── Pre-warm imports (sync) + expensive caches (background) ──
-    _prewarm()
+    import threading
+    _shutdown_requested = threading.Event()
 
     # ── Signal handlers ──
-    # httpd.shutdown() must be called from a different thread than serve_forever()
-    # to avoid deadlock (shutdown() waits for serve_forever() to return).
-    import threading
+    # Installed before serving starts. httpd.shutdown() must be called from a
+    # different thread than serve_forever() to avoid deadlock (shutdown()
+    # waits for serve_forever() to return).
     def _shutdown_handler(signum, frame):
         sig_name = signal.Signals(signum).name
         logger.info('Received %s, shutting down gracefully...', sig_name)
+        _shutdown_requested.set()
         threading.Thread(target=httpd.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGTERM, _shutdown_handler)
     signal.signal(signal.SIGINT, _shutdown_handler)
 
-    # ── Startup complete ──
-    total_time = round(time.monotonic() - _t0, 2)
+    # ── Start serving immediately (issue #3) ──
+    # The socket is bound and TLS-wrapped, but until serve_forever() calls
+    # accept() the kernel only queues TCP connections and never completes
+    # the TLS handshake — Chrome then exhausts its retry budget with
+    # net::ERR_TOO_MANY_RETRIES on the first page load. Serve on a thread
+    # now; the slow init below (state.db, displays, sync prewarm imports)
+    # runs on the main thread while requests are answered. /health returns
+    # 503 and non-public /api/* 503 until mark_server_ready().
+    server_thread = threading.Thread(target=httpd.serve_forever,
+                                     name='httpd-serve', daemon=True)
+    server_thread.start()
     logger.info('Listening: %s://%s:%s', scheme, HOST, PORT)
-    logger.info('Startup:   %ss', total_time)
-    logger.info('Log level: %s', _log_level)
+
+    # Test-only hook (backend/tests/test_issue3_bind_serve_gap.py): widen
+    # the listen→ready window so tests can assert requests are answered
+    # during init. Never set in production.
+    _boot_stall = float(os.environ.get('LEAP_AIDE_TEST_BOOT_STALL') or 0)
+    if _boot_stall > 0:
+        logger.info('TEST BOOT STALL: sleeping %.1fs (LEAP_AIDE_TEST_BOOT_STALL)',
+                    _boot_stall)
+        time.sleep(_boot_stall)
 
     try:
-        httpd.serve_forever()
+        # ── Stage 8: Validate state.db schema ──────────────────────────
+        # Check __webui column types before any code that swallows exceptions.
+        # If types are wrong, the database is from an incompatible version.
+        if not _shutdown_requested.is_set():
+            _stage(8, 'Validating state.db schema')
+            try:
+                from app.api.webui_schema import check_webui_column_types, IncompatibleSchemaError
+                from app.api.models import _get_session_db
+                db = _get_session_db()
+                if db is not None:
+                    check_webui_column_types(db)
+                _done()
+            except IncompatibleSchemaError as e:
+                _fail(str(e))
+                sys.exit(1)
+            except Exception as e:
+                _done(f'skipped ({e})')
+
+        # ── Stage 9: Start session displays ──
+        if not _shutdown_requested.is_set():
+            _stage(9, 'Starting session displays')
+            try:
+                from app.api.session_display import ensure_pinned_displays, sync_gateway_session_cwd
+                sync_gateway_session_cwd()
+                ensure_pinned_displays()
+                _done()
+            except BaseException as e:
+                _fail(f'{type(e).__name__}: {e}')
+
+        # ── Pre-warm imports (sync) + expensive caches (background) ──
+        if not _shutdown_requested.is_set():
+            _prewarm()
+            from app.api.prewarm import mark_server_ready
+            mark_server_ready()
+            total_time = round(time.monotonic() - _t0, 2)
+            logger.info('Startup:   %ss', total_time)
+            logger.info('Log level: %s', _log_level)
+
+        server_thread.join()
     finally:
+        # Stop the serve thread first on exception paths (e.g. sys.exit on
+        # an incompatible schema) so cleanup never runs under live requests.
+        if server_thread.is_alive():
+            threading.Thread(target=httpd.shutdown, daemon=True).start()
+            server_thread.join(timeout=5)
         logger.info('Shutting down...')
 
         # 1. Cancel all active agent streams (parallel)

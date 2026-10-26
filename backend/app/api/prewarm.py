@@ -32,6 +32,23 @@ _TOOL_DEFS_DONE = threading.Event()
 _TOOL_DEFS_LOCK = threading.Lock()
 _TOOL_DEFS_RAN = False  # single-flight flag for warm_tool_definitions
 
+# Set by server.main() once the socket is listening AND the post-bind init
+# (state.db validation, session displays, sync prewarm imports) has finished.
+# Before that, /health answers 503 and non-public /api/* 503 so early
+# browser requests (issue #3) are answered instead of hanging in the
+# kernel's accept backlog with no TLS handshake.
+_SERVER_READY = threading.Event()
+
+
+def mark_server_ready() -> None:
+    """Mark startup complete.  Called by server.main() after _prewarm()."""
+    _SERVER_READY.set()
+
+
+def server_ready() -> bool:
+    """True once startup finished; False during the listen→ready window."""
+    return _SERVER_READY.is_set()
+
 
 def begin_prewarm() -> None:
     """Mark prewarm as active.  Called first thing in server._prewarm()."""

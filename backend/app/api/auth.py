@@ -138,12 +138,22 @@ def _hash_password(password):
     return dk.hex()
 
 
+# PBKDF2 with 600k iterations costs ~0.5s per call, and get_password_hash()
+# runs on EVERY request via check_auth -> is_auth_enabled. The env-var
+# password is immutable for the process lifetime, so hash it once (the
+# settings.json path returns a precomputed hash and needs no cache).
+_env_hash_cache: dict = {'pw': None, 'hash': None}
+
+
 def get_password_hash() -> str | None:
     """Return the active password hash, or None if auth is disabled.
     Priority: env var > settings.json."""
     env_pw = os.getenv('HERMES_WEBUI_PASSWORD', '').strip()
     if env_pw:
-        return _hash_password(env_pw)
+        if _env_hash_cache['pw'] != env_pw:
+            _env_hash_cache['pw'] = env_pw
+            _env_hash_cache['hash'] = _hash_password(env_pw)
+        return _env_hash_cache['hash']
     settings = load_settings()
     return settings.get('password_hash') or None
 
