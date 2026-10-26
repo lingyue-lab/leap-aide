@@ -127,6 +127,105 @@ function sanitizeHTML(html: string): string {
     .replace(/javascript:/gi, '');
 }
 
+
+// ── Nested-fence repair (issue #28) ───────────────────────────────────────────
+//
+// CommonMark has no nested fences: while a block is open, ANY line with the
+// same fence char, at least the opener's length and no info string closes it.
+// A ```markdown wrapper whose body contains a ```bash block is therefore closed
+// by the inner block's bare ``` — the rest of the document leaks out as prose
+// and the wrapper's real closing fence becomes a stray empty code block.
+//
+// Models produce exactly that shape when they quote a whole markdown document
+// ("wrap the PR description in a ```markdown block"). repairNestedFenceDocument
+// recognises the signature — the document ends inside an unterminated fence and
+// the first block already contains a nested opener — and re-emits the wrapper
+// with a fence longer than anything inside it, which renders as one block.
+
+const FENCE_LINE_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+
+interface FenceLine {
+  char: '`' | '~';
+  len: number;
+  info: string;
+}
+
+/** Parse a line that is a fenced-code marker, following CommonMark's shape. */
+function parseFenceLine(line: string): FenceLine | null {
+  const m = FENCE_LINE_RE.exec(line);
+  if (!m) return null;
+  const marker = m[1];
+  const info = m[2].trim();
+  // Per CommonMark, a backtick fence's info string may not contain a backtick.
+  if (marker[0] === '`' && info.includes('`')) return null;
+  return { char: marker[0] as '`' | '~', len: marker.length, info };
+}
+
+/**
+ * Rewrite a fenced markdown document that nests a fenced block inside a
+ * shorter (or equal) wrapper fence, so the whole document stays in one code
+ * block. Returns the input unchanged for every other shape.
+ */
+export function repairNestedFenceDocument(raw: string): string {
+  const lines = raw.split('\n');
+
+  let first = 0;
+  while (first < lines.length && lines[first].trim() === '') first++;
+  if (first >= lines.length) return raw;
+  const outer = parseFenceLine(lines[first]);
+  // Only a language-tagged wrapper is treated as "a document in a code block".
+  if (!outer || outer.info === '') return raw;
+
+  // Walk the document the way marked will, to learn where it ends up.
+  let open: FenceLine | null = null;
+  let firstBlockClosed = false;
+  let firstBlockHasNestedOpener = false;
+  let lastFence = -1;
+
+  for (let i = first; i < lines.length; i++) {
+    const fence = parseFenceLine(lines[i]);
+    if (!fence) continue;
+    lastFence = i;
+    if (open === null) {
+      open = fence;
+      continue;
+    }
+    const closes = fence.char === open.char && fence.len >= open.len && fence.info === '';
+    if (closes) {
+      open = null;
+      if (i !== first) firstBlockClosed = true;
+    } else if (!firstBlockClosed && fence.info !== '') {
+      firstBlockHasNestedOpener = true;
+    }
+  }
+
+  // Signature of the bug: EOF inside a fence, after a first block that itself
+  // contained a nested opener. Anything else is left untouched.
+  if (open === null || !firstBlockClosed || !firstBlockHasNestedOpener) return raw;
+  const tail = parseFenceLine(lines[lastFence]);
+  if (!tail || tail.info !== '') return raw;
+
+  const body = lines.slice(first + 1, lastFence);
+  if (body.length === 0) return raw;
+  // Keep the wrapper's indentation (a fence may sit inside a list item).
+  const indent = /^[ \t]*/.exec(lines[first])![0];
+
+  let longestInner = outer.len;
+  for (const line of body) {
+    const fence = parseFenceLine(line);
+    if (fence) longestInner = Math.max(longestInner, fence.len);
+  }
+  const wrapper = outer.char.repeat(longestInner + 1);
+
+  return [
+    ...lines.slice(0, first),
+    indent + wrapper + outer.info,
+    ...body,
+    indent + wrapper,
+    ...lines.slice(lastFence + 1),
+  ].join('\n');
+}
+
 // ── Main export ──
 
 export function renderMarkdown(raw: string, skipHighlight: boolean = false): string {
@@ -140,8 +239,11 @@ export function renderMarkdown(raw: string, skipHighlight: boolean = false): str
   // Strip YAML frontmatter
   const textToRender = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '');
 
+  // Repair a nested-fence wrapper before parsing (issue #28).
+  const repaired = repairNestedFenceDocument(textToRender);
+
   const stash = createStash();
-  let html = textToRender;
+  let html = repaired;
 
   // 1. Protect plain URLs before marked's GFM autolink swallows non-ASCII text.
   //    Stash them as inline code so marked leaves them untouched.
