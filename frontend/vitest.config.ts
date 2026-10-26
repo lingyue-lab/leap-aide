@@ -45,3 +45,4 @@ export default defineConfig({
     watch: false,
   },
 });
+# Automated fix for issue #26: [Bug] Light模式下，中断streaming操作弹出的底部Info Card背景色和其它部分割裂
