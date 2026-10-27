@@ -1,11 +1,10 @@
 /**
- * NavTabs providers-gate behavior:
- *  - Clicking chat/tasks when gate returns 'passed' should call onPanelChange.
- *  - Clicking chat/tasks when gate returns 'navigated' should NOT call
- *    onPanelChange.
+ * NavTabs providers-gate behavior (issue #16 UI invariant: switching panels
+ * never awaits the network):
+ *  - Clicking chat/tasks switches the panel IMMEDIATELY; the gate runs in
+ *    the background afterwards (it only gates SENDING, not switching).
  *  - Clicking other tabs (settings, skills, memory, workspaces, terminal)
- *    should NOT call gateProviders at all and should always pass through
- *    to onPanelChange.
+ *    should NOT call gateProviders at all.
  *
  * Note: there is no 'cancelled' outcome — the gate uses an Alert Dialog
  * (M3 Basic) with a single primary action; chat / cron panels are
@@ -85,28 +84,29 @@ beforeEach(() => {
 
 describe('NavTabs — providers gate', () => {
   // TC-N1
-  it('clicking Chat calls onPanelChange when gate returns "passed"', async () => {
+  it('clicking Chat switches immediately and still runs the gate in the background', async () => {
     mockedGate.mockResolvedValueOnce('passed');
     const onPanelChange = vi.fn();
     const { getByLabelText } = render(
       <NavTabs activePanel="tasks" onPanelChange={onPanelChange} />,
     );
     fireEvent.click(getByLabelText('tabs.chat_title'));
-    // onPanelChange is called synchronously after the async gate resolves.
-    await vi.waitFor(() => expect(onPanelChange).toHaveBeenCalledWith('chat'));
-    expect(mockedGate).toHaveBeenCalledTimes(1);
+    // Issue #16: the switch must NOT wait for the gate promise.
+    expect(onPanelChange).toHaveBeenCalledWith('chat');
+    await vi.waitFor(() => expect(mockedGate).toHaveBeenCalledTimes(1));
   });
 
-  // TC-N3
-  it('clicking Tasks does NOT call onPanelChange when gate returns "navigated"', async () => {
+  // TC-N3 (issue #16: 'navigated' no longer blocks the switch — the gate
+  // dialog guides the user to Settings but the panel already changed).
+  it('clicking Tasks still switches when gate returns "navigated"', async () => {
     mockedGate.mockResolvedValueOnce('navigated');
     const onPanelChange = vi.fn();
     const { getByLabelText } = render(
       <NavTabs activePanel="chat" onPanelChange={onPanelChange} />,
     );
     fireEvent.click(getByLabelText('tabs.tasks_title'));
+    expect(onPanelChange).toHaveBeenCalledWith('tasks');
     await vi.waitFor(() => expect(mockedGate).toHaveBeenCalledTimes(1));
-    expect(onPanelChange).not.toHaveBeenCalled();
   });
 
   // TC-N4 — non-gated tabs pass through unconditionally.

@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { cronService, modelsService, skillsService, toolsetsService } from '@/services/api';
-import type { CronCreateRequest, CronJob, ModelGroup } from '@/types';
+import { cronService, skillsService, toolsetsService } from '@/services/api';
+import type { CronCreateRequest, CronJob } from '@/types';
 import { useCronStore } from '@/stores/useCronStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
+import { useModelsStore } from '@/stores/useModelsStore';
 import FormPage, { FormActions } from '@/components/common/FormPage';
 import { FormField, TextField, TextArea } from '@/components/common/FormField';
 import { ChevronDownIcon } from '@/components/common/Icons';
@@ -36,7 +37,7 @@ export default function TaskForm({ editJob, onSuccess, onCancel }: TaskFormProps
   const [formPrompt, setFormPrompt] = useState(editJob?.prompt || '');
   const [formDeliver, setFormDeliver] = useState<'local' | 'discord' | 'telegram'>(editJob?.deliver || 'local');
   const defaultModel = useSettingsStore((s) => s.settings?.model ?? '');
-  const [modelGroups, setModelGroups] = useState<ModelGroup[]>([]);
+  const modelGroups = useModelsStore((s) => s.data?.groups ?? []);
   const [formModel, setFormModel] = useState(editJob?.model || defaultModel || '');
   const [formError, setFormError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -70,9 +71,8 @@ export default function TaskForm({ editJob, onSuccess, onCancel }: TaskFormProps
   const skillsDropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    modelsService.getModels()
-      .then((resp) => setModelGroups(resp.groups ?? []))
-      .catch(() => {});
+    // Load the shared model catalog (issue #16: store-deduped, TTL-cached).
+    void useModelsStore.getState().load();
     // Load skills
     skillsService.list()
       .then((resp) => setAvailableSkills(resp.skills?.map(s => ({ name: s.name, label: s.label || s.name })) ?? []))

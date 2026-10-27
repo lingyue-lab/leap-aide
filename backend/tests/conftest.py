@@ -111,6 +111,11 @@ os.environ['HERMES_WEBUI_STATE_DIR'] = str(TEST_STATE_DIR)
 os.environ['HERMES_WEBUI_DEFAULT_WORKSPACE'] = str(TEST_WORKSPACE)
 os.environ['HERMES_HOME'] = str(TEST_STATE_DIR)
 os.environ['HERMES_BASE_HOME'] = str(TEST_STATE_DIR)
+# Issue #16: /api/models degrades to a building:True answer after this bound.
+# The production default is 3s; function tests assert on real groups, so give
+# the cold build a generous budget — slow CI must not flake into the degrade
+# path.  Unit tests pin the tight bound via monkeypatch instead.
+os.environ.setdefault('HERMES_WEBUI_MODELS_WAIT_S', '30')
 # ── Live-test opt-in ────────────────────────────────────────────────────────────
 # Tests that exercise a real chat completion need a live provider key.
 # Opt-in requires BOTH:

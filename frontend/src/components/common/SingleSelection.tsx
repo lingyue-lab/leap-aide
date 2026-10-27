@@ -33,6 +33,10 @@ export interface SingleSelectionProps {
   loading?: boolean;
   emptyText?: string;
   onOpen?: () => void;
+  /** Called when the close (X) button is clicked while `loading` — lets the
+   *  caller abort the in-flight request that drives the spinner (issue #16:
+   *  the picker's X must cancel the models fetch, not just hide the popover). */
+  onCancelLoading?: () => void;
 }
 
 // ── Component ──────────────────────────────────────────────────────────────
@@ -53,6 +57,7 @@ const SingleSelection: React.FC<SingleSelectionProps> = ({
   loading = false,
   emptyText = 'No options available',
   onOpen,
+  onCancelLoading,
 }) => {
   const [open, setOpen] = useState(false);
   const [popoverStyle, setPopoverStyle] = useState<React.CSSProperties>({});
@@ -78,7 +83,12 @@ const SingleSelection: React.FC<SingleSelectionProps> = ({
     });
   }, [onOpen]);
 
-  const close = useCallback(() => setOpen(false), []);
+  const close = useCallback(() => {
+    // Closing while a load is in flight also aborts it — the spinner is
+    // driven by a real network request the caller may want to cancel.
+    if (loading && onCancelLoading) onCancelLoading();
+    setOpen(false);
+  }, [loading, onCancelLoading]);
 
   // ── Select handler (keep popover open after selection) ──────────────────
   const handleSelect = useCallback((v: string | null) => {

@@ -289,7 +289,10 @@ def _prewarm() -> None:
         t0 = time.monotonic()
         try:
             from app.api.config import get_available_models
-            result = get_available_models()
+            # wait_seconds=None: the prewarm is the one deliberate unbounded
+            # waiter — it wants the REAL catalog, not a building:True degrade
+            # (the live build itself runs on a background worker thread).
+            result = get_available_models(wait_seconds=None)
             n_groups = len(result.get('groups', []))
             logger.info('Pre-warm: models cache ready (%.1fs, %d groups)',
                         time.monotonic() - t0, n_groups)
@@ -363,6 +366,7 @@ def main() -> None:
     from app.api.config import (
         print_startup_config,
         apply_network_preferences,
+        apply_aws_metadata_preference,
         verify_hermes_imports,
         _HERMES_FOUND,
     )
@@ -374,6 +378,10 @@ def main() -> None:
     print_startup_config()
     # Patch getaddrinfo before any prewarm thread does network I/O (issue #8).
     apply_network_preferences()
+    # Probe IMDS once and disable botocore's metadata discovery when it is
+    # unreachable — must run before the models prewarm imports botocore
+    # (issue #16: 1-2s IMDS timeouts per cold build on non-AWS hosts).
+    apply_aws_metadata_preference()
     _done()
 
     # ── Stage 2: Fix credential permissions ──

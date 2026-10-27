@@ -8,7 +8,7 @@ import { useCronStore } from '@/stores/useCronStore';
 import { useMemoryStore } from '@/stores/useMemoryStore';
 import { useTerminalStore } from '@/stores/useTerminalStore';
 import { useSettingsTabStore } from '@/stores/useSettingsTabStore';
-import { modelsService } from '@/services/api';
+import { useModelsStore } from '@/stores/useModelsStore';
 import SkillDetail from '@/components/skills/SkillDetail';
 import SkillForm from '@/components/skills/SkillForm';
 import TaskDetail from '@/components/tasks/TaskDetail';
@@ -83,19 +83,14 @@ function WelcomeState() {
   // on first render.  Without this, settings.model can point at an
   // unconfigured provider (e.g. user only has DeepSeek configured but
   // settings.default_model is anthropic/...) and the menu opens with
-  // nothing preselected.
-  const [firstAvailableModelId, setFirstAvailableModelId] = useState<string | undefined>(undefined);
+  // nothing preselected.  Goes through the shared store (issue #16) so a
+  // welcome-page mount joins the composer's in-flight request instead of
+  // stacking a second one on a cold backend.
+  const firstAvailableModelId = useModelsStore((s) => s.data?.groups?.[0]?.models?.[0]?.id);
+  const loadModels = useModelsStore((s) => s.load);
   useEffect(() => {
-    let cancelled = false;
-    modelsService.getModels()
-      .then((resp) => {
-        if (cancelled) return;
-        const first = resp.groups?.[0]?.models?.[0]?.id;
-        if (first) setFirstAvailableModelId(first);
-      })
-      .catch(() => { /* leave undefined — picker shows placeholder */ });
-    return () => { cancelled = true; };
-  }, []);
+    void loadModels();
+  }, [loadModels]);
 
   // Track the user's explicit model pick from the picker. The composer
   // can't POST /api/session/update for the placeholder session (it would
