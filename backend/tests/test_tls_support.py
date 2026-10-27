@@ -40,7 +40,12 @@ def _find_free_port() -> int:
 
 def _wait_for_server(host: str, port: int, use_ssl: bool = False,
                      timeout: float = 30.0) -> bool:
-    """Poll until the server accepts a connection or times out."""
+    """Poll until /health reports ready (status ok) or times out.
+
+    /health answers 503 {"status": "initializing"} while the server thread
+    is already serving but post-bind init is still running (issue #3), so
+    any HTTP response is not enough — tests assert 200 afterwards.
+    """
     ctx = None
     if use_ssl:
         ctx = ssl.create_default_context()
@@ -55,11 +60,13 @@ def _wait_for_server(host: str, port: int, use_ssl: bool = False,
                 c = http.client.HTTPConnection(host, port, timeout=2)
             c.request("GET", "/health")
             resp = c.getresponse()
-            resp.read()
+            body = resp.read()
             c.close()
-            return True
+            if resp.status == 200 and json.loads(body).get("status") == "ok":
+                return True
         except Exception:
-            time.sleep(0.5)
+            pass
+        time.sleep(0.5)
     return False
 
 

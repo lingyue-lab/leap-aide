@@ -216,8 +216,33 @@ if [ "A${whoami}" == "Aleap-aide-init" ]; then
     # sudo resets the environment: pass the two values explicitly. Everything
     # else (HERMES_HOME, HERMES_WEBUI_STATE_DIR, ...) is restored by load_env()
     # in the second half, which runs before those variables are consumed.
-    sudo WANTED_UID="${WANTED_UID}" WANTED_GID="${WANTED_GID}" bash "${script_fullname}" \
-      || error_exit "root re-exec failed"
+    # As PID 1 this script must forward stop signals itself: the kernel ignores
+    # default-disposition signals for PID 1 and podman/docker stop only signal
+    # PID 1, so a bare foreground re-exec would swallow SIGTERM, stall the
+    # engine's kill grace period, and have the whole tree SIGKILLed mid-shutdown
+    # — wasting the grace window on every restart and lengthening the next
+    # boot's dead-port interval (issue #3).
+    _leap_child=""
+    _got_signal=0
+    _forward_signal() {
+      _got_signal=1
+      echo "-- Forwarding stop signal to root re-exec (PID ${_leap_child})"
+      if [ -n "$_leap_child" ]; then kill -TERM "$_leap_child" 2>/dev/null || true; fi
+    }
+    trap _forward_signal SIGTERM SIGINT
+    sudo WANTED_UID="${WANTED_UID}" WANTED_GID="${WANTED_GID}" bash "${script_fullname}" &
+    _leap_child=$!
+    _rc=0
+    wait $_leap_child || _rc=$?
+    # `set -e`: a wait() interrupted by the forwarded signal returns 128+signum
+    # while the child is still shutting down (captured via `|| _rc=$?` instead
+    # of exiting) — reclaim the child's real status with a second wait.
+    if [ "$_got_signal" = "1" ] && [ "$_rc" -ge 128 ]; then
+      _rc=0
+      wait $_leap_child || _rc=$?
+    fi
+    trap - SIGTERM SIGINT
+    if [ "$_rc" -ne 0 ]; then error_exit "root re-exec failed (exit code ${_rc})"; fi
     ok_exit "Clean exit"
   fi
 
@@ -255,7 +280,34 @@ if [ "A${whoami}" == "Aleap-aide-init" ]; then
   save_env /tmp/leap-aide-init_env.txt
   # restart the script as leap-aide set with the correct UID/GID this time
   echo "-- Restarting as leap-aide user with UID ${WANTED_UID} GID ${WANTED_GID}"
-  sudo su leap-aide $script_fullname || error_exit "subscript failed"
+  # Run the leap-aide phase as a child and forward stop signals to it. As
+  # PID 1 this script is immune to default-disposition signals (the kernel
+  # ignores them for PID 1), while podman/docker stop only signal PID 1 —
+  # without the forward, stop stalls the engine's kill grace period (10s)
+  # and the whole tree is SIGKILLed mid-shutdown, wasting 10s on every
+  # restart before the next boot starts (issue #3: lengthens the window in
+  # which the port is dead and first page loads fail).
+  _leap_child=""
+  _got_signal=0
+  _forward_signal() {
+    _got_signal=1
+    echo "-- Forwarding stop signal to leap-aide phase (PID ${_leap_child})"
+    if [ -n "$_leap_child" ]; then kill -TERM "$_leap_child" 2>/dev/null || true; fi
+  }
+  trap _forward_signal SIGTERM SIGINT
+  sudo su leap-aide $script_fullname &
+  _leap_child=$!
+  _rc=0
+  wait $_leap_child || _rc=$?
+  # `set -e`: a wait() interrupted by the forwarded signal returns 128+signum
+  # while the child is still shutting down (captured via `|| _rc=$?` instead
+  # of exiting) — reclaim the child's real status with a second wait.
+  if [ "$_got_signal" = "1" ] && [ "$_rc" -ge 128 ]; then
+    _rc=0
+    wait $_leap_child || _rc=$?
+  fi
+  trap - SIGTERM SIGINT
+  if [ "$_rc" -ne 0 ]; then error_exit "subscript failed (exit code ${_rc})"; fi
   ok_exit "Clean exit"
 fi
 
@@ -287,7 +339,18 @@ echo ""; echo "-- Aligning /app ownership with the leap-aide user"
 # as a user that cannot write its own checkout.
 # This replaces the old `rsync /build/ /app/`, which re-copied the whole tree
 # on every start just to apply --chown.
-sudo chown -R ${WANTED_UID}:${WANTED_GID} /app || error_exit "Failed to set owner of /app to ${WANTED_UID}:${WANTED_GID}"
+# Recursive chown over the whole tree is one of the slowest boot steps
+# (issue #3: it delays time-to-listen on first boot), so skip it when a
+# stamp in the container's /tmp shows the tree was already re-owned for
+# this UID:GID. /tmp resets on container recreate or image change — exactly
+# when the image-layer owners matter again.
+_app_stamp="$itdir/app-uid-stamp"
+if [ -f "$_app_stamp" ] && [ "$(cat "$_app_stamp")" = "${WANTED_UID}:${WANTED_GID}" ]; then
+  echo "-- /app already owned by ${WANTED_UID}:${WANTED_GID} (stamp match) — skipping chown"
+else
+  sudo chown -R ${WANTED_UID}:${WANTED_GID} /app || error_exit "Failed to set owner of /app to ${WANTED_UID}:${WANTED_GID}"
+  echo -n "${WANTED_UID}:${WANTED_GID}" > "$_app_stamp" || echo "!! WARNING: could not write $_app_stamp (chown re-runs next boot)"
+fi
 it=/app/.testfile; touch $it || error_exit "Failed to verify /app directory"
 rm -f $it || error_exit "Failed to delete test file in /app"
 

@@ -742,6 +742,12 @@ def handle_get(handler, parsed) -> bool:
         return True
 
     if parsed.path == "/health":
+        # 503 until server.main() finishes post-bind init (issue #3): the
+        # serve thread answers during boot, but gateway/bootstrap/compose
+        # health checks must keep waiting for real readiness.
+        from app.api.prewarm import server_ready
+        if not server_ready():
+            return j(handler, {"status": "initializing"}, status=503)
         return j(
             handler,
             {

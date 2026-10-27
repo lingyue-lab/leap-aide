@@ -106,6 +106,9 @@ class CtlDockerWrapperTest(unittest.TestCase):
             # container (an image built with `touch /.within_container`), so
             # point the guard at a path that does not exist by default.
             "WITHIN_CONTAINER_MARKER": str(self.root / "not-a-container"),
+            # start-docker waits for /health on the host (issue #3); the stub
+            # engines below never serve one, so skip the wait in these tests.
+            "CTL_HEALTH_WAIT_TIMEOUT": "0",
         }
 
     def tearDown(self):
