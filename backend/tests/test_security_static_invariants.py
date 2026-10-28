@@ -7,7 +7,8 @@ in the headless backend-test environment.
 
 Four backend guarantees remain:
 
-  - api/config.py validates the discovered gateway URL uses an http(s) scheme
+  - api/model_catalog.py validates fetch URLs use an http(s) scheme
+    (the SSRF guard moved from config.py with the issue #10 refactor)
   - server.py uses a QuietHTTPServer subclass (only access logging)
   - api/routes.py calls _redact_text for sensitive patterns
   - api/streaming.py strips HTML tags from provider error responses
@@ -19,30 +20,32 @@ REPO_ROOT = None  # set in setUpModule via __file__
 SERVER_PY: str = ""
 ROUTES_PY: str = ""
 CONFIG_PY: str = ""
+CATALOG_PY: str = ""
 
 
 def setUpModule():
-    global REPO_ROOT, SERVER_PY, ROUTES_PY, CONFIG_PY
+    global REPO_ROOT, SERVER_PY, ROUTES_PY, CONFIG_PY, CATALOG_PY
     import pathlib
     REPO_ROOT = pathlib.Path(__file__).parent.parent
     SERVER_PY = (REPO_ROOT / "app" / "server.py").read_text(encoding="utf-8")
     ROUTES_PY = (REPO_ROOT / "app" / "api" / "routes.py").read_text(encoding="utf-8")
     CONFIG_PY = (REPO_ROOT / "app" / "api" / "config.py").read_text(encoding="utf-8")
+    CATALOG_PY = (REPO_ROOT / "app" / "api" / "model_catalog.py").read_text(encoding="utf-8")
 
 
 class TestGatewayUrlSchemeValidation(unittest.TestCase):
-    """api/config.py: gateway URL must reject non-http(s) schemes."""
+    """api/model_catalog.py: gateway URL must reject non-http(s) schemes."""
 
     def test_urlparse_used(self):
         self.assertIn(
-            "urlparse", CONFIG_PY,
+            "urlparse", CATALOG_PY,
             "URL scheme validation must call urlparse()",
         )
 
     def test_scheme_allowlist_includes_http_and_https(self):
         # Allow-list must contain both http and https (with optional "").
         self.assertRegex(
-            CONFIG_PY,
+            CATALOG_PY,
             r'scheme\s+not\s+in\s*\(\s*["\'](?:["\']\s*,\s*["\'])*https?["\']',
             "URL scheme must be checked against an explicit http/https allow-list",
         )
@@ -50,7 +53,7 @@ class TestGatewayUrlSchemeValidation(unittest.TestCase):
     def test_invalid_scheme_raises(self):
         # Non-http(s) schemes must raise ValueError (PR #351 hardening).
         self.assertRegex(
-            CONFIG_PY,
+            CATALOG_PY,
             r"raise\s+ValueError.*[Ss]cheme",
             "Invalid URL scheme must raise ValueError",
         )
@@ -58,7 +61,7 @@ class TestGatewayUrlSchemeValidation(unittest.TestCase):
     def test_bandit_b310_annotation_present(self):
         # Bandit flags urlopen() without scheme allow-list; we mark the line safe.
         self.assertRegex(
-            CONFIG_PY, r"#\s*nosec\s+B310",
+            CATALOG_PY, r"#\s*nosec\s+B310",
             "urlopen call must be annotated with `# nosec B310` after fix",
         )
 

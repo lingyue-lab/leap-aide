@@ -154,17 +154,59 @@ describe('useModelsStore', () => {
     expect(mockedGetModels).toHaveBeenCalledTimes(2);
   });
 
-  it('polling is capped at MAX_POLLS while the backend stays in building state', async () => {
+  it('polling is capped at MAX_POLLS and settles instead of spinning forever', async () => {
     mockedGetModels.mockResolvedValue(buildingCatalog as never);
     void useModelsStore.getState().load();
     await vi.advanceTimersByTimeAsync(0);
     expect(mockedGetModels).toHaveBeenCalledTimes(1);
+    expect(useModelsStore.getState().status).toBe('loading');
 
-    // 25 polls' worth of time: the initial request + at most 20 polls.
-    await vi.advanceTimersByTimeAsync(21 * 2500);
-    expect(mockedGetModels.mock.calls.length).toBeLessThanOrEqual(21);
-    // And the cap actually stopped it well before the window ended.
-    expect(mockedGetModels.mock.calls.length).toBeGreaterThanOrEqual(20);
+    // Well past the poll budget: initial request + at most 36 polls.
+    await vi.advanceTimersByTimeAsync(40 * 2500);
+    expect(mockedGetModels.mock.calls.length).toBeLessThanOrEqual(37);
+    expect(mockedGetModels.mock.calls.length).toBeGreaterThanOrEqual(36);
+
+    // The cap must settle the store — status is no longer 'loading', so the
+    // picker cannot freeze on an endless spinner (regression: compose-footer
+    // model picker stuck spinning when the backend build hung).
+    const after = useModelsStore.getState();
+    expect(after.status).not.toBe('loading');
+    // Degraded catalog data exists: surface it as ready so the picker shows
+    // whatever baseline groups arrived.
+    expect(after.status).toBe('ready');
+    expect(after.data?.building).toBe(true);
+  });
+
+  it('a failed poll lands in error instead of staying loading', async () => {
+    mockedGetModels
+      .mockResolvedValueOnce(buildingCatalog as never)
+      .mockRejectedValue(new Error('network down') as never);
+    void useModelsStore.getState().load();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useModelsStore.getState().status).toBe('loading');
+
+    await vi.advanceTimersByTimeAsync(2500);
+    const after = useModelsStore.getState();
+    expect(after.status).toBe('error');
+    expect(after.error).toBe('network down');
+  });
+
+  it('cancel during a building poll chain restores a settled status', async () => {
+    mockedGetModels.mockResolvedValue(buildingCatalog as never);
+    void useModelsStore.getState().load();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useModelsStore.getState().status).toBe('loading');
+
+    // Let one poll fire so the chain is mid-flight with previousStatus='loading'.
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(useModelsStore.getState().status).toBe('loading');
+
+    useModelsStore.getState().cancel();
+    // Cancel must not restore 'loading' — that re-froze the picker.
+    const after = useModelsStore.getState();
+    expect(after.status).not.toBe('loading');
+    // Degraded data is present, so 'ready' is the settled fallback.
+    expect(after.status).toBe('ready');
   });
 
   it('invalidate() resets everything', async () => {

@@ -847,6 +847,105 @@ def _on_session_title(
         )
 
 
+# ── Provider billing / zero-balance detection (issue #38) ─────────────────────
+# Error fragments that mark a provider response as credit/balance exhaustion.
+# Mirrors the hermes-agent error classifier's billing patterns so a key with
+# no remaining balance is classified as quota even when the wording falls
+# outside the older, narrower list.
+_QUOTA_ERROR_PATTERNS = (
+    'insufficient credit',
+    'credit balance',
+    'credits exhausted',
+    'credits have been exhausted',
+    'quota_exceeded',
+    'insufficient_quota',
+    'quota exceeded',
+    'exceeded your current quota',
+    'insufficient balance',
+    'balance is insufficient',
+    'account balance is too low',
+    'insufficient funds',
+    'out of funds',
+    'run out of funds',
+    'no usable credits',
+    'top up your credits',
+    'requires available credits',
+    'payment required',
+    'billing hard limit',
+    'balance_depleted',
+    '余额不足',
+)
+
+
+def _is_quota_error(text) -> bool:
+    """True when *text* looks like an exhausted-credit / zero-balance error."""
+    lowered = str(text or '').lower()
+    if not lowered:
+        return False
+    return any(pattern in lowered for pattern in _QUOTA_ERROR_PATTERNS)
+
+
+def _ensure_failed_user_message(s, msg_text) -> None:
+    """Keep a failed turn's user message in the transcript (issue #38).
+
+    When a stream dies before ``run_conversation`` assigns its result to
+    ``s.messages``, the frontend's completion reload replaces the optimistic
+    bubble with the backend transcript and the user's message disappears.
+    If the latest user message does not contain *msg_text*, append it — in
+    memory and in state.db — mirroring ``cancel_stream``'s documented
+    exception to the WebUI-no-message-writes rule.  No-op when the message
+    is already present (the usual case: the SDK persists the inbound turn
+    before the first LLM call).
+    """
+    if not msg_text:
+        return
+    existing = s.messages or []
+    for _m in reversed(existing):
+        if isinstance(_m, dict) and _m.get('role') == 'user':
+            _content = _m.get('content')
+            if isinstance(_content, str):
+                if msg_text in _content:
+                    return  # already in the transcript
+            elif isinstance(_content, list):
+                if any(
+                    isinstance(_b, dict) and msg_text in str(_b.get('text') or '')
+                    for _b in _content
+                ):
+                    return
+            break  # only inspect the most recent user message
+    _now = time.time()
+    _new_msg = {
+        'role': 'user',
+        'content': msg_text,
+        'timestamp': int(_now),
+        'timestamp__webui': _now,
+    }
+    _pending_original = getattr(s, '_pending_original_message', None)
+    if _pending_original:
+        _new_msg['original_content__webui'] = _pending_original
+        s._pending_original_message = None
+    s.messages = list(existing) + [_new_msg]
+    try:
+        from app.api.models import _get_session_db
+        _db = _get_session_db()
+        if _db is not None:
+            _db.append_message(
+                session_id=s.session_id, role='user', content=msg_text,
+            )
+    except Exception:
+        logger.debug(
+            'Failed to persist failed-turn user message for %s',
+            getattr(s, 'session_id', '?'), exc_info=True,
+        )
+    try:
+        s.sync_webui_metadata()
+    except Exception:
+        logger.debug(
+            'Failed to sync webui metadata after failed-turn user message for %s',
+            getattr(s, 'session_id', '?'), exc_info=True,
+        )
+
+
 def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, attachments=None, drain_message=False, *, ephemeral=False):
     """Run agent in background thread, writing SSE events to stream_manager.
 
@@ -1686,11 +1785,15 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             resolved_model, resolved_provider, resolved_base_url = resolve_model_provider(model)
 
             # Resolve API key via Hermes runtime provider (matches gateway behaviour).
-            # Pass the resolved provider so non-default providers get their own credentials.
+            # Pass the resolved provider so non-default providers get their own
+            # credentials. resolve_runtime_for_provider also translates gateway
+            # variants (e.g. xiaomi-token-plan → xiaomi + explicit key/base_url).
             resolved_api_key = None
             try:
-                from hermes_cli.runtime_provider import resolve_runtime_provider
-                _rt = resolve_runtime_provider(requested=resolved_provider)
+                from app.api.config import resolve_runtime_for_provider
+                _rt, resolved_provider, resolved_base_url = resolve_runtime_for_provider(
+                    resolved_provider, resolved_base_url
+                )
                 resolved_api_key = _rt.get("api_key")
                 if not resolved_provider:
                     resolved_provider = _rt.get("provider")
@@ -2392,13 +2495,15 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         flush=True,
                     )
                     _err_lower = _err_str.lower()
+                    # Billing verdicts from the SDK carry
+                    # failure_reason='billing' — trust them even when the
+                    # provider wording is not in the pattern list (issue #38).
                     _is_quota = (
-                        'insufficient credit' in _err_lower
-                        or 'credit balance' in _err_lower
-                        or 'credits exhausted' in _err_lower
-                        or 'quota_exceeded' in _err_lower
-                        or 'quota exceeded' in _err_lower
-                        or 'exceeded your current quota' in _err_lower
+                        _is_quota_error(_err_str)
+                        or (
+                            isinstance(result, dict)
+                            and str(result.get('failure_reason') or '').lower() == 'billing'
+                        )
                     )
                     _is_auth = (
                         not _is_quota and (
@@ -2442,6 +2547,9 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         _err_label = 'No response received'
                         _err_type = 'no_response'
                         _err_hint = 'Verify your API key is valid and the selected model is available for your account.'
+                    # Keep the failed turn's user message in the transcript so
+                    # the frontend completion reload does not swallow it (#38).
+                    _ensure_failed_user_message(s, msg_text)
                     put('apperror', {
                         'message': _err_str or f'{_err_label}.',
                         'type': _err_type,
@@ -2739,14 +2847,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
         # Classify before saving so the error message can be persisted to the session.
         # Check quota exhaustion first — OpenAI billing 429s use insufficient_quota which
         # also matches rate-limit patterns, so order matters.
-        _exc_is_quota = (
-            'insufficient credit' in _exc_lower
-            or 'credit balance' in _exc_lower
-            or 'credits exhausted' in _exc_lower
-            or 'quota_exceeded' in _exc_lower
-            or 'quota exceeded' in _exc_lower
-            or 'exceeded your current quota' in _exc_lower
-        )
+        _exc_is_quota = _is_quota_error(err_str)
         _exc_is_rate_limit = (not _exc_is_quota) and (
             'rate limit' in _exc_lower or '429' in err_str or 'RateLimitError' in type(e).__name__
         )
@@ -2811,6 +2912,31 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 if stream_manager.get_stream_id(s.session_id) != stream_id:
                     _owned = False
                 if _owned:
+                    # Ephemeral (/btw) sessions skip all persistence — do not
+                    # backfill their transcript either.
+                    if not ephemeral:
+                        # The thread died before the result was assigned to
+                        # s.messages, so the in-memory transcript is stale.
+                        # Reload what the SDK persisted (the inbound user turn
+                        # is crash-persisted before the first LLM call) so the
+                        # frontend completion reload does not drop it, then
+                        # make sure this turn's user message survives (#38).
+                        try:
+                            from app.api.models import _get_session_db
+                            _db = _get_session_db()
+                            if _db is not None:
+                                _db_messages = _db.get_messages(s.session_id)
+                                if _db_messages:
+                                    s.messages = _db_messages
+                                    # DB content is raw — re-run the global
+                                    # post-processing (XML strip / reasoning).
+                                    _postprocess_messages(s.messages)
+                        except Exception:
+                            logger.debug(
+                                "Failed to reload messages after stream error for %s",
+                                s.session_id, exc_info=True,
+                            )
+                        _ensure_failed_user_message(s, msg_text)
                     s.pending_user_message = None
                     s.pending_attachments = []
                     s.pending_started_at = None

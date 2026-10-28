@@ -764,8 +764,9 @@ ENV HERMES_HOME=/home/leap-aide/.hermes
 # Immutable-image seal for lazy runtime installs (issue #8): the agent venv is
 # root-owned while the server runs as leap-aide-init, so a lazy `uv pip install`
 # would burn ~26s and die with EACCES anyway. Sealed, it fails fast with an
-# actionable hint instead. Pre-installed core lazy deps (edge-tts, fal-client —
-# install.sh Step 4) are unaffected: ensure() returns early once they import.
+# actionable hint instead. Pre-installed core lazy deps (anthropic, boto3,
+# edge-tts, fal-client — install.sh Step 4) are unaffected: ensure() returns
+# early once they import.
 # Durable-target installs keep working if the operator sets
 # HERMES_LAZY_INSTALL_TARGET; override the seal per-container with
 # -e HERMES_DISABLE_LAZY_INSTALLS=0.

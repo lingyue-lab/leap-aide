@@ -47,7 +47,7 @@ class TestConfigYamlModelsLoading:
     """Verify that providers with explicit models in config.yaml use those models."""
 
     def test_provider_in_config_but_not_provider_models_gets_cfg_models(self):
-        """A provider only in cfg.providers (not _PROVIDER_MODELS) should appear
+        """A provider only in cfg.providers (not the JSON catalog) should appear
         with its configured model list instead of being skipped entirely."""
         cfg = {
             "model": {"provider": "my-custom-llm"},
@@ -117,7 +117,9 @@ class TestConfigYamlModelsLoading:
                 break
 
     def test_provider_in_provider_models_but_no_cfg_override_unchanged(self):
-        """When no models key in cfg.providers, hardcoded _PROVIDER_MODELS still used."""
+        """When no models key in cfg.providers, the catalog baseline is used."""
+        from app.api import model_catalog
+
         cfg = {
             "model": {"provider": "anthropic"},
             "providers": {
@@ -128,14 +130,16 @@ class TestConfigYamlModelsLoading:
             },
         }
         result = _available_models_with_cfg(cfg)
-        raw_ids = {m["id"] for m in _cfg._PROVIDER_MODELS.get("anthropic", [])}
+        raw_ids = {
+            m["id"] for m in model_catalog.provider_baseline_models("anthropic")
+        }
         for g in result["groups"]:
             if g["provider"] == "Anthropic":
                 returned_ids = {m["id"] for m in g["models"]}
-                # Should still have the hardcoded models
+                # Should still have the catalog baseline models
                 overlap = raw_ids & returned_ids
                 assert overlap, (
-                    f"No _PROVIDER_MODELS models found in Anthropic group. "
+                    f"No catalog baseline models found in Anthropic group. "
                     f"Expected subset of {raw_ids}, got {returned_ids}"
                 )
                 break

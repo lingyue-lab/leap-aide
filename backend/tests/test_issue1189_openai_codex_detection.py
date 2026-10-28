@@ -4,9 +4,9 @@ in the model picker when OPENAI_API_KEY is configured.
 
 The env-var detection block in ``api/config.py`` previously mapped
 ``OPENAI_API_KEY`` to only the ``openai`` provider group; the
-``openai-codex`` group has its own static model list in
-``_PROVIDER_MODELS`` (9 models: gpt-5.5, gpt-5.4, codex-specific
-variants, etc.) but no automatic detection path.
+``openai-codex`` group has its own baseline model list in the JSON
+catalog (9 models: gpt-5.5, gpt-5.4, codex-specific variants, etc.)
+but no automatic detection path.
 
 Note (cross-tool): hermes-agent's ``openai-codex`` provider config
 declares ``auth_type="oauth_external"`` with a default
@@ -66,16 +66,17 @@ def test_openai_api_key_env_var_path_detects_openai_codex(monkeypatch):
     )
 
 
-def test_openai_codex_static_model_list_present():
-    """Sanity: the openai-codex provider has a non-empty static model list
-    in _PROVIDER_MODELS so adding it to detected_providers actually
+def test_openai_codex_baseline_model_list_present():
+    """Sanity: the openai-codex provider has a non-empty baseline model
+    list in the JSON catalog so adding it to detected_providers actually
     surfaces models in the picker rather than an empty group."""
-    assert "openai-codex" in config._PROVIDER_MODELS, (
-        "_PROVIDER_MODELS must include 'openai-codex' for the detection "
-        "fix to surface anything"
+    from app.api import model_catalog
+
+    models = model_catalog.provider_baseline_models("openai-codex")
+    assert models, (
+        "The JSON catalog must include a non-empty 'openai-codex' baseline "
+        "for the detection fix to surface anything"
     )
-    models = config._PROVIDER_MODELS["openai-codex"]
-    assert len(models) > 0, "openai-codex must have at least one static model"
     # Sanity: contains codex-specific variants as well as shared gpt-5.x
     ids = {m["id"] for m in models}
     assert any("codex" in mid for mid in ids), (
@@ -85,8 +86,8 @@ def test_openai_codex_static_model_list_present():
 
 
 def test_openai_codex_display_name_present():
-    """The Codex group needs a human-readable label in _PROVIDER_DISPLAY,
-    otherwise the picker falls back to the raw provider id."""
-    assert config._PROVIDER_DISPLAY.get("openai-codex"), (
-        "_PROVIDER_DISPLAY must have a label for 'openai-codex'"
-    )
+    """The Codex group needs a human-readable label, otherwise the picker
+    falls back to the raw provider id."""
+    from app.api import model_catalog
+
+    assert model_catalog.provider_display("openai-codex") == "OpenAI Codex"

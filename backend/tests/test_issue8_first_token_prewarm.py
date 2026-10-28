@@ -487,3 +487,110 @@ def test_remove_provider_key_skips_probe(monkeypatch):
     assert result["ok"] is True and result["action"] == "removed"
     time.sleep(0.3)
     assert not fired.is_set(), "key removal has nothing to validate — no probe"
+
+
+# ── 10. save-time validation + probe status for the Settings badge ─────────
+
+
+def test_validation_ok_skips_background_probe_and_records_status(monkeypatch):
+    """Sync validation already hit the endpoint — no duplicate probe thread,
+    and the verdict is recorded for GET /api/providers."""
+    import app.api.model_catalog as mc
+    import app.api.providers as providers
+
+    monkeypatch.setenv("HERMES_WEBUI_VALIDATE_KEY_ON_SAVE", "1")
+    monkeypatch.setenv("HERMES_WEBUI_CONNECTIVITY_PROBE", "0")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(providers, "_write_env_file", lambda *a, **k: None)
+    monkeypatch.setattr(providers, "invalidate_models_cache", lambda: None)
+
+    fired = threading.Event()
+    monkeypatch.setattr(
+        providers,
+        "probe_provider_connectivity",
+        lambda *a, **k: fired.set() or "ok",
+    )
+    monkeypatch.setattr(
+        mc,
+        "query_live_models",
+        lambda slug, **kwargs: [{"id": "m1", "label": "M1"}],
+    )
+
+    providers._PROBE_STATUS.clear()
+    try:
+        result = providers.set_provider_key("deepseek", "sk-valid-key-123")
+        time.sleep(0.3)  # allow a (wrongly fired) probe thread to land
+        status, checked_at = providers._get_probe_status("deepseek")
+    finally:
+        providers._PROBE_STATUS.clear()
+
+    assert result["ok"] is True
+    assert result["validated"] is True
+    assert result["models_count"] == 1
+    assert not fired.is_set(), "sync validation covered this save — no probe"
+    assert status == "ok"
+    assert checked_at is not None
+
+
+def test_probe_records_status_for_settings_badge(monkeypatch):
+    """probe_provider_connectivity stores its verdict for GET /api/providers."""
+    import app.api.providers as providers
+
+    monkeypatch.delenv("HERMES_WEBUI_CONNECTIVITY_PROBE", raising=False)
+    _patch_probe_endpoint(
+        monkeypatch, ("https://api.deepseek.com/v1", "sk-test", "deepseek")
+    )
+
+    def _raise_401(req, timeout=None):
+        raise urllib.error.HTTPError(
+            "https://api.deepseek.com/v1/models", 401, "Unauthorized", None, None
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", _raise_401)
+    providers._PROBE_STATUS.clear()
+    try:
+        assert providers.probe_provider_connectivity() == "auth"
+        status, checked_at = providers._get_probe_status("deepseek")
+    finally:
+        providers._PROBE_STATUS.clear()
+
+    assert status == "auth"
+    assert checked_at is not None
+
+
+def test_probe_uses_catalog_auth_header(monkeypatch):
+    """anthropic probes must send x-api-key — Bearer would 401 a valid key
+    and paint a false 'rejected' badge on the Settings row."""
+    import app.api.providers as providers
+
+    monkeypatch.delenv("HERMES_WEBUI_CONNECTIVITY_PROBE", raising=False)
+    _patch_probe_endpoint(
+        monkeypatch, ("https://api.anthropic.com/v1", "sk-ant-test", "anthropic")
+    )
+    seen_headers: dict = {}
+
+    class _CaptureResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self, n=-1):
+            return b"{}"
+
+    def _capture(req, timeout=None):
+        seen_headers.update(dict(req.header_items()))
+        return _CaptureResp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", _capture)
+    providers._PROBE_STATUS.clear()
+    try:
+        assert providers.probe_provider_connectivity() == "ok"
+    finally:
+        providers._PROBE_STATUS.clear()
+
+    # urllib Title-Cases header names ("X-api-key").
+    names = {k.lower() for k in seen_headers}
+    assert "x-api-key" in names, f"missing x-api-key header: {seen_headers}"
+    assert "authorization" not in names, f"unexpected Bearer header: {seen_headers}"

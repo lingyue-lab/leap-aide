@@ -27,27 +27,6 @@ _PROVIDER_ALIASES = {
     "openai-codex": "openai",
 }
 
-# OpenAI-compatible /v1/models endpoints for live model discovery.
-# Used as fallback when hermes_cli.provider_model_ids() is unavailable or
-# returns [] for a provider (#871).  Kept at module level so the dict is
-# built once, not reconstructed per request.
-_OPENAI_COMPAT_ENDPOINTS = {
-    "zai": "https://api.z.ai/v1",
-    "minimax": "https://api.minimax.chat/v1",
-    "mistralai": "https://api.mistral.ai/v1",
-    "xai": "https://api.x.ai/v1",
-    "deepseek": "https://api.deepseek.com/v1",
-    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
-}
-# NOTE: "openai-codex" is excluded because it maps to the same endpoint as
-# the base "openai" provider (api.openai.com/v1).  When both are configured
-# the openai provider is already wired through provider_model_ids(); codex-
-# specific model filtering happens downstream in hermes_cli.
-#
-# TODO: Add TTL-based caching (e.g. 60s) so repeated model-list requests
-# don't hit provider APIs.  The frontend already caches via _liveModelCache
-# but the backend re-fetches on every /api/models/live call.
-
 from app.api.config import (
     STATE_DIR,
     SESSION_DIR,
@@ -770,9 +749,6 @@ def handle_get(handler, parsed) -> bool:
         except Exception as exc:
             return j(handler, {"error": str(exc)}, status=500)
         return t(handler, raw_yaml, content_type="text/plain; charset=utf-8")
-
-    if parsed.path == "/api/models/live":
-        return _handle_live_models(handler, parsed)
 
     # ── Providers (GET) ──
     if parsed.path == "/api/providers":
@@ -3588,160 +3564,6 @@ def _handle_clarify_inject(handler, parsed):
     return j(handler, {"error": "session_id required"}, status=400)
 
 
-def _handle_live_models(handler, parsed):
-    """Return the live model list for a provider.
-
-    Delegates to the agent's provider_model_ids() which handles:
-    - OpenRouter: live fetch from /api/v1/models
-    - Anthropic: live fetch from /v1/models (API key or OAuth token)
-    - Copilot: live fetch from app.api.githubcopilot.com/models with correct headers
-    - openai-codex: Codex OAuth endpoint + local ~/.codex/ cache fallback
-    - Nous: live fetch from inference-api.nousresearch.com/v1/models
-    - DeepSeek, kimi-coding, opencode-zen/go, custom: generic OpenAI-compat /v1/models
-    - ZAI, MiniMax, Google/Gemini: fall back to static list (non-standard endpoints)
-    - All others: static _PROVIDER_MODELS fallback
-
-    The agent already maintains all provider-specific auth and endpoint logic
-    in one place; the WebUI inherits it rather than duplicating it.
-
-    Query params:
-        provider  (optional) — provider ID; defaults to active profile provider
-    """
-    qs = parse_qs(parsed.query)
-    provider = (qs.get("provider", [""])[0] or "").lower().strip()
-
-    try:
-        from app.api.config import get_config as _gc
-        cfg = _gc()
-        if not provider:
-            provider = cfg.get("model", {}).get("provider") or ""
-        if not provider:
-            return j(handler, {"error": "no_provider", "models": []})
-
-        # Normalize provider alias so 'z.ai' -> 'zai', 'x.ai' -> 'xai', etc.
-        # The browser sends whatever active_provider the static endpoint returned;
-        # without normalization, provider_model_ids() misses the alias and returns [].
-        # Uses the WebUI-owned table (api/config._resolve_provider_alias) which
-        # works even when hermes_cli is not on sys.path.
-        from app.api.config import _resolve_provider_alias
-        provider = _resolve_provider_alias(provider)
-
-        # Delegate to the agent's live-fetch + fallback resolver.
-        # provider_model_ids() tries live endpoints first and falls back to
-        # the static _PROVIDER_MODELS list — it never raises.
-        try:
-            import sys as _sys
-            import os as _os
-            _agent_dir = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
-                                       "..", "..", ".hermes", "hermes-agent")
-            _agent_dir = _os.path.normpath(_agent_dir)
-            if _agent_dir not in _sys.path:
-                _sys.path.insert(0, _agent_dir)
-            from hermes_cli.models import provider_model_ids as _pmi
-            ids = _pmi(provider)
-        except Exception as _import_err:
-            logger.debug("provider_model_ids import failed for %s: %s", provider, _import_err)
-            ids = []
-
-        if not ids:
-            # For 'custom' provider, provider_model_ids() returns [] because
-            # 'custom' isn't a real endpoint.  Fall back to the custom_providers
-            # entries from config.yaml so the live-model enrichment step can
-            # add any models that weren't already in the static list.
-            if provider == "custom":
-                try:
-                    _cp_entries = cfg.get("custom_providers", [])
-                    if isinstance(_cp_entries, list):
-                        ids = [
-                            _cp.get("model", "")
-                            for _cp in _cp_entries
-                            if isinstance(_cp, dict) and _cp.get("model", "")
-                        ]
-                except Exception:
-                    pass
-
-        # ── OpenAI-compat live fetch fallback ──────────────────────────────────
-        # When provider_model_ids() is unavailable or returns [] for a provider
-        # that exposes a standard /v1/models endpoint, fetch directly.  This
-        # eliminates the need to keep _PROVIDER_MODELS in sync for providers
-        # that have a discoverable API (#871).
-        #
-        # WARNING: This uses synchronous urllib.request which blocks the worker
-        # thread for up to 8 seconds on timeout. This is acceptable because:
-        #  (a) the server uses threading (not async), so other requests continue;
-        #  (b) the frontend shows the static list immediately and enriches in
-        #      the background via _fetchLiveModels(), so the user never waits.
-        if not ids:
-            _ep = _OPENAI_COMPAT_ENDPOINTS.get(provider)
-            if _ep:
-                try:
-                    import urllib.request
-                    _providers_cfg = cfg.get("providers", {})
-                    _prov = _providers_cfg.get(provider, {}) if isinstance(_providers_cfg, dict) else {}
-                    # Only use provider-scoped key — never fall back to a top-level
-                    # api_key which may belong to a different provider.
-                    _key = _prov.get("api_key") if isinstance(_prov, dict) else None
-                    if not _key:
-                        _key = cfg.get("model", {}).get("api_key")
-                    if _key:
-                        _req = urllib.request.Request(
-                            f"{_ep}/models",
-                            headers={"Authorization": f"Bearer {_key}"},
-                        )
-                        with urllib.request.urlopen(_req, timeout=8) as _resp:
-                            _body = json.loads(_resp.read())
-                        ids = [m.get("id", "") for m in _body.get("data", []) if m.get("id")]
-                        logger.debug("Live-fetched %d models from %s /v1/models", len(ids), provider)
-                except Exception as _fetch_err:
-                    logger.debug("Live fetch from %s failed: %s", provider, _fetch_err)
-                    # Fall through to static list below
-
-        # Static fallback — only reached when live fetch also failed.
-        if not ids:
-            from app.api.config import get_provider_card_models as _gcm
-            ids = [m["id"] for m in _gcm(provider)]
-        if not ids:
-            return j(handler, {"provider": provider, "models": [], "count": 0})
-
-        # Normalise to {id, label} — provider_model_ids() returns plain string IDs.
-        # For ollama-cloud use the shared Ollama formatter (handles `:variant` suffix).
-        # For all other providers use a simpler hyphen-split capitaliser.
-        from app.api.config import _format_ollama_label as _fmt_ollama
-
-        def _make_label(mid):
-            """Best-effort human label from a model ID string."""
-            if provider in ("ollama", "ollama-cloud"):
-                return _fmt_ollama(mid)
-            # Preserve slashes for router IDs like "anthropic/claude-sonnet-4.6"
-            display = mid.split("/")[-1] if "/" in mid else mid
-            parts = display.split("-")
-            result = []
-            for p in parts:
-                pl = p.lower()
-                if pl == "gpt":
-                    result.append("GPT")
-                elif pl in ("claude", "gemini", "gemma", "llama", "mistral",
-                            "qwen", "deepseek", "grok", "kimi", "glm"):
-                    result.append(p.capitalize())
-                elif p[:1].isdigit():
-                    result.append(p)  # version numbers: 5.4, 3.5, 4.6 — unchanged
-                else:
-                    result.append(p.capitalize())
-            label = " ".join(result)
-            # Restore well-known uppercase tokens that title-casing breaks
-            for orig in ("GPT", "GLM", "API", "AI", "XL", "MoE"):
-                label = label.replace(orig.title(), orig)
-            return label
-
-        models_out = [{"id": mid, "label": _make_label(mid)} for mid in ids if mid]
-        return j(handler, {"provider": provider, "models": models_out,
-                           "count": len(models_out)})
-
-    except Exception as _e:
-        logger.debug("_handle_live_models failed for %s: %s", provider, _e)
-        return j(handler, {"error": str(_e), "models": []})
-
-
 _CRON_OUTPUT_TS_PATTERNS = (
     # New format: 2026-07-28_11-20-38.md
     _re.compile(r"(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})"),
@@ -4480,12 +4302,16 @@ def _handle_chat_sync(handler, body):
             from app.api.config import resolve_model_provider
 
             _model, _provider, _base_url = resolve_model_provider(s.model)
-            # Resolve API key via Hermes runtime provider (matches gateway behaviour)
+            # Resolve API key via Hermes runtime provider (matches gateway
+            # behaviour). resolve_runtime_for_provider also translates gateway
+            # variants (e.g. xiaomi-token-plan → xiaomi + explicit key/base_url).
             _api_key = None
             try:
-                from hermes_cli.runtime_provider import resolve_runtime_provider
+                from app.api.config import resolve_runtime_for_provider
 
-                _rt = resolve_runtime_provider(requested=_provider)
+                _rt, _provider, _base_url = resolve_runtime_for_provider(
+                    _provider, _base_url
+                )
                 _api_key = _rt.get("api_key")
                 # Also use runtime provider/base_url if the webui config didn't resolve them
                 if not _provider:
@@ -5404,7 +5230,6 @@ def _auto_compress_session(s) -> None:
     """
     from app.api.streaming import _sanitize_messages_for_api
     import app.api.config as _cfg
-    import hermes_cli.runtime_provider as _runtime_provider
     import run_agent as _run_agent
 
     messages = _sanitize_messages_for_api(s.messages)
@@ -5412,7 +5237,11 @@ def _auto_compress_session(s) -> None:
         return  # nothing to compress
 
     resolved_model, resolved_provider, resolved_base_url = _cfg.resolve_model_provider(s.model)
-    _rt = _runtime_provider.resolve_runtime_provider(requested=resolved_provider)
+    # resolve_runtime_for_provider also translates gateway variants
+    # (e.g. xiaomi-token-plan → xiaomi + explicit key/base_url).
+    _rt, resolved_provider, resolved_base_url = _cfg.resolve_runtime_for_provider(
+        resolved_provider, resolved_base_url
+    )
     resolved_api_key = _rt.get("api_key")
     if not resolved_api_key:
         raise RuntimeError("No API key configured for compression")
@@ -5606,14 +5435,17 @@ def _handle_session_compress(handler, body):
                 )
 
         import app.api.config as _cfg
-        import hermes_cli.runtime_provider as _runtime_provider
         import run_agent as _run_agent
 
         resolved_model, resolved_provider, resolved_base_url = _cfg.resolve_model_provider(s.model)
 
         resolved_api_key = None
         try:
-            _rt = _runtime_provider.resolve_runtime_provider(requested=resolved_provider)
+            # resolve_runtime_for_provider also translates gateway variants
+            # (e.g. xiaomi-token-plan → xiaomi + explicit key/base_url).
+            _rt, resolved_provider, resolved_base_url = _cfg.resolve_runtime_for_provider(
+                resolved_provider, resolved_base_url
+            )
             resolved_api_key = _rt.get("api_key")
             if not resolved_provider:
                 resolved_provider = _rt.get("provider")

@@ -19,9 +19,9 @@ Environment
 -----------
 The module anchors itself to ONE deterministic environment: an autouse fixture
 sets a fake ``DEEPSEEK_API_KEY`` and then WARMS the model catalog via the
-blocking ``get_available_models()`` so provider detection puts the static
-``_PROVIDER_MODELS`` deepseek list into the cache (zero network — the list is
-hardcoded in api/config.py). The warm step is required, not optional: both
+blocking ``get_available_models()`` so provider detection puts the catalog's
+deepseek baseline into the cache (zero network — the baseline lives in
+``model_catalog.json``). The warm step is required, not optional: both
 ``_resolve_compatible_session_model`` and ``normalize_model_prefix`` read the
 catalog through the non-blocking ``peek_available_models()`` (issue #8), which
 on a cold cache answers config-only with empty groups and never builds — the
@@ -42,8 +42,8 @@ from app.api.routes import _resolve_effective_session_model_for_display
 def _deepseek_configured(monkeypatch):
     """Anchor the module to a "DeepSeek is configured" environment.
 
-    The deepseek catalog group comes from the static _PROVIDER_MODELS list in
-    api/config.py, so a fake key only flips provider detection — the build
+    The deepseek catalog group comes from the JSON baseline in
+    model_catalog.json, so a fake key only flips provider detection — the build
     below never fetches a provider model list over the network. Warming is
     also what makes the display normalization assertions exact and independent
     of whatever provider keys the test runner happens to export.
@@ -57,6 +57,26 @@ def _deepseek_configured(monkeypatch):
     # (bedrock detection) — ~4s of socket timeout on hosts with no IMDS.
     # Irrelevant to these display tests, so skip the probe entirely.
     monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    # Keep the warm step offline: a fake key against the live gateway would
+    # 401, and the catalog now hides groups whose key is rejected (auth
+    # failure) — the fixture would then see no deepseek group at all.
+    # A network-style failure makes resolve_provider_models fall back to
+    # the JSON baseline, which is exactly the anchor these tests need.
+    import urllib.error
+
+    from app.api import model_catalog
+
+    def _offline(slug, *a, **kw):
+        raise urllib.error.URLError("offline")
+
+    monkeypatch.setattr(model_catalog, "query_live_models", _offline)
+    # The offline fallback prefers prior/last-good over baseline; clear
+    # both so the anchor is the JSON baseline, deterministic regardless
+    # of test order or a stale disk envelope.
+    model_catalog.forget_last_good_models("deepseek")
+    from app.api import config as _config
+
+    monkeypatch.setattr(_config, "_prior_provider_models", lambda: {})
     from app.api.config import get_available_models, invalidate_models_cache
     from app.api import config as config_mod
 

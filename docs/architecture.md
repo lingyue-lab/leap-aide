@@ -44,7 +44,7 @@ Key principles:
 | HTTP shell | `server.py`, `bootstrap.py`, `api/helpers.py`, `api/upload.py`, `api/startup.py` | ThreadingHTTPServer + TLS + WS upgrade dispatch; launch/bootstrap; `j()`/`bad()`/`require()`/`safe_resolve()`; multipart parsing; startup dependency install |
 | Routing | `api/routes.py` | All GET/POST handlers, flat if/elif chain |
 | Streaming | `api/streaming.py`, `api/stream_manager.py`, `api/ws_events.py`, `api/notify_stream.py` | Agent invocation + per-session event queues; queue/stream lifecycle; the `/api/ws/events` bus; notify forwarding |
-| Config & models | `api/config.py`, `api/models.py`, `api/webui_schema.py`, `api/state_sync.py` | Discovery/globals/model detection; session model + CRUD + LRU cache; `__webui` schema columns; `/insights` sync into state.db |
+| Config & models | `api/config.py`, `api/model_catalog.py`, `api/models.py`, `api/webui_schema.py`, `api/state_sync.py` | Discovery/globals/model detection; JSON model catalog (load/alias/live query/merge); session model + CRUD + LRU cache; `__webui` schema columns; `/insights` sync into state.db |
 | Sessions | `api/agent_sessions.py`, `api/session_ops.py`, `api/session_display.py`, `api/session_watcher.py` | Session lifecycle around the SDK; ops/display helpers; background session watching |
 | Workspace | `api/workspace.py` | File ops, workspace registry, git detection, trust levels |
 | Auth & identity | `api/auth.py`, `api/profiles.py` | Optional password gate + signed cookies; profile state |
@@ -127,7 +127,71 @@ External dependencies: `pyyaml` only (plus the Hermes Agent SDK and its own deps
 | `HERMES_WEBUI_PREWARM_WAIT_S` | `10` | Max seconds a chat waits for the prewarmed tool definitions; `=0` never waits |
 | `HERMES_WEBUI_FORCE_IPV4` | *(enabled)* | Prefer IPv4 for outbound connections (skips blackholed-IPv6 stalls); `=0` disables |
 | `HERMES_WEBUI_CONNECTIVITY_PROBE` | *(enabled)* | Background provider reachability probe at boot and after saving a key; `=0` disables |
+| `HERMES_WEBUI_CATALOG_QUERY_TIMEOUT_S` | `3.0` | Per-provider timeout (seconds) for live model-list queries during a catalog build |
 | `LOG_LEVEL` | `WARNING` | Python logging level |
+
+---
+
+## Model catalog & refresh
+
+Provider display names, aliases, baseline model lists, endpoints, auth
+headers and refresh policy live in a single JSON file:
+`backend/app/api/data/model_catalog.json` (schema v1). It is loaded and
+validated by `api/model_catalog.py`; the Python tables that used to mirror
+this data (`_PROVIDER_MODELS`, `_FALLBACK_MODELS`, `_PROVIDER_DISPLAY`,
+`_PROVIDER_ALIASES`, `_OPENAI_COMPAT_ENDPOINTS`) were removed — the JSON
+file is the only source of truth for *what models a provider offers*.
+
+Key properties:
+
+- **Per-provider record**: `display_name`, `aliases[]`,
+  `auth{type,env_var(s),header}` (`x-api-key` for Anthropic, Bearer
+  otherwise), `endpoint{base_url,models_path,trust_local}`,
+  `refresh{mode: api|none, membership: replace|curated, timeout_s}`,
+  `default_model`, and a human-curated `models[]` initial list (model ids
+  keep their historical shapes — bare for MiniMax, `@provider:`-prefixed
+  for the rest). For `refresh.mode=none` providers it is the only source;
+  for `refresh.mode=api` providers it is only the first-boot seed — once
+  a live query succeeds, the API result fully replaces it.
+- **Single deterministic merge** (`resolve_provider_models`): explicit
+  `providers.<id>.models` in config.yaml always wins and is never
+  queried. For `membership=replace` a successful live query is the
+  single source of truth — membership and order come from the API, and
+  the JSON baseline only donates display labels for ids the API still
+  lists (models the API omits vanish; API-only models appear
+  immediately). For `membership=curated` the result is the intersection
+  of baseline and live ids. A failed (or empty) query keeps the last
+  successful list (memory or disk envelope) or the baseline; a group is
+  never cleared by a failure. There is no multi-source fallback chain —
+  this replaced the old "try the agent, then a hardcoded endpoint
+  table, then the static list" behaviour.
+- **Refresh triggers** reuse the existing `/api/models` build machinery
+  (no extra background threads): the 24 h TTL, config.yaml or
+  `model_catalog.json` mtime changes, key saves, and the boot prewarm.
+  Providers with `refresh.mode=api` are queried concurrently
+  (`ThreadPoolExecutor`, ≤6 workers) with a per-provider timeout.
+  Eligibility (is a key present / is the provider OAuth) is unchanged —
+  the catalog decides *what* to show, never *whether* the provider is
+  eligible.
+- **Disk envelope**: the models cache snapshot persists
+  `{schema_version, active_provider, default_model, groups,
+  provider_models, fetched_at}` so a restart serves a complete first
+  response and keeps per-provider last-good lists; legacy `{groups-only}`
+  files still load.
+- **SSRF guard** (`model_catalog._check_url_safe`): scheme allowlist
+  (http/https) plus rejection of hostnames resolving to private IPs,
+  with explicit escapes for known-local hosts (ollama/localhost/
+  lmstudio), catalog `endpoint.trust_local`, and user-declared
+  `custom_providers` hostnames.
+- **Z.ai endpoint fix**: the catalog carries
+  `https://api.z.ai/api/paas/v4` (the old hardcoded `api.z.ai/v1` was
+  404). Volcano Ark (`ark`, `ARK_API_KEY`) was added as a verified
+  provider.
+- **Maintenance script**: `scripts/sync_models.py` drafts an OpenRouter
+  baseline update from the public `/api/v1/models` endpoint (labels of
+  existing ids preserved with `--map-labels`). It prints a JSON fragment
+  for manual review and never writes the catalog itself; it is not part
+  of CI.
 
 ---
 

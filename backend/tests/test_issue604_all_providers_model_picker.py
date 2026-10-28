@@ -1,109 +1,96 @@
-"""Tests for #604 — model picker shows all configured providers."""
-import pathlib
-import re
+"""Tests for #604 — model picker shows all configured providers.
 
-# Resolved from __file__, not the cwd: run-test.sh chdirs to the repo root, so
-# a bare "app/api/config.py" only resolves when pytest is launched from backend/.
-CONFIG_PY = pathlib.Path(__file__).parent.parent / "app" / "api" / "config.py"
-
-
-def _src() -> str:
-    return CONFIG_PY.read_text(encoding="utf-8")
-
-
-def _get_provider_models_keys() -> set:
-    """Extract top-level provider keys from _PROVIDER_MODELS dict."""
-    lines = CONFIG_PY.read_text(encoding="utf-8").splitlines()
-    keys = []
-    in_dict = False
-    for line in lines:
-        if "_PROVIDER_MODELS = {" in line:
-            in_dict = True
-            continue
-        if in_dict:
-            m = re.match(r'^    "([^"]+)":\s*\[', line)
-            if m:
-                keys.append(m.group(1))
-            if re.match(r'^\}', line):
-                break
-    return set(keys)
-
-
-_PROVIDER_MODELS_KEYS = _get_provider_models_keys()
+Since issue #10 the provider/model catalog lives in
+``backend/app/api/data/model_catalog.json`` (single source of truth);
+these tests assert against the loaded catalog and the env-var scan it
+drives, instead of regex-parsing config.py's retired hardcoded tables.
+"""
+from app.api import model_catalog
 
 
 class TestProviderDetectionEnvVars:
-    """All known env vars should map to valid provider IDs."""
-
-    # Providers that exist but aren't in _PROVIDER_MODELS (use special handling)
-    _SPECIAL_PROVIDERS = {"openrouter", "ollama-cloud", "custom", "ollama", "lmstudio", "local"}
+    """Env-var detection must map every key to a valid catalog provider."""
 
     def test_xai_env_maps_to_xai_provider(self):
-        """XAI_API_KEY should add 'x-ai' (not 'xai')."""
-        src = _src()
-        assert re.search(r'XAI_API_KEY.*?add\("x-ai"\)', src, re.DOTALL), \
-            "XAI_API_KEY must map to provider 'x-ai'"
+        """XAI_API_KEY must be declared by the x-ai catalog record."""
+        env_vars = model_catalog.catalog_env_vars().get("x-ai", [])
+        assert "XAI_API_KEY" in env_vars, (
+            f"XAI_API_KEY must map to provider 'x-ai'. Found: {env_vars}"
+        )
 
     def test_mistral_env_maps_to_mistralai_provider(self):
-        """MISTRAL_API_KEY should add 'mistralai' (not 'mistral')."""
-        src = _src()
-        assert re.search(r'MISTRAL_API_KEY.*?add\("mistralai"\)', src, re.DOTALL), \
-            "MISTRAL_API_KEY must map to provider 'mistralai'"
+        """MISTRAL_API_KEY must be declared by the mistralai catalog record."""
+        env_vars = model_catalog.catalog_env_vars().get("mistralai", [])
+        assert "MISTRAL_API_KEY" in env_vars, (
+            f"MISTRAL_API_KEY must map to provider 'mistralai'. Found: {env_vars}"
+        )
 
-    def test_all_provider_env_vars_map_to_known_providers(self):
-        """Every detected_provider.add() call should reference a known provider."""
-        src = _src()
-        fn = re.search(r'def _build_available_models_uncached', src)
-        fn_block = src[fn.start():fn.start() + 10000]
-        adds = re.findall(r'detected_providers\.add\("([^"]+)"\)', fn_block)
-        unknown = [p for p in adds if p not in _PROVIDER_MODELS_KEYS and p not in self._SPECIAL_PROVIDERS]
-        assert not unknown, \
-            f"Unknown provider IDs in env var detection: {unknown}"
+    def test_all_catalog_env_vars_belong_to_known_providers(self):
+        """Every slug in catalog_env_vars() must resolve to a catalog record."""
+        for slug, env_vars in model_catalog.catalog_env_vars().items():
+            assert model_catalog.get_provider_record(slug) is not None, (
+                f"catalog_env_vars() slug {slug!r} has no provider record"
+            )
+            assert env_vars, f"catalog_env_vars() entry {slug!r} has no env vars"
+
+    def test_env_scan_skips_empty_none_refresh_providers(self):
+        """Providers with an empty baseline and refresh.mode=none (e.g.
+        meta-llama) are skipped by the env scan — they have nothing to
+        render.  api-mode providers with empty baselines (ark, ollama,
+        huggingface, ollama-cloud) must NOT be skipped: their models
+        come from the live query once a key is configured."""
+        rec = model_catalog.get_provider_record("meta-llama")
+        assert rec is not None, "meta-llama missing from catalog"
+        assert not rec["models"], "meta-llama baseline unexpectedly non-empty"
+        assert rec["refresh"]["mode"] != "api", (
+            "meta-llama is refresh.mode=api and would not be skipped"
+        )
+        for slug in ("ark", "ollama", "lmstudio", "huggingface", "ollama-cloud"):
+            rec = model_catalog.get_provider_record(slug)
+            assert rec is not None, f"{slug} missing from catalog"
+            assert rec["refresh"]["mode"] == "api", (
+                f"{slug} must be refresh.mode=api so an empty baseline still renders"
+            )
 
 
 class TestConfigProvidersDetection:
     """Providers listed in config.yaml providers section should be detected."""
 
     def test_cfg_providers_detection_exists(self):
-        """_build_available_models must scan cfg['providers'] for known providers."""
-        src = _src()
-        assert "cfg.get(\"providers\", {})" in src, \
+        """_build_available_models must scan cfg['providers']."""
+        import inspect
+        import app.api.config as config
+
+        src = inspect.getsource(config._build_available_models_uncached)
+        assert 'cfg.get("providers", {})' in src, (
             "Must read cfg['providers']"
-        assert "_cfg_providers" in src, \
-            "Must use _cfg_providers variable"
-
-    def test_cfg_providers_only_adds_known(self):
-        """Only providers in _PROVIDER_MODELS should be added from config."""
-        src = _src()
-        # Find the config providers detection block
-        m = re.search(r'Also detect providers explicitly listed', src)
-        assert m, "Comment about config.yaml providers detection must exist"
-        block = src[m.start():m.start() + 500]
-        assert "_PROVIDER_MODELS" in block, \
-            "Config providers detection must check against _PROVIDER_MODELS"
+        )
+        assert "_cfg_providers" in src, "Must use _cfg_providers variable"
 
 
-class TestProviderModelsCompleteness:
-    """Verify _PROVIDER_MODELS has expected providers."""
+class TestCatalogCompleteness:
+    """Verify the JSON catalog carries the expected providers."""
+
+    def _providers(self) -> set:
+        return set(model_catalog.catalog_providers())
 
     def test_has_anthropic(self):
-        assert "anthropic" in _PROVIDER_MODELS_KEYS
+        assert "anthropic" in self._providers()
 
     def test_has_openai(self):
-        assert "openai" in _PROVIDER_MODELS_KEYS
+        assert "openai" in self._providers()
 
     def test_has_google(self):
-        assert "google" in _PROVIDER_MODELS_KEYS
+        assert "google" in self._providers()
 
     def test_has_deepseek(self):
-        assert "deepseek" in _PROVIDER_MODELS_KEYS
+        assert "deepseek" in self._providers()
 
     def test_has_xai(self):
-        assert "x-ai" in _PROVIDER_MODELS_KEYS
+        assert "x-ai" in self._providers()
 
     def test_has_mistralai(self):
-        assert "mistralai" in _PROVIDER_MODELS_KEYS
+        assert "mistralai" in self._providers()
 
     def test_has_openrouter(self):
-        # openrouter uses _FALLBACK_MODELS, not _PROVIDER_MODELS
-        pass  # intentionally no assertion
+        assert "openrouter" in self._providers()

@@ -214,6 +214,7 @@
       "hide_key": "Hide key",
       "saved": "Key saved",
       "cleared": "Key removed",
+      "key_invalid": "The provider rejected this API key.",
       "oauth_hint": "Uses OAuth — configure via CLI: hermes model",
       "not_configurable_hint": "Key managed in config.yaml"
     }

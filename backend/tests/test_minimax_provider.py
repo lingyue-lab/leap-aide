@@ -43,85 +43,59 @@ def _resolve_with_config(model_id, provider=None, base_url=None):
         config.cfg.update(old_cfg)
 
 
-# ── Fallback model list ───────────────────────────────────────────────────────
+# ── JSON catalog baseline (issue #10) ─────────────────────────────────────────
 
-def test_minimax_m2_7_in_fallback_models():
-    """MiniMax-M2.7 must appear in the hardcoded fallback model list."""
-    ids = [m['id'] for m in config._FALLBACK_MODELS]
-    assert 'minimax/MiniMax-M2.7' in ids, (
-        f"minimax/MiniMax-M2.7 missing from _FALLBACK_MODELS. Found: {ids}"
+def test_minimax_baseline_has_bare_ids():
+    """The catalog's minimax baseline must keep bare model ids (no @minimax:
+    prefix) — minimax is the one provider whose dropdown ids are unprefixed."""
+    from app.api import model_catalog
+    ids = [m['id'] for m in model_catalog.provider_baseline_models('minimax')]
+    assert 'MiniMax-M2.7' in ids, (
+        f"MiniMax-M2.7 missing from catalog minimax baseline. Found: {ids}"
     )
-
-
-def test_minimax_m2_7_highspeed_in_fallback_models():
-    """MiniMax-M2.7-highspeed must appear in the hardcoded fallback model list."""
-    ids = [m['id'] for m in config._FALLBACK_MODELS]
-    assert 'minimax/MiniMax-M2.7-highspeed' in ids, (
-        f"minimax/MiniMax-M2.7-highspeed missing from _FALLBACK_MODELS. Found: {ids}"
+    assert 'MiniMax-M2.7-highspeed' in ids, (
+        f"MiniMax-M2.7-highspeed missing from catalog minimax baseline. Found: {ids}"
     )
-
-
-def test_minimax_fallback_provider_label():
-    """MiniMax fallback entries must use 'MiniMax' as the provider label."""
-    minimax_entries = [m for m in config._FALLBACK_MODELS if 'minimax' in m['id'].lower()]
-    assert minimax_entries, "No MiniMax entries found in _FALLBACK_MODELS"
-    for entry in minimax_entries:
-        assert entry['provider'] == 'MiniMax', (
-            f"Expected provider='MiniMax', got '{entry['provider']}' for {entry['id']}"
+    for mid in ids:
+        assert not mid.startswith('@'), (
+            f"minimax baseline ids must be bare (no @provider: prefix): {mid}"
         )
 
 
-# ── _PROVIDER_MODELS ──────────────────────────────────────────────────────────
-
-def test_minimax_provider_models_has_m2_7():
-    """_PROVIDER_MODELS['minimax'] must include MiniMax-M2.7."""
-    models = config._PROVIDER_MODELS.get('minimax', [])
-    ids = [m['id'] for m in models]
-    assert 'MiniMax-M2.7' in ids, (
-        f"MiniMax-M2.7 missing from _PROVIDER_MODELS['minimax']. Found: {ids}"
-    )
-
-
-def test_minimax_provider_models_has_highspeed():
-    """_PROVIDER_MODELS['minimax'] must include MiniMax-M2.7-highspeed."""
-    models = config._PROVIDER_MODELS.get('minimax', [])
-    ids = [m['id'] for m in models]
-    assert 'MiniMax-M2.7-highspeed' in ids, (
-        f"MiniMax-M2.7-highspeed missing from _PROVIDER_MODELS['minimax']. Found: {ids}"
-    )
+def test_minimax_display_name():
+    """Catalog must render MiniMax as the group display name."""
+    from app.api import model_catalog
+    assert model_catalog.provider_display('minimax') == 'MiniMax'
 
 
 # ── MINIMAX_API_KEY env var detection ─────────────────────────────────────────
 
-def test_minimax_api_key_in_env_scan_tuple():
-    """MINIMAX_API_KEY must be included in the env var scan performed by the
-    models catalog build, so users who export MINIMAX_API_KEY see the
-    MiniMax provider in the dropdown without editing ~/.hermes/.env."""
-    import inspect
-    # Issue #16 hoisted the live build out of get_available_models() into
-    # _build_available_models_uncached() (single-flight background worker);
-    # the env scan tuple lives with the build now.
-    src = inspect.getsource(config._build_available_models_uncached)
-    assert 'MINIMAX_API_KEY' in src, (
-        "MINIMAX_API_KEY not found in _build_available_models_uncached() "
-        "source — it must be added to the env var scan tuple so os.environ "
-        "is checked."
+def test_minimax_env_vars_declared_in_catalog():
+    """The catalog must declare MINIMAX_API_KEY / MINIMAX_CN_API_KEY so the
+    env scan (driven by catalog_env_vars()) detects the provider without
+    editing ~/.hermes/.env."""
+    from app.api import model_catalog
+    env_vars = model_catalog.catalog_env_vars().get('minimax', [])
+    assert 'MINIMAX_API_KEY' in env_vars, (
+        f"MINIMAX_API_KEY not declared in catalog minimax record. Found: {env_vars}"
     )
-
-
-def test_minimax_cn_api_key_in_env_scan_tuple():
-    """MINIMAX_CN_API_KEY must also be scanned (mainland China API key variant)."""
-    import inspect
-    src = inspect.getsource(config._build_available_models_uncached)
-    assert 'MINIMAX_CN_API_KEY' in src, (
-        "MINIMAX_CN_API_KEY not found in _build_available_models_uncached() "
-        "source."
+    assert 'MINIMAX_CN_API_KEY' in env_vars, (
+        f"MINIMAX_CN_API_KEY not declared in catalog minimax record. Found: {env_vars}"
     )
 
 
 def test_minimax_detected_from_os_environ(monkeypatch):
     """Setting MINIMAX_API_KEY in os.environ triggers minimax provider detection."""
+    import urllib.error
+
+    def _offline(slug, *a, **kw):
+        raise urllib.error.URLError("offline")
+
     monkeypatch.setenv('MINIMAX_API_KEY', 'test-key-from-env')
+    # Keep the test offline: raise a network error so the catalog falls
+    # back to the JSON baseline (a live-success would replace it, and a
+    # 401 would hide the group entirely).
+    monkeypatch.setattr(config.model_catalog, 'query_live_models', _offline)
     old_cfg = dict(config.cfg)
     # Clear model config so the env-var fallback path is exercised
     config.cfg['model'] = {}

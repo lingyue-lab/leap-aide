@@ -8,50 +8,90 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
+import urllib.error
 from pathlib import Path
 from typing import Any
 
+from app.api import model_catalog
 from app.api.config import (
-    _PROVIDER_CARD_ALIASES,
-    _PROVIDER_DISPLAY,
-    _PROVIDER_MODELS,
     _get_config_path,
     _save_yaml_config_file,
     get_config,
-    get_provider_card_models,
     invalidate_models_cache,
     reload_config,
 )
 
 logger = logging.getLogger(__name__)
 
-# SECTION: Provider ↔ env var mapping
+# SECTION: Provider env-var resolution
 
-# Maps canonical provider slug → env var name for API key.
-# Providers not listed here (OAuth/token-flow providers like copilot, nous,
-# openai-codex) cannot have their keys managed from the WebUI.
-_PROVIDER_ENV_VAR: dict[str, str] = {
-    "openrouter": "OPENROUTER_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
-    "openai": "OPENAI_API_KEY",
-    "copilot": "COPILOT_GITHUB_TOKEN",
-    "alibaba": "DASHSCOPE_API_KEY",
-    "google": "GOOGLE_API_KEY",
-    "gemini": "GEMINI_API_KEY",
-    "huggingface": "HF_TOKEN",
-    "zai": "GLM_API_KEY",
-    "kimi-coding": "KIMI_API_KEY",
-    "lmstudio": "LM_API_KEY",
-    "deepseek": "DEEPSEEK_API_KEY",
-    "minimax": "MINIMAX_API_KEY",
-    "mistralai": "MISTRAL_API_KEY",
-    "xai": "XAI_API_KEY",
-    "opencode-zen": "OPENCODE_ZEN_API_KEY",
-    "opencode-go": "OPENCODE_GO_API_KEY",
-    "ollama": "OLLAMA_API_KEY",
-    "ollama-cloud": "OLLAMA_API_KEY",
+# Env var names come from the JSON catalog (auth.env_var / auth.env_vars), so
+# catalog-only edits (adding a provider, fixing a var name) need no Python
+# change — mirrors how config.py's eligibility scan consumes catalog_env_vars()
+# (issue #10).  Providers with no mapping (OAuth/token-flow providers like
+# nous, openai-codex) cannot have their keys managed from the WebUI.
+
+
+def _provider_env_vars(provider_id: str) -> list[str]:
+    """Resolve API-key env var names for a provider id.
+
+    Accepts a Settings card id (``xai``, ``alibaba``, ``gemini``) or a catalog
+    slug (``x-ai``, ``qwen``, ``google``) and returns the env var names
+    declared by the catalog, in declaration order.  Unknown / custom providers
+    return [].
+
+    ``copilot`` is the one catalog exception: it authenticates via OAuth, so
+    the catalog declares no env vars, but a manually set COPILOT_GITHUB_TOKEN
+    in ``~/.hermes/.env`` is still a valid token-flow credential.
+    """
+    if not provider_id:
+        return []
+    slug = model_catalog.resolve_alias(provider_id)
+    envs = model_catalog.catalog_env_vars().get(slug)
+    if envs:
+        return list(envs)
+    if provider_id == "copilot":
+        return ["COPILOT_GITHUB_TOKEN"]
+    return []
+
+# Settings card dedup: fold related catalog slugs into one provider card.
+# Mirrors the retired config._PROVIDER_CARD_ALIASES so the Settings UI keeps
+# showing one "Qwen" / "Gemini" / "xAI" card even though the catalog keeps
+# separate records (e.g. google vs gemini, qwen vs alibaba).
+_PROVIDER_CARD_FOLD = {
+    "qwen": "alibaba",
+    "google": "gemini",
+    "x-ai": "xai",
 }
+
+
+def _provider_card_id(slug: str) -> str:
+    """Fold a catalog slug into its Settings card id."""
+    return _PROVIDER_CARD_FOLD.get(slug, slug)
+
+
+def _provider_card_models(card_id: str) -> list[dict]:
+    """Return the merged baseline model list for a Settings card.
+
+    Folds every catalog slug whose card id matches *card_id* (e.g. both
+    ``google`` and ``gemini`` baselines land on the ``gemini`` card),
+    deduped by model id.
+    """
+    seen: set[str] = set()
+    out: list[dict] = []
+    for slug in model_catalog.catalog_providers():
+        if _provider_card_id(slug) != card_id:
+            continue
+        for m in model_catalog.provider_baseline_models(slug):
+            mid = m.get("id")
+            if mid and mid not in seen:
+                seen.add(mid)
+                out.append(m)
+    return out
+
+
 # Providers that use OAuth or token flows — their credentials are managed
 # through the Hermes CLI, not via API keys.  The WebUI cannot set these.
 _OAUTH_PROVIDERS = frozenset({
@@ -197,13 +237,13 @@ def _provider_has_key(provider_id: str) -> bool:
     4. ``config.yaml → providers.<id>.api_key``
     5. ``config.yaml → custom_providers[].api_key`` (for custom providers)
     """
-    env_var = _PROVIDER_ENV_VAR.get(provider_id)
-    if env_var:
+    env_vars = _provider_env_vars(provider_id)
+    if env_vars:
         env_path = _get_hermes_home() / ".env"
         env_values = _load_env_file(env_path)
-        if env_values.get(env_var):
+        if any(env_values.get(v) for v in env_vars):
             return True
-        if os.getenv(env_var):
+        if any(os.getenv(v) for v in env_vars):
             return True
 
     cfg = get_config()
@@ -240,17 +280,127 @@ def _provider_is_oauth(provider_id: str) -> bool:
 
 # SECTION: Connectivity probe (issue #8)
 
+# Last verification result per provider (Settings card id -> status dict).
+# Surfaced by GET /api/providers so Settings can show "API key rejected"
+# on an already-saved key without waiting for a re-save (issue: a bad key
+# saved before validation existed stayed invisible until chat time).
+_PROBE_STATUS: dict[str, dict] = {}
+_PROBE_STATUS_LOCK = threading.Lock()
+_PROBE_STATUS_TTL_S = 900.0  # a cached result is stale after 15 minutes
+_PROBE_REFRESH_MIN_INTERVAL_S = 60.0  # rate-limit GET-triggered probe kicks
+_last_probe_kick = 0.0
+
+
+def _record_probe_status(provider_id: str, status: str) -> None:
+    """Store the latest verification result for *provider_id*."""
+    if not provider_id or status not in ("ok", "auth", "network", "skipped"):
+        return
+    with _PROBE_STATUS_LOCK:
+        _PROBE_STATUS[provider_id] = {"status": status, "checked_at": time.time()}
+
+
+def _get_probe_status(provider_id: str) -> tuple[str | None, float | None]:
+    """Return ``(status, checked_at)`` for *provider_id*, or ``(None, None)``."""
+    with _PROBE_STATUS_LOCK:
+        entry = _PROBE_STATUS.get(provider_id)
+        if not isinstance(entry, dict):
+            return None, None
+        return entry.get("status"), entry.get("checked_at")
+
+
+def _clear_probe_status(provider_id: str) -> None:
+    """Drop any cached verification result for *provider_id*."""
+    with _PROBE_STATUS_LOCK:
+        _PROBE_STATUS.pop(provider_id, None)
+
+
+# Kill switch for save-time key validation (tests default this off so the
+# suite never touches the network; production default is enabled).
+_VALIDATE_KEY_ENV = "HERMES_WEBUI_VALIDATE_KEY_ON_SAVE"
+
+
+def _live_validate_api_key(provider_id: str, api_key: str) -> dict:
+    """Fetch the provider's model list with the *candidate* key (pre-write).
+
+    Returns ``{"status", "models_count", "detail"}`` where status is one of:
+
+    - ``ok``      — endpoint returned a model list; the key works
+    - ``auth``    — HTTP 401/403; the key is definitively rejected
+    - ``network`` — unreachable / timeout; inconclusive (never blocks a save)
+    - ``skipped`` — no live-query endpoint, keyless auth, or kill switch
+    - ``unknown`` — unexpected error; inconclusive (never blocks a save)
+
+    Never raises.  Uses the catalog's own query path so the probe hits the
+    same URL and auth header style (Bearer vs x-api-key) that a real
+    catalog refresh would.
+    """
+    if os.environ.get(_VALIDATE_KEY_ENV, "").strip().lower() in ("0", "false", "no"):
+        return {"status": "skipped", "models_count": None, "detail": None}
+
+    slug = model_catalog.resolve_alias(provider_id)
+    rec = model_catalog.get_provider_record(slug)
+    if rec is None or rec["refresh"]["mode"] != "api" or not rec.get("endpoint"):
+        return {"status": "skipped", "models_count": None, "detail": None}
+    if (rec.get("auth") or {}).get("type", "none") == "none":
+        # Keyless provider — nothing to verify.
+        return {"status": "skipped", "models_count": None, "detail": None}
+
+    try:
+        models = model_catalog.query_live_models(
+            slug,
+            api_key=api_key,
+            timeout_s=model_catalog.provider_timeout_s(slug),
+        )
+        return {"status": "ok", "models_count": len(models), "detail": None}
+    except urllib.error.HTTPError as exc:
+        # HTTPError is an URLError subclass — must be caught first.
+        if exc.code in (401, 403):
+            return {"status": "auth", "models_count": None, "detail": f"HTTP {exc.code}"}
+        return {"status": "unknown", "models_count": None, "detail": f"HTTP {exc.code}"}
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return {"status": "network", "models_count": None, "detail": str(exc)}
+    except Exception as exc:  # SSRF guard, JSON decode, ...
+        return {"status": "unknown", "models_count": None, "detail": str(exc)}
+
+
+def _maybe_kick_stale_probes(providers: list[dict]) -> None:
+    """Refresh verification results for saved keys in the background.
+
+    Fire-and-forget: GET /api/providers never waits on the network.  One
+    kick per ``_PROBE_REFRESH_MIN_INTERVAL_S`` so opening Settings cannot
+    stampede the providers.
+    """
+    global _last_probe_kick
+    now = time.time()
+    stale: list[str] = []
+    for entry in providers:
+        if not (entry.get("configurable") and entry.get("has_key")):
+            continue
+        status, checked_at = _get_probe_status(entry["id"])
+        if status is None or checked_at is None or (now - checked_at) > _PROBE_STATUS_TTL_S:
+            stale.append(entry["id"])
+    if not stale:
+        return
+    with _PROBE_STATUS_LOCK:
+        if now - _last_probe_kick < _PROBE_REFRESH_MIN_INTERVAL_S:
+            return
+        _last_probe_kick = now
+
+    def _run() -> None:
+        for pid in stale:
+            probe_provider_connectivity(pid)
+
+    threading.Thread(target=_run, name="probe-refresh", daemon=True).start()
+
 
 def _resolve_probe_endpoint(provider_id: str | None) -> tuple[str, str, str] | None:
     """Resolve ``(base_url, api_key, provider_id)`` for the connectivity probe.
 
     base_url chain: ``providers.<id>.base_url`` → ``model.base_url`` (only
     when this provider is the active one) → ``custom_providers[].base_url``
-    → the shared OpenAI-compatible endpoint table in ``routes.py`` (lazily
-    imported to avoid a circular import — routes imports this module at
-    module level).  That table already covers well-known endpoints such as
-    ``https://api.deepseek.com/v1``, the endpoint issue #8 stalled on, so no
-    new hardcoded map is introduced here.
+    → the well-known OpenAI-compatible endpoint declared by the JSON model
+    catalog (issue #10 — replaces the old routes.py hardcoded table and
+    carries the corrected Z.ai endpoint).
 
     Returns ``None`` when no endpoint can be resolved — the probe is
     skipped rather than guessing a URL.
@@ -297,11 +447,16 @@ def _resolve_probe_endpoint(provider_id: str | None) -> tuple[str, str, str] | N
             if f"custom:{cp_name}" == pid or cp.get("name", "").strip().lower() == pid:
                 base_url = str(cp.get("base_url") or "").strip()
                 break
-    # 4. Well-known OpenAI-compatible endpoint table (lazily imported)
+    # 4. Well-known OpenAI-compatible endpoint from the JSON catalog.
+    #    The probe appends "/models" itself, so use the raw base_url rather
+    #    than model_catalog.provider_endpoint() (which joins models_path).
+    #    provider_base_url() honors a user override (e.g. XIAOMI_BASE_URL
+    #    for regional gateways) before falling back to the packaged default.
     if not base_url:
         try:
-            from app.api.routes import _OPENAI_COMPAT_ENDPOINTS
-            base_url = _OPENAI_COMPAT_ENDPOINTS.get(pid, "")
+            from app.api import model_catalog as _model_catalog
+
+            base_url = _model_catalog.provider_base_url(pid) or ""
         except Exception:
             base_url = ""
     if not base_url:
@@ -319,15 +474,17 @@ def _resolve_probe_key(cfg: dict, provider_id: str, model_cfg: dict) -> str:
     ``providers.<id>.api_key`` → ``custom_providers[].api_key``.
     Returns ``""`` when nothing is configured.
     """
-    env_var = _PROVIDER_ENV_VAR.get(provider_id)
-    if env_var:
+    env_vars = _provider_env_vars(provider_id)
+    if env_vars:
         env_values = _load_env_file(_get_hermes_home() / ".env")
-        key = str(env_values.get(env_var) or "").strip()
-        if key:
-            return key
-        key = str(os.getenv(env_var) or "").strip()
-        if key:
-            return key
+        for var in env_vars:
+            key = str(env_values.get(var) or "").strip()
+            if key:
+                return key
+        for var in env_vars:
+            key = str(os.getenv(var) or "").strip()
+            if key:
+                return key
     active = str(model_cfg.get("provider") or "").strip().lower()
     if active and active == provider_id:
         key = str(model_cfg.get("api_key") or "").strip()
@@ -388,12 +545,18 @@ def probe_provider_connectivity(provider_id: str | None = None, *, timeout: floa
             headers={"Accept": "application/json"},
         )
         if api_key:
-            req.add_header("Authorization", f"Bearer {api_key}")
+            # Match the catalog's declared header style — anthropic and
+            # friends reject a Bearer token on /models (x-api-key).
+            if model_catalog.provider_auth_header(pid).lower() == "x-api-key":
+                req.add_header("x-api-key", api_key)
+            else:
+                req.add_header("Authorization", f"Bearer {api_key}")
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 resp.read(1024)  # drain a little so the connection closes cleanly
             logger.info("Connectivity probe: %s reachable (%.2fs)",
                         pid, time.monotonic() - t0)
+            _record_probe_status(pid, "ok")
             return "ok"
         except urllib.error.HTTPError as exc:
             # Any HTTP status (even 404) proves network + TLS are fine; only
@@ -402,15 +565,18 @@ def probe_provider_connectivity(provider_id: str | None = None, *, timeout: floa
                 logger.warning(
                     "Connectivity probe: %s reachable but auth rejected (HTTP %d, "
                     "%.2fs) — check the API key", pid, exc.code, time.monotonic() - t0)
+                _record_probe_status(pid, "auth")
                 return "auth"
             logger.info("Connectivity probe: %s reachable (%.2fs, HTTP %d)",
                         pid, time.monotonic() - t0, exc.code)
+            _record_probe_status(pid, "ok")
             return "ok"
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             logger.warning(
                 "Connectivity probe: %s unreachable (%.2fs): %s — check outbound "
                 "network/proxy (IPv4 preference is enabled by default, so a failure "
                 "here is not an IPv6 issue)", pid, time.monotonic() - t0, exc)
+            _record_probe_status(pid, "network")
             return "network"
     except Exception:
         logger.warning("Connectivity probe failed", exc_info=True)
@@ -430,28 +596,30 @@ def get_providers() -> dict[str, Any]:
     - ``configurable``: whether the key can be set from the WebUI
     - ``key_source``: where the key was found (``env_file``, ``env_var``,
       ``config_yaml``, ``oauth``, ``none``)
+    - ``key_status``: last verification result for a saved key
+      (``ok``/``auth``/``network``/``skipped``) or ``None`` when unknown
+    - ``key_checked_at``: unix timestamp of that result, or ``None``
     - ``models``: list of known model IDs for this provider
     """
     providers = []
 
     # Collect all known provider IDs from multiple sources, folding
-    # OpenRouter-prefix cards (qwen, google, x-ai) into their canonical card.
+    # related catalog slugs (qwen, google, x-ai) into their canonical card.
     known_ids = {
-        _PROVIDER_CARD_ALIASES.get(pid, pid)
-        for pid in (_PROVIDER_DISPLAY.keys() | _PROVIDER_MODELS.keys())
+        _provider_card_id(pid) for pid in model_catalog.catalog_providers()
     }
 
     # Also detect providers from config.yaml providers section
     cfg = get_config()
     providers_cfg = cfg.get("providers", {})
     if isinstance(providers_cfg, dict):
-        known_ids.update(_PROVIDER_CARD_ALIASES.get(pid, pid) for pid in providers_cfg.keys())
+        known_ids.update(_provider_card_id(pid) for pid in providers_cfg.keys())
 
-    # Add OAuth providers even if not in _PROVIDER_DISPLAY
+    # Add OAuth providers even if not in the catalog
     known_ids.update(_OAUTH_PROVIDERS)
 
     for pid in sorted(known_ids):
-        display_name = _PROVIDER_DISPLAY.get(pid, pid.replace("-", " ").title())
+        display_name = model_catalog.provider_display(pid)
         is_oauth = _provider_is_oauth(pid)
         has_key = _provider_has_key(pid)
 
@@ -485,20 +653,20 @@ def get_providers() -> dict[str, Any]:
                 logger.debug("hermes_cli auth check failed for %s", pid, exc_info=True)
                 # keep has_key from _provider_has_key()
         elif has_key:
-            env_var = _PROVIDER_ENV_VAR.get(pid)
-            if env_var:
+            env_vars = _provider_env_vars(pid)
+            if env_vars:
                 env_path = _get_hermes_home() / ".env"
                 env_values = _load_env_file(env_path)
-                if env_values.get(env_var):
+                if any(env_values.get(v) for v in env_vars):
                     key_source = "env_file"
-                elif os.getenv(env_var):
+                elif any(os.getenv(v) for v in env_vars):
                     key_source = "env_var"
                 else:
                     key_source = "config_yaml"
             else:
                 key_source = "config_yaml"
 
-        models = get_provider_card_models(pid)
+        models = _provider_card_models(pid)
         # Also include models from config.yaml providers section
         if isinstance(providers_cfg, dict):
             provider_cfg = providers_cfg.get(pid, {})
@@ -509,16 +677,23 @@ def get_providers() -> dict[str, Any]:
                 elif isinstance(cfg_models, list):
                     models = models + [{"id": k, "label": k} for k in cfg_models]
 
+        key_status, key_checked_at = _get_probe_status(pid)
         providers.append({
             "id": pid,
             "display_name": display_name,
             "has_key": has_key,
-            "configurable": not is_oauth and pid in _PROVIDER_ENV_VAR,
+            "configurable": not is_oauth and bool(_provider_env_vars(pid)),
             "is_oauth": is_oauth,
             "key_source": key_source,
             "auth_error": auth_error,
+            "key_status": key_status,
+            "key_checked_at": key_checked_at,
             "models": models,
         })
+
+    # Refresh stale verification results for saved keys in the background
+    # (never blocks this GET — the badge may lag by one response).
+    _maybe_kick_stale_probes(providers)
 
     # Determine active provider
     active_provider = None
@@ -548,17 +723,21 @@ def set_provider_key(provider_id: str, api_key: str | None) -> dict[str, Any]:
     if _provider_is_oauth(provider_id):
         return {
             "ok": False,
-            "error": f"'{_PROVIDER_DISPLAY.get(provider_id, provider_id)}' uses OAuth authentication. "
+            "error": f"'{model_catalog.provider_display(provider_id)}' uses OAuth authentication. "
                      f"Use `hermes model` in the terminal to configure it.",
         }
 
-    env_var = _PROVIDER_ENV_VAR.get(provider_id)
-    if not env_var:
+    env_vars = _provider_env_vars(provider_id)
+    if not env_vars:
         return {
             "ok": False,
-            "error": f"Cannot configure API key for '{_PROVIDER_DISPLAY.get(provider_id, provider_id)}'. "
+            "error": f"Cannot configure API key for '{model_catalog.provider_display(provider_id)}'. "
                      f"This provider does not have a known env var mapping.",
         }
+    # Multi-var providers (e.g. minimax: MINIMAX_API_KEY + MINIMAX_CN_API_KEY)
+    # write to the first declared name; the remaining names are alternate
+    # spellings scanned for key detection only.
+    env_var = env_vars[0]
 
     # Validate API key format (basic sanity check)
     if api_key:
@@ -567,6 +746,24 @@ def set_provider_key(provider_id: str, api_key: str | None) -> dict[str, Any]:
             return {"ok": False, "error": "API key must not contain newline characters."}
         if len(api_key) < 8:
             return {"ok": False, "error": "API key appears too short."}
+
+    # Live-validate the candidate key BEFORE writing it: a rejected key
+    # (HTTP 401/403) must not be saved and must surface as an error on the
+    # Settings row.  Network / unexpected failures are inconclusive — the
+    # key is still saved (with a warning) so a flaky endpoint or outage
+    # never blocks a perfectly valid credential.
+    validation = None
+    if api_key:
+        validation = _live_validate_api_key(provider_id, api_key)
+        if validation["status"] == "auth":
+            _record_probe_status(provider_id, "auth")
+            return {
+                "ok": False,
+                "error": (
+                    f"'{model_catalog.provider_display(provider_id)}' rejected the "
+                    f"API key ({validation['detail']}). Check the key and try again."
+                ),
+            }
 
     env_path = _get_hermes_home() / ".env"
     try:
@@ -582,25 +779,41 @@ def set_provider_key(provider_id: str, api_key: str | None) -> dict[str, Any]:
     # disrupting active streaming sessions that may be reading config.cfg.
     invalidate_models_cache()
 
+    # Record the verification result so GET /api/providers can badge the
+    # row.  Anything else (skipped validation, inconclusive "unknown",
+    # key removal) drops any stale result from a previous key.
+    if validation is not None and validation["status"] in ("ok", "auth", "network"):
+        _record_probe_status(provider_id, validation["status"])
+    else:
+        _clear_probe_status(provider_id)
+
     # Fire-and-forget connectivity probe so a bad key or an unreachable
     # endpoint shows up in the log now instead of stalling the first chat
     # for 30s (issue #8).  Daemon thread — the response contract is
-    # unchanged and the caller never waits on the network.
-    if api_key:
-        import threading as _threading
-        _threading.Thread(
+    # unchanged and the caller never waits on the network.  Skipped only
+    # when the sync validation already covered this save (it hit the same
+    # endpoint) or this is a key removal.
+    if api_key and (validation is None or validation["status"] == "skipped"):
+        threading.Thread(
             target=probe_provider_connectivity,
             args=(provider_id,),
             name=f"probe-{provider_id}",
             daemon=True,
         ).start()
 
-    return {
+    result: dict[str, Any] = {
         "ok": True,
         "provider": provider_id,
-        "display_name": _PROVIDER_DISPLAY.get(provider_id, provider_id),
+        "display_name": model_catalog.provider_display(provider_id),
         "action": "updated" if api_key else "removed",
     }
+    if validation is not None:
+        result["validated"] = validation["status"] != "skipped"
+        if validation["status"] == "ok":
+            result["models_count"] = validation["models_count"]
+        elif validation["status"] in ("network", "unknown"):
+            result["warning"] = "Could not verify the key; it was saved anyway."
+    return result
 
 
 def remove_provider_key(provider_id: str) -> dict[str, Any]:

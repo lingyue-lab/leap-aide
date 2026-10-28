@@ -660,11 +660,23 @@ export function handleReplayEvent(sessionId: string, event: string, data: any): 
 
     case 'apperror': {
       _dismissCompressing(sessionId);
-      let errorMsg = data.message || 'Unknown error';
-      if (data.type === 'rate_limit') errorMsg = `Rate limit reached: ${data.message}`;
-      else if (data.type === 'no_response') errorMsg = 'No response received. Check your API key and model selection.';
-      else { errorMsg = data.message; if (data.hint) errorMsg += `\n\n${data.hint}`; }
-      window.dispatchEvent(new CustomEvent('app-error-card', { detail: { sessionId, message: errorMsg } }));
+      const raw = typeof data.message === 'string' && data.message ? data.message : 'Unknown error';
+      let errorMsg = raw;
+      if (data.type === 'rate_limit') {
+        errorMsg = `Rate limit reached: ${raw}`;
+      } else if (data.type === 'no_response' && raw === 'Unknown error') {
+        errorMsg = 'No response received. Check your API key and model selection.';
+      } else {
+        // Includes no_response with a real provider message: the underlying
+        // error must stay visible (issue #38) — a zero-balance key that slips
+        // past backend classification still surfaces its raw text here.
+        errorMsg = raw;
+      }
+      if (data.hint) errorMsg += `\n\n${data.hint}`;
+      // Render inline as an InfoCard — the old 'app-error-card' CustomEvent
+      // lost its listener in the streaming refactor, so backend errors
+      // (including insufficient balance) were silently dropped (issue #38).
+      showInfoCard(sessionId, errorMsg);
       _sessionStates.set(sessionId, {
         ...s, busy: false, streaming: false, completedAt: Date.now(), error: errorMsg,
       });
@@ -677,7 +689,7 @@ export function handleReplayEvent(sessionId: string, event: string, data: any): 
     case 'error': {
       _dismissCompressing(sessionId);
       const errMsg = 'Connection lost';
-      window.dispatchEvent(new CustomEvent('app-error-card', { detail: { sessionId, message: errMsg } }));
+      showInfoCard(sessionId, errMsg);
       _sessionStates.set(sessionId, {
         ...s, busy: false, streaming: false, completedAt: Date.now(), error: errMsg,
       });

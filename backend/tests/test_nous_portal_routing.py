@@ -45,9 +45,9 @@ class TestNousModelIds:
         resolve_model_provider() — identical to the live-fetched path — rather
         than relying on the slash-only portal provider guard.
         """
-        from app.api.config import _PROVIDER_MODELS
-        nous_models = _PROVIDER_MODELS.get("nous", [])
-        assert nous_models, "Nous must have at least one static model"
+        from app.api import model_catalog
+        nous_models = model_catalog.provider_baseline_models("nous")
+        assert nous_models, "Nous must have at least one baseline model"
         for m in nous_models:
             mid = m["id"]
             assert mid.startswith("@nous:"), (
@@ -58,8 +58,8 @@ class TestNousModelIds:
 
     def test_nous_known_models_present(self):
         """Key Nous models must be present with correct @nous:-prefixed IDs."""
-        from app.api.config import _PROVIDER_MODELS
-        nous_ids = {m["id"] for m in _PROVIDER_MODELS.get("nous", [])}
+        from app.api import model_catalog
+        nous_ids = {m["id"] for m in model_catalog.provider_baseline_models("nous")}
         assert "@nous:anthropic/claude-opus-4.6" in nous_ids, (
             "@nous:anthropic/claude-opus-4.6 must be in Nous model list"
         )
@@ -72,14 +72,14 @@ class TestNousModelIds:
 
     def test_nous_models_no_bare_or_slash_only(self):
         """No Nous static model should be bare or slash-only without @nous: prefix."""
-        from app.api.config import _PROVIDER_MODELS
+        from app.api import model_catalog
         bad_ids = {
             "claude-opus-4.6", "claude-sonnet-4.6", "gpt-5.4-mini",
             "gemini-3.1-pro-preview",
             "anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6",
             "openai/gpt-5.4-mini", "google/gemini-3.1-pro-preview",
         }
-        nous_ids = {m["id"] for m in _PROVIDER_MODELS.get("nous", [])}
+        nous_ids = {m["id"] for m in model_catalog.provider_baseline_models("nous")}
         for bad in bad_ids:
             assert bad not in nous_ids, (
                 f"Model ID '{bad}' found in Nous static list without @nous: prefix. "

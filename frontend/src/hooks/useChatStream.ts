@@ -153,7 +153,25 @@ export function useChatStream() {
                   const remainingGhosts = storeAfterLoad.messages.filter(m => m._queued);
 
                   // Backend messages now carry timestamp__webui from streaming.
-                  const merged = [...session.messages, ...remainingGhosts];
+                  const merged = [...session.messages];
+                  // A failed turn may leave the user message only in
+                  // pending_user_message — merge it so the completion reload
+                  // does not swallow the just-sent bubble (issue #38).
+                  const pendingMsg = session.pending_user_message;
+                  if (pendingMsg && typeof pendingMsg === 'string') {
+                    const last = merged[merged.length - 1];
+                    if (!(last?.role === 'user' && typeof last.content === 'string' && last.content === pendingMsg)) {
+                      merged.push({
+                        role: 'user',
+                        content: pendingMsg,
+                        timestamp__webui: session.pending_user_message_ts ?? (Date.now() / 1000),
+                        ...(session.pending_original_message
+                          ? { original_content__webui: session.pending_original_message }
+                          : {}),
+                      });
+                    }
+                  }
+                  merged.push(...remainingGhosts);
                   useChatStore.getState().setMessages(merged);
                   // Keep streamManager in sync so any deferred startTransition
                   // updates don't push stale _sessionStates (empty tools) back.
@@ -259,6 +277,13 @@ export function useChatStream() {
     // Ensure WS is alive before starting a stream — the backend sends
     // begin_stream via WS, and _send() silently drops if disconnected.
     wsManager.ensureConnected();
+
+    // A previous failed turn may have left an error InfoCard up — clear it so
+    // the new attempt starts clean (issue #38). Interrupt mode overwrites the
+    // card with its own spinner below, so it does not need the dismiss.
+    if (mode !== 'interrupt') {
+      dismissInfoCard(sessionId);
+    }
 
     const store = useChatStore.getState();
 

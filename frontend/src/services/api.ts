@@ -274,12 +274,6 @@ export const modelsService = {
   getModels: async (init?: RequestInit) => {
     return api<import('@/types').ModelsResponse>('/api/models', init);
   },
-
-  getLiveModels: async (provider: string) => {
-    return api<{ models: Array<{ id: string; label?: string }> }>(
-      `/api/models/live?provider=${encodeURIComponent(provider)}`
-    );
-  },
 };
 
 // Config file API 服务
@@ -307,7 +301,19 @@ export const providersService = {
     return api('/api/providers');
   },
 
-  setKey: async (provider: string, apiKey: string): Promise<{ ok: boolean; error?: string }> => {
+  setKey: async (
+    provider: string,
+    apiKey: string
+  ): Promise<{
+    ok: boolean;
+    error?: string;
+    /** Non-blocking notice: the key was saved but could not be verified. */
+    warning?: string;
+    /** True when a live model-list fetch actually ran for this save. */
+    validated?: boolean;
+    /** Model count returned by the verification fetch (when validated + ok). */
+    models_count?: number;
+  }> => {
     return api('/api/providers', {
       method: 'POST',
       body: JSON.stringify({ provider, api_key: apiKey }),

@@ -10,6 +10,10 @@
  *    leaving the store stuck on a stale value.
  *  - ProvidersGroup on mount syncs the gate from the initial fetch,
  *    correcting any stale state.
+ *  - A successful save invalidates + reloads the models store so the
+ *    compose-footer picker sees new/rejected providers immediately.
+ *  - A save that returns a warning shows it while keeping has_key true.
+ *  - A stored key with key_status='auth' renders a persistent error line.
  *
  * The test exercises ProviderRow through the visible SettingsDetail
  * component, since ProviderRow is not exported directly.
@@ -20,13 +24,17 @@ import SettingsDetail from '@/components/settings/SettingsDetail';
 import { useProvidersGateStore } from '@/stores/useProvidersGateStore';
 import { useSettingsTabStore } from '@/stores/useSettingsTabStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
-import { providersService } from '@/services/api';
+import { useModelsStore } from '@/stores/useModelsStore';
+import { providersService, modelsService } from '@/services/api';
 
 vi.mock('@/services/api', () => ({
   providersService: {
     getProviders: vi.fn(),
     setKey: vi.fn(),
     deleteKey: vi.fn(),
+  },
+  modelsService: {
+    getModels: vi.fn(),
   },
   configFileService: {
     getRaw: vi.fn().mockResolvedValue(''),
@@ -45,6 +53,7 @@ vi.mock('@/stores/useSettingsStore', () => {
 const mockedGetProviders = vi.mocked(providersService.getProviders);
 const mockedSetKey = vi.mocked(providersService.setKey);
 const mockedDeleteKey = vi.mocked(providersService.deleteKey);
+const mockedGetModels = vi.mocked(modelsService.getModels);
 
 const fakeProvider = (overrides: Record<string, unknown> = {}) => ({
   id: 'anthropic',
@@ -65,9 +74,20 @@ beforeEach(() => {
     settingsTabActive: true,
     selectedGroup: 'providers',
   });
+  // Abort any in-flight models load left over from a previous test, then
+  // reset to a clean idle store.
+  useModelsStore.getState().cancel();
+  useModelsStore.setState({ data: null, status: 'idle', error: null, fetchedAt: null });
   mockedGetProviders.mockReset();
   mockedSetKey.mockReset();
   mockedDeleteKey.mockReset();
+  mockedGetModels.mockReset();
+  mockedGetModels.mockResolvedValue({
+    groups: [],
+    active_provider: null,
+    default_model: '',
+    building: false,
+  });
 });
 
 describe('SettingsDetail — providers gate refresh', () => {
@@ -215,5 +235,148 @@ describe('SettingsDetail — providers gate refresh', () => {
     await waitFor(() => {
       expect(useProvidersGateStore.getState().configured).toBe(false);
     });
+  });
+
+  // The save flow must refresh the models catalog immediately: ChatComposer
+  // only reloads on gate true↔false transitions, so adding a 2nd provider
+  // (or fixing a rejected key) would otherwise leave a stale 5-min-TTL picker.
+  it('after a successful setKey, the models store is invalidated and reloaded', async () => {
+    mockedGetProviders.mockResolvedValueOnce({
+      providers: [fakeProvider({ has_key: false })],
+      active_provider: null,
+    });
+    mockedSetKey.mockResolvedValue({ ok: true, validated: true, models_count: 2 });
+    mockedGetProviders.mockResolvedValueOnce({
+      providers: [fakeProvider({ has_key: true })],
+      active_provider: 'anthropic',
+    });
+
+    const { container, getByPlaceholderText, getByTitle } = render(<SettingsDetail />);
+    await waitFor(() => {
+      expect(container.querySelector('input[placeholder*="enter_key"]')).not.toBeNull();
+    });
+    fireEvent.change(getByPlaceholderText('settings.providers.enter_key'), {
+      target: { value: 'sk-test-123' },
+    });
+    fireEvent.click(getByTitle('settings.providers.save_key'));
+
+    await waitFor(() => {
+      expect(useModelsStore.getState().status).toBe('ready');
+    });
+    expect(mockedGetModels).toHaveBeenCalled();
+  });
+
+  // Backend saved the key but could not verify it (network/timeout) —
+  // a warning is shown and the key is stored (has_key flips to true).
+  it('setKey with a warning shows the warning and still marks the key as stored', async () => {
+    mockedGetProviders.mockResolvedValueOnce({
+      providers: [fakeProvider({ has_key: false })],
+      active_provider: null,
+    });
+    mockedSetKey.mockResolvedValue({
+      ok: true,
+      warning: 'Could not verify the key; it was saved anyway.',
+    });
+    mockedGetProviders.mockResolvedValueOnce({
+      providers: [fakeProvider({ has_key: true })],
+      active_provider: 'anthropic',
+    });
+
+    const { container, getByPlaceholderText, getByTitle, queryByTitle } = render(<SettingsDetail />);
+    await waitFor(() => {
+      expect(container.querySelector('input[placeholder*="enter_key"]')).not.toBeNull();
+    });
+    fireEvent.change(getByPlaceholderText('settings.providers.enter_key'), {
+      target: { value: 'sk-test-123' },
+    });
+    fireEvent.click(getByTitle('settings.providers.save_key'));
+
+    await waitFor(() => {
+      expect(container.textContent).toContain('Could not verify the key');
+    });
+    // Key was saved: the row switched to the masked display + clear button.
+    expect(queryByTitle('settings.providers.clear_key')).not.toBeNull();
+  });
+
+  // A stored key the provider rejected (key_status='auth' from the
+  // background probe) renders a persistent error line under the row.
+  it('renders a persistent invalid-key notice when key_status is auth', async () => {
+    mockedGetProviders.mockResolvedValueOnce({
+      providers: [fakeProvider({ has_key: true, key_status: 'auth' })],
+      active_provider: null,
+    });
+
+    const { container } = render(<SettingsDetail />);
+    await waitFor(() => {
+      expect(container.textContent).toContain('settings.providers.key_invalid');
+    });
+  });
+
+  // Save-time key validation fetches the model list and can take seconds —
+  // the row must show an M3 indeterminate spinner while the request is in
+  // flight (instead of the save icon).
+  it('shows an M3 spinner in the row while the save request is pending', async () => {
+    mockedGetProviders.mockResolvedValueOnce({
+      providers: [fakeProvider({ has_key: false })],
+      active_provider: null,
+    });
+    let resolveSave!: (v: { ok: boolean }) => void;
+    mockedSetKey.mockReturnValue(new Promise((r) => { resolveSave = r; }));
+
+    const { container, getByPlaceholderText, getByTitle, queryByTitle } = render(<SettingsDetail />);
+    await waitFor(() => {
+      expect(container.querySelector('input[placeholder*="enter_key"]')).not.toBeNull();
+    });
+    fireEvent.change(getByPlaceholderText('settings.providers.enter_key'), {
+      target: { value: 'sk-test-123' },
+    });
+    fireEvent.click(getByTitle('settings.providers.save_key'));
+
+    // Save button swapped for the spinner; input locked.
+    await waitFor(() => {
+      expect(queryByTitle('settings.providers.save_key')).toBeNull();
+      expect(container.querySelector('svg.m3-circular-progress')).not.toBeNull();
+      expect(getByPlaceholderText('settings.providers.enter_key')).toBeDisabled();
+    });
+
+    resolveSave({ ok: true });
+    mockedGetProviders.mockResolvedValueOnce({
+      providers: [fakeProvider({ has_key: true, key_source: 'env_file' })],
+      active_provider: 'anthropic',
+    });
+    await waitFor(() => {
+      expect(queryByTitle('settings.providers.save_key')).toBeNull(); // now has-key layout
+      expect(container.querySelector('svg.m3-circular-progress')).toBeNull();
+    });
+  });
+
+  // Right after a save the provider prop is still the pre-save snapshot
+  // (key_source 'none'); the badge must jump 未配置 → .env directly, never
+  // flashing a meaningless "None" label.
+  it('after saving, the source badge shows .env and never the raw "None"', async () => {
+    mockedGetProviders.mockResolvedValueOnce({
+      providers: [fakeProvider({ has_key: false, key_source: 'none' })],
+      active_provider: null,
+    });
+    mockedSetKey.mockResolvedValue({ ok: true, validated: true, models_count: 2 });
+    mockedGetProviders.mockResolvedValueOnce({
+      providers: [fakeProvider({ has_key: true, key_source: 'env_file' })],
+      active_provider: 'anthropic',
+    });
+
+    const { container, getByPlaceholderText, getByTitle } = render(<SettingsDetail />);
+    await waitFor(() => {
+      expect(container.querySelector('input[placeholder*="enter_key"]')).not.toBeNull();
+    });
+    fireEvent.change(getByPlaceholderText('settings.providers.enter_key'), {
+      target: { value: 'sk-test-123' },
+    });
+    fireEvent.click(getByTitle('settings.providers.save_key'));
+
+    // Wait until the row flipped to has-key; the badge must already be .env.
+    await waitFor(() => {
+      expect(container.textContent).toContain('.env');
+    });
+    expect(container.textContent).not.toContain('None');
   });
 });

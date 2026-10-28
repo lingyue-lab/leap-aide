@@ -214,6 +214,7 @@
       "hide_key": "隐藏 Key",
       "saved": "Key 已保存",
       "cleared": "Key 已清除",
+      "key_invalid": "提供商拒绝了此 API Key。",
       "oauth_hint": "使用 OAuth — 请通过 CLI 配置：hermes model",
       "not_configurable_hint": "Key 在 config.yaml 中管理"
     }
