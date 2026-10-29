@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { FormField, TextField } from '../components/common/FormField';
 import LoadingSpinner from '../components/common/LoadingSpinner';
+import { useProvidersGateStore } from '../stores/useProvidersGateStore';
 
 interface AuthContextValue {
   isAuthenticated: boolean;
@@ -50,6 +51,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
 
       const ok = response.ok;
+      // Drop any pre-login gate state: the boot-time check ran without a
+      // session cookie and must not decide the post-login gate (issue #5).
+      if (ok) useProvidersGateStore.getState().reset();
       setIsAuthenticated(ok);
       return ok;
     } catch (err) {
@@ -65,6 +69,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         credentials: 'include',
       });
     } finally {
+      useProvidersGateStore.getState().reset();
       setIsAuthenticated(false);
     }
   }, []);

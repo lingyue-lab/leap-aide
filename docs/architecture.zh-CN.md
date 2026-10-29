@@ -47,7 +47,7 @@ hermes-agent SDK            AIAgent.run_conversation()、tools、gateway
 | 配置与模型 | `api/config.py`、`api/models.py`、`api/webui_schema.py`、`api/state_sync.py` | 发现/全局量/模型检测；会话模型 + CRUD + LRU 缓存；`__webui` schema 列；`/insights` 同步进 state.db |
 | 会话 | `api/agent_sessions.py`、`api/session_ops.py`、`api/session_display.py`、`api/session_watcher.py` | 基于 SDK 的会话生命周期；ops/展示辅助；后台会话监视 |
 | 工作区 | `api/workspace.py` | 文件操作、工作区注册、git 检测、信任级别 |
-| 认证与身份 | `api/auth.py`、`api/profiles.py`、`api/onboarding.py` | 可选口令门 + 签名 cookie；profile 状态；首次运行向导 |
+| 认证与身份 | `api/auth.py`、`api/profiles.py` | 可选口令门 + 签名 cookie；profile 状态 |
 | 面板 | `api/terminal.py`、`api/vnc.py`、`api/observer.py`、`api/cli_viewer.py` | 终端 PTY 通道；VNC 通道；observer 界面；CLI 会话列表 |
 | 业务 | `api/slash_commands.py`、`api/clarify.py`、`api/metering.py`、`api/providers.py`、`api/commands.py`、`api/background.py`、`api/updates.py` | 斜杠命令分发；clarify 对话；用量计量；provider/模型门控；命令注册表暴露；后台 goal；更新检查 |
 
@@ -123,7 +123,6 @@ hermes-agent SDK            AIAgent.run_conversation()、tools、gateway
 | `HERMES_WEBUI_PYTHON` | *（自动发现）* | Python 可执行文件覆盖 |
 | `HERMES_WEBUI_ALLOWED_ORIGINS` | *（未设置）* | 额外允许的来源（origin） |
 | `HERMES_WEBUI_AUTO_INSTALL` | *（未设置）* | `=1` 表示启动时自动安装依赖 |
-| `HERMES_WEBUI_ONBOARDING_OPEN` | *（已设置）* | 打开首次运行向导 |
 | `HERMES_WEBUI_PREWARM_TOOL_DEFS` | *（默认启用）* | 启动期工具定义快照；`=0` 关闭（首条消息改付工具检查开销） |
 | `HERMES_WEBUI_PREWARM_WAIT_S` | `10` | 聊天线程等待预热工具定义的最长秒数；`=0` 不等待 |
 | `HERMES_WEBUI_FORCE_IPV4` | *（默认启用）* | 出网连接优先 IPv4（规避 IPv6 黑洞挂起）；`=0` 关闭 |

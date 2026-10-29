@@ -9,6 +9,7 @@ import { useSessionStore } from '@/stores/useSessionStore';
 import { setChatPanelActive } from '@/hooks/useStreamNotify';
 import { markSessionSeen } from '@/utils/sessionSeen';
 import { gateProviders } from '@/utils/providersGate';
+import { clearPanelTabStates } from '@/utils/panelTabs';
 import type { NavPanel } from '@/types';
 import { Icon } from '@/components/common/Icons';
 import { useAuth } from '@/contexts/AuthContext';
@@ -87,14 +88,9 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
     },
   ];
 
-  const clearAllTabStates = () => {
-    setSkillsTabActive(false);
-    setTasksTabActive(false);
-    setMemoryTabActive(false);
-    setWorkspacesTabActive(false);
-    setTerminalTabActive(false);
-    setSettingsTabActive(false);
-  };
+  // Shared with openProvidersSettings() (gate → Settings), which has to clear
+  // the same flags for the main area to switch, not just the sidebar.
+  const clearAllTabStates = clearPanelTabStates;
 
   const switchPanel = (panel: NavPanel) => {
     // Issue #16 UI invariant: switching panels NEVER awaits the network.

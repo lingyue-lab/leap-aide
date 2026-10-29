@@ -18,35 +18,53 @@ vi.mock('@/utils/providersGate', () => ({
   gateProviders: vi.fn(),
 }));
 
-vi.mock('@/stores/useSkillStore', () => ({
-  useSkillStore: (sel: (s: Record<string, unknown>) => unknown) =>
-    sel({ clearSelection: () => {}, setSkillsTabActive: () => {}, cancelEditing: () => {} }),
-}));
+vi.mock('@/stores/useSkillStore', () => {
+  const state = { clearSelection: () => {}, setSkillsTabActive: () => {}, cancelEditing: () => {} };
+  const useSkillStore = (sel: (s: typeof state) => unknown) => sel(state);
+  // Attach getState for the non-hook access pattern (clearPanelTabStates).
+  (useSkillStore as unknown as { getState: () => typeof state }).getState = () => state;
+  return { useSkillStore };
+});
 
-vi.mock('@/stores/useCronStore', () => ({
-  useCronStore: (sel: (s: Record<string, unknown>) => unknown) =>
-    sel({ setTasksTabActive: () => {} }),
-}));
+vi.mock('@/stores/useCronStore', () => {
+  const state = { setTasksTabActive: () => {} };
+  const useCronStore = (sel: (s: typeof state) => unknown) => sel(state);
+  // Attach getState for the non-hook access pattern (clearPanelTabStates).
+  (useCronStore as unknown as { getState: () => typeof state }).getState = () => state;
+  return { useCronStore };
+});
 
-vi.mock('@/stores/useMemoryStore', () => ({
-  useMemoryStore: (sel: (s: Record<string, unknown>) => unknown) =>
-    sel({ setMemoryTabActive: () => {} }),
-}));
+vi.mock('@/stores/useMemoryStore', () => {
+  const state = { setMemoryTabActive: () => {} };
+  const useMemoryStore = (sel: (s: typeof state) => unknown) => sel(state);
+  // Attach getState for the non-hook access pattern (clearPanelTabStates).
+  (useMemoryStore as unknown as { getState: () => typeof state }).getState = () => state;
+  return { useMemoryStore };
+});
 
-vi.mock('@/stores/useWorkspaceStore', () => ({
-  useWorkspaceStore: (sel: (s: Record<string, unknown>) => unknown) =>
-    sel({ setWorkspacesTabActive: () => {} }),
-}));
+vi.mock('@/stores/useWorkspaceStore', () => {
+  const state = { setWorkspacesTabActive: () => {} };
+  const useWorkspaceStore = (sel: (s: typeof state) => unknown) => sel(state);
+  // Attach getState for the non-hook access pattern (clearPanelTabStates).
+  (useWorkspaceStore as unknown as { getState: () => typeof state }).getState = () => state;
+  return { useWorkspaceStore };
+});
 
-vi.mock('@/stores/useTerminalStore', () => ({
-  useTerminalStore: (sel: (s: Record<string, unknown>) => unknown) =>
-    sel({ setTerminalTabActive: () => {} }),
-}));
+vi.mock('@/stores/useTerminalStore', () => {
+  const state = { setTerminalTabActive: () => {} };
+  const useTerminalStore = (sel: (s: typeof state) => unknown) => sel(state);
+  // Attach getState for the non-hook access pattern (clearPanelTabStates).
+  (useTerminalStore as unknown as { getState: () => typeof state }).getState = () => state;
+  return { useTerminalStore };
+});
 
-vi.mock('@/stores/useSettingsTabStore', () => ({
-  useSettingsTabStore: (sel: (s: Record<string, unknown>) => unknown) =>
-    sel({ setSettingsTabActive: () => {} }),
-}));
+vi.mock('@/stores/useSettingsTabStore', () => {
+  const state = { setSettingsTabActive: () => {} };
+  const useSettingsTabStore = (sel: (s: typeof state) => unknown) => sel(state);
+  // Attach getState for the non-hook access pattern (clearPanelTabStates).
+  (useSettingsTabStore as unknown as { getState: () => typeof state }).getState = () => state;
+  return { useSettingsTabStore };
+});
 
 vi.mock('@/stores/useSessionStore', () => {
   const fakeState = { sessions: [], currentSessionId: null };

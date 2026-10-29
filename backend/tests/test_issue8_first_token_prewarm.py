@@ -18,7 +18,7 @@ LeapAide-side fixes:
        and honours the HERMES_WEBUI_FORCE_IPV4=0 opt-out.
   8.   probe_provider_connectivity classifies ok/auth/network/skipped and
        never raises.
-  9.   set_provider_key / onboarding setup fire a background probe.
+  9.   set_provider_key fires a background probe.
 """
 import pathlib
 import sys
@@ -487,46 +487,3 @@ def test_remove_provider_key_skips_probe(monkeypatch):
     assert result["ok"] is True and result["action"] == "removed"
     time.sleep(0.3)
     assert not fired.is_set(), "key removal has nothing to validate — no probe"
-
-
-def test_onboarding_setup_fires_background_probe(monkeypatch):
-    """Issue #8 scenario trigger: fresh boot → onboarding saves key → probe."""
-    import app.api.onboarding as onboarding
-    import app.api.providers as providers
-
-    monkeypatch.delenv("HERMES_WEBUI_CONNECTIVITY_PROBE", raising=False)
-    # Recorded so onboarding's direct os.environ write is undone at teardown.
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "unset-sentinel")
-
-    seen = threading.Event()
-
-    def _probe(provider_id=None, **kwargs):
-        seen.set()
-        return "ok"
-
-    monkeypatch.setattr(providers, "probe_provider_connectivity", _probe)
-    # Stub out every side effect of the save path (config/.env writes,
-    # cache reloads, status computation) — only the probe trigger is under test.
-    monkeypatch.setattr(onboarding, "_load_yaml_config", lambda p: {})
-    monkeypatch.setattr(onboarding, "_save_yaml_config", lambda p, c: None)
-    monkeypatch.setattr(onboarding, "_write_env_file", lambda p, u: None)
-    monkeypatch.setattr(onboarding, "reload_config", lambda: None)
-    monkeypatch.setattr(onboarding, "get_onboarding_status", lambda: {"ok": True})
-    monkeypatch.setattr(onboarding, "save_settings", lambda d: None)
-    monkeypatch.setattr(
-        "app.api.profiles._reload_dotenv", lambda h: None, raising=False
-    )
-
-    body = {
-        "provider": "deepseek",
-        "model": "deepseek-chat-v3-0324",
-        "api_key": "sk-onboarding-123",
-        "confirm_overwrite": True,
-    }
-    result = onboarding.apply_onboarding_setup(body)
-
-    assert result == {"ok": True}
-    assert seen.wait(5.0), (
-        "apply_onboarding_setup must fire a background connectivity probe "
-        "after saving the key (issue #8 scenario)"
-    )

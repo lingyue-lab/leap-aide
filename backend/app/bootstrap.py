@@ -65,8 +65,6 @@ _load_repo_dotenv()
 
 DEFAULT_HOST = os.getenv("HERMES_WEBUI_HOST", "127.0.0.1")
 DEFAULT_PORT = int(os.getenv("HERMES_WEBUI_PORT", "8787"))
-# Set HERMES_WEBUI_SKIP_ONBOARDING=1 to bypass the first-run wizard when
-# the environment is already fully configured (e.g. managed hosting).
 
 
 def info(msg: str) -> None:
@@ -233,7 +231,7 @@ def open_browser(url: str) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Bootstrap Hermes Web UI onboarding.")
+    parser = argparse.ArgumentParser(description="Bootstrap the LeapAide Web UI.")
     parser.add_argument("port", nargs="?", type=int, default=DEFAULT_PORT)
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument(
