@@ -78,12 +78,29 @@ describe('useProvidersGateStore', () => {
     expect(useProvidersGateStore.getState().configured).toBe(false);
   });
 
-  // TC-S5 — first boot, fetch fails: fail-open to true.
-  it('fails open to configured=true when prior value is null and check throws', async () => {
+  // TC-S5 — first boot, fetch fails (401 pre-login, 503 initializing, network
+  // blip): the store must stay "unknown" instead of inventing `configured =
+  // true`. Caching an invented `true` is what kept the providers gate silent
+  // on the first clean boot (issue #5).
+  it('leaves configured unknown when prior value is null and check throws', async () => {
     mockedGetProviders.mockRejectedValueOnce(new Error('network'));
     const result = await useProvidersGateStore.getState().check();
-    expect(result).toBe(true);
-    expect(useProvidersGateStore.getState().configured).toBe(true);
+    expect(result).toBeNull();
+    expect(useProvidersGateStore.getState().configured).toBeNull();
+    expect(useProvidersGateStore.getState().lastErrorStatus).toBeNull();
+  });
+
+  // TC-S5b — the HTTP status of a failed check is recorded so gateProviders()
+  // can tell "server still initialising" (503, worth retrying) from "cannot
+  // ask at all" (fail open for this call).
+  it('records the HTTP status of a failed check', async () => {
+    mockedGetProviders.mockRejectedValueOnce(
+      Object.assign(new Error('HTTP 503'), { status: 503 }),
+    );
+    const result = await useProvidersGateStore.getState().check();
+    expect(result).toBeNull();
+    expect(useProvidersGateStore.getState().configured).toBeNull();
+    expect(useProvidersGateStore.getState().lastErrorStatus).toBe(503);
   });
 
   // TC-S8 — delete then network blip: keep previous false (don't silently re-arm).
@@ -118,11 +135,12 @@ describe('useProvidersGateStore', () => {
 
   // TC-S7
   it('reset() returns the store to initial state', () => {
-    useProvidersGateStore.setState({ configured: true, checkedAt: 123 });
+    useProvidersGateStore.setState({ configured: true, checkedAt: 123, lastErrorStatus: 503 });
     useProvidersGateStore.getState().reset();
-    const { configured, checkedAt } = useProvidersGateStore.getState();
+    const { configured, checkedAt, lastErrorStatus } = useProvidersGateStore.getState();
     expect(configured).toBeNull();
     expect(checkedAt).toBeNull();
+    expect(lastErrorStatus).toBeNull();
   });
 
   // TC-S9 — in-flight guard: two concurrent check() calls share a single request.

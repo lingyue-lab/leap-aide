@@ -2,6 +2,7 @@ import { showAlertDialog } from '@/components/common/DialogHost';
 import { useProvidersGateStore } from '@/stores/useProvidersGateStore';
 import { useSidebarPanelStore } from '@/stores/useSidebarPanelStore';
 import { useSettingsTabStore } from '@/stores/useSettingsTabStore';
+import { clearPanelTabStates } from '@/utils/panelTabs';
 import i18n from '@/i18n/config';
 
 /**
@@ -21,22 +22,40 @@ import i18n from '@/i18n/config';
  */
 export type GateOutcome = 'passed' | 'navigated';
 
+/** Delay between retries while the server answers 503 "initializing". */
+const INITIALIZING_RETRY_DELAY_MS = 1000;
+
+/** Retry budget — the listen→ready window is ~5-7s (issue #3). */
+const INITIALIZING_MAX_RETRIES = 10;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 /**
  * Open Settings → Model Providers. Shared between the gate's "Configure"
  * action and any future direct navigation callers (e.g. a "Configure
  * providers" button in an empty-state placeholder).
  *
- * Updates all three pieces of state needed for the Settings tab to
- * render correctly:
- *   1. Sidebar's activePanel (so the left-hand settings list appears
+ * Updates all the state needed for the Settings tab to render correctly:
+ *   1. Every other panel flag is cleared first (`clearPanelTabStates()`).
+ *      `NonTerminalContent` checks workspaces / skills / memory / tasks
+ *      BEFORE settings, so leaving one armed keeps the old view in the main
+ *      area while the sidebar already says Settings — the bug found in
+ *      manual testing of issue #5 (Workspaces → Chat → "Configure
+ *      providers").
+ *   2. Sidebar's activePanel (so the left-hand settings list appears
  *      alongside the main settings panel — without this, the user would
  *      see the settings detail but the sidebar would still show Chat
  *      sessions, which is jarring).
- *   2. settingsTabActive (drives NonTerminalContent in MainContent).
- *   3. selectedGroup = 'providers' (jumps straight to the providers
+ *   3. settingsTabActive (drives NonTerminalContent in MainContent).
+ *   4. selectedGroup = 'providers' (jumps straight to the providers
  *      group instead of the default 'appearance').
  */
 export function openProvidersSettings(): void {
+  clearPanelTabStates();
   useSidebarPanelStore.getState().setActivePanel('settings');
   useSettingsTabStore.getState().setSettingsTabActive(true);
   useSettingsTabStore.getState().setSelectedGroup('providers');
@@ -45,17 +64,21 @@ export function openProvidersSettings(): void {
 /**
  * Run the "no model providers configured" precondition gate.
  *
- * If `configured === true`, returns 'passed' immediately without
- * touching the dialog. If `configured === null`, performs a check first.
- * If still unconfigured, shows an M3 Basic Dialog (single primary
- * action, no Cancel button, Escape / scrim cannot dismiss) offering to
- * open Settings → Model Providers. The dialog resolves only when the user
- * clicks "Configure providers", at which point we navigate and return
- * 'navigated'.
+ * Resolution order:
+ *   - `configured === true`  → 'passed', no dialog, no request.
+ *   - `configured === false` → show the dialog, navigate, 'navigated'.
+ *   - `configured === null`  → ask the store. A 503 (server still
+ *     initialising) is *not* an answer: keep asking for a bounded time.
+ *     Any other failure leaves the state unknown, so the call proceeds
+ *     ('passed') fail-open — without caching, which means the next entry
+ *     into chat asks again. That distinction is what fixes issue #5: the
+ *     first clean boot used to cache the pre-login 401 / init-503 as
+ *     "configured" and the gate stayed silent.
  *
  * The dialog is shown via the module-level `showAlertDialog` helper,
  * which means this function is safe to call from non-React code as long
- * as `<DialogHost />` is mounted at the App root (which it is).
+ * as `<DialogHost />` is mounted at the App root (which it is); the helper
+ * itself waits for the host when effects flush out of order.
  *
  * Translations are pulled from the i18next singleton (`i18n.t`) rather
  * than `useTranslation()` because this module is called from non-React
@@ -64,13 +87,27 @@ export function openProvidersSettings(): void {
  */
 export async function gateProviders(): Promise<GateOutcome> {
   const t = i18n.t.bind(i18n);
-  const store = useProvidersGateStore.getState();
 
-  let configured = store.configured;
+  let configured = useProvidersGateStore.getState().configured;
   if (configured === null) {
-    configured = await store.check();
+    configured = await useProvidersGateStore.getState().check();
   }
-  if (configured) return 'passed';
+
+  for (
+    let attempt = 0;
+    configured === null &&
+    useProvidersGateStore.getState().lastErrorStatus === 503 &&
+    attempt < INITIALIZING_MAX_RETRIES;
+    attempt += 1
+  ) {
+    await sleep(INITIALIZING_RETRY_DELAY_MS);
+    configured = await useProvidersGateStore.getState().check();
+  }
+
+  // Known-configured, or still unknown (network error / 5xx / still
+  // initialising): let the caller proceed. Nothing was cached for the
+  // unknown case, so the next entry re-checks instead of staying silent.
+  if (configured !== false) return 'passed';
 
   await showAlertDialog({
     title: t('providers.gate.title'),

@@ -47,7 +47,7 @@ Key principles:
 | Config & models | `api/config.py`, `api/models.py`, `api/webui_schema.py`, `api/state_sync.py` | Discovery/globals/model detection; session model + CRUD + LRU cache; `__webui` schema columns; `/insights` sync into state.db |
 | Sessions | `api/agent_sessions.py`, `api/session_ops.py`, `api/session_display.py`, `api/session_watcher.py` | Session lifecycle around the SDK; ops/display helpers; background session watching |
 | Workspace | `api/workspace.py` | File ops, workspace registry, git detection, trust levels |
-| Auth & identity | `api/auth.py`, `api/profiles.py`, `api/onboarding.py` | Optional password gate + signed cookies; profile state; first-run wizard |
+| Auth & identity | `api/auth.py`, `api/profiles.py` | Optional password gate + signed cookies; profile state |
 | Panels | `api/terminal.py`, `api/vnc.py`, `api/observer.py`, `api/cli_viewer.py` | Terminal PTY channel; VNC channel; observer surface; CLI session listing |
 | Business | `api/slash_commands.py`, `api/clarify.py`, `api/metering.py`, `api/providers.py`, `api/commands.py`, `api/background.py`, `api/updates.py` | Slash-command dispatch; clarify dialogs; usage metering; provider/model gate; command registry exposure; background goals; update check |
 
@@ -123,7 +123,6 @@ External dependencies: `pyyaml` only (plus the Hermes Agent SDK and its own deps
 | `HERMES_WEBUI_PYTHON` | *(auto-discovered)* | Python executable override |
 | `HERMES_WEBUI_ALLOWED_ORIGINS` | *(unset)* | Extra allowed origins |
 | `HERMES_WEBUI_AUTO_INSTALL` | *(unset)* | `=1` enables dependency auto-install at startup |
-| `HERMES_WEBUI_ONBOARDING_OPEN` | *(set)* | Open the first-run wizard |
 | `HERMES_WEBUI_PREWARM_TOOL_DEFS` | *(enabled)* | Boot-time tool-definition snapshot; `=0` disables (first chat then pays the tool-check cost) |
 | `HERMES_WEBUI_PREWARM_WAIT_S` | `10` | Max seconds a chat waits for the prewarmed tool definitions; `=0` never waits |
 | `HERMES_WEBUI_FORCE_IPV4` | *(enabled)* | Prefer IPv4 for outbound connections (skips blackholed-IPv6 stalls); `=0` disables |

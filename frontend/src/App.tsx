@@ -8,10 +8,9 @@ import LoadingSpinner from './components/common/LoadingSpinner';
 import DialogHost from './components/common/DialogHost';
 import { useSessionStore } from './stores/useSessionStore';
 import { useSettingsStore } from './stores/useSettingsStore';
-import { useWorkspaceStore } from './stores/useWorkspaceStore';
-import { useProvidersGateStore } from './stores/useProvidersGateStore';
 import { useTheme } from './contexts/ThemeContext';
-import { ProtectedRoute } from './contexts/AuthContext';
+import { ProtectedRoute, useAuth } from './contexts/AuthContext';
+import { useAuthenticatedBootstrap } from './hooks/useAuthenticatedBootstrap';
 import { useStreamNotify } from './hooks/useStreamNotify';
 import { handleNotifyEvent } from './stores/notifyManager';
 import { wsManager } from './stores/wsManager';
@@ -20,20 +19,15 @@ import { FONT_ZOOM_MAP } from './constants';
 function App() {
   const { i18n } = useTranslation();
   const { currentSessionId, pinningSession } = useSessionStore();
-  const { settings, loadSettings } = useSettingsStore();
-  const loadWorkspaces = useWorkspaceStore((s) => s.loadWorkspaces);
+  const { settings } = useSettingsStore();
   const { setTheme } = useTheme();
+  const { isAuthenticated } = useAuth();
   useStreamNotify(currentSessionId);
 
-  // Load settings, workspaces, and the providers-gate state on mount.
-  // The gate check is fire-and-forget — it warms the cache so the first
-  // click on Chat/Tasks doesn't show a brief "checking…" UI; failures
-  // are handled inside `check()` by failing open.
-  React.useEffect(() => {
-    loadSettings();
-    loadWorkspaces();
-    useProvidersGateStore.getState().check();
-  }, []);
+  // Boot loaders — settings, workspaces and the providers-gate warm-up all
+  // hit auth-protected endpoints, so they wait for a session instead of
+  // firing on mount and answering 401 on the first clean boot (issue #5).
+  useAuthenticatedBootstrap(isAuthenticated);
 
   // Connect to WebSocket with a small delay to allow font loading first.
   React.useEffect(() => {

@@ -529,7 +529,7 @@ def test_server():
         # or any os.environ mutation that happens inside the server process.
         # Without this, a profile switch or active_profile file in the real
         # ~/.hermes can redirect _get_active_hermes_home() out of the sandbox,
-        # causing onboarding writes (config.yaml, .env) to land in the production
+        # causing config.yaml / .env writes to land in the production
         # ~/.hermes/profiles/webui/ and overwrite real API keys.
         "HERMES_BASE_HOME":               str(TEST_STATE_DIR),
     })

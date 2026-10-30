@@ -58,6 +58,22 @@ def _deepseek_configured(monkeypatch):
     # Irrelevant to these display tests, so skip the probe entirely.
     monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
     from app.api.config import get_available_models, invalidate_models_cache
+    from app.api import config as config_mod
+
+    # Build from the env patched above, never from a snapshot written by
+    # another process.  Each pytest batch starts the session-scoped test
+    # server (conftest.py:374), which prewarms the catalog at boot
+    # (app/server.py:291) and writes <state>/models_cache.json.  A fork PR has
+    # no DEEPSEEK_API_KEY secret, so that snapshot holds a key-less catalog —
+    # exactly ['custom', 'openrouter'] — and get_available_models() prefers
+    # the disk snapshot (config.py:2145).  One write landing between the
+    # invalidate below and the warm therefore makes this assertion fail with
+    # the key-less provider list (seen on CI for PR #36, while the same
+    # commit passed in another run).  Detaching the disk layer makes the
+    # warm deterministic and side-effect free.
+    monkeypatch.setattr(config_mod, "_load_models_cache_from_disk", lambda: None)
+    monkeypatch.setattr(config_mod, "_save_models_cache_to_disk", lambda cache: None)
+
     invalidate_models_cache()  # drop any catalog cached by a prior test
     # Warm the cache: peek_available_models() never builds, so without this
     # the resolver and normalize_model_prefix see an empty config-only catalog.

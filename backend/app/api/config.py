@@ -2642,7 +2642,6 @@ def _get_session_agent_lock(session_id: str) -> threading.Lock:
 # ── Settings persistence ─────────────────────────────────────────────────────
 
 _SETTINGS_DEFAULTS = {
-    "onboarding_completed": False,
     "send_key": "enter",  # 'enter' or 'ctrl+enter'
     "show_cli_sessions": True,  # show hermes CLI sessions from state.db in the sidebar
     "show_messaging_sessions": True,  # show IM/gateway sessions (weixin, telegram, discord, ...) in the sidebar
@@ -2669,7 +2668,9 @@ _SETTINGS_DEFAULTS = {
     "default_mode": "manual",  # approval mode for new sessions: manual | smart | yolo
     "session_ttl": "86400",  # login cookie TTL in seconds (default 24h)
 }
-_SETTINGS_LEGACY_DROP_KEYS = {"assistant_language", "bubble_layout", "default_model", "show_token_usage", "sync_to_insights", "default_workspace"}
+# Keys never served again: each belonged to a feature that has been removed.
+# They are dropped on read and purged from settings.json.
+_SETTINGS_LEGACY_DROP_KEYS = {"assistant_language", "bubble_layout", "default_model", "show_token_usage", "sync_to_insights", "default_workspace", "onboarding_completed"}
 _SETTINGS_THEME_VALUES = {"light", "dark", "system"}
 _SETTINGS_SKIN_VALUES = {
     "default",
@@ -2733,6 +2734,25 @@ _settings_cache_lock = threading.Lock()
 _settings_mtime: float = 0.0
 
 
+def _rewrite_settings_file(stored: dict) -> None:
+    """Rewrite settings.json with ``stored`` (atomic, best-effort).
+
+    Used to physically drop keys whose feature was deleted (issue #5 Part C)
+    instead of carrying them on disk forever. Failures are logged and ignored
+    — a read-only or full disk must never break settings loading.
+    """
+    tmp = SETTINGS_FILE.with_suffix(".json.tmp")
+    try:
+        tmp.write_text(json.dumps(stored, indent=2, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, SETTINGS_FILE)
+    except Exception:
+        logger.debug("Failed to rewrite %s after dropping legacy keys", SETTINGS_FILE, exc_info=True)
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def _read_settings_from_disk() -> tuple[dict, float]:
     """Read settings.json from disk and return (merged_dict, mtime)."""
     settings = dict(_SETTINGS_DEFAULTS)
@@ -2747,13 +2767,16 @@ def _read_settings_from_disk() -> tuple[dict, float]:
         try:
             stored = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
             if isinstance(stored, dict):
-                settings.update(
-                    {
-                        k: v
-                        for k, v in stored.items()
-                        if k not in _SETTINGS_LEGACY_DROP_KEYS
-                    }
-                )
+                live = {
+                    k: v
+                    for k, v in stored.items()
+                    if k not in _SETTINGS_LEGACY_DROP_KEYS
+                }
+                settings.update(live)
+                if len(live) != len(stored):
+                    # Issue #5 Part C: purge dead keys from disk too. Runs once
+                    # per stale file — the rewrite removes them.
+                    _rewrite_settings_file(live)
         except Exception:
             logger.debug("Failed to load settings from %s", SETTINGS_FILE)
         try:
@@ -2841,7 +2864,6 @@ _SETTINGS_ENUM_VALUES = {
     "default_mode": {"manual", "smart", "yolo"},
 }
 _SETTINGS_BOOL_KEYS = {
-    "onboarding_completed",
     "show_cli_sessions",
     "show_messaging_sessions",
     "show_cron_sessions",
