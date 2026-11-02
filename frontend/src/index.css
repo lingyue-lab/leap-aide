@@ -3,8 +3,9 @@
 @tailwind utilities;
 
 /* ── Material Symbols Rounded (subset font for sidebar nav icons) ──
-   The full font is ~5 MB; we ship only the 6 ligatures used by the
-   sidebar nav (Chat, Memory, Tasks, Skills, Workspaces, Terminal).
+   The full font is ~5 MB; we ship only the 9 ligatures used by the
+   sidebar nav (Chat, Memory, Tasks, Skills, Workspaces, Terminal,
+   Browser Desktop).
    Regenerate via `bash frontend/scripts/subset-material-icons.sh` if the icon
    set changes. See Icons.tsx `MATERIAL_FONT_ICONS` for the active list. */
 @font-face {
@@ -375,6 +376,11 @@
     animation: sidebar-slide-in 0.2s ease;
   }
 
+  /* Rail-only mode (browser-desktop tab): keep panels mounted but hidden */
+  .sidebar.rail-only .sidebar-content {
+    display: none;
+  }
+
   @keyframes sidebar-slide-in {
     from { opacity: 0; transform: translateX(-8px); }
     to   { opacity: 1; transform: translateX(0); }
@@ -399,7 +405,7 @@
     box-sizing: border-box;
   }
   /* Zoom all main panels except Terminal (which uses fixed-pixel rendering) */
-  .main:not(.terminal-main) {
+  .main:not(.terminal-main):not(.browser-desktop-main) {
     zoom: var(--app-zoom, 1);
   }
 
@@ -409,6 +415,112 @@
     background: var(--md-surface) !important;
     display: flex;
     flex-direction: column;
+  }
+
+  /* Browser-desktop main area: no padding, fills with the noVNC view.
+     Pure black matches the framebuffer so the letterboxed area and the
+     floating controls sit on one uniform surface. */
+  .browser-desktop-main {
+    padding: 0 !important;
+    background: #000 !important;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .browser-desktop-view {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    background: #000;
+  }
+
+  .browser-desktop-novnc {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+  }
+
+  .browser-desktop-novnc canvas {
+    display: block;
+    margin: 0 auto;
+  }
+
+  .browser-desktop-status-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255, 255, 255, 0.72);
+    font-size: 14px;
+    pointer-events: none;
+  }
+
+  /* Floating status + reconnect controls over the noVNC canvas: one compact
+     M3 pill surface so the desktop view uses the full width. */
+  .browser-desktop-controls {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 4px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--md-surface-container-high) 92%, transparent);
+    box-shadow: var(--md-elevation-1);
+    color: var(--md-on-surface-variant);
+  }
+
+  .browser-desktop-controls .icon-btn {
+    width: 28px;
+    height: 28px;
+  }
+
+  .browser-desktop-status-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px 4px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    white-space: nowrap;
+    color: inherit;
+  }
+
+  .browser-desktop-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .browser-desktop-status-chip.status-active .browser-desktop-status-dot {
+    background: #34a853;
+  }
+
+  .browser-desktop-status-chip.status-degraded .browser-desktop-status-dot {
+    background: #f9ab00;
+  }
+
+  .browser-desktop-status-chip.status-stopped .browser-desktop-status-dot,
+  .browser-desktop-status-chip.status-disabled .browser-desktop-status-dot {
+    background: #dadce0;
+  }
+
+  .browser-desktop-error {
+    position: absolute;
+    top: 56px;
+    right: 12px;
+    z-index: 2;
+    max-width: min(420px, calc(100% - 24px));
+    padding: 8px 12px;
+    border-radius: var(--md-shape-sm);
+    background: var(--md-error-container);
+    color: var(--md-on-error-container);
+    font-size: 12px;
+    word-break: break-word;
   }
 
   /* Container holding all terminal instances */
@@ -2474,6 +2586,15 @@
     border-radius: 50%;
     background: var(--md-primary);
     z-index: 2;
+  }
+
+  /* Desktop health badge — amber when degraded, error when stopped */
+  .nav-tab-dot-degraded {
+    background: #f9ab00;
+  }
+
+  .nav-tab-dot-stopped {
+    background: var(--md-error);
   }
 
   /* Panel view */

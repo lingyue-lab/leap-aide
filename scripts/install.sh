@@ -696,13 +696,20 @@ if [ "$IN_DOCKER" = true ]; then
   if ! command -v xterm >/dev/null 2>&1; then
     _sys_deps_to_install="${_sys_deps_to_install} xterm"
   fi
+  # CJK font for xterm tool-call windows and Chrome pages (wqy-microhei is
+  # ~5MB vs fonts-noto-cjk ~90MB)
+  if ! fc-list 2>/dev/null | grep -qiE 'wqy|cjk|uming|ukai'; then
+    _sys_deps_to_install="${_sys_deps_to_install} fonts-wqy-microhei"
+  fi
   # Chinese locale support
   if ! locale -a 2>/dev/null | grep -q 'zh_CN.UTF-8'; then
     _sys_deps_to_install="${_sys_deps_to_install} locales"
   fi
-  # Fcitx5 input method for Chinese input
+  # Fcitx5 input method for Chinese input (fcitx5-config-qt is the real GUI
+  # behind the desktop's "Fcitx 5 Configuration" menu entry — without it the
+  # menu click silently does nothing)
   if ! command -v fcitx5 >/dev/null 2>&1; then
-    _sys_deps_to_install="${_sys_deps_to_install} fcitx5 fcitx5-chinese-addons fcitx5-frontend-gtk3 fcitx5-frontend-gtk4 dbus-x11 python3-dbus"
+    _sys_deps_to_install="${_sys_deps_to_install} fcitx5 fcitx5-chinese-addons fcitx5-frontend-gtk3 fcitx5-frontend-gtk4 fcitx5-config-qt dbus-x11 python3-dbus"
   fi
   if [ -n "$_sys_deps_to_install" ]; then
     warn "Installing system dependencies:${_sys_deps_to_install}"
@@ -1361,6 +1368,21 @@ if [ -f "$DEST/backend/scripts/install-wrappers.sh" ]; then
   ok "Command wrappers installed"
 else
   warn "install-wrappers.sh not found — skipping"
+fi
+
+# ── Step 5.5: Install LeapAide-managed agent skills ──
+say ""
+say "${B}Installing agent skills...${R}"
+
+if [ -f "$DEST/backend/scripts/install-skills.sh" ]; then
+  if HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}" \
+      bash "$DEST/backend/scripts/install-skills.sh" --source "$DEST/skills"; then
+    ok "Agent skills installed"
+  else
+    warn "install-skills.sh failed — agents will not see LeapAide-managed skills"
+  fi
+else
+  warn "install-skills.sh not found — skipping"
 fi
 
 # ── Step 6: Build ──

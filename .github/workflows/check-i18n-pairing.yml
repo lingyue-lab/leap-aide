@@ -1,0 +1,48 @@
+name: check-i18n-pairing
+
+# Bilingual pair co-change gate (issue #9): when a PR touches one language
+# file of a tracked bilingual pair (*.i18n.yaml under the repo), BOTH
+# language files must change together. This closes the "edit one side, then
+# --write the hashes" bypass path. The hash-record verify mode runs
+# separately inside the testing image (backend/tests/test_session_browser_skill.py);
+# this workflow only enforces the git co-change rule, which needs a checkout
+# with history (in-image tests have no .git).
+
+on:
+  workflow_dispatch:
+  pull_request:
+    # Base-branch filter: PRs targeting main.
+    branches: [main]
+    paths:
+      - 'skills/**'
+      - 'backend/scripts/check_translation_pairing.py'
+
+jobs:
+  cochange:
+    name: Bilingual pair co-change gate
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 so the PR base sha is present for `base...HEAD`.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check bilingual co-change (PRs)
+        if: github.event_name == 'pull_request'
+        run: >-
+          python3 backend/scripts/check_translation_pairing.py
+          --check-cochange ${{ github.event.pull_request.base.sha }}
+
+      # Manual runs verify every tracked pair's hash record end-to-end.
+      - name: Verify all pairing records (manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -e
+          found=0
+          for rec in $(git ls-files '*.i18n.yaml'); do
+            found=1
+            python3 backend/scripts/check_translation_pairing.py "${rec%.i18n.yaml}.md"
+          done
+          if [ "$found" = "0" ]; then
+            echo "No tracked bilingual pairs (*.i18n.yaml) found."
+          fi

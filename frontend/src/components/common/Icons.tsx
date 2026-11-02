@@ -107,7 +107,7 @@ export interface MaterialIconProps extends IconProps {
 // consistent: filled Material Symbols Rounded glyphs sized via `font-size`,
 // with the FILL axis driven by the `fill` prop (0 = outlined, 1 = filled).
 //
-// The font is subsetted to just these 6 ligatures (~180 KB vs ~5 MB
+// The font is subsetted to just these 9 ligatures (~240 KB vs ~5 MB
 // upstream) — see frontend/scripts/subset-material-icons.sh. Keep this set and the
 // LIGATURES list in that script in sync.
 
@@ -154,6 +154,7 @@ const MATERIAL_FONT_ICONS = new Set([
   'layers',
   'folder_open',
   'terminal_2',
+  'desktop_windows',
   'settings',
   'logout',
 ]);
@@ -216,6 +217,7 @@ const KNOWN_ICONS: Record<string, React.ComponentType<any>> = {
   calendar_month: makeMaterialIcon('calendar_month'),
 
   // Settings & system
+  desktop_windows: makeMaterialIcon('desktop_windows'),
   extension: Puzzle,
   light_mode: Sun,
   lock: Lock,
@@ -264,7 +266,7 @@ const ICON_FALLBACK = HelpCircle;
 // ── Icon dispatcher ───────────────────────────────────────────────────
 
 /**
- * Icon component — renders a lucide-react SVG (with 6 Material Symbols
+ * Icon component — renders a lucide-react SVG (with Material Symbols
  * Rounded font icons rendered via `MaterialFontIcon`; see
  * `MATERIAL_FONT_ICONS`).
  *
@@ -309,7 +311,9 @@ export function Icon({ name, size = 18, fill = 0, className, title, onClick, sty
       title={title}
       onClick={onClick}
     >
-      <Component size={size} style={fillStyle} />
+      {/* Material path needs `fill` forwarded so its FILL axis follows the
+          active state; lucide ignores the prop and uses `fillStyle` instead. */}
+      <Component size={size} {...(isMaterialFont ? { fill } : {})} style={fillStyle} />
     </span>
   );
 }

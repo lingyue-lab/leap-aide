@@ -1513,18 +1513,10 @@ def handle_get(handler, parsed) -> bool:
             {"name": get_active_profile_name(), "path": str(get_active_hermes_home())},
         )
 
-    # ── Session Observer routes ──────────────────────────────────────────
-    import re as _re_obs
-    _obs_info = _re_obs.match(r'^/observations/([a-zA-Z0-9_-]+)/info$', parsed.path)
-    _obs_root = _re_obs.match(r'^/observations/([a-zA-Z0-9_-]+)$', parsed.path)
-
-    if _obs_info:
-        from app.api.observer import handle_observer_info
-        return handle_observer_info(handler, _obs_info.group(1))
-
-    if _obs_root:
-        from app.api.observer import handle_observer_page
-        return handle_observer_page(handler, _obs_root.group(1))
+    # ── Global browser-desktop route ─────────────────────────────────────
+    if parsed.path == "/api/browser-desktop":
+        from app.api.browser_desktop import handle_browser_desktop_info
+        return handle_browser_desktop_info(handler)
 
     # ── SPA fallback: serve index.html for client-side routes ──────────────
     # Non-API, non-static paths are React Router routes (e.g. /session/:id).
@@ -1794,14 +1786,6 @@ def handle_post(handler, parsed) -> bool:
             return bad(handler, "session_id is required")
         if not all(c in '0123456789abcdefghijklmnopqrstuvwxyz_' for c in sid):
             return bad(handler, "Invalid session_id", 400)
-        # Stop SessionDisplay if running
-        try:
-            from app.api.session_display import _DISPLAYS
-            existing = _DISPLAYS.get(sid)
-            if existing:
-                existing.stop(remove_json=True)
-        except Exception as e:
-            logger.debug("SessionDisplay cleanup on delete failed for %s: %s", sid, e)
         # Stop per-session process loop if running
         with LOCK:
             s = SESSIONS.get(sid)
@@ -2377,26 +2361,13 @@ def handle_post(handler, parsed) -> bool:
             s = get_session(body["session_id"])
         except KeyError:
             return bad(handler, "Session not found", 404)
+        # Pin means "keep this session at the top of the list and never
+        # auto-clean it" — it no longer controls any desktop lifecycle
+        # (the browser desktop is a single always-on global instance,
+        # issue #37).
         with _get_session_agent_lock(body["session_id"]):
             s.pinned = bool(body.get("pinned", True))
             s.sync_webui_metadata()
-
-        # Pin → start SessionDisplay; Unpin → stop SessionDisplay
-        try:
-            from app.api.session_display import SessionDisplay, _DISPLAYS
-            existing = _DISPLAYS.get(body["session_id"])
-            if s.pinned:
-                if existing and existing.is_running():
-                    pass  # already running, nothing to do
-                else:
-                    sd = SessionDisplay(body["session_id"])
-                    sd.start()
-            else:
-                if existing:
-                    existing.stop(remove_json=True)
-        except Exception as e:
-            logger.warning("SessionDisplay pin hook failed for %s: %s",
-                           body["session_id"], e)
 
         return j(handler, {"ok": True, "session": s.compact()})
 

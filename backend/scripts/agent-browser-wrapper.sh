@@ -6,45 +6,74 @@
 # Installed at /usr/local/bin/agent-browser (earlier in PATH than npx).
 # Simply resolves to the real agent-browser binary and exec's it.
 #
-# ── CDP URL resolution (SessionDisplay integration) ────────────────────────
+# ── CDP URL resolution (global receptionist integration) ───────────────────
 #
-# When BROWSER_CDP_URL is the sentinel value "http://127.0.0.1:19999", this
-# wrapper resolves the real CDP URL from the per-session display config:
-#   ~/.hermes/webui/sessions_display/<HERMES_SESSION_KEY>.json
+# Policy: pure pass-through, with ONE exception — when the global browser
+# desktop is up. The shared desktop's receptionist is the only legitimate
+# attach target (Chrome itself has NO TCP CDP port — it is on a
+# parent-child pipe), so the wrapper strips any caller-supplied
+# --cdp / --session and injects the receptionist discovery URL with this
+# session's id. Everything else is deliberately none of the wrapper's
+# business: whether a session may touch desktop resources at all is
+# gated by the terminal approval patterns
+# (app.compat.desktop_guard / BROWSER_DESKTOP_BLOCK_STRATEGY), not by
+# argument rewriting here. The wrapper does not read that variable —
+# under strategy=off a session's --cdp really does go through, which is
+# the point of "fully open".
 #
-# This sentinel mechanism is immune to cross-session os.environ races: every
-# SessionDisplay session writes the *same* sentinel value, so concurrent
-# overwrites are harmless.  The real CDP port is read from the session's own
-# JSON file, which is session-granular and race-free.
+# The single source of truth for the desktop endpoint is the global
+# state file written by app.api.global_desktop:
+#   $HERMES_WEBUI_STATE_DIR/browser_desktop.json
+#   (fallback when that env var is absent: ~/.hermes/webui/browser_desktop.json)
+# When it is absent (desktop down), the wrapper is a pure pass-through
+# so agent-browser falls back to its own local headless browser.
 #
-# Precedence:
-#   1. Global BROWSER_CDP_URL (non-sentinel) — e.g. CLI /browser connect
-#   2. SessionDisplay JSON (when sentinel is set)
-#   3. Neither — passthrough (agent-browser uses its default logic)
+# LeapAide never injects BROWSER_CDP_URL into the child env — this wrapper
+# resolves the endpoint straight from the state file via
+# HERMES_SESSION_KEY (injected per-session by _IsolatedPopen), so there
+# is no env copy that can race or go stale across concurrent sessions.
 
 set -euo pipefail
 
-# ── Sentinel CDP URL resolution ────────────────────────────────────────────
-SENTINEL="http://127.0.0.1:19999"
-SESSIONS_DIR="${HOME}/.hermes/webui/sessions_display"
-# Extract session_id from HERMES_SESSION_KEY (strip "agent:main:webui:dm:" prefix)
-SID="${HERMES_SESSION_KEY##*:}"
+# ── Global desktop JSON resolution ─────────────────────────────────────────
+# HERMES_WEBUI_STATE_DIR is the documented contract (entrypoint + skill).
+# HOME alone is wrong when the server runs with HOME=/root while the state
+# lives under /home/leap-aide/.hermes — the wrapper would then never see
+# the desktop as up and silently pass through to local headless.
+STATE_DIR="${HERMES_WEBUI_STATE_DIR:-${HOME}/.hermes/webui}"
+JSON_FILE="${STATE_DIR}/browser_desktop.json"
+# Extract session_id from HERMES_SESSION_KEY (strip "agent:main:webui:dm:"
+# prefix; a bare session id passes through unchanged).
+SID="${HERMES_SESSION_KEY:-}"
+SID="${SID##*:}"
 
+# DESKTOP_UP=true (state file present and active) triggers the
+# strip-and-inject override below; any other state (degraded, file
+# missing, unreadable) leaves the wrapper as a pure pass-through so
+# agent-browser falls back to its own local headless browser.
+DESKTOP_UP=false
 FINAL_CDP=""
-
-if [[ -n "${BROWSER_CDP_URL:-}" && "$BROWSER_CDP_URL" != "$SENTINEL" ]]; then
-    # Global real CDP URL set (e.g. CLI /browser connect) — use directly
-    FINAL_CDP="$BROWSER_CDP_URL"
-elif [[ "$BROWSER_CDP_URL" == "$SENTINEL" && -n "$SID" ]]; then
-    # Sentinel → resolve from SessionDisplay JSON
-    JSON_FILE="${SESSIONS_DIR}/${SID}.json"
-    if [[ -f "$JSON_FILE" ]]; then
-        FINAL_CDP=$(python3 -c "import json; print(json.load(open('$JSON_FILE')).get('cdp_url', ''))" 2>/dev/null || echo "")
+if [[ -f "$JSON_FILE" ]]; then
+    _state=$(python3 -c "import json; d=json.load(open('$JSON_FILE')); print(d.get('status',''), d.get('receptionist_url',''))" 2>/dev/null || echo "")
+    _status=$(echo "$_state" | awk '{print $1}')
+    _url=$(echo "$_state" | awk '{print $2}')
+    if [[ "$_status" == "active" && -n "$_url" ]]; then
+        DESKTOP_UP=true
+        FINAL_CDP="${_url%/}/json/version?sid=${SID}"
     fi
 fi
 
-if [[ -n "$FINAL_CDP" ]]; then
-    # Rebuild argument list: inject --cdp, strip any existing --cdp / --session
+if [[ "$DESKTOP_UP" == "true" && -z "$SID" ]]; then
+    # No session identity in this context: a sid-less discovery URL would
+    # be rejected by the receptionist (sid required), so stay a pure
+    # pass-through instead of injecting a guaranteed-400 endpoint.
+    echo "agent-browser wrapper: HERMES_SESSION_KEY missing; not injecting receptionist URL" >&2
+fi
+
+if [[ "$DESKTOP_UP" == "true" && -n "$SID" ]]; then
+    # Rebuild argument list: strip any caller-supplied --cdp / --session
+    # (the receptionist is the only attach target), then inject the
+    # receptionist endpoint.
     # (--cdp takes priority over --session in agent-browser >= 0.13)
     NEW_ARGS=()
     SKIP_NEXT=false
@@ -70,7 +99,9 @@ if [[ -n "$FINAL_CDP" ]]; then
         esac
     done
     NEW_ARGS+=("--cdp" "$FINAL_CDP")
-    set -- "${NEW_ARGS[@]}"
+    if ((${#NEW_ARGS[@]})); then
+        set -- "${NEW_ARGS[@]}"
+    fi
 fi
 
 # ── Recursion guard ──────────────────────────────────────────────────────────

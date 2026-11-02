@@ -26,14 +26,6 @@ interface SessionState {
    *  real session (POST /api/chat/start round-trip + StreamManager reconnect).
    *  Drives the Loading Spinner in WelcomeState. */
   pendingNewSessionPromoting: boolean;
-  /** Session id currently being pinned/unpinned. Non-null while a
-   *  pinSession() promise is in flight. The server-side /api/session/pin
-   *  handler synchronously boots SessionDisplay (Xvfb + dbus + fcitx5 +
-   *  openbox + x11vnc + Chrome), which takes 10-15s on cold start.
-   *  Drives the fullscreen PinningOverlay so the user sees feedback that
-   *  the click registered. Cleared in a finally block so a server error
-   *  cannot leave the overlay stuck. */
-  pinningSession: string | null;
 
   // Actions
   loadSessions: () => Promise<void>;
@@ -92,7 +84,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   delegateChildrenVersion: 0,
   pendingNewSession: null,
   pendingNewSessionPromoting: false,
-  pinningSession: null,
 
   loadSessions: async () => {
     // Issue #16: async fetch (was a synchronous XHR that froze the main
@@ -332,35 +323,29 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   pinSession: async (id, pinned) => {
-    // Mark this session as pinning so the fullscreen PinningOverlay shows
-    // during the 10-15s server-side SessionDisplay.start() round-trip.
-    // The flag is cleared in finally so a server error cannot leave the
-    // overlay stuck on screen. Only one pin is in flight at a time by
-    // design (clicking pin on session B while A is still pinning will
-    // queue behind A's overlay).
-    set({ pinningSession: id });
-    try {
-      await fetch('/api/session/pin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: id, pinned }),
-        credentials: 'include',
-      });
-      set((state) => ({
-        sessions: state.sessions.map((s) =>
-          s.session_id === id ? { ...s, pinned } : s
-        ),
-        // Mirror pinned into currentSession so consumers reading
-        // currentSession.pinned (e.g. MainContent's observe button) re-render
-        // immediately, without requiring a session switch round-trip.
-        currentSession:
-          state.currentSession?.session_id === id
-            ? { ...state.currentSession, pinned }
-            : state.currentSession,
-      }));
-    } finally {
-      set({ pinningSession: null });
-    }
+    // Pin is list-top metadata only since issue #37 — the shared browser
+    // desktop boots at server start, so there is no long-running pin
+    // round-trip to track with a store flag.
+    await fetch('/api/session/pin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: id, pinned }),
+      credentials: 'include',
+    });
+    // Pin/unpin only flips the pinned flag server-side — the session's
+    // skills list is never mutated, so local state just mirrors `pinned`.
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.session_id === id ? { ...s, pinned } : s
+      ),
+      // Mirror pinned into currentSession so consumers reading
+      // currentSession.pinned re-render immediately, without requiring
+      // a session switch round-trip.
+      currentSession:
+        state.currentSession?.session_id === id
+          ? { ...state.currentSession, pinned }
+          : state.currentSession,
+    }));
   },
 
   clearSession: async (id) => {

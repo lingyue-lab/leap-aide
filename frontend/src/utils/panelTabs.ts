@@ -1,3 +1,4 @@
+import { useBrowserDesktopStore } from '@/stores/useBrowserDesktopStore';
 import { useCronStore } from '@/stores/useCronStore';
 import { useMemoryStore } from '@/stores/useMemoryStore';
 import { useSettingsTabStore } from '@/stores/useSettingsTabStore';
@@ -23,5 +24,6 @@ export function clearPanelTabStates(): void {
   useMemoryStore.getState().setMemoryTabActive(false);
   useWorkspaceStore.getState().setWorkspacesTabActive(false);
   useTerminalStore.getState().setTerminalTabActive(false);
+  useBrowserDesktopStore.getState().setBrowserDesktopActive(false);
   useSettingsTabStore.getState().setSettingsTabActive(false);
 }

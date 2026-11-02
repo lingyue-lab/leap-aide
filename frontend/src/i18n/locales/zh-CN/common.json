@@ -38,7 +38,9 @@
     "todos": "待办",
     "todos_title": "任务管理",
     "terminal": "终端",
-    "terminal_title": "打开终端 Shell"
+    "terminal_title": "打开终端 Shell",
+    "browser_desktop": "桌面",
+    "browser_desktop_title": "共享浏览器桌面"
   },
   "sessions": {
     "new_conversation": "新对话",
@@ -363,10 +365,16 @@
     "hide_panel": "隐藏待办面板",
     "readonly_no_todos": "只读会话 — 待办事项不可用"
   },
-  "vnc": {
-    "observe": "观察",
-    "pin_to_observe": "请先固定会话",
-    "readonly_no_observe": "只读会话 — 观察功能不可用"
+  "browser_desktop": {
+    "status_active": "运行中",
+    "status_degraded": "降级",
+    "status_disabled": "已禁用",
+    "status_stopped": "已停止",
+    "status_connecting": "正在连接桌面…",
+    "status_connected": "已连接",
+    "status_disconnected": "已断开",
+    "status_unavailable": "桌面不可用",
+    "reconnect": "重新连接"
   },
   "context_usage": {
     "context": "上下文",

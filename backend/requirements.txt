@@ -1,4 +1,7 @@
 # Hermes Web UI -- minimal Python dependencies
-# The server uses only stdlib + pyyaml.
+# The server uses only stdlib + pyyaml, plus one approved exception:
+# aiohttp powers the browser-desktop receptionist (CDP micro-endpoints
+# + WebSocket proxy for the shared Chrome; issue #37).
 # All heavy ML/agent deps live in the Hermes agent venv.
 pyyaml>=6.0
+aiohttp>=3.9

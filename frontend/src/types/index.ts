@@ -361,7 +361,7 @@ export interface CompressionChainSegment {
 
 // types/nav.ts - 导航相关类型定义
 
-export type NavPanel = 'chat' | 'tasks' | 'skills' | 'memory' | 'workspaces' | 'terminal' | 'settings';
+export type NavPanel = 'chat' | 'tasks' | 'skills' | 'memory' | 'workspaces' | 'terminal' | 'browser-desktop' | 'settings';
 
 export interface NavTab {
   panel: NavPanel;

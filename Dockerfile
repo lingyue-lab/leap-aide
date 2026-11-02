@@ -154,7 +154,15 @@ RUN apt-get update -y --fix-missing --no-install-recommends \
         libatomic1 xz-utils build-essential \
         xvfb x11vnc openbox wmctrl xterm \
         fcitx5 fcitx5-chinese-addons fcitx5-frontend-gtk3 fcitx5-frontend-gtk4 \
+        fcitx5-config-qt \
         dbus-x11 python3-dbus \
+        fonts-wqy-microhei \
+    # fcitx5-config-qt ships two desktop entries with the same visible name
+    # "Fcitx 5 Configuration" (fcitx5-configtool.desktop and
+    # org.fcitx.fcitx5-config-qt.desktop). openbox's obamenu ignores the
+    # latter's NoDisplay=true, so both appear under Applications — keep only
+    # the canonical fcitx5-configtool entry.
+    && rm -f /usr/share/applications/org.fcitx.fcitx5-config-qt.desktop \
     && apt-get upgrade -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
@@ -405,12 +413,12 @@ ENV HERMES_HOME=${HERMES_HOME}
 
 USER root
 
-# install-wrappers.sh and chrome-wrapper.sh hardcode /root/.cache/ms-playwright
-# (they were designed for a root-owned install). Now that install.sh runs
+# install-wrappers.sh hardcodes /root/.cache/ms-playwright
+# (it was designed for a root-owned install). Now that install.sh runs
 # as root (USER root, below), Chromium lands at /root/.cache/ms-playwright
 # directly — no symlink needed. We do need chmod 755 /root though, so
 # leap-aide-init (the user tests run as) can traverse /root to invoke
-# chrome-wrapper / hermes-chrome / agent-browser.
+# agent-browser (the wrapper redirects to the global desktop receptionist).
 RUN chmod 755 /root
 
 # Re-COPY backend/tests/ on top of the /app/backend/tests/ already populated
@@ -470,7 +478,7 @@ RUN echo "=== proxy + registry config ===" \
 #     playwright-core to avoid the Node v26 hang bug — matches install.sh:776)
 #   - RUNS browser-use CLI install
 #   - RUNS leap-aide Python deps (uv pip install -r /app/backend/requirements.txt)
-#   - RUNS command wrappers (chrome-wrapper, agent-browser-wrapper)
+#   - RUNS command wrappers (agent-browser-wrapper)
 # systemd is auto-skipped inside Docker (IN_DOCKER=true).
 #
 # Don't override HOME here — install.sh runs as USER root, and HOME only

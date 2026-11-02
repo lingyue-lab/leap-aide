@@ -7,6 +7,7 @@ import { useSkillStore } from '@/stores/useSkillStore';
 import { useCronStore } from '@/stores/useCronStore';
 import { useMemoryStore } from '@/stores/useMemoryStore';
 import { useTerminalStore } from '@/stores/useTerminalStore';
+import { useBrowserDesktopStore } from '@/stores/useBrowserDesktopStore';
 import { useSettingsTabStore } from '@/stores/useSettingsTabStore';
 import { useModelsStore } from '@/stores/useModelsStore';
 import SkillDetail from '@/components/skills/SkillDetail';
@@ -20,10 +21,12 @@ import TodosDrawer from '@/components/layout/TodosDrawer';
 // Lazy-load TerminalView so xterm (~150-200KB + 30KB CSS) is only fetched
 // when the user actually opens a terminal tab.
 const TerminalView = lazy(() => import('@/components/terminal/TerminalView'));
+// Lazy-load the noVNC view so @novnc/novnc is only fetched when the user
+// actually opens the browser-desktop tab.
+const BrowserDesktopView = lazy(() => import('@/components/browser-desktop/BrowserDesktopView'));
 
 import SettingsDetail from '@/components/settings/SettingsDetail';
 import { EmptyState, TASKS_ICON, SKILLS_ICON, MEMORY_ICON, WORKSPACE_ICON } from '@/components/common/Placeholder';
-import { observerService } from '@/services/api';
 import Tooltip from '@/components/common/Tooltip';
 import { Icon } from '@/components/common/Icons';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
@@ -367,13 +370,6 @@ function NonTerminalContent({
             <div className="topbar-chips">
               {currentSession && (() => {
                 const isReadonly = !!currentSession._readonly;
-                const isPinned = !!currentSession.pinned;
-                const canObserve = !isReadonly && isPinned;
-                const observeTooltip = isReadonly
-                  ? t('vnc.readonly_no_observe', 'Read-only session — observation not available')
-                  : !isPinned
-                    ? t('vnc.pin_to_observe', 'Pin session to observe')
-                    : t('vnc.observe', 'Observe');
                 const todosTooltip = isReadonly
                   ? t('todos.readonly_no_todos', 'Read-only session — todos not available')
                   : todosPanelOpen
@@ -381,32 +377,16 @@ function NonTerminalContent({
                     : t('todos.show_panel');
 
                 return (
-                  <>
-                    <Tooltip text={todosTooltip}>
-                      <button
-                        className={`icon-btn${todosPanelOpen ? ' active' : ''}`}
-                        onClick={() => { if (!isReadonly) toggleTodos(); }}
-                        disabled={isReadonly}
-                        aria-pressed={todosPanelOpen}
-                      >
-                        <Icon name="checklist" size={18} />
-                      </button>
-                    </Tooltip>
-                    <Tooltip text={observeTooltip}>
-                      <button
-                        className="icon-btn"
-                        onClick={canObserve ? async () => {
-                          const sid = currentSession.session_id;
-                          if (!sid) return;
-                          try { await observerService.getInfo(sid); } catch { /* ignore */ }
-                          window.open('/observations/' + encodeURIComponent(sid), '_blank');
-                        } : undefined}
-                        disabled={!canObserve || isReadonly}
-                      >
-                        <Icon name="visibility" size={18} />
-                      </button>
-                    </Tooltip>
-                  </>
+                  <Tooltip text={todosTooltip}>
+                    <button
+                      className={`icon-btn${todosPanelOpen ? ' active' : ''}`}
+                      onClick={() => { if (!isReadonly) toggleTodos(); }}
+                      disabled={isReadonly}
+                      aria-pressed={todosPanelOpen}
+                    >
+                      <Icon name="checklist" size={18} />
+                    </button>
+                  </Tooltip>
                 );
               })()}
             </div>
@@ -444,8 +424,11 @@ export default function MainContent({ children }: MainContentProps) {
   }, []);
 
   const terminalTabActive = useTerminalStore((s) => s.terminalTabActive);
-  // Close panels when switching to terminal
-  useEffect(() => { if (terminalTabActive) closeAllPanels(); }, [terminalTabActive]);
+  const browserDesktopActive = useBrowserDesktopStore((s) => s.browserDesktopActive);
+  // Close panels when switching to terminal or the browser desktop
+  useEffect(() => {
+    if (terminalTabActive || browserDesktopActive) closeAllPanels();
+  }, [terminalTabActive, browserDesktopActive]);
   const activeTerminalId = useTerminalStore((s) => s.activeTerminalId);
   const terminals = useTerminalStore((s) => s.terminals);
 
@@ -476,11 +459,28 @@ export default function MainContent({ children }: MainContentProps) {
       </main>
 
       {/* ─────────────────────────────────────────────────────────────────────
-          Non-terminal area: hidden while terminal tab is active.
+          Browser-desktop area: ALWAYS mounted so the noVNC RFB connection
+          survives tab switches (same keep-mounted philosophy as the terminal
+          area). Mutually exclusive with the terminal main — both hidden when
+          the chat/non-terminal main is active.
+      ──────────────────────────────────────────────────────────────────────── */}
+      <main
+        className="main browser-desktop-main"
+        style={{ display: browserDesktopActive ? 'flex' : 'none' }}
+        aria-hidden={!browserDesktopActive}
+      >
+        <Suspense fallback={<LoadingSpinner mode="inline" text="Loading desktop view..." />}>
+          <BrowserDesktopView />
+        </Suspense>
+      </main>
+
+      {/* ─────────────────────────────────────────────────────────────────────
+          Non-terminal area: hidden while terminal or browser-desktop tab is
+          active.
       ──────────────────────────────────────────────────────────────────────── */}
       <main
         className="main"
-        style={{ display: terminalTabActive ? 'none' : undefined }}
+        style={{ display: terminalTabActive || browserDesktopActive ? 'none' : undefined }}
       >
         <NonTerminalContent
           todosPanelOpen={todosPanelOpen}

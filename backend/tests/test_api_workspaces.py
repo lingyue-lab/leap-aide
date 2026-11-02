@@ -64,7 +64,8 @@ def test_pinned_survives_update():
     created = []
     try:
         sid, sess = make_session(created)
-        # pin endpoint synchronously boots SessionDisplay; allow headroom.
+        # post_with_timeout: historical headroom from the pin-boots-desktop
+        # era; pin is metadata-only now but the helper stays harmless.
         post_with_timeout("/api/session/pin",
                           {"session_id": sid, "pinned": True})
         # Update workspace/model

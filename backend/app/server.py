@@ -371,6 +371,15 @@ def main() -> None:
         _HERMES_FOUND,
     )
 
+    # Install SDK compat patches before any prewarm thread snapshots tool
+    # definitions (their check_fns call browser_tool._get_cdp_override_raw).
+    try:
+        from app.compat import install as _install_compat_patches
+        _install_compat_patches()
+    except Exception:
+        logger.warning('compat: SDK CDP override patch install failed',
+                       exc_info=True)
+
     # ── Banner ──
 
     # ── Stage 1: Load config ──
@@ -525,13 +534,17 @@ def main() -> None:
             except Exception as e:
                 _done(f'skipped ({e})')
 
-        # ── Stage 9: Start session displays ──
+        # ── Stage 9: Start the global browser desktop ──
         if not _shutdown_requested.is_set():
-            _stage(9, 'Starting session displays')
+            _stage(9, 'Starting browser desktop')
             try:
-                from app.api.session_display import ensure_pinned_displays, sync_gateway_session_cwd
+                from app.api.global_desktop import (
+                    ensure_global_desktop, sync_gateway_session_cwd,
+                )
                 sync_gateway_session_cwd()
-                ensure_pinned_displays()
+                # Non-fatal: browser tools fall back to local headless
+                # when the desktop is down (issue #37).
+                ensure_global_desktop()
                 _done()
             except BaseException as e:
                 _fail(f'{type(e).__name__}: {e}')
@@ -566,17 +579,12 @@ def main() -> None:
         except Exception:
             pass
 
-        # 2. Stop SessionDisplay processes
+        # 2. Stop the global browser desktop (receptionist + Chrome + X stack)
         try:
-            from app.api.session_display import _DISPLAYS
-            displays = list(_DISPLAYS.items())
-            if displays:
-                logger.info('Stopping %d session display(s)...', len(displays))
-                for sid, sd in displays:
-                    try:
-                        sd.stop(remove_json=False)
-                    except Exception:
-                        pass
+            from app.api.global_desktop import stop_global_desktop, get_global_desktop
+            if get_global_desktop().is_running():
+                logger.info('Stopping global browser desktop...')
+            stop_global_desktop()
         except Exception:
             pass
 

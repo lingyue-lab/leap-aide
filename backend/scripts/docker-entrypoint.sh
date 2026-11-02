@@ -411,6 +411,15 @@ fi
 for _d in sessions logs memories image_cache audio_cache cron hooks pairing skills; do
   sudo mkdir -p "$HERMES_HOME/$_d"
 done
+# LeapAide-managed agent skills (issue #9): merge image /app/skills into
+# $HERMES_HOME/skills. Idempotent; respects user-owned (unmanaged) dirs.
+# sudo resets the environment, so HERMES_HOME must be passed explicitly.
+# Runs before the chown below so ownership converges with the rest of the tree.
+if [ -d /app/skills ]; then
+  echo "-- Installing LeapAide-managed skills from /app/skills"
+  sudo env HERMES_HOME="$HERMES_HOME" bash /app/backend/scripts/install-skills.sh \
+    --source /app/skills || echo "!! WARNING: install-skills.sh failed (continuing)"
+fi
 # Credential hygiene on the runtime copy (the seed .env is world-readable so
 # the cicd stage can import env_loader without root; the runtime copy must not be).
 [ -f "$HERMES_HOME/.env" ] && sudo chmod 600 "$HERMES_HOME/.env"

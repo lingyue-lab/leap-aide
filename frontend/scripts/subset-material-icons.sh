@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Regenerate the subsetted Material Symbols Rounded font used by the sidebar
-# nav icons. The full font is ~5 MB; we ship only the 6 ligatures used by
-# Chat / Memory / Tasks / Skills / Workspaces / Terminal, yielding ~180 KB.
+# nav icons. The full font is ~5 MB; we ship only the 9 ligatures used by
+# Chat / Memory / Tasks / Skills / Workspaces / Terminal / Browser Desktop,
+# yielding ~180 KB.
 #
-# Prereq: `pip install fonttools brotli` (pyftsubset CLI must be on PATH).
+# Prereq: `pip install fonttools brotli` (the fontTools.subset module must be
+# importable by `python3`).
 #
 # To add a new sidebar icon: append its Material ligature name to
 # LIGATURES below and rerun this script. The Icons.tsx `MATERIAL_FONT_ICONS`
@@ -11,7 +13,7 @@
 
 set -euo pipefail
 
-LIGATURES="calendar_monthlayersfolder_openterminalsupport_agentpsychologysettingslogout"
+LIGATURES="calendar_monthlayersfolder_openterminalsupport_agentpsychologysettingslogoutdesktop_windows"
 
 # Resolve repo root (this script lives in <repo>/frontend/scripts/).
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -36,7 +38,7 @@ fi
 
 mkdir -p "$OUT_DIR"
 echo "[subset] Generating $OUT_FILE..."
-pyftsubset "$FULL_FONT" \
+python3 -m fontTools.subset "$FULL_FONT" \
   --text="$LIGATURES" \
   --flavor=woff2 \
   --output-file="$OUT_FILE" \

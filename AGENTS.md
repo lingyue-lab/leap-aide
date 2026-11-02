@@ -46,7 +46,7 @@ See [docs/architecture.md](docs/architecture.md).
 
 ## Coding Standards
 
-- Backend: pure Python stdlib (no Flask/Django/FastAPI); the only external dependency is `pyyaml`.
+- Backend: pure Python stdlib (no Flask/Django/FastAPI); dependencies are `pyyaml` plus one approved exception: `aiohttp` (browser-desktop receptionist, issue #37).
 - Frontend: TypeScript strict mode. State management uses Zustand stores; styling follows the Google Material 3 frontend specification.
 - Never use raw `confirm()`/`prompt()` — use `showConfirmDialog()`/`showPromptDialog()`.
 - Path-traversal protection: always use `safe_resolve(root, requested)` for file operations.

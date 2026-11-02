@@ -273,9 +273,9 @@ def test_server_delete_invalidates_index(cleanup_test_sessions):
             text.find('if parsed.path == "/api/session/delete":'),
         )
         if delete_idx >= 0:
-            # Use 4000 chars to accommodate the SessionDisplay stop, process loop
-            # shutdown, agent eviction, file unlink, and SESSION_AGENT_LOCKS prune
-            # that now run before SESSION_INDEX_FILE.unlink() in api/routes.py.
+            # Use 4000 chars to accommodate the process loop shutdown, agent
+            # eviction, file unlink, and SESSION_AGENT_LOCKS prune that run
+            # before SESSION_INDEX_FILE.unlink() in api/routes.py.
             delete_block = text[delete_idx:delete_idx+4000]
             assert "SESSION_INDEX_FILE" in delete_block, \
                 f"{label} session/delete must invalidate SESSION_INDEX_FILE"
