@@ -116,6 +116,11 @@ os.environ['HERMES_BASE_HOME'] = str(TEST_STATE_DIR)
 # the cold build a generous budget — slow CI must not flake into the degrade
 # path.  Unit tests pin the tight bound via monkeypatch instead.
 os.environ.setdefault('HERMES_WEBUI_MODELS_WAIT_S', '30')
+# Save-time key validation (set_provider_key → provider /models fetch) must
+# never touch the network in tests.  Default the kill switch OFF here so
+# existing set-key tests (and the spawned test server, which copies this
+# environ) stay offline; validation tests opt in per-test via monkeypatch.
+os.environ.setdefault('HERMES_WEBUI_VALIDATE_KEY_ON_SAVE', '0')
 # ── Live-test opt-in ────────────────────────────────────────────────────────────
 # Tests that exercise a real chat completion need a live provider key.
 # Opt-in requires BOTH:

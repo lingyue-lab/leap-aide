@@ -4,6 +4,10 @@ The SSRF check blocks requests to private IPs unless the hostname is in a
 hardcoded allowlist. This fix extracts hostnames from custom_providers config
 and adds them to the trusted set, so user-explicitly configured local endpoints
 (ollama, llama.cpp, vLLM, TabbyAPI, etc.) are not blocked.
+
+Note: the SSRF guard itself moved from config.py to model_catalog.py
+(``_check_url_safe``) with the issue #10 refactor — config.py still *builds*
+the trusted-host set from custom_providers and passes it in.
 """
 import os
 import pathlib
@@ -12,6 +16,7 @@ import pytest
 # Resolved from __file__, not the cwd: run-test.sh chdirs to the repo root, so
 # a bare "app/api/config.py" only resolves when pytest is launched from backend/.
 CONFIG_PY = pathlib.Path(__file__).parent.parent / "app" / "api" / "config.py"
+CATALOG_PY = pathlib.Path(__file__).parent.parent / "app" / "api" / "model_catalog.py"
 
 
 # ---------- Source-code analysis tests ----------
@@ -37,10 +42,14 @@ def test_ssrf_trusted_hosts_populated_from_custom_providers():
 
 
 def test_ssrf_check_uses_trusted_hosts():
-    """The SSRF check must consult _ssrf_trusted_hosts before blocking."""
-    src = CONFIG_PY.read_text(encoding="utf-8")
-    # The is_known_local check must include _ssrf_trusted_hosts
-    assert "in _ssrf_trusted_hosts" in src
+    """The SSRF check must consult the trusted-hosts set before blocking."""
+    # The membership check lives in model_catalog._check_url_safe, which
+    # receives the set via the trust_local_hosts parameter.
+    catalog_src = CATALOG_PY.read_text(encoding="utf-8")
+    assert "in trust_local_hosts" in catalog_src
+    # config.py still builds the set and hands it to the catalog fetch.
+    config_src = CONFIG_PY.read_text(encoding="utf-8")
+    assert "trust_local_hosts=_ssrf_trusted_hosts" in config_src
 
 
 def test_ssrf_known_local_still_present():
@@ -52,7 +61,7 @@ def test_ssrf_known_local_still_present():
 
 def test_ssrf_block_still_present():
     """SSRF ValueError must still be raised for unknown private IPs."""
-    src = CONFIG_PY.read_text(encoding="utf-8")
+    src = CATALOG_PY.read_text(encoding="utf-8")
     assert 'SSRF: resolved hostname to private IP' in src
 
 

@@ -31,6 +31,14 @@ services:
       # hermes-agent state dir (sessions, logs, memories, config, .env) — must
       # live under the mounted ~/.hermes volume. Mirrors the entrypoint default.
       - HERMES_HOME=/home/leap-aide/.hermes
+      # Seal lazy runtime pip installs (issue #8). The agent venv is baked
+      # into the image; a lazy install (e.g. boto3 for the Bedrock provider,
+      # triggered by the model-catalog build importing bedrock_adapter) would
+      # block for up to 300s and still fail. Sealed, ensure() fails fast and
+      # the provider degrades gracefully instead of pinning /api/models in a
+      # building:true loop. No HERMES_LAZY_INSTALL_TARGET is set here, so all
+      # lazy installs are refused. Per-container override: -e ...=0.
+      - HERMES_DISABLE_LAZY_INSTALLS=1
       - HERMES_WEBUI_PASSWORD=lingyue-lab
       - HERMES_WEBUI_DEFAULT_WORKSPACE=/workspaces
       - HTTP_PROXY=

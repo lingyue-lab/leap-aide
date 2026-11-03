@@ -3,10 +3,12 @@ import { useTranslation } from 'react-i18next';
 import { useSettingsTabStore } from '@/stores/useSettingsTabStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 import { useProvidersGateStore } from '@/stores/useProvidersGateStore';
+import { useModelsStore } from '@/stores/useModelsStore';
 import { useTheme } from '@/contexts/ThemeContext';
 import { configFileService, providersService } from '@/services/api';
 import FileView from '@/components/shared/FileView';
 import { EditIcon, Icon } from '@/components/common/Icons';
+import LoadingSpinner from '@/components/common/LoadingSpinner';
 import CustomScrollbar from '@/components/common/CustomScrollbar';
 import type { Settings, Theme, SendKey, FontSize, Provider } from '@/types';
 
@@ -463,22 +465,40 @@ function ProviderRow({ provider }: { provider: Provider }) {
   const [hasKey, setHasKey] = useState(provider.has_key);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
+  const [feedback, setFeedback] = useState<{ type: 'ok' | 'err' | 'warn'; msg: string } | null>(null);
+  // Last known verification result for the stored key (from GET /api/providers'
+  // key_status, updated on save). 'auth' renders a persistent error line — the
+  // key is stored but the provider rejects it.
+  const [keyStatus, setKeyStatus] = useState<Provider['key_status']>(provider.key_status ?? null);
 
-  const flashFeedback = (type: 'ok' | 'err', msg: string) => {
+  const flashFeedback = (type: 'ok' | 'err' | 'warn', msg: string) => {
     setFeedback({ type, msg });
     setTimeout(() => setFeedback(null), 3000);
   };
 
   const handleSave = async () => {
-    if (!apiKey.trim()) return;
+    if (!apiKey.trim() || saving) return;
     setSaving(true);
     try {
       const res = await providersService.setKey(provider.id, apiKey.trim());
       if (res.ok) {
-        flashFeedback('ok', t('settings.providers.saved'));
+        if (res.warning) {
+          // Key saved but not verified (network/timeout) — surface the notice.
+          flashFeedback('warn', res.warning);
+        } else {
+          flashFeedback('ok', t('settings.providers.saved'));
+        }
         setApiKey('');
         setHasKey(true);
+        setKeyStatus(res.validated ? 'ok' : (provider.key_status ?? null));
+        // The key change (possibly a fix for a rejected one) can immediately
+        // alter which providers appear in the catalog — refresh the picker
+        // now instead of waiting for the store's 5-minute TTL. ChatComposer
+        // only reloads on gate true↔false transitions, so a 2nd provider
+        // (or a corrected key) would otherwise leave a stale model list.
+        const ms = useModelsStore.getState();
+        ms.invalidate();
+        void ms.load();
         // Refresh the gate with a fresh provider list. Fail-open on
         // network error (user just added a key — assume they now have
         // at least one configured provider). ProvidersGroup on next
@@ -509,6 +529,7 @@ function ProviderRow({ provider }: { provider: Provider }) {
         flashFeedback('ok', t('settings.providers.cleared'));
         setApiKey('');
         setHasKey(false);
+        setKeyStatus(null);
         // Refresh the gate with a fresh provider list. Fail-closed on
         // network error (user just deleted a key — assume they may now
         // have zero configured providers; the next chat / tasks click
@@ -540,6 +561,12 @@ function ProviderRow({ provider }: { provider: Provider }) {
       env_var: 'env',
       config_yaml: 'config.yaml',
       oauth: 'OAuth',
+      // A save from this UI always writes ~/.hermes/.env, but right after
+      // the save the provider prop is still the pre-save snapshot whose
+      // key_source is 'none' — rendering that raw value showed a
+      // meaningless "None" badge between 未配置 and .env. Treat the stale
+      // state as .env; the real source takes over once the list refreshes.
+      none: '.env',
     };
     return { label: src[provider.key_source] ?? provider.key_source, color: 'var(--md-success)' };
   };
@@ -616,6 +643,7 @@ function ProviderRow({ provider }: { provider: Provider }) {
                 onChange={(e) => setApiKey(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); }}
                 placeholder={t('settings.providers.enter_key')}
+                disabled={saving}
                 style={{
                   flex: 1,
                   padding: '5px 10px',
@@ -626,18 +654,27 @@ function ProviderRow({ provider }: { provider: Provider }) {
                   fontSize: 16,
                   fontFamily: 'monospace',
                   minWidth: 0,
+                  opacity: saving ? 0.6 : 1,
                 }}
               />
 
-              {/* Save icon */}
-              <button
-                onClick={handleSave}
-                disabled={saving || !apiKey.trim()}
-                title={t('settings.providers.save_key')}
-                style={{ background: 'none', border: 'none', cursor: apiKey.trim() ? 'pointer' : 'not-allowed', padding: 4, color: apiKey.trim() ? 'var(--md-primary)' : 'var(--md-outline)', flexShrink: 0, opacity: saving ? 0.5 : 1 }}
-              >
-                <Icon name="save" size={17} />
-              </button>
+              {/* Save icon — while saving, swap in an M3 indeterminate
+                  spinner: save-time key validation fetches the provider's
+                  model list, which can take several seconds. */}
+              {saving ? (
+                <span style={{ padding: 4, flexShrink: 0, display: 'inline-flex' }}>
+                  <LoadingSpinner mode="inline" size={20} minimal />
+                </span>
+              ) : (
+                <button
+                  onClick={handleSave}
+                  disabled={!apiKey.trim()}
+                  title={t('settings.providers.save_key')}
+                  style={{ background: 'none', border: 'none', cursor: apiKey.trim() ? 'pointer' : 'not-allowed', padding: 4, color: apiKey.trim() ? 'var(--md-primary)' : 'var(--md-outline)', flexShrink: 0 }}
+                >
+                  <Icon name="save" size={17} />
+                </button>
+              )}
             </>
           )}
         </div>
@@ -652,9 +689,24 @@ function ProviderRow({ provider }: { provider: Provider }) {
         </div>
       )}
 
+      {/* Persistent invalid-key notice: the stored key was rejected by the
+          provider (background probe / save-time validation result). Unlike
+          the flash below, this stays until the key is fixed or removed. */}
+      {hasKey && keyStatus === 'auth' && !feedback && (
+        <div style={{ padding: '4px 14px 8px', fontSize: 14, color: 'var(--md-error)' }}>
+          {t('settings.providers.key_invalid')}
+        </div>
+      )}
+
       {/* Feedback message */}
       {feedback && (
-        <div style={{ padding: '4px 14px 8px', fontSize: 14, color: feedback.type === 'ok' ? 'var(--md-success)' : 'var(--md-error)' }}>
+        <div style={{
+          padding: '4px 14px 8px',
+          fontSize: 14,
+          // Warn uses a fixed amber (M3 tertiary is pinkish and fails as a
+          // warning color in both themes).
+          color: feedback.type === 'ok' ? 'var(--md-success)' : feedback.type === 'warn' ? '#e65100' : 'var(--md-error)',
+        }}>
           {feedback.msg}
         </div>
       )}

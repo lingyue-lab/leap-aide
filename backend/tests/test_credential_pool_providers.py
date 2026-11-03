@@ -22,9 +22,6 @@ def _install_fake_hermes_cli(monkeypatch, *, with_load_pool: bool = False, pool_
 
     fake_models = types.ModuleType("hermes_cli.models")
     fake_models.list_available_providers = lambda: []
-    fake_models.provider_model_ids = lambda pid: (
-        ["gpt-oss:20b", "qwen3:30b-a3b"] if pid == "ollama-cloud" else []
-    )
 
     fake_auth = types.ModuleType("hermes_cli.auth")
     fake_auth.get_auth_status = lambda _pid: {}
@@ -104,7 +101,17 @@ def _group_by_provider(result):
     return {g["provider"]: g["models"] for g in result.get("groups", [])}
 
 
-def test_ollama_cloud_manual_credential_shows_group(monkeypatch, tmp_path):
+def test_ollama_cloud_manual_credential_empty_baseline_omits_group(monkeypatch, tmp_path):
+    """A manual ollama-cloud credential alone no longer invents a model group.
+
+    Historically the SDK's provider_model_ids() enumerated Ollama Cloud
+    models from the credential (issue #10 refactor removed that path).
+    The catalog baseline for ollama-cloud is empty and refresh.mode=none,
+    so — like the empty-discovery case below — the group is omitted rather
+    than rendered with no models. Users who want the group can declare
+    providers.ollama-cloud.models in config.yaml (covered by the test
+    after this one).
+    """
     auth_payload = {
         "version": 1,
         "providers": {},
@@ -123,6 +130,55 @@ def test_ollama_cloud_manual_credential_shows_group(monkeypatch, tmp_path):
     }
 
     result = _call_get_available_models(monkeypatch, tmp_path, auth_payload)
+    groups = _group_by_provider(result)
+    assert "Ollama Cloud" not in groups, (
+        f"Ollama Cloud group must be omitted with an empty catalog baseline; "
+        f"got {list(groups)}"
+    )
+
+
+def test_ollama_cloud_cfg_models_override_shows_group(monkeypatch, tmp_path):
+    """providers.ollama-cloud.models in config.yaml still surfaces the group."""
+    auth_payload = {
+        "version": 1,
+        "providers": {},
+        "active_provider": "openai-codex",
+        "credential_pool": {
+            "ollama-cloud": [
+                {
+                    "id": "abc123",
+                    "label": "ollama-manual",
+                    "source": "manual",
+                    "auth_type": "api_key",
+                    "base_url": "https://ollama.com/v1",
+                }
+            ]
+        },
+    }
+
+    _install_fake_hermes_cli(monkeypatch)
+    (tmp_path / "auth.json").write_text(json.dumps(auth_payload), encoding="utf-8")
+    monkeypatch.setattr(profiles, "get_active_hermes_home", lambda: tmp_path)
+
+    old_cfg = dict(config.cfg)
+    old_mtime = config._cfg_mtime
+    config.cfg.clear()
+    config.cfg["model"] = {}
+    config.cfg["providers"] = {"ollama-cloud": {"models": ["gpt-oss:20b", "qwen3:30b-a3b"]}}
+    try:
+        config._cfg_mtime = config.Path(config._get_config_path()).stat().st_mtime
+    except Exception:
+        config._cfg_mtime = 0.0
+
+    config.invalidate_models_cache()
+    try:
+        result = config.get_available_models()
+    finally:
+        config.cfg.clear()
+        config.cfg.update(old_cfg)
+        config._cfg_mtime = old_mtime
+        config.invalidate_models_cache()
+
     groups = _group_by_provider(result)
     assert "Ollama Cloud" in groups, f"Expected Ollama Cloud in {list(groups)}"
     model_ids = [m["id"] for m in groups["Ollama Cloud"]]
@@ -430,7 +486,7 @@ def test_auth_store_active_provider_alias_is_resolved(monkeypatch, tmp_path):
     auth_payload = {
         "version": 1,
         "providers": {},
-        # Aliased name: 'google' → 'gemini' per _PROVIDER_ALIASES.
+        # Aliased name: 'google' → 'gemini' per the catalog alias table.
         "active_provider": "google",
         "credential_pool": {},
     }
@@ -448,17 +504,13 @@ def test_auth_store_active_provider_alias_is_resolved(monkeypatch, tmp_path):
 
 
 def test_ollama_cloud_empty_catalog_skips_group(monkeypatch, tmp_path):
-    """When hermes_cli returns no models for ollama-cloud, the group is omitted.
+    """With no models discoverable for ollama-cloud, the group is omitted.
 
-    Matches the named-custom and unknown-provider branches: we don't invent a
-    catalog we can't enumerate. The logger.warning in the except branch keeps
-    diagnostics available for operators.
+    The catalog baseline for ollama-cloud is empty (refresh.mode=none), so
+    — matching the named-custom and unknown-provider branches — we don't
+    invent a catalog we can't enumerate.
     """
     _install_fake_hermes_cli(monkeypatch)
-
-    # Override the stub to return empty for ollama-cloud.
-    import sys as _sys
-    _sys.modules["hermes_cli.models"].provider_model_ids = lambda pid: []
 
     auth_payload = {
         "version": 1,
@@ -592,4 +644,164 @@ def test_fallback_path_resolves_alias_when_load_pool_unavailable(monkeypatch, tm
     )
     assert "Google" not in groups, (
         f"Raw alias name must not leak when fallback path runs; got {list(groups)}"
+    )
+
+
+# --- Regression: env-sourced pool entries must not bypass the key check ---
+# A credential_pool entry with `source: env:VAR` is only a mirror of the env
+# var. When the key is deleted the mirror lingers in auth.json but no longer
+# represents a usable credential, so it must not keep the provider visible.
+
+
+def test_stale_env_sourced_pool_entry_does_not_show_keyless_provider(monkeypatch, tmp_path):
+    """load_pool path: a deleted key must hide the provider even if a stale
+    env-sourced pool entry remains in auth.json."""
+    monkeypatch.delenv("XIAOMI_API_KEY", raising=False)
+    auth_payload = {
+        "version": 1,
+        "providers": {},
+        "active_provider": "",
+        "credential_pool": {
+            "xiaomi": [
+                {
+                    "id": "xp001",
+                    "label": "env mirror",
+                    # Mirror of a now-deleted XIAOMI_API_KEY.
+                    "source": "env:XIAOMI_API_KEY",
+                    "auth_type": "api_key",
+                    "base_url": "https://api.xiaomimimo.com/v1",
+                }
+            ]
+        },
+    }
+
+    result = _call_get_available_models(monkeypatch, tmp_path, auth_payload, with_load_pool=True)
+    groups = _group_by_provider(result)
+    xiaomi = config.model_catalog.provider_display("xiaomi")
+    assert xiaomi not in groups, (
+        f"A stale env-sourced pool entry must not keep a keyless provider visible; got {list(groups)}"
+    )
+
+
+def test_manual_pool_entry_still_shows_provider_without_env_key(monkeypatch, tmp_path):
+    """load_pool path: a manual (non-env) pool entry is a real credential and
+    must still bypass _provider_has_key — guards against over-filtering."""
+    monkeypatch.delenv("XIAOMI_API_KEY", raising=False)
+    auth_payload = {
+        "version": 1,
+        "providers": {},
+        "active_provider": "",
+        "credential_pool": {
+            "xiaomi": [
+                {
+                    "id": "xp002",
+                    "label": "manual-cred",
+                    "source": "manual",
+                    "auth_type": "api_key",
+                    "base_url": "https://api.xiaomimimo.com/v1",
+                }
+            ]
+        },
+    }
+
+    result = _call_get_available_models(monkeypatch, tmp_path, auth_payload, with_load_pool=True)
+    groups = _group_by_provider(result)
+    xiaomi = config.model_catalog.provider_display("xiaomi")
+    assert xiaomi in groups, (
+        f"A manual pool entry is a real credential and must keep the provider visible; got {list(groups)}"
+    )
+
+
+def test_stale_env_sourced_entry_hidden_on_importerror_fallback_path(monkeypatch, tmp_path):
+    """ImportError fallback path: same stale env-mirror rule as the load_pool path."""
+    monkeypatch.delenv("XIAOMI_API_KEY", raising=False)
+    auth_payload = {
+        "version": 1,
+        "providers": {},
+        "active_provider": "",
+        "credential_pool": {
+            "xiaomi": [
+                {
+                    "id": "xp003",
+                    "label": "env mirror",
+                    "source": "env:XIAOMI_API_KEY",
+                    "auth_type": "api_key",
+                }
+            ]
+        },
+    }
+
+    result = _call_get_available_models(monkeypatch, tmp_path, auth_payload, with_load_pool=False)
+    groups = _group_by_provider(result)
+    xiaomi = config.model_catalog.provider_display("xiaomi")
+    assert xiaomi not in groups, (
+        f"Fallback path must also drop a stale env-sourced entry; got {list(groups)}"
+    )
+
+
+# --- Regression: catalog .env scan must run even when hermes_cli succeeds ---
+# hermes_cli only knows providers it registered itself. Gateway variants
+# (e.g. xiaomi-token-plan / XIAOMI_TOKEN_PLAN_API_KEY) are invisible to it, so
+# the catalog env-var scan must run unconditionally — not only when hermes_cli
+# fails — or a configured Token-Plan key never surfaces in the model picker.
+
+
+def test_catalog_env_scan_detects_variant_even_when_hermes_cli_succeeds(monkeypatch, tmp_path):
+    import types as _types
+
+    # hermes_cli "succeeds" and reports one authenticated (OAuth) provider.
+    fake_pkg = _types.ModuleType("hermes_cli")
+    fake_pkg.__path__ = []
+    fake_models = _types.ModuleType("hermes_cli.models")
+    fake_models.list_available_providers = lambda: [{"id": "copilot", "authenticated": True}]
+    fake_auth = _types.ModuleType("hermes_cli.auth")
+    fake_auth.get_auth_status = lambda _pid: {}
+    monkeypatch.setitem(sys.modules, "hermes_cli", fake_pkg)
+    monkeypatch.setitem(sys.modules, "hermes_cli.models", fake_models)
+    monkeypatch.setitem(sys.modules, "hermes_cli.auth", fake_auth)
+    monkeypatch.delitem(sys.modules, "agent.credential_pool", raising=False)
+    monkeypatch.delitem(sys.modules, "agent", raising=False)
+
+    # Configure the token-plan gateway key that hermes_cli cannot see.
+    monkeypatch.setenv("XIAOMI_TOKEN_PLAN_API_KEY", "unit-test-token-plan-key")
+
+    # Keep the test offline: a fake key against the live gateway would 401,
+    # and the catalog now hides groups whose key is rejected (auth failure).
+    # A network-style failure makes resolve_provider_models fall back to
+    # the JSON baseline, which is what this test asserts on.
+    import urllib.error
+
+    def _offline(slug, *a, **kw):
+        raise urllib.error.URLError("offline")
+
+    monkeypatch.setattr(config.model_catalog, "query_live_models", _offline)
+
+    auth_payload = {"version": 1, "providers": {}, "active_provider": "", "credential_pool": {}}
+    (tmp_path / "auth.json").write_text(json.dumps(auth_payload), encoding="utf-8")
+    monkeypatch.setattr(profiles, "get_active_hermes_home", lambda: tmp_path)
+
+    old_cfg = dict(config.cfg)
+    old_mtime = config._cfg_mtime
+    config.cfg.clear()
+    config.cfg["model"] = {}
+    try:
+        config._cfg_mtime = config.Path(config._get_config_path()).stat().st_mtime
+    except Exception:
+        config._cfg_mtime = 0.0
+    config.invalidate_models_cache()
+    try:
+        result = config.get_available_models()
+    finally:
+        config.cfg.clear()
+        config.cfg.update(old_cfg)
+        config._cfg_mtime = old_mtime
+        config.invalidate_models_cache()
+
+    groups = _group_by_provider(result)
+    # The hermes_cli-reported provider is still detected (post-filter keeps OAuth).
+    assert "GitHub Copilot" in groups, f"hermes_cli-detected provider missing; got {list(groups)}"
+    # The catalog .env scan must ALSO add the gateway variant hermes_cli cannot see.
+    variant = config.model_catalog.provider_display("xiaomi-token-plan")
+    assert variant in groups, (
+        f"Catalog .env scan must detect xiaomi-token-plan despite hermes_cli succeeding; got {list(groups)}"
     )

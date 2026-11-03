@@ -1,0 +1,358 @@
+{
+  "schema_version": 1,
+  "_readme": "models = the provider's INITIAL model list, not a permanent fallback. For refresh.mode=none providers (no verified endpoint — OAuth portals such as copilot/nous/openai-codex) it is the only source and is shown as-is. For refresh.mode=api providers it seeds the first catalog build; once a live GET /models succeeds, the live list fully replaces it (the baseline only donates display labels for ids the API still lists; membership=curated keeps the baseline shortlist instead) and subsequent live failures show the last successful live list instead. Do not rename this field to fallback_models — the name 'models' is intentional.",
+  "providers": {
+    "anthropic": {
+      "display_name": "Anthropic",
+      "aliases": ["claude", "claude-code"],
+      "auth": {"type": "api_key", "env_var": "ANTHROPIC_API_KEY", "header": "x-api-key"},
+      "endpoint": {"base_url": "https://api.anthropic.com/v1", "models_path": "/models"},
+      "refresh": {"mode": "api", "membership": "replace"},
+      "default_model": "claude-sonnet-4.6",
+      "models": [
+        {"id": "@anthropic:claude-opus-4.6", "label": "Claude Opus 4.6"},
+        {"id": "@anthropic:claude-sonnet-4.6", "label": "Claude Sonnet 4.6"},
+        {"id": "@anthropic:claude-sonnet-4-5", "label": "Claude Sonnet 4.5"},
+        {"id": "@anthropic:claude-haiku-4-5", "label": "Claude Haiku 4.5"}
+      ]
+    },
+    "openai": {
+      "display_name": "OpenAI",
+      "auth": {"type": "api_key", "env_var": "OPENAI_API_KEY"},
+      "endpoint": {"base_url": "https://api.openai.com/v1", "models_path": "/models"},
+      "refresh": {"mode": "api", "membership": "replace"},
+      "default_model": "gpt-5.4",
+      "models": [
+        {"id": "@openai:gpt-5.5", "label": "GPT-5.5"},
+        {"id": "@openai:gpt-5.5-mini", "label": "GPT-5.5 Mini"},
+        {"id": "@openai:gpt-5.4-mini", "label": "GPT-5.4 Mini"},
+        {"id": "@openai:gpt-5.4", "label": "GPT-5.4"}
+      ]
+    },
+    "openai-codex": {
+      "display_name": "OpenAI Codex",
+      "auth": {"type": "oauth"},
+      "refresh": {"mode": "none"},
+      "models": [
+        {"id": "@openai-codex:gpt-5.5", "label": "GPT-5.5"},
+        {"id": "@openai-codex:gpt-5.5-mini", "label": "GPT-5.5 Mini"},
+        {"id": "@openai-codex:gpt-5.4", "label": "GPT-5.4"},
+        {"id": "@openai-codex:gpt-5.4-mini", "label": "GPT-5.4 Mini"},
+        {"id": "@openai-codex:gpt-5.3-codex", "label": "GPT-5.3 Codex"},
+        {"id": "@openai-codex:gpt-5.2-codex", "label": "GPT-5.2 Codex"},
+        {"id": "@openai-codex:gpt-5.1-codex-max", "label": "GPT-5.1 Codex Max"},
+        {"id": "@openai-codex:gpt-5.1-codex-mini", "label": "GPT-5.1 Codex Mini"},
+        {"id": "@openai-codex:codex-mini-latest", "label": "Codex Mini (latest)"}
+      ]
+    },
+    "google": {
+      "display_name": "Google",
+      "auth": {"type": "api_key", "env_var": "GOOGLE_API_KEY"},
+      "endpoint": {"base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "models_path": "/models"},
+      "refresh": {"mode": "api", "membership": "replace"},
+      "models": [
+        {"id": "@google:gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro Preview"},
+        {"id": "@google:gemini-3-flash-preview", "label": "Gemini 3 Flash Preview"},
+        {"id": "@google:gemini-3.1-flash-lite-preview", "label": "Gemini 3.1 Flash Lite Preview"},
+        {"id": "@google:gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
+        {"id": "@google:gemini-2.5-flash", "label": "Gemini 2.5 Flash"}
+      ]
+    },
+    "gemini": {
+      "display_name": "Gemini",
+      "aliases": ["google-gemini", "google-ai-studio", "google"],
+      "auth": {"type": "api_key", "env_var": "GEMINI_API_KEY"},
+      "endpoint": {"base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "models_path": "/models"},
+      "refresh": {"mode": "api", "membership": "replace"},
+      "models": [
+        {"id": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro Preview"},
+        {"id": "gemini-3-flash-preview", "label": "Gemini 3 Flash Preview"},
+        {"id": "gemini-3.1-flash-lite-preview", "label": "Gemini 3.1 Flash Lite Preview"},
+        {"id": "gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
+        {"id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash"}
+      ]
+    },
+    "deepseek": {
+      "display_name": "DeepSeek",
+      "aliases": ["deep-seek"],
+      "auth": {"type": "api_key", "env_var": "DEEPSEEK_API_KEY"},
+      "endpoint": {"base_url": "https://api.deepseek.com/v1", "models_path": "/models"},
+      "refresh": {"mode": "api", "membership": "replace"},
+      "default_model": "deepseek-chat-v3-0324",
+      "models": [
+        {"id": "@deepseek:deepseek-v4-pro", "label": "DeepSeek V4 Pro"},
+        {"id": "@deepseek:deepseek-v4-flash", "label": "DeepSeek V4 Flash"},
+        {"id": "@deepseek:deepseek-chat-v3-0324", "label": "DeepSeek V3"},
+        {"id": "@deepseek:deepseek-reasoner", "label": "DeepSeek Reasoner"}
+      ]
+    },
+    "nous": {
+      "display_name": "Nous Portal",
+      "auth": {"type": "oauth"},
+      "refresh": {"mode": "none"},
+      "models": [
+        {"id": "@nous:anthropic/claude-opus-4.6", "label": "Claude Opus 4.6 (via Nous)"},
+        {"id": "@nous:anthropic/claude-sonnet-4.6", "label": "Claude Sonnet 4.6 (via Nous)"},
+        {"id": "@nous:openai/gpt-5.4-mini", "label": "GPT-5.4 Mini (via Nous)"},
+        {"id": "@nous:google/gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro Preview (via Nous)"}
+      ]
+    },
+    "zai": {
+      "display_name": "Z.AI / GLM",
+      "aliases": ["glm", "z-ai", "z.ai", "zhipu"],
+      "auth": {"type": "api_key", "env_var": "GLM_API_KEY"},
+      "endpoint": {"base_url": "https://api.z.ai/api/paas/v4", "models_path": "/models"},
+      "refresh": {"mode": "api", "membership": "replace"},
+      "models": [
+        {"id": "@zai:glm-5.1", "label": "GLM-5.1"},
+        {"id": "@zai:glm-5", "label": "GLM-5"},
+        {"id": "@zai:glm-5-turbo", "label": "GLM-5 Turbo"},
+        {"id": "@zai:glm-4.7", "label": "GLM-4.7"},
+        {"id": "@zai:glm-4.5", "label": "GLM-4.5"},
+        {"id": "@zai:glm-4.5-flash", "label": "GLM-4.5 Flash"}
+      ]
+    },
+    "kimi-coding": {
+      "display_name": "Kimi / Moonshot",
+      "aliases": ["kimi", "moonshot"],
+      "auth": {"type": "api_key", "env_var": "KIMI_API_KEY"},
+      "endpoint": {"base_url": "https://api.moonshot.cn/v1", "models_path": "/models"},
+      "refresh": {"mode": "api", "membership": "replace"},
+      "models": [
+        {"id": "@kimi-coding:moonshot-v1-8k", "label": "Moonshot v1 8k"},
+        {"id": "@kimi-coding:moonshot-v1-32k", "label": "Moonshot v1 32k"},
+        {"id": "@kimi-coding:moonshot-v1-128k", "label": "Moonshot v1 128k"},
+        {"id": "@kimi-coding:kimi-latest", "label": "Kimi Latest"},
+        {"id": "@kimi-coding:kimi-k2.5", "label": "Kimi K2.5"}
+      ]
+    },
+    "xiaomi": {
+      "display_name": "Xiaomi MiMo",
+      "aliases": ["mimo", "xiaomi-mimo"],
+      "auth": {"type": "api_key", "env_var": "XIAOMI_API_KEY"},
+      "endpoint": {"base_url": "https://api.xiaomimimo.com/v1", "base_url_env": "XIAOMI_BASE_URL", "models_path": "/models"},
+      "refresh": {"mode": "api", "membership": "replace"},
+      "default_model": "mimo-v2.6-flash",
+      "models": [
+        {"id": "@xiaomi:mimo-v2.6-pro", "label": "MiMo V2.6 Pro"},
+        {"id": "@xiaomi:mimo-v2.6-pro-ultraspeed", "label": "MiMo V2.6 Pro Ultraspeed"},
+        {"id": "@xiaomi:mimo-v2.6-flash", "label": "MiMo V2.6 Flash"}
+      ]
+    },
+    "xiaomi-token-plan": {
+      "display_name": "Xiaomi MiMo (Token Plan)",
+      "aliases": ["mimo-token-plan"],
+      "auth": {"type": "api_key", "env_var": "XIAOMI_TOKEN_PLAN_API_KEY"},
+      "endpoint": {"base_url": "https://token-plan-cn.xiaomimimo.com/v1", "models_path": "/models"},
+      "sdk_provider": "xiaomi",
+      "refresh": {"mode": "api", "membership": "replace"},
+      "default_model": "mimo-v2.6-flash",
+      "models": [
+        {"id": "@xiaomi-token-plan:mimo-v2.6-pro", "label": "MiMo V2.6 Pro"},
+        {"id": "@xiaomi-token-plan:mimo-v2.6-pro-ultraspeed", "label": "MiMo V2.6 Pro Ultraspeed"},
+        {"id": "@xiaomi-token-plan:mimo-v2.6-flash", "label": "MiMo V2.6 Flash"}
+      ]
+    },
+    "minimax": {
+      "display_name": "MiniMax",
+      "auth": {"type": "api_key", "env_vars": ["MINIMAX_API_KEY", "MINIMAX_CN_API_KEY"]},
+      "endpoint": {"base_url": "https://api.minimax.chat/v1", "models_path": "/models"},
+      "refresh": {"mode": "api", "membership": "replace"},
+      "models": [
+        {"id": "MiniMax-M2.7", "label": "MiniMax M2.7"},
+        {"id": "MiniMax-M2.7-highspeed", "label": "MiniMax M2.7 Highspeed"},
+        {"id": "MiniMax-M2.5", "label": "MiniMax M2.5"},
+        {"id": "MiniMax-M2.5-highspeed", "label": "MiniMax M2.5 Highspeed"},
+        {"id": "MiniMax-M2.1", "label": "MiniMax M2.1"}
+      ]
+    },
+    "copilot": {
+      "display_name": "GitHub Copilot",
+      "aliases": ["github", "github-copilot", "github-models", "github-model"],
+      "auth": {"type": "oauth"},
+      "refresh": {"mode": "none"},
+      "models": [
+        {"id": "@copilot:gpt-5.5", "label": "GPT-5.5"},
+        {"id": "@copilot:gpt-5.5-mini", "label": "GPT-5.5 Mini"},
+        {"id": "@copilot:gpt-5.4", "label": "GPT-5.4"},
+        {"id": "@copilot:gpt-5.4-mini", "label": "GPT-5.4 Mini"},
+        {"id": "@copilot:gpt-4o", "label": "GPT-4o"},
+        {"id": "@copilot:claude-opus-4.6", "label": "Claude Opus 4.6"},
+        {"id": "@copilot:claude-sonnet-4.6", "label": "Claude Sonnet 4.6"},
+        {"id": "@copilot:gemini-3-flash-preview", "label": "Gemini 3 Flash Preview"}
+      ]
+    },
+    "opencode-zen": {
+      "display_name": "OpenCode Zen",
+      "aliases": ["opencode"],
+      "auth": {"type": "api_key", "env_var": "OPENCODE_ZEN_API_KEY"},
+      "endpoint": {"base_url": "https://opencode.ai/zen/v1", "models_path": "/models"},
+      "refresh": {"mode": "api", "membership": "replace"},
+      "models": [
+        {"id": "@opencode-zen:gpt-5.4-pro", "label": "GPT-5.4 Pro"},
+        {"id": "@opencode-zen:gpt-5.4", "label": "GPT-5.4"},
+        {"id": "@opencode-zen:gpt-5.4-mini", "label": "GPT-5.4 Mini"},
+        {"id": "@opencode-zen:gpt-5.4-nano", "label": "GPT-5.4 Nano"},
+        {"id": "@opencode-zen:gpt-5.3-codex", "label": "GPT-5.3 Codex"},
+        {"id": "@opencode-zen:gpt-5.3-codex-spark", "label": "GPT-5.3 Codex Spark"},
+        {"id": "@opencode-zen:gpt-5.2", "label": "GPT-5.2"},
+        {"id": "@opencode-zen:gpt-5.2-codex", "label": "GPT-5.2 Codex"},
+        {"id": "@opencode-zen:gpt-5.1", "label": "GPT-5.1"},
+        {"id": "@opencode-zen:gpt-5.1-codex", "label": "GPT-5.1 Codex"},
+        {"id": "@opencode-zen:gpt-5.1-codex-max", "label": "GPT-5.1 Codex Max"},
+        {"id": "@opencode-zen:gpt-5.1-codex-mini", "label": "GPT-5.1 Codex Mini"},
+        {"id": "@opencode-zen:gpt-5", "label": "GPT-5"},
+        {"id": "@opencode-zen:gpt-5-codex", "label": "GPT-5 Codex"},
+        {"id": "@opencode-zen:gpt-5-nano", "label": "GPT-5 Nano"},
+        {"id": "@opencode-zen:claude-opus-4-6", "label": "Claude Opus 4.6"},
+        {"id": "@opencode-zen:claude-opus-4-5", "label": "Claude Opus 4.5"},
+        {"id": "@opencode-zen:claude-opus-4-1", "label": "Claude Opus 4.1"},
+        {"id": "@opencode-zen:claude-sonnet-4-6", "label": "Claude Sonnet 4.6"},
+        {"id": "@opencode-zen:claude-sonnet-4-5", "label": "Claude Sonnet 4.5"},
+        {"id": "@opencode-zen:claude-sonnet-4", "label": "Claude Sonnet 4"},
+        {"id": "@opencode-zen:claude-haiku-4-5", "label": "Claude Haiku 4.5"},
+        {"id": "@opencode-zen:claude-3-5-haiku", "label": "Claude 3.5 Haiku"},
+        {"id": "@opencode-zen:gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro Preview"},
+        {"id": "@opencode-zen:gemini-3-flash-preview", "label": "Gemini 3 Flash Preview"},
+        {"id": "@opencode-zen:gemini-3.1-flash-lite-preview", "label": "Gemini 3.1 Flash Lite Preview"},
+        {"id": "@opencode-zen:gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
+        {"id": "@opencode-zen:gemini-2.5-flash", "label": "Gemini 2.5 Flash"},
+        {"id": "@opencode-zen:glm-5.1", "label": "GLM-5.1"},
+        {"id": "@opencode-zen:glm-5", "label": "GLM-5"},
+        {"id": "@opencode-zen:kimi-k2.5", "label": "Kimi K2.5"},
+        {"id": "@opencode-zen:minimax-m2.5", "label": "MiniMax M2.5"},
+        {"id": "@opencode-zen:minimax-m2.5-free", "label": "MiniMax M2.5 Free"},
+        {"id": "@opencode-zen:nemotron-3-super-free", "label": "Nemotron 3 Super Free"},
+        {"id": "@opencode-zen:big-pickle", "label": "Big Pickle"}
+      ]
+    },
+    "opencode-go": {
+      "display_name": "OpenCode Go",
+      "auth": {"type": "api_key", "env_var": "OPENCODE_GO_API_KEY"},
+      "endpoint": {"base_url": "https://opencode.ai/zen/go/v1", "models_path": "/models"},
+      "refresh": {"mode": "api", "membership": "replace"},
+      "models": [
+        {"id": "@opencode-go:glm-5.1", "label": "GLM-5.1"},
+        {"id": "@opencode-go:glm-5", "label": "GLM-5"},
+        {"id": "@opencode-go:kimi-k2.5", "label": "Kimi K2.5"},
+        {"id": "@opencode-go:mimo-v2-pro", "label": "MiMo V2 Pro"},
+        {"id": "@opencode-go:mimo-v2-omni", "label": "MiMo V2 Omni"},
+        {"id": "@opencode-go:minimax-m2.7", "label": "MiniMax M2.7"},
+        {"id": "@opencode-go:minimax-m2.5", "label": "MiniMax M2.5"}
+      ]
+    },
+    "mistralai": {
+      "display_name": "Mistral",
+      "auth": {"type": "api_key", "env_var": "MISTRAL_API_KEY"},
+      "endpoint": {"base_url": "https://api.mistral.ai/v1", "models_path": "/models"},
+      "refresh": {"mode": "api", "membership": "replace"},
+      "models": [
+        {"id": "@mistralai:mistral-large-latest", "label": "Mistral Large"},
+        {"id": "@mistralai:mistral-small-latest", "label": "Mistral Small"}
+      ]
+    },
+    "qwen": {
+      "display_name": "Qwen",
+      "aliases": ["aliyun", "dashscope", "alibaba-cloud", "alibaba"],
+      "auth": {"type": "api_key", "env_vars": ["DASHSCOPE_API_KEY"]},
+      "endpoint": {"base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "models_path": "/models"},
+      "refresh": {"mode": "api", "membership": "replace"},
+      "models": [
+        {"id": "@qwen:qwen3-coder", "label": "Qwen3 Coder"},
+        {"id": "@qwen:qwen3.6-plus", "label": "Qwen3.6 Plus"}
+      ]
+    },
+    "x-ai": {
+      "display_name": "xAI",
+      "aliases": ["grok", "x.ai", "xai"],
+      "auth": {"type": "api_key", "env_var": "XAI_API_KEY"},
+      "endpoint": {"base_url": "https://api.x.ai/v1", "models_path": "/models"},
+      "refresh": {"mode": "api", "membership": "replace"},
+      "models": [
+        {"id": "@x-ai:grok-4.20", "label": "Grok 4.20"}
+      ]
+    },
+    "ark": {
+      "display_name": "Volcano Ark",
+      "aliases": ["volcano", "volc", "volcano-ark", "doubao"],
+      "auth": {"type": "api_key", "env_var": "ARK_API_KEY"},
+      "endpoint": {"base_url": "https://ark.cn-beijing.volces.com/api/v3", "models_path": "/models"},
+      "refresh": {"mode": "api", "membership": "replace"},
+      "models": []
+    },
+    "openrouter": {
+      "display_name": "OpenRouter",
+      "auth": {"type": "api_key", "env_var": "OPENROUTER_API_KEY"},
+      "endpoint": {"base_url": "https://openrouter.ai/api/v1", "models_path": "/models"},
+      "refresh": {"mode": "api", "membership": "curated", "timeout_s": 10},
+      "models": [
+        {"id": "openai/gpt-5.4-mini", "label": "GPT-5.4 Mini"},
+        {"id": "openai/gpt-5.4", "label": "GPT-5.4"},
+        {"id": "anthropic/claude-opus-4.6", "label": "Claude Opus 4.6"},
+        {"id": "anthropic/claude-sonnet-4.6", "label": "Claude Sonnet 4.6"},
+        {"id": "google/gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro Preview"},
+        {"id": "google/gemini-3-flash-preview", "label": "Gemini 3 Flash Preview"},
+        {"id": "google/gemini-3.1-flash-lite-preview", "label": "Gemini 3.1 Flash Lite Preview"},
+        {"id": "google/gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
+        {"id": "google/gemini-2.5-flash", "label": "Gemini 2.5 Flash"},
+        {"id": "deepseek/deepseek-v4-pro", "label": "DeepSeek V4 Pro"},
+        {"id": "deepseek/deepseek-v4-flash", "label": "DeepSeek V4 Flash"},
+        {"id": "deepseek/deepseek-chat-v3-0324", "label": "DeepSeek V3"},
+        {"id": "qwen/qwen3-coder", "label": "Qwen3 Coder"},
+        {"id": "qwen/qwen3.6-plus", "label": "Qwen3.6 Plus"},
+        {"id": "x-ai/grok-4.20", "label": "Grok 4.20"}
+      ]
+    },
+    "ollama": {
+      "display_name": "Ollama",
+      "auth": {"type": "none"},
+      "endpoint": {"base_url": "http://localhost:11434/v1", "models_path": "/models", "trust_local": true},
+      "refresh": {"mode": "api", "membership": "replace"},
+      "models": []
+    },
+    "lmstudio": {
+      "display_name": "LM Studio",
+      "auth": {"type": "none"},
+      "endpoint": {"base_url": "http://localhost:1234/v1", "models_path": "/models", "trust_local": true},
+      "refresh": {"mode": "api", "membership": "replace"},
+      "models": []
+    },
+    "ollama-cloud": {
+      "display_name": "Ollama Cloud",
+      "auth": {"type": "api_key", "env_var": "OLLAMA_API_KEY"},
+      "endpoint": {"base_url": "https://ollama.com/v1", "models_path": "/models"},
+      "refresh": {"mode": "api", "membership": "replace"},
+      "models": []
+    },
+    "meta-llama": {
+      "display_name": "Meta Llama",
+      "auth": {"type": "none"},
+      "refresh": {"mode": "none"},
+      "models": []
+    },
+    "huggingface": {
+      "display_name": "HuggingFace",
+      "auth": {"type": "api_key", "env_var": "HF_TOKEN"},
+      "endpoint": {"base_url": "https://router.huggingface.co/v1", "models_path": "/models"},
+      "refresh": {"mode": "api", "membership": "replace"},
+      "models": []
+    },
+    "tencent-tokenhub": {
+      "display_name": "Tencent TokenHub",
+      "aliases": ["tencent", "tokenhub", "tencent-cloud", "tencentmaas"],
+      "auth": {"type": "api_key", "env_var": "TOKENHUB_API_KEY"},
+      "endpoint": {"base_url": "https://tokenhub.tencentmaas.com/v1", "models_path": "/models"},
+      "refresh": {"mode": "api", "membership": "replace"},
+      "default_model": "hy3-preview",
+      "models": [
+        {"id": "@tencent-tokenhub:hy3-preview", "label": "Hy3 Preview"}
+      ]
+    }
+  },
+  "aliases": {
+    "aws": "bedrock",
+    "aws-bedrock": "bedrock",
+    "amazon": "bedrock",
+    "amazon-bedrock": "bedrock"
+  }
+}

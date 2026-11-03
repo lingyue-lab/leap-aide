@@ -322,6 +322,10 @@ export interface Provider {
   is_oauth: boolean;
   key_source: 'env_file' | 'env_var' | 'config_yaml' | 'oauth' | 'none';
   auth_error?: string | null;
+  /** Last verification result for a saved key (background probe / save-time validation). */
+  key_status?: 'ok' | 'auth' | 'network' | 'skipped' | null;
+  /** Unix timestamp (seconds) of that result, or null when never checked. */
+  key_checked_at?: number | null;
   models: Array<{ id: string; label: string }>;
 }
 

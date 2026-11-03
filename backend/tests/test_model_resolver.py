@@ -236,15 +236,17 @@ def test_no_duplicate_when_default_model_is_prefixed():
 
 def test_default_provider_models_not_prefixed():
     """The active provider's models remain bare (no @prefix added)."""
-    import app.api.config as _cfg
-    raw_anthropic_ids = {m['id'] for m in _cfg._PROVIDER_MODELS.get('anthropic', [])}
+    from app.api import model_catalog
+    raw_anthropic_ids = {
+        m['id'] for m in model_catalog.provider_baseline_models('anthropic')
+    }
     result = _available_models_with_provider('anthropic')
     groups = {g['provider']: g['models'] for g in result['groups']}
     if 'Anthropic' in groups:
         returned_ids = {m['id'] for m in groups['Anthropic']}
         for bare_id in raw_anthropic_ids:
             assert bare_id in returned_ids, (
-                f"_PROVIDER_MODELS entry '{bare_id}' is missing from the Anthropic group"
+                f"catalog baseline entry '{bare_id}' is missing from the Anthropic group"
             )
 
 
@@ -321,7 +323,7 @@ def test_no_phantom_custom_group_when_active_provider_is_set(monkeypatch):
 
 def test_default_model_lands_under_active_provider_group(monkeypatch):
     """The configured default_model must appear under the active provider's
-    display group, even when the model isn't in _PROVIDER_MODELS[provider]
+    display group, even when the model isn't in the JSON catalog baseline
     AND the active provider isn't the alphabetical first detected provider.
 
     Regression guard for a hyphen-vs-space bug in the "ensure default_model
@@ -503,4 +505,310 @@ def test_custom_endpoint_slash_model_routes_to_custom_not_openrouter():
     )
     assert model_or == 'google/gemma-4-26b-a4b', (
         "Model name should be preserved for openrouter, got '{}'.".format(model_or)
+    )
+
+
+# ── Gateway variants (Pattern B: xiaomi api + token-plan coexist) ─────────
+
+
+@pytest.fixture
+def _variant_env(monkeypatch, tmp_path):
+    """Isolated hermes home with only the token-plan key configured."""
+    import app.api.model_catalog as mc
+    import app.api.providers as providers
+
+    monkeypatch.setattr(providers, "_get_hermes_home", lambda: tmp_path)
+    for var in ("XIAOMI_API_KEY", "XIAOMI_TOKEN_PLAN_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    (tmp_path / ".env").write_text("XIAOMI_TOKEN_PLAN_API_KEY=tp-test-key-123456\n")
+    mc.load_catalog(force=True)
+
+
+def _stub_runtime_provider(monkeypatch, calls):
+    """Install a fake hermes_cli.runtime_provider that records its kwargs."""
+    import sys
+    import types
+
+    pkg = types.ModuleType("hermes_cli")
+    pkg.__path__ = []
+    mod = types.ModuleType("hermes_cli.runtime_provider")
+
+    def resolve_runtime_provider(
+        requested=None, explicit_api_key=None, explicit_base_url=None, target_model=None
+    ):
+        calls["requested"] = requested
+        calls["explicit_api_key"] = explicit_api_key
+        calls["explicit_base_url"] = explicit_base_url
+        return {
+            "provider": requested,
+            "api_key": explicit_api_key or "fallback-key",
+            "base_url": explicit_base_url or "https://default.example/v1",
+            "api_mode": "chat_completions",
+            "source": "explicit" if explicit_api_key else "env",
+        }
+
+    mod.resolve_runtime_provider = resolve_runtime_provider
+    monkeypatch.setitem(sys.modules, "hermes_cli", pkg)
+    monkeypatch.setitem(sys.modules, "hermes_cli.runtime_provider", mod)
+
+
+def test_gateway_variant_translates_to_sdk_provider(_variant_env):
+    parts = config.resolve_gateway_variant("xiaomi-token-plan")
+    assert parts is not None
+    sdk_provider, base_url, api_key = parts
+    assert sdk_provider == "xiaomi"
+    assert base_url == "https://token-plan-cn.xiaomimimo.com/v1"
+    assert api_key == "tp-test-key-123456"
+
+
+def test_regular_provider_is_not_a_variant(_variant_env):
+    assert config.resolve_gateway_variant("xiaomi") is None
+    assert config.resolve_gateway_variant("deepseek") is None
+    assert config.resolve_gateway_variant("") is None
+    assert config.resolve_gateway_variant(None) is None
+
+
+def test_variant_model_id_resolves_provider_hint(_variant_env):
+    """@xiaomi-token-plan:... keeps the variant slug for the runtime layer."""
+    model, provider, base_url = _resolve_with_config(
+        "@xiaomi-token-plan:mimo-v2.6-flash", provider="anthropic",
+    )
+    assert model == "mimo-v2.6-flash"
+    assert provider == "xiaomi-token-plan"
+    assert base_url is None  # variant base_url arrives via resolve_runtime_for_provider
+
+
+def test_resolve_runtime_for_provider_variant_slug(_variant_env, monkeypatch):
+    """Shape 1: the provider hint IS the variant — translate + explicit args."""
+    calls = {}
+    _stub_runtime_provider(monkeypatch, calls)
+    runtime, provider, base_url = config.resolve_runtime_for_provider(
+        "xiaomi-token-plan", None
+    )
+    assert calls["requested"] == "xiaomi"
+    assert calls["explicit_api_key"] == "tp-test-key-123456"
+    assert calls["explicit_base_url"] == "https://token-plan-cn.xiaomimimo.com/v1"
+    assert runtime["api_key"] == "tp-test-key-123456"
+    assert runtime["base_url"] == "https://token-plan-cn.xiaomimimo.com/v1"
+    assert provider == "xiaomi"
+    assert base_url == "https://token-plan-cn.xiaomimimo.com/v1"
+
+
+def test_resolve_runtime_for_provider_config_base_url_recovers_variant(
+    _variant_env, monkeypatch
+):
+    """Shape 2: config.yaml holds provider=xiaomi + the token-plan base_url
+    (the CLI-compatible persisted form) — recover the variant's private key."""
+    calls = {}
+    _stub_runtime_provider(monkeypatch, calls)
+    runtime, provider, base_url = config.resolve_runtime_for_provider(
+        "xiaomi", "https://token-plan-cn.xiaomimimo.com/v1"
+    )
+    assert calls["requested"] == "xiaomi"
+    assert calls["explicit_api_key"] == "tp-test-key-123456"
+    assert calls["explicit_base_url"] == "https://token-plan-cn.xiaomimimo.com/v1"
+    assert runtime["api_key"] == "tp-test-key-123456"
+    assert provider == "xiaomi"
+    assert base_url == "https://token-plan-cn.xiaomimimo.com/v1"
+
+
+def test_resolve_runtime_for_provider_plain_path_unchanged(_variant_env, monkeypatch):
+    """Non-variant providers hit resolve_runtime_provider with no explicit args."""
+    calls = {}
+    _stub_runtime_provider(monkeypatch, calls)
+    runtime, provider, base_url = config.resolve_runtime_for_provider("deepseek", None)
+    assert calls["requested"] == "deepseek"
+    assert calls["explicit_api_key"] is None
+    assert calls["explicit_base_url"] is None
+    assert runtime["api_key"] == "fallback-key"
+    # Passthrough preserves the caller's fill-from-runtime logic.
+    assert provider == "deepseek"
+    assert base_url is None
+
+
+def test_resolve_runtime_for_provider_empty_hint(_variant_env, monkeypatch):
+    calls = {}
+    _stub_runtime_provider(monkeypatch, calls)
+    runtime, provider, base_url = config.resolve_runtime_for_provider("", None)
+    assert calls["requested"] == ""
+    assert calls["explicit_api_key"] is None
+    assert calls["explicit_base_url"] is None
+
+
+def test_set_default_model_persists_sdk_slug_for_variant(_variant_env, monkeypatch, tmp_path):
+    """config.yaml is shared with the hermes CLI, which rejects unknown
+    provider slugs — a variant default must persist as SDK slug + base_url."""
+    import yaml
+
+    cfgfile = tmp_path / "config.yaml"
+    cfgfile.write_text(
+        "model:\n  provider: anthropic\n  default: claude-sonnet-4.6\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "_get_config_path", lambda: cfgfile)
+    old_cfg = dict(config.cfg)
+    old_mtime = config._cfg_mtime
+    try:
+        config.reload_config()
+        result = config.set_hermes_default_model("@xiaomi-token-plan:mimo-v2.6-flash")
+        assert result["ok"] is True
+        saved = yaml.safe_load(cfgfile.read_text(encoding="utf-8"))
+        assert saved["model"]["provider"] == "xiaomi"
+        assert saved["model"]["base_url"] == "https://token-plan-cn.xiaomimimo.com/v1"
+        assert saved["model"]["default"] == "mimo-v2.6-flash"
+    finally:
+        config.cfg.clear()
+        config.cfg.update(old_cfg)
+        config._cfg_mtime = old_mtime
+
+
+def test_set_default_model_back_to_plain_gateway_clears_stale_base_url(
+    _variant_env, monkeypatch, tmp_path
+):
+    """Switching the default from the variant back to the plain gateway must
+    drop the stale token-plan base_url (provider stays 'xiaomi' either way)."""
+    import yaml
+
+    cfgfile = tmp_path / "config.yaml"
+    cfgfile.write_text(
+        "model:\n"
+        "  provider: xiaomi\n"
+        "  base_url: https://token-plan-cn.xiaomimimo.com/v1\n"
+        "  default: mimo-v2.6-flash\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "_get_config_path", lambda: cfgfile)
+    old_cfg = dict(config.cfg)
+    old_mtime = config._cfg_mtime
+    try:
+        config.reload_config()
+        result = config.set_hermes_default_model("@xiaomi:mimo-v2.6-flash")
+        assert result["ok"] is True
+        saved = yaml.safe_load(cfgfile.read_text(encoding="utf-8"))
+        assert saved["model"]["provider"] == "xiaomi"
+        assert "base_url" not in saved["model"]
+    finally:
+        config.cfg.clear()
+        config.cfg.update(old_cfg)
+        config._cfg_mtime = old_mtime
+
+
+def test_config_only_fields_remap_variant_active_provider(_variant_env, monkeypatch, tmp_path):
+    """_config_only_catalog_fields maps provider=xiaomi + token-plan base_url
+    back to the variant slug so group ordering treats it as active."""
+    cfgfile = tmp_path / "config.yaml"
+    cfgfile.write_text(
+        "model:\n"
+        "  provider: xiaomi\n"
+        "  base_url: https://token-plan-cn.xiaomimimo.com/v1\n"
+        "  default: mimo-v2.6-flash\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "_get_config_path", lambda: cfgfile)
+    import app.api.profiles as profiles
+
+    monkeypatch.setattr(profiles, "get_active_hermes_home", lambda: tmp_path)
+    old_cfg = dict(config.cfg)
+    old_mtime = config._cfg_mtime
+    try:
+        config.reload_config()
+        default_model, active_provider, _auth = config._config_only_catalog_fields()
+        assert active_provider == "xiaomi-token-plan"
+        assert default_model == "mimo-v2.6-flash"
+    finally:
+        config.cfg.clear()
+        config.cfg.update(old_cfg)
+        config._cfg_mtime = old_mtime
+
+
+# ── Auth-failure hiding (bad key must not show baseline models) ────────────
+
+
+def test_resolve_detected_reports_auth_failures(monkeypatch):
+    """A 401 from one provider must land in the auth_failed set (not be
+    swallowed by the generic task-failed handler), while other providers
+    resolve normally.  Callers rely on the (resolved, auth_failed) tuple to
+    omit the rejected provider's group."""
+    import app.api.model_catalog as mc
+
+    monkeypatch.setenv("XIAOMI_TOKEN_PLAN_API_KEY", "tp-bogus-key-123456")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-bogus-key-123456")
+
+    def fake_resolve(slug, **kwargs):
+        if slug == "xiaomi-token-plan":
+            raise mc.ProviderAuthError(slug, 401)
+        return [{"id": "@deepseek:ok", "label": "OK"}]
+
+    monkeypatch.setattr(mc, "resolve_provider_models", fake_resolve)
+
+    resolved, auth_failed = config._resolve_detected_provider_models(
+        {"model": {}, "providers": {}},
+        {"xiaomi-token-plan", "deepseek"},
+        None,
+        "",
+    )
+
+    assert auth_failed == {"xiaomi-token-plan"}
+    assert "deepseek" in resolved
+    assert "xiaomi-token-plan" not in resolved
+
+
+def test_auth_failed_provider_is_omitted_from_groups(monkeypatch):
+    """End-to-end: a rejected token-plan key must hide its group entirely —
+    the compose-footer picker must not show baseline models for a bogus key
+    (the reported defect), while the rest of the catalog still builds."""
+    import sys
+    import types
+    import urllib.error
+
+    import app.api.model_catalog as mc
+
+    # hermes_cli stub: nothing authenticated via the CLI — the token-plan
+    # key is detected through the unconditional catalog env-var scan.
+    fake_models = types.ModuleType("hermes_cli.models")
+    fake_models.list_available_providers = lambda: []
+    fake_auth = types.ModuleType("hermes_cli.auth")
+    fake_auth.get_auth_status = lambda pid: {}
+    monkeypatch.setitem(sys.modules, "hermes_cli.models", fake_models)
+    monkeypatch.setitem(sys.modules, "hermes_cli.auth", fake_auth)
+
+    monkeypatch.setenv("XIAOMI_TOKEN_PLAN_API_KEY", "tp-bogus-key-123456")
+    monkeypatch.delenv("XIAOMI_API_KEY", raising=False)
+
+    def fake_query(slug, **kwargs):
+        if slug == "xiaomi-token-plan":
+            raise urllib.error.HTTPError(
+                "https://token-plan-cn.xiaomimimo.com/v1/models",
+                401, "Unauthorized", None, None,
+            )
+        # Every other provider: no live models (offline, no network).
+        return []
+
+    monkeypatch.setattr(mc, "query_live_models", fake_query)
+
+    old_cfg = dict(config.cfg)
+    old_mtime = config._cfg_mtime
+    config.cfg.clear()
+    config.cfg["model"] = {}
+    try:
+        # Pin the mtime so get_available_models does not reload the stub
+        # config.yaml (provider=custom + loopback base_url) over this cfg.
+        config._cfg_mtime = config.Path(config._get_config_path()).stat().st_mtime
+    except Exception:
+        config._cfg_mtime = 0.0
+    try:
+        config.invalidate_models_cache()
+        result = config.get_available_models()
+    finally:
+        config.cfg.clear()
+        config.cfg.update(old_cfg)
+        config._cfg_mtime = old_mtime
+
+    group_ids = [g.get("provider_id") for g in result["groups"]]
+    assert "xiaomi-token-plan" not in group_ids, (
+        f"rejected provider still rendered a group: {group_ids}"
+    )
+    all_model_ids = [m["id"] for g in result["groups"] for m in g.get("models", [])]
+    assert not any("mimo" in mid.lower() for mid in all_model_ids), (
+        f"baseline mimo models leaked into the picker: {all_model_ids}"
     )

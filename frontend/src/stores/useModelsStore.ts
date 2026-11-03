@@ -23,7 +23,9 @@ import type { ModelsResponse } from '@/types';
  */
 const MODELS_TTL_MS = 5 * 60 * 1000;
 const POLL_INTERVAL_MS = 2500;
-const MAX_POLLS = 20;
+// Cold catalog builds have been observed at ~60s in containerized deploys
+// (IMDS probes + per-provider live queries), so budget well over a minute.
+const MAX_POLLS = 36;
 
 export type ModelsStatus = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -68,7 +70,22 @@ export const useModelsStore = create<ModelsState>((set, get) => {
   function schedulePoll() {
     stopPollTimer();
     pollCount += 1;
-    if (pollCount > MAX_POLLS) return;
+    if (pollCount > MAX_POLLS) {
+      // Budget exhausted: the backend build is hung or pathologically slow.
+      // Never leave status at 'loading' — that froze the model picker on an
+      // endless spinner. Show whatever (degraded) catalog we already have;
+      // with no data at all, surface an error the picker can render.
+      const { data } = get();
+      if (data) {
+        set({ status: 'ready', error: null });
+      } else {
+        set({
+          status: 'error',
+          error: 'Model catalog is taking longer than expected. Please try again.',
+        });
+      }
+      return;
+    }
     pollTimer = setTimeout(() => {
       pollTimer = null;
       void get().load({ force: true });
@@ -154,9 +171,27 @@ export const useModelsStore = create<ModelsState>((set, get) => {
       // ownership reason.
       active = null;
       inFlight = null;
+      // 'loading' is only valid while a request or poll timer is live.  A
+      // building:true chain often sits between polls (no active request) —
+      // cancel must still settle the status or the picker re-freezes.
+      const settle = () => {
+        if (get().status !== 'loading') return;
+        set({ status: get().data ? 'ready' : 'idle' });
+      };
       if (req) {
-        set({ status: req.previousStatus });
+        // During a building:true poll chain the forced loads recorded
+        // previousStatus as 'loading' — restoring that would re-freeze the
+        // picker. Fall back to a settled status instead.
+        const restore =
+          req.previousStatus === 'loading'
+            ? get().data
+              ? 'ready'
+              : 'idle'
+            : req.previousStatus;
+        set({ status: restore });
         req.ctrl.abort();
+      } else {
+        settle();
       }
     },
 

@@ -53,7 +53,6 @@ def _install_fake_hermes_cli(monkeypatch):
 
     fake_models = types.ModuleType("hermes_cli.models")
     fake_models.list_available_providers = lambda: []
-    fake_models.provider_model_ids = lambda pid: []
 
     fake_auth = types.ModuleType("hermes_cli.auth")
     fake_auth.get_auth_status = lambda _pid: {}

@@ -44,7 +44,7 @@ hermes-agent SDK            AIAgent.run_conversation()、tools、gateway
 | HTTP 壳 | `server.py`、`bootstrap.py`、`api/helpers.py`、`api/upload.py`、`api/startup.py` | ThreadingHTTPServer + TLS + WS upgrade 分发；启动/引导；`j()`/`bad()`/`require()`/`safe_resolve()`；multipart 解析；启动期依赖安装 |
 | 路由 | `api/routes.py` | 全部 GET/POST 处理器，扁平 if/elif 链 |
 | 流式 | `api/streaming.py`、`api/stream_manager.py`、`api/ws_events.py`、`api/notify_stream.py` | agent 调用 + 各会话事件队列；队列/流生命周期；`/api/ws/events` 事件总线；notify 转发 |
-| 配置与模型 | `api/config.py`、`api/models.py`、`api/webui_schema.py`、`api/state_sync.py` | 发现/全局量/模型检测；会话模型 + CRUD + LRU 缓存；`__webui` schema 列；`/insights` 同步进 state.db |
+| 配置与模型 | `api/config.py`、`api/model_catalog.py`、`api/models.py`、`api/webui_schema.py`、`api/state_sync.py` | 发现/全局量/模型检测；JSON 模型目录（加载/别名/实时查询/合并）；会话模型 + CRUD + LRU 缓存；`__webui` schema 列；`/insights` 同步进 state.db |
 | 会话 | `api/agent_sessions.py`、`api/session_ops.py`、`api/session_display.py`、`api/session_watcher.py` | 基于 SDK 的会话生命周期；ops/展示辅助；后台会话监视 |
 | 工作区 | `api/workspace.py` | 文件操作、工作区注册、git 检测、信任级别 |
 | 认证与身份 | `api/auth.py`、`api/profiles.py` | 可选口令门 + 签名 cookie；profile 状态 |
@@ -127,7 +127,57 @@ hermes-agent SDK            AIAgent.run_conversation()、tools、gateway
 | `HERMES_WEBUI_PREWARM_WAIT_S` | `10` | 聊天线程等待预热工具定义的最长秒数；`=0` 不等待 |
 | `HERMES_WEBUI_FORCE_IPV4` | *（默认启用）* | 出网连接优先 IPv4（规避 IPv6 黑洞挂起）；`=0` 关闭 |
 | `HERMES_WEBUI_CONNECTIVITY_PROBE` | *（默认启用）* | 后台提供商连通性探测（启动时 + 保存 key 后）；`=0` 关闭 |
+| `HERMES_WEBUI_CATALOG_QUERY_TIMEOUT_S` | `3.0` | 目录构建期间每个 provider 实时模型查询的超时（秒） |
 | `LOG_LEVEL` | `WARNING` | Python 日志级别 |
+
+---
+
+## 模型目录与刷新
+
+Provider 的展示名、别名、基线模型列表、端点、认证头与刷新策略统一存放在
+单个 JSON 文件 `backend/app/api/data/model_catalog.json`（schema v1），
+由 `api/model_catalog.py` 加载并校验。曾镜像这些数据的 Python 表
+（`_PROVIDER_MODELS`、`_FALLBACK_MODELS`、`_PROVIDER_DISPLAY`、
+`_PROVIDER_ALIASES`、`_OPENAI_COMPAT_ENDPOINTS`）已删除——JSON 文件是
+*某个 provider 提供哪些模型* 的唯一真相源。
+
+要点：
+
+- **每 provider 记录**：`display_name`、`aliases[]`、
+  `auth{type,env_var(s),header}`（Anthropic 用 `x-api-key`，其余 Bearer）、
+  `endpoint{base_url,models_path,trust_local}`、
+  `refresh{mode: api|none, membership: replace|curated, timeout_s}`、
+  `default_model`，以及人工维护的 `models[]` 初始列表（模型 id 保留历史形态：
+  MiniMax 为裸 id，其余带 `@provider:` 前缀。对 `refresh.mode=none` 的
+  provider 它是唯一来源；对 `refresh.mode=api` 的 provider 它只是首启
+  种子——一旦实时查询成功即被 API 结果整体取代）。
+- **单一确定合并规则**（`resolve_provider_models`）：config.yaml 中显式的
+  `providers.<id>.models` 永远最优先且不参与查询。`membership=replace`
+  时实时查询成功的结果是唯一事实来源——成员与顺序以 API 为准，JSON 基线
+  仅为 API 仍在列出的 id 贡献展示标签（API 不再列出的模型消失，API 新增
+  的模型立即出现）；`membership=curated` 时取基线与实时 id 的交集。查询
+  失败或返回空列表时保留上次成功列表（内存或磁盘 envelope）或基线，绝不
+  清空分组。旧的“先试 agent、再试硬编码端点表、最后静态表”多级兜底已删除。
+- **刷新触发**复用现有 `/api/models` 构建机制（不新增后台线程）：24h TTL、
+  config.yaml 或 `model_catalog.json` mtime 变化、保存 key、启动预热。
+  `refresh.mode=api` 的 provider 并发查询（`ThreadPoolExecutor`，≤6 worker）
+  并按 provider 超时。资格判定（有 key / OAuth）不变——目录只决定*展示什么
+  模型*，不决定*该 provider 是否有资格展示*。
+- **磁盘 envelope**：模型缓存快照持久化
+  `{schema_version, active_provider, default_model, groups,
+  provider_models, fetched_at}`，重启后首个响应字段完整，并保留每 provider
+  的上次成功列表；旧的 `{仅 groups}` 文件仍可加载。
+- **SSRF 防护**（`model_catalog._check_url_safe`）：scheme 白名单
+  （http/https）+ 拒绝解析到私网 IP 的主机名；已知本机主机
+  （ollama/localhost/lmstudio）、目录 `endpoint.trust_local` 与用户声明的
+  `custom_providers` 主机名可豁免。
+- **Z.ai 端点修复**：目录使用 `https://api.z.ai/api/paas/v4`
+  （旧硬编码 `api.z.ai/v1` 已 404）。同时新增已验证的火山方舟 provider
+  （`ark`，`ARK_API_KEY`）。
+- **维护脚本**：`scripts/sync_models.py` 从 OpenRouter 公开
+  `/api/v1/models` 端点拉取并生成基线草稿（`--map-labels` 保留已有 id 的
+  策展标签）。脚本只输出 JSON 片段供人工审核，绝不直接写目录文件，也不在
+  CI 中运行。
 
 ---
 

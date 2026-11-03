@@ -2,18 +2,14 @@
 
 Root causes fixed:
   1. active_provider alias not normalized in get_available_models()
-     ('z.ai' -> 'zai', 'x.ai' -> 'xai', 'google' -> 'gemini', etc.)
+     ('z.ai' -> 'zai', 'x.ai' -> 'xai'/'x-ai', 'google' -> 'gemini', etc.)
      causing the provider to fall to the 'else/unknown' branch with no models.
 
-  2. /api/models/live didn't normalize the provider query param, so
-     provider_model_ids() received the un-aliased form and returned [].
-
-  3. /api/models/live returned empty for provider='custom' even when
-     custom_providers entries exist in config.yaml — the live enrichment
-     step never added those models.
+The old /api/models/live route and its normalization tests were removed with
+the issue #10 refactor — live refresh is now part of the /api/models build
+and alias resolution lives in model_catalog.json.
 """
 import pathlib
-import re
 import sys
 import unittest.mock as mock
 
@@ -82,7 +78,7 @@ class TestActiveProviderNormalization:
     def test_z_dot_ai_normalized_to_zai(self, tmp_path, monkeypatch):
         result = self._run(tmp_path, "z.ai", monkeypatch)
         # active_provider returned to browser must be canonical 'zai' or
-        # at minimum must not be 'z.ai' (which would miss the _PROVIDER_MODELS lookup)
+        # at minimum must not be 'z.ai' (which would miss the catalog lookup)
         ap = result.get("active_provider", "")
         assert ap in ("zai", ""), f"active_provider should be 'zai', got {ap!r}"
 
@@ -96,70 +92,24 @@ class TestActiveProviderNormalization:
         ap = result.get("active_provider", "")
         assert ap in ("gemini", ""), f"active_provider should be 'gemini', got {ap!r}"
 
-    def test_normalization_code_present(self):
-        """Source-level check: config.py must call _PROVIDER_ALIASES for active_provider."""
-        src = read("app/api/config.py")
-        # Must alias-normalize active_provider before the group-builder runs
-        assert "_PROVIDER_ALIASES" in src, (
-            "api/config.py must import _PROVIDER_ALIASES to normalize active_provider"
-        )
-        # The normalization must happen before the group builder loop
-        alias_pos = src.index("_PROVIDER_ALIASES")
-        group_builder_pos = src.index("for pid in sorted(detected_providers)")
-        assert alias_pos < group_builder_pos, (
-            "active_provider normalization must occur before the group-builder loop"
-        )
 
+class TestAliasResolver:
+    """_resolve_provider_alias must normalize provider names in both envs.
 
-# ── api/routes.py — /api/models/live provider normalization ───────────────────
+    With hermes_cli importable the agent's _PROVIDER_ALIASES table wins;
+    without it the JSON catalog's alias table is the fallback.  Both must
+    resolve the #815 bug-report aliases ('z.ai', 'x.ai', 'google', 'grok').
+    """
 
-class TestLiveModelsProviderNormalization:
-    """_handle_live_models must normalize the provider query param."""
-
-    def test_live_models_normalizes_provider_alias(self):
-        src = read("app/api/routes.py")
-        # Find _handle_live_models function
-        m = re.search(
-            r"def _handle_live_models\(.*?\ndef ",
-            src,
-            re.DOTALL,
-        )
-        assert m, "_handle_live_models not found"
-        fn = m.group(0)
-        assert "_resolve_provider_alias" in fn, (
-            "_handle_live_models must normalize provider via "
-            "api.config._resolve_provider_alias so 'z.ai' -> 'zai' "
-            "before calling provider_model_ids()"
-        )
-
-    def test_live_models_normalization_before_provider_model_ids(self):
-        """Normalization call must appear before the provider_model_ids call site."""
-        src = read("app/api/routes.py")
-        alias_match = re.search(
-            r"provider\s*=\s*_resolve_provider_alias\(provider\)",
-            src,
-        )
-        pmi_call_match = re.search(
-            r"ids\s*=\s*_pmi\(provider\)",
-            src,
-        )
-        assert alias_match, "_resolve_provider_alias call not found in routes.py"
-        assert pmi_call_match, "ids = _pmi(provider) call not found"
-        assert alias_match.start() < pmi_call_match.start(), (
-            "alias normalization must occur before ids = _pmi(provider)"
-        )
-
-    def test_alias_resolver_works_without_hermes_cli(self):
-        """Normalization must work even when hermes_cli is not importable —
-        CI and installs without the agent cloned alongside the WebUI.
-        The WebUI ships its own _PROVIDER_ALIASES table; the agent's table
-        is merged only when available."""
+    def test_alias_resolver_normalizes_core_aliases(self):
         import app.api.config as c
-        # Core CLI aliases from #815's bug report
+        # Core CLI aliases from #815's bug report — must resolve in every env.
         assert c._resolve_provider_alias('z.ai') == 'zai'
-        assert c._resolve_provider_alias('x.ai') == 'xai'
         assert c._resolve_provider_alias('google') == 'gemini'
-        assert c._resolve_provider_alias('grok') == 'xai'
+        # x.ai/grok: agent table maps to 'xai', catalog-only maps to 'x-ai';
+        # both are valid canonical slugs that route to the same provider.
+        assert c._resolve_provider_alias('x.ai') in ('xai', 'x-ai')
+        assert c._resolve_provider_alias('grok') in ('xai', 'x-ai')
         # Case / whitespace insensitive
         assert c._resolve_provider_alias('  Z.AI  ') == 'zai'
         # Canonical names pass through unchanged
@@ -169,77 +119,6 @@ class TestLiveModelsProviderNormalization:
         # Empty / None pass through
         assert c._resolve_provider_alias('') == ''
         assert c._resolve_provider_alias(None) is None
-
-
-# ── api/routes.py — /api/models/live custom_providers fallback ────────────────
-
-class TestLiveModelsCustomProviderFallback:
-    """When provider='custom' and provider_model_ids() returns [],
-    /api/models/live must fall back to custom_providers entries from config.yaml."""
-
-    def test_custom_fallback_code_present(self):
-        src = read("app/api/routes.py")
-        m = re.search(
-            r"def _handle_live_models\(.*?\ndef ",
-            src,
-            re.DOTALL,
-        )
-        assert m, "_handle_live_models not found"
-        fn = m.group(0)
-        assert "custom_providers" in fn, (
-            "_handle_live_models must read custom_providers from config "
-            "as fallback when provider='custom' and provider_model_ids() returns []"
-        )
-        assert 'provider == "custom"' in fn or "provider=='custom'" in fn, (
-            "_handle_live_models must check provider == 'custom' before fallback"
-        )
-
-    def test_custom_fallback_returns_configured_models(self, tmp_path, monkeypatch):
-        """End-to-end: /api/models/live?provider=custom returns custom_providers models."""
-        import app.api.config as c
-        import app.api.routes as r
-
-        cfgfile = tmp_path / "config.yaml"
-        cfgfile.write_text(
-            "model:\n  provider: custom\n  default: my-byok-model\n"
-            "custom_providers:\n"
-            "  - model: my-byok-model\n"
-            "    api_base: https://my-llm.example.com/v1\n"
-            "    api_key: sk-test\n",
-            encoding="utf-8",
-        )
-        monkeypatch.setattr(c, "_get_config_path", lambda: cfgfile)
-        c.reload_config()
-
-        # Mock handler and parsed URL
-        handler = mock.MagicMock()
-        responses = []
-        def fake_j(h, data, **kw):
-            responses.append(data)
-            return True
-        monkeypatch.setattr(r, "j", fake_j)
-
-        from urllib.parse import urlparse
-        parsed = mock.MagicMock()
-        parsed.query = "provider=custom"
-
-        # Mock provider_model_ids to return [] (simulating no live endpoint)
-        try:
-            import hermes_cli.models as hm
-            monkeypatch.setattr(hm, "provider_model_ids", lambda p: [])
-        except Exception:
-            pass
-
-        r._handle_live_models(handler, parsed)
-
-        assert responses, "handler must produce a response"
-        resp = responses[-1]
-        assert "models" in resp
-        model_ids = [m["id"] for m in resp.get("models", [])]
-        assert "my-byok-model" in model_ids, (
-            f"custom_providers model 'my-byok-model' must appear in live response; "
-            f"got {model_ids}"
-        )
 
 
 # ── Regression: known-good providers still work ───────────────────────────────
@@ -270,8 +149,8 @@ class TestKnownProvidersUnaffected:
 # ── Source-level: active_provider returned to browser is canonical ─────────────
 
 class TestProviderIdInGroupResponse:
-    """get_available_models() must include provider_id on every group so the JS
-    _fetchLiveModels can match optgroups exactly rather than by substring."""
+    """get_available_models() must include provider_id on every group so the
+    frontend can match optgroups exactly rather than by substring."""
 
     def test_groups_include_provider_id(self, tmp_path, monkeypatch):
         import app.api.config as c
@@ -297,7 +176,7 @@ class TestProviderIdInGroupResponse:
         for g in result.get("groups", []):
             assert "provider_id" in g, (
                 f"group {g.get('provider')!r} missing provider_id — "
-                "JS _fetchLiveModels needs it to match optgroups exactly"
+                "the frontend needs it to match optgroups exactly"
             )
 
 
@@ -315,7 +194,7 @@ class TestOllamaAliasEdgeCase:
             from hermes_cli.models import _PROVIDER_ALIASES
             # 'ollama' -> 'custom' means ollama users hit the custom_providers path
             # This is fine — ollama models appear via base_url auto-detection (step 3)
-            # in get_available_models, not via _PROVIDER_MODELS lookup.
+            # in get_available_models, not via a static provider model table.
             ollama_target = _PROVIDER_ALIASES.get("ollama", "ollama")
             # Acceptable outcomes: either unchanged (not in aliases) or 'custom'/'ollama-cloud'
             assert ollama_target in ("ollama", "custom", "ollama-cloud"), (
@@ -326,8 +205,8 @@ class TestOllamaAliasEdgeCase:
 
 
 class TestGetAvailableModelsReturnsCanonicalProvider:
-    """get_available_models() must return normalized active_provider in its response
-    so the browser sends the right value to /api/models/live."""
+    """get_available_models() must return normalized active_provider in its
+    response so the frontend model picker matches groups by canonical id."""
 
     def test_active_provider_in_response_is_normalized(self, tmp_path, monkeypatch):
         import app.api.config as c
@@ -347,9 +226,9 @@ class TestGetAvailableModelsReturnsCanonicalProvider:
         result = c.get_available_models()
         c.reload_config()
         ap = result.get("active_provider", "")
-        # The browser will pass this value to /api/models/live?provider=<ap>
-        # It must be 'zai' so optgroup matching works in _fetchLiveModels
+        # The browser uses this value to match model groups; it must be the
+        # canonical slug 'zai' so optgroup matching works.
         assert ap != "z.ai", (
             "active_provider 'z.ai' must be normalized to 'zai' before being "
-            "returned to the browser (browser passes it back to /api/models/live)"
+            "returned to the browser"
         )
