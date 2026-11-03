@@ -80,10 +80,10 @@ def post_with_timeout(path, body=None, headers=None, timeout=60):
     """POST JSON with a caller-controlled timeout (default 60s).
 
     Use this for endpoints that synchronously boot heavy subsystems
-    and take longer than the default 10s canary window.  Today the
-    only such endpoint is POST /api/session/pin, whose server-side
-    SessionDisplay.start() takes 10-15s on cold start (Xvfb + dbus
-    + fcitx5 + openbox + x11vnc + Chrome), then 3-6s on warm starts.
+    and take longer than the default 10s canary window.  Since issue
+    #37 the shared browser desktop boots at server start rather than
+    on pin, so no endpoint currently needs this — keep the helper for
+    future heavyweight endpoints.
 
     Do NOT use this helper for the common case -- the default post()'s
     10s timeout is a deliberate canary for hung servers and should

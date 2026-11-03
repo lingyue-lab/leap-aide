@@ -600,25 +600,4 @@ export const memoryService = {
   },
 };
 
-// Observer API 服务
-export const observerService = {
-  getInfo: (sessionId: string) =>
-    api<{
-      ok: boolean;
-      running: boolean;
-      vnc_port?: number;
-      display_num?: number;
-      cdp_port?: number;
-      status?: string;
-      error?: string;
-    }>(`/observations/${encodeURIComponent(sessionId)}/info`),
-
-  openPage: (sessionId: string) =>
-    window.open(
-      `/observations/${encodeURIComponent(sessionId)}`,
-      '_blank',
-      'noopener,noreferrer'
-    ),
-};
-
 

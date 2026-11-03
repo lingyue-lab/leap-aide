@@ -2,11 +2,19 @@
 Hermes Web UI — SSE → xterm CLI tool visualization.
 
 Listens to tool.started / tool.completed events from the SSE streaming
-pipeline and spawns xterm windows on the session's Xvfb virtual display.
+pipeline and spawns xterm windows on the SHARED global desktop's Xvfb
+virtual display (issue #37: one living room for every session).
 
-CRITICAL: Only visualizes when SessionDisplay is already running.
-If the user hasn't clicked 👁, silently skips all visualization (FR-015).
+CRITICAL: Only visualizes when the global desktop is already running.
+If it is down, silently skips all visualization (FR-015).
 Agent tools execute normally regardless — chat panel ToolCard always visible.
+
+Concurrency model (issue #37): windows are keyed by the global-unique
+tool-call id (tid), so concurrent calls from different sessions never
+collide; titles carry a short session prefix so a human watching the
+desktop can tell whose call is whose. Transient overlap between a
+session's windows during concurrent calls is accepted; MAX_XTERMS is a
+global safety cap (oldest window is evicted when exceeded).
 """
 
 from __future__ import annotations
@@ -27,6 +35,7 @@ _XTERM_WARNED = False
 
 MAX_XTERMS = int(os.environ.get("HERMES_OBSERVE_MAX_XTERMS", "6"))
 _XTERM_CLOSE_DELAY = 5.0
+_XTERM_LOCK = threading.Lock()
 _xterm_outputs: dict[str, str] = {}
 
 
@@ -54,69 +63,78 @@ def on_tool_started(session_id: str, name: str, args: dict | None, tid: str) -> 
             _XTERM_WARNED = True
         return
 
-    from app.api.session_display import SessionDisplay, _DISPLAYS
+    from app.api.global_desktop import get_global_desktop, XtermEntry
 
-    sd = _DISPLAYS.get(session_id)
-    if not sd or not sd.is_running():
+    gd = get_global_desktop()
+    if not gd.is_running() or gd.display_num is None:
         return
+    display = gd.display_num
 
-    display = sd.display_num
-    if display is None:
-        return
+    with _XTERM_LOCK:
+        # Enforce the global max-xterms cap (evict oldest)
+        if len(gd.xterm_procs) >= MAX_XTERMS:
+            oldest_tid = next(iter(gd.xterm_procs), None)
+            if oldest_tid:
+                entry = gd.xterm_procs.pop(oldest_tid)
+                try:
+                    entry.proc.terminate()
+                except OSError:
+                    pass
+                _cleanup_tmpfile(oldest_tid)
 
-    # Enforce max xterms limit
-    if len(sd.xterm_procs) >= MAX_XTERMS:
-        oldest_tid = next(iter(sd.xterm_procs), None)
-        if oldest_tid:
-            try:
-                sd.xterm_procs[oldest_tid].terminate()
-            except OSError:
-                pass
-            del sd.xterm_procs[oldest_tid]
-            _cleanup_tmpfile(oldest_tid)
-
-    # Build display content
-    params_str = _format_json_like(args) if args else "(none)"
-    content = (
-        f"--- Cmd ---\n"
-        f"{name}\n\n"
-        f"--- Params ---\n"
-        f"{params_str}\n"
-    )
-
-    try:
-        tmpf = tempfile.NamedTemporaryFile(
-            mode="w", prefix=f"hermes-xterm-{tid[:8]}-", suffix=".out",
-            delete=False,
+        # Build display content
+        params_str = _format_json_like(args) if args else "(none)"
+        content = (
+            f"--- Cmd ---\n"
+            f"{name}\n\n"
+            f"--- Params ---\n"
+            f"{params_str}\n"
         )
-        tmpf.write(content)
-        tmpf.flush()
-        tmpf_path = tmpf.name
-        _xterm_outputs[tid] = tmpf_path
-    except OSError:
-        tmpf_path = "/dev/null"
 
-    try:
-        proc = subprocess.Popen(
-            [
-                "xterm",
-                "-T", f"[Agent] {name}"[:80],
-                "-geometry", "96x58+960+0",
-                "-fa", "Monospace",
-                "-fs", "18",
-                "-bg", "#0d1117",
-                "-fg", "#58a6ff",
-                "-cr", "#58a6ff",
-                "-e", "sh", "-c",
-                f"tail -n +1 -f {tmpf_path}",
-            ],
-            env={**os.environ, "DISPLAY": f":{display}"},
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        sd.xterm_procs[tid] = proc
-    except Exception as exc:
-        logger.warning("Failed to spawn xterm for %s/%s: %s", session_id, name, exc)
+        try:
+            tmpf = tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8",
+                prefix=f"hermes-xterm-{tid[:8]}-", suffix=".out",
+                delete=False,
+            )
+            tmpf.write(content)
+            tmpf.flush()
+            tmpf_path = tmpf.name
+            _xterm_outputs[tid] = tmpf_path
+        except (OSError, UnicodeError):
+            tmpf_path = "/dev/null"
+
+        try:
+            proc = subprocess.Popen(
+                [
+                    "xterm",
+                    "-T", f"[{session_id[:6]}] {name}"[:80],
+                    "-geometry", "96x58+960+0",
+                    "-fa", "Monospace",
+                    "-fs", "18",
+                    "-bg", "#0d1117",
+                    "-fg", "#58a6ff",
+                    "-cr", "#58a6ff",
+                    "-e", "sh", "-c",
+                    f"tail -n +1 -f {tmpf_path}",
+                ],
+                # C.UTF-8 overrides the container's LC_ALL=C so xterm enables
+                # UTF-8 mode — otherwise CJK tool output renders as mojibake.
+                # C.UTF-8 is built into glibc (no locale-gen dependency).
+                env={
+                    **os.environ,
+                    "DISPLAY": f":{display}",
+                    "LANG": "C.UTF-8",
+                    "LC_ALL": "C.UTF-8",
+                },
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            gd.xterm_procs[tid] = XtermEntry(
+                proc=proc, session_id=session_id, started_at=time.time(),
+            )
+        except Exception as exc:
+            logger.warning("Failed to spawn xterm for %s/%s: %s", session_id, name, exc)
 
 
 def on_tool_completed(
@@ -128,14 +146,11 @@ def on_tool_completed(
     is_error: bool,
 ) -> None:
     """Append result and status to the xterm window, then close it after a delay."""
-    from app.api.session_display import SessionDisplay, _DISPLAYS
+    from app.api.global_desktop import get_global_desktop
 
-    sd = _DISPLAYS.get(session_id)
-    if not sd:
-        _cleanup_tmpfile(tid)
-        return
-
-    proc = sd.xterm_procs.pop(tid, None)
+    gd = get_global_desktop()
+    with _XTERM_LOCK:
+        entry = gd.xterm_procs.pop(tid, None)
     tmpf_path = _xterm_outputs.pop(tid, None)
     status_text = "✗" if is_error else "✓"
     duration_str = f" ({duration:.1f}s)" if duration else ""
@@ -146,7 +161,7 @@ def on_tool_completed(
 
     if tmpf_path:
         try:
-            with open(tmpf_path, "a") as f:
+            with open(tmpf_path, "a", encoding="utf-8") as f:
                 f.write(f"\n--- Result ---\n")
                 f.write(output_text)
                 f.write(f"\n\n--- Status ---\n")
@@ -156,8 +171,8 @@ def on_tool_completed(
             pass
 
     # Close xterm after a delay for the user to read output
-    if proc and proc.poll() is None:
-        _close_xterm_later(proc)
+    if entry and entry.proc.poll() is None:
+        _close_xterm_later(entry.proc)
 
     # Clean up temp file after matching delay
     if tmpf_path:
@@ -172,18 +187,19 @@ def on_tool_completed(
 
 def cleanup_session_xterms(session_id: str) -> None:
     """Close all xterms for a session. Called when the streaming turn ends."""
-    from app.api.session_display import _DISPLAYS
+    from app.api.global_desktop import get_global_desktop
 
-    sd = _DISPLAYS.get(session_id)
-    if not sd:
-        return
-    for tid, proc in list(sd.xterm_procs.items()):
-        try:
-            proc.terminate()
-        except OSError:
-            pass
-        _cleanup_tmpfile(tid)
-    sd.xterm_procs.clear()
+    gd = get_global_desktop()
+    with _XTERM_LOCK:
+        for tid, entry in list(gd.xterm_procs.items()):
+            if entry.session_id != session_id:
+                continue
+            try:
+                entry.proc.terminate()
+            except OSError:
+                pass
+            _cleanup_tmpfile(tid)
+            del gd.xterm_procs[tid]
 
 
 def _close_xterm_later(proc: subprocess.Popen, delay: float = _XTERM_CLOSE_DELAY) -> None:

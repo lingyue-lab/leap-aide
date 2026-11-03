@@ -3,8 +3,6 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import Layout from './components/layout/Layout';
 import ChatInterface from './components/chat/ChatInterface';
-import ObserverPage from './components/observer/ObserverPage';
-import LoadingSpinner from './components/common/LoadingSpinner';
 import DialogHost from './components/common/DialogHost';
 import { useSessionStore } from './stores/useSessionStore';
 import { useSettingsStore } from './stores/useSettingsStore';
@@ -18,7 +16,7 @@ import { FONT_ZOOM_MAP } from './constants';
 
 function App() {
   const { i18n } = useTranslation();
-  const { currentSessionId, pinningSession } = useSessionStore();
+  const { currentSessionId } = useSessionStore();
   const { settings } = useSettingsStore();
   const { setTheme } = useTheme();
   const { isAuthenticated } = useAuth();
@@ -81,20 +79,9 @@ function App() {
         <Routes>
           <Route path="/" element={<ChatInterface sessionId={currentSessionId} />} />
           <Route path="/session/:sessionId" element={<ChatInterface />} />
-          <Route path="/observations/:sessionId" element={<ObserverPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Layout>
-      {/* Fullscreen overlay shown while /api/session/pin synchronously
-          boots SessionDisplay on the server (10-15s cold start). Mounted
-          once at App root; visibility is driven entirely by the store
-          flag, so it stays out of the way during normal use.
-          Scrim + centered spinner, no card wrapper — matches the
-          M3 progress indicator overlay spec and keeps this spinner
-          visually identical to the inline/overlay variants. */}
-      {pinningSession && (
-        <LoadingSpinner mode="fullscreen" />
-      )}
       {/* Global host for showConfirmDialog / showPromptDialog helpers.
           Mounted once at the App root so any module can queue a dialog
           request without prop drilling. Renders nothing when no dialog

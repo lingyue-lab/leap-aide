@@ -60,7 +60,7 @@ def _set_tcp_keepalive(sock: socket.socket, idle_sec: int = 60, interval_sec: in
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 VNC_HOST: str = os.environ.get("HERMES_VNC_HOST", "127.0.0.1")
-VNC_PORT: int = int(os.environ.get("HERMES_VNC_PORT", "5901"))
+VNC_PORT: int = int(os.environ.get("HERMES_VNC_PORT", "5900"))
 
 # ── Import low-level WS helpers from terminal.py (no code duplication) ────────
 # These helpers are stable, well-tested primitives used by the terminal backend.

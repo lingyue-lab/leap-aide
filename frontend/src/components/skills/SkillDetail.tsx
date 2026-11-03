@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSkillStore } from '@/stores/useSkillStore';
 import { skillsService } from '@/services/api';
-import { renderMarkdown } from '@/utils/markdown';
+import { renderMarkdown, relativeFileLinkTarget } from '@/utils/markdown';
 // Lazy-load FileTreePanel so react-arborist + react-dnd (~120KB) is only
 // fetched when the user actually opens a skill detail view.
 const FileTreePanel = lazy(() => import('@/components/shared/FileTreePanel'));
@@ -157,6 +157,15 @@ export default function SkillDetail() {
 
   const renderedContent = selectedSkillContent ? renderMarkdown(selectedSkillContent) : '';
 
+  // 相对文件链接（如 [中文](SKILL.zh-CN.md)）在 SPA 内是非法路由，
+  // 点击时改为打开内置文件视图。
+  const handleSkillMdLinkClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const target = relativeFileLinkTarget(e);
+    if (!target) return;
+    e.preventDefault();
+    handleFileSelect(target);
+  };
+
   // ── FileTreePanel 文件操作回调 ──────────────────────────────────
 
   const handleTreeCreate = async (parentPath: string, name: string, isDir: boolean) => {
@@ -294,6 +303,7 @@ export default function SkillDetail() {
                 <CodeCopyButton content={selectedSkillContent || ''} />
                 <div
                   className="prose prose-sm text-[var(--foreground)]"
+                  onClick={handleSkillMdLinkClick}
                   dangerouslySetInnerHTML={{ __html: renderedContent }}
                 />
               </div>
@@ -319,6 +329,7 @@ export default function SkillDetail() {
             onCancel={handleFileCancel}
             saving={fileSaving}
             editError={fileError}
+            onRelativeLink={handleFileSelect}
           />
         )}
       </div>

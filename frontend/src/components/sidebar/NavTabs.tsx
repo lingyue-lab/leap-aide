@@ -4,6 +4,7 @@ import { useCronStore } from '@/stores/useCronStore';
 import { useMemoryStore } from '@/stores/useMemoryStore';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 import { useTerminalStore } from '@/stores/useTerminalStore';
+import { getBrowserDesktopStatus, useBrowserDesktopStore } from '@/stores/useBrowserDesktopStore';
 import { useSettingsTabStore } from '@/stores/useSettingsTabStore';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { setChatPanelActive } from '@/hooks/useStreamNotify';
@@ -36,7 +37,14 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
   const setMemoryTabActive = useMemoryStore((s) => s.setMemoryTabActive);
   const setWorkspacesTabActive = useWorkspaceStore((s) => s.setWorkspacesTabActive);
   const setTerminalTabActive = useTerminalStore((s) => s.setTerminalTabActive);
+  const setBrowserDesktopActive = useBrowserDesktopStore((s) => s.setBrowserDesktopActive);
+  const desktopInfo = useBrowserDesktopStore((s) => s.info);
   const setSettingsTabActive = useSettingsTabStore((s) => s.setSettingsTabActive);
+
+  // M3 badge on the Desktop destination: surface degraded/stopped desktops
+  // even while another panel is open (BrowserDesktopView polls the store).
+  const desktopStatus = getBrowserDesktopStatus(desktopInfo);
+  const desktopAlert = desktopStatus === 'degraded' || desktopStatus === 'stopped';
 
   // Derive whether any session has unread messages (for chat tab badge).
   // When last_seen_msg_count is null (never tracked, e.g. unopened CLI sessions),
@@ -86,6 +94,12 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
       titleKey: 'tabs.terminal_title',
       icon: 'terminal_2',
     },
+    {
+      panel: 'browser-desktop',
+      labelKey: 'tabs.browser_desktop',
+      titleKey: 'tabs.browser_desktop_title',
+      icon: 'desktop_windows',
+    },
   ];
 
   // Shared with openProvidersSettings() (gate → Settings), which has to clear
@@ -116,6 +130,8 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
       setWorkspacesTabActive(true);
     } else if (panel === 'terminal') {
       setTerminalTabActive(true);
+    } else if (panel === 'browser-desktop') {
+      setBrowserDesktopActive(true);
     } else if (panel === 'settings') {
       setSettingsTabActive(true);
     } else if (panel === 'chat') {
@@ -145,22 +161,31 @@ export default function NavTabs({ activePanel, onPanelChange }: NavTabsProps) {
     <div className="nav-tabs">
       {/* Main tabs */}
       <div className="nav-tabs-main">
-        {tabs.map((tab) => (
-          <button
-            key={tab.panel}
-            className={`nav-tab ${activePanel === tab.panel ? 'active' : ''}`}
-            data-panel={tab.panel}
-            data-label={t(tab.labelKey)}
-            onClick={() => switchPanel(tab.panel)}
-            title={t(tab.titleKey)}
-            aria-label={t(tab.titleKey)}
-          >
-            <Icon name={tab.icon} size={24} fill={activePanel === tab.panel ? 1 : 0} />
-            {tab.panel === 'chat' && hasSessionUnread && (
-              <span className="nav-tab-dot" />
-            )}
-          </button>
-        ))}
+        {tabs.map((tab) => {
+          const showDesktopAlert = tab.panel === 'browser-desktop' && desktopAlert;
+          const title = showDesktopAlert
+            ? `${t(tab.titleKey)} · ${t(`browser_desktop.status_${desktopStatus}`)}`
+            : t(tab.titleKey);
+          return (
+            <button
+              key={tab.panel}
+              className={`nav-tab ${activePanel === tab.panel ? 'active' : ''}`}
+              data-panel={tab.panel}
+              data-label={t(tab.labelKey)}
+              onClick={() => switchPanel(tab.panel)}
+              title={title}
+              aria-label={title}
+            >
+              <Icon name={tab.icon} size={24} fill={activePanel === tab.panel ? 1 : 0} />
+              {tab.panel === 'chat' && hasSessionUnread && (
+                <span className="nav-tab-dot" />
+              )}
+              {showDesktopAlert && (
+                <span className={`nav-tab-dot nav-tab-dot-${desktopStatus}`} />
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {/* Settings tab pinned at bottom */}

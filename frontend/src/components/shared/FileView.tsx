@@ -1,4 +1,4 @@
-import { renderMarkdown, highlightCode, resolveLanguage } from '@/utils/markdown';
+import { renderMarkdown, highlightCode, resolveLanguage, relativeFileLinkTarget } from '@/utils/markdown';
 import CodeCopyButton from './CodeCopyButton';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 
@@ -30,6 +30,10 @@ export interface FileViewProps {
 
   // Empty state
   emptyMessage?: string;
+
+  // Relative file links in rendered markdown (e.g. [中文](SKILL.zh-CN.md))
+  // are invalid SPA URLs; when provided, clicks are routed here instead.
+  onRelativeLink?: (path: string) => void;
 
   // Additional class
   className?: string;
@@ -133,6 +137,7 @@ export default function FileView({
   saving,
   editError,
   emptyMessage,
+  onRelativeLink,
   className = '',
 }: FileViewProps) {
   // ── Loading ──
@@ -212,11 +217,18 @@ export default function FileView({
   // ── Markdown ──
   if (fileType === 'markdown') {
     const html = content ? renderMarkdown(content) : '';
+    const handleLinkClick = (e: React.MouseEvent<HTMLDivElement>) => {
+      const target = relativeFileLinkTarget(e);
+      if (!target || !onRelativeLink) return;
+      e.preventDefault();
+      onRelativeLink(target);
+    };
     return wrapper(
       <div className="file-view-code">
         <CodeCopyButton content={content || ''} />
         <div
           className="prose prose-sm text-[var(--foreground)]"
+          onClick={onRelativeLink ? handleLinkClick : undefined}
           dangerouslySetInnerHTML={{ __html: html }}
         />
       </div>

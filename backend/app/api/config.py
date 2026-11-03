@@ -49,7 +49,6 @@ STATE_DIR = (
 )
 
 SESSION_DIR = STATE_DIR / "sessions"
-SESSIONS_DISPLAY_DIR = STATE_DIR / "sessions_display"
 WORKSPACES_FILE = STATE_DIR / "workspaces.json"
 SESSION_INDEX_FILE = SESSION_DIR / "_index.json"
 SETTINGS_FILE = STATE_DIR / "settings.json"
@@ -2606,26 +2605,52 @@ def _evict_session_agent(session_id: str) -> None:
     with SESSION_AGENT_CACHE_LOCK:
         SESSION_AGENT_CACHE.pop(session_id, None)
 
-# ── Thread-local env context ─────────────────────────────────────────────────
-_thread_ctx = threading.local()
+# ── Session env override context ────────────────────────────────────────────
+# The ContextVar itself lives in app.compat.env_overrides (documented there):
+# ContextVar, NOT threading.local, so overrides propagate to Hermes tool
+# workers via propagate_context_to_thread(). The same ContextVar also feeds
+# the in-process SDK readers through app.compat.browser_cdp (patched
+# browser_tool._get_cdp_override_raw). Re-exported under the historical
+# private name so existing references keep working.
+from app.compat.env_overrides import env_override_ctx as _env_override_ctx
 _original_popen = None          # saved reference to real subprocess.Popen
 _popen_patched = False
 _popen_lock = threading.Lock()
 
 
 def _set_thread_env(**kwargs):
-    """Register thread-local env overrides and enable subprocess isolation.
+    """Register session env overrides and enable subprocess isolation.
 
-    On first call, replaces :class:`subprocess.Popen` with
-    :class:`_IsolatedPopen` so that every subprocess spawned by an agent
-    thread inherits the session-specific env vars registered here (e.g.
-    ``HERMES_SESSION_KEY``, ``BROWSER_CDP_URL``).  Threads that have not
-    called ``_set_thread_env`` are unaffected — their subprocesses behave
-    exactly as before.
+    Overrides are stored in a ContextVar so they propagate to Hermes
+    tool-worker threads (via ``contextvars.copy_context()``) and into any
+    subprocess those workers spawn through the patched Popen. Contexts
+    that never called ``_set_thread_env`` are unaffected — their
+    subprocesses behave exactly as before.
     """
     global _popen_patched, _original_popen
 
-    _thread_ctx.env = kwargs
+    _env_override_ctx.set(dict(kwargs))
+
+    # Lazily install SDK compat patches so in-process readers
+    # (browser_tool._get_cdp_override_raw) honor this session's override.
+    # Idempotent; also installed at server startup.
+    try:
+        from app.compat import install as _install_compat_patches
+        _install_compat_patches()
+    except Exception:
+        logging.getLogger("app.api.config").debug(
+            "compat patch install failed", exc_info=True
+        )
+    try:
+        import logging as _logging
+        _logging.getLogger("app.api.config").debug(
+            "[env-override] set thread=%s session_key=%r keys=%s",
+            threading.get_ident(),
+            kwargs.get("HERMES_SESSION_KEY", "<missing>"),
+            sorted(kwargs.keys()),
+        )
+    except Exception:
+        pass
 
     with _popen_lock:
         if not _popen_patched:
@@ -2634,17 +2659,35 @@ def _set_thread_env(**kwargs):
             _original_popen = _sp.Popen
 
             class _IsolatedPopen(_original_popen):  # type: ignore[valid-type]
-                """Popen that merges thread-local env overrides into the child env."""
+                """Popen that merges session env overrides into the child env."""
 
                 def __init__(self, *args, **kwargs):
-                    overrides = getattr(_thread_ctx, 'env', None) or {}
+                    overrides = _env_override_ctx.get() or {}
+                    try:
+                        import logging as _logging
+                        _env_arg = kwargs.get('env', None)
+                        _logging.getLogger("app.api.config").debug(
+                            "[env-override] popen thread=%s has_overrides=%s "
+                            "ov_keys=%s args0=%r",
+                            threading.get_ident(),
+                            1 if overrides else 0,
+                            sorted(overrides.keys()) if overrides else None,
+                            (args[0][:80] if args and isinstance(args[0], (str, list, tuple)) else None),
+                        )
+                    except Exception:
+                        pass
                     if overrides:
                         env = kwargs.get('env', None)
-                        if env is None:
-                            env = dict(os.environ)
-                            env.update(overrides)
-                        else:
-                            env = {**env, **overrides}
+                        env = dict(os.environ) if env is None else dict(env)
+                        # An override value of None means "remove this key"
+                        # (e.g. HTTP_PROXY for pinned sessions, where
+                        # agent-browser would otherwise route the local CDP
+                        # connection through the proxy).
+                        for _k, _v in overrides.items():
+                            if _v is None:
+                                env.pop(_k, None)
+                            else:
+                                env[_k] = _v
                         kwargs['env'] = env
                     super().__init__(*args, **kwargs)
 
@@ -2653,7 +2696,7 @@ def _set_thread_env(**kwargs):
 
 
 def _clear_thread_env():
-    _thread_ctx.env = {}
+    _env_override_ctx.set({})
 
 
 # ── Per-session agent locks ───────────────────────────────────────────────────

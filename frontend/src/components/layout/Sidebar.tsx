@@ -5,7 +5,6 @@ import SkillsPanel from '@/components/sidebar/SkillsPanel';
 import MemoryPanel from '@/components/sidebar/MemoryPanel';
 import WorkspacesPanel from '@/components/sidebar/WorkspacesPanel';
 import TerminalPanel from '@/components/sidebar/TerminalPanel';
-
 import SettingsPanel from '@/components/sidebar/SettingsPanel';
 import { wsManager } from '@/stores/wsManager';
 import { useSidebarPanelStore } from '@/stores/useSidebarPanelStore';
@@ -25,14 +24,21 @@ export default function Sidebar({ width = 300, onResizeStart }: SidebarProps) {
 
   const closeSidebar = () => setSidebarOpen(false);
 
+  // The shared browser desktop has no supporting list: only one desktop
+  // exists and its status/reconnect controls live in the view itself. Keep
+  // the nav rail visible but collapse the panel area for that tab.
+  const panelVisible = sidebarOpen && activePanel !== 'browser-desktop';
+  const sidebarWidth = panelVisible ? width : 48;
+
   const handlePanelChange = (panel: NavPanel) => {
     if (panel === activePanel) {
-      // Clicking the active tab toggles sidebar open/close
-      toggleSidebarOpen();
+      // Clicking the active tab toggles sidebar open/close — except for the
+      // Desktop tab, which has no panel to collapse/expand.
+      if (panel !== 'browser-desktop') toggleSidebarOpen();
     } else {
       // Different tab — switch panel and ensure sidebar is open
       setActivePanel(panel);
-      setSidebarOpen(true);
+      if (panel !== 'browser-desktop') setSidebarOpen(true);
       // Ensure WS reconnects if it died (e.g. after screen lock).
       wsManager.ensureConnected();
     }
@@ -41,7 +47,7 @@ export default function Sidebar({ width = 300, onResizeStart }: SidebarProps) {
   return (
     <>
       {/* Mobile overlay */}
-      {sidebarOpen && (
+      {panelVisible && (
         <div
           className="fixed inset-0 bg-black/50 z-50 md:hidden"
           onClick={closeSidebar}
@@ -49,11 +55,13 @@ export default function Sidebar({ width = 300, onResizeStart }: SidebarProps) {
       )}
 
       <aside
-        className={`sidebar ${sidebarOpen ? 'open' : ''}`}
-        style={{ width: sidebarOpen ? `${width}px` : '48px', minWidth: sidebarOpen ? `${width}px` : '48px' }}
+        className={`sidebar ${sidebarOpen ? 'open' : ''}${panelVisible ? '' : ' rail-only'}`}
+        style={{ width: `${sidebarWidth}px`, minWidth: `${sidebarWidth}px` }}
       >
         <NavTabs activePanel={activePanel} onPanelChange={handlePanelChange} />
 
+        {/* Keep panels mounted while the Desktop tab collapses the sidebar, so
+            chat scroll position and panel-local state survive the round trip. */}
         {sidebarOpen && (
           <div className="sidebar-content">
             <div className={`panel-view ${activePanel === 'chat' ? 'active' : ''}`} id="panelChat">
@@ -87,7 +95,7 @@ export default function Sidebar({ width = 300, onResizeStart }: SidebarProps) {
         )}
 
         {/* Resize handle — hidden when collapsed */}
-        {sidebarOpen && (
+        {panelVisible && (
           <div
             className="resize-handle"
             onMouseDown={onResizeStart}

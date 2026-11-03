@@ -46,7 +46,7 @@ bash scripts/build.sh
 
 ## 编码规范
 
-- 后端：纯 Python stdlib（无 Flask/Django/FastAPI），唯一外部依赖是 `pyyaml`。
+- 后端：纯 Python stdlib（无 Flask/Django/FastAPI），依赖为 `pyyaml`，另有一项已批准的例外：`aiohttp`（browser-desktop 接收员，issue #37）。
 - 前端：TypeScript strict 模式。状态管理用 Zustand store，样式遵循Google Design M3前端规范。
 - 禁止使用原生 `confirm()`/`prompt()` — 使用 `showConfirmDialog()`/`showPromptDialog()`。
 - 路径穿越防护：文件操作始终使用 `safe_resolve(root, requested)`。

@@ -271,6 +271,28 @@ export function renderMarkdown(raw: string, skipHighlight: boolean = false): str
   return html;
 }
 
+// ── Relative file-link interception ─────────────────────────────────────────
+// Markdown like `[中文](SKILL.zh-CN.md)` renders an <a href="SKILL.zh-CN.md">.
+// Inside the SPA that href resolves against the current route (invalid URL).
+// Callers of rendered markdown pass a click handler; this extracts the link
+// target when the click landed on a relative, in-document file link.
+
+export function relativeFileLinkTarget(event: {
+  target: EventTarget | null;
+}): string | null {
+  const el = event.target;
+  if (!(el instanceof Element)) return null;
+  const a = el.closest('a');
+  if (!a) return null;
+  const href = a.getAttribute('href') || '';
+  // Skip in-page anchors, external/scheme links (http:, mailto:),
+  // protocol-relative (//) and site-absolute (/) paths.
+  if (!href || href.startsWith('#') || /^(?:[a-z][a-z0-9+.-]*:|\/\/|\/)/i.test(href)) {
+    return null;
+  }
+  return decodeURIComponent(href.split('#')[0].split('?')[0]) || null;
+}
+
 export function highlightCode(code: string, lang: string): string {
   try {
     const grammar = Prism.languages[lang] || Prism.languages.text;

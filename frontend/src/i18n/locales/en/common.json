@@ -38,7 +38,9 @@
     "todos": "Todo",
     "todos_title": "Task management",
     "terminal": "Terminal",
-    "terminal_title": "Open terminal shell"
+    "terminal_title": "Open terminal shell",
+    "browser_desktop": "Desktop",
+    "browser_desktop_title": "Shared browser desktop"
   },
   "sessions": {
     "new_conversation": "New conversation",
@@ -364,10 +366,16 @@
     "hide_panel": "Hide todos panel",
     "readonly_no_todos": "Read-only session — todos not available"
   },
-  "vnc": {
-    "observe": "Observe",
-    "pin_to_observe": "Pin session to observe",
-    "readonly_no_observe": "Read-only session — observation not available"
+  "browser_desktop": {
+    "status_active": "Active",
+    "status_degraded": "Degraded",
+    "status_disabled": "Disabled",
+    "status_stopped": "Stopped",
+    "status_connecting": "Connecting to desktop…",
+    "status_connected": "Connected",
+    "status_disconnected": "Disconnected",
+    "status_unavailable": "Desktop unavailable",
+    "reconnect": "Reconnect"
   },
   "context_usage": {
     "context": "Context",
