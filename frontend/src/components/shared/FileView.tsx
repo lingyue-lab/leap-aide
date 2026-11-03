@@ -227,7 +227,7 @@ export default function FileView({
       <div className="file-view-code">
         <CodeCopyButton content={content || ''} />
         <div
-          className="prose prose-sm text-[var(--foreground)]"
+          className="prose text-[var(--foreground)]"
           onClick={onRelativeLink ? handleLinkClick : undefined}
           dangerouslySetInnerHTML={{ __html: html }}
         />
