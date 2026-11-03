@@ -472,84 +472,91 @@ def _trusted_workspace_roots() -> list[Path]:
 
 
 def list_workspace_suggestions(prefix: str = "", limit: int = 12) -> list[str]:
-    """Return workspace path suggestions under trusted roots only.
+    """Return directory completions for the add-workspace path field.
 
-    Suggestions are limited to directories under one of:
-      - Path.home()
-      - the boot default workspace
-      - already-saved workspace roots
+    Must match what ``validate_workspace_to_add`` actually accepts: any
+    existing directory except known system roots.  This endpoint used to be
+    limited to "trusted roots" (home + boot default + already-saved
+    workspaces) while Add happily accepted any non-system directory, so the
+    autocomplete hid paths the form would have accepted (issue #22).
 
-    Arbitrary system prefixes return an empty list rather than an error so the
-    UI can safely autocomplete while the user types.
+    The system-root blocklist stays — that is the real boundary (and
+    ``validate_workspace_to_add`` enforces it too).  Only the trusted-roots
+    restriction is dropped.
+
+    Hidden directories (names starting with ".") are included: a workspace can
+    legitimately live in one (e.g. ``~/.hermes_workspaces``) and hiding them
+    made those paths impossible to complete.  The typed prefix still filters
+    them naturally (typing "." narrows to hidden entries).
+
+    Returns [] for an empty prefix or a parent that cannot be listed, so the
+    UI can stay silent while the user types.
     """
-    roots = _trusted_workspace_roots()
-    if not roots:
-        return []
-
     raw = (prefix or "").strip()
     if not raw:
-        return [str(p) for p in roots[:limit]]
+        return []
 
-    if raw.startswith("~"):
-        target = Path(raw).expanduser()
-    elif Path(raw).is_absolute():
-        target = Path(raw)
+    # Derive parent + leaf prefix from the RAW string.  Path(".../.") would
+    # normalise the trailing dot away and turn a "show hidden" query into the
+    # parent directory's own name, so the leaf must not go through Path().
+    if raw == "~":
+        parent = Path.home()
+        leaf = ""
+    elif raw.endswith(os.sep) or raw.endswith("/"):
+        try:
+            parent = Path(raw).expanduser()
+        except Exception:
+            return []
+        leaf = ""
     else:
-        target = Path.home() / raw
-
-    normalized = str(target)
-    normalized_lower = normalized.lower()
-    suggestions: list[str] = []
-
-    def add(path: Path) -> None:
-        value = str(path)
-        if value not in suggestions:
-            suggestions.append(value)
-
-    # If the user is typing a partial trusted root like /Users/xuef..., suggest
-    # the matching trusted roots without scanning arbitrary system parents.
-    for root in roots:
-        if str(root).lower().startswith(normalized_lower):
-            add(root)
-
-    in_root = [
-        root
-        for root in roots
-        if normalized == str(root) or normalized.startswith(str(root) + os.sep)
-    ]
-    if not in_root:
-        return suggestions[:limit]
-
-    anchor_root = max(in_root, key=lambda p: len(str(p)))
-    ends_with_sep = raw.endswith(os.sep) or raw.endswith('/')
-    parent = target if ends_with_sep else target.parent
-    leaf = '' if ends_with_sep else target.name
-    show_hidden = leaf.startswith('.')
+        idx = raw.rfind("/")
+        if idx == -1:
+            parent = Path.home()
+            leaf = raw
+        else:
+            try:
+                parent = Path(raw[:idx] or "/").expanduser()
+            except Exception:
+                return []
+            leaf = raw[idx + 1:]
 
     try:
-        parent_resolved = parent.expanduser().resolve()
+        parent_resolved = parent.resolve()
     except Exception:
-        return suggestions[:limit]
-
+        return []
     if not parent_resolved.exists() or not parent_resolved.is_dir():
-        return suggestions[:limit]
-    if not _is_within(parent_resolved, anchor_root):
-        return suggestions[:limit]
+        return []
+
+    # Never enumerate inside a blocked system root (e.g. /etc, /usr), but do
+    # allow the filesystem root itself so "/" can list top-level directories.
+    if str(parent_resolved) != "/" and _is_blocked_workspace_path(
+        parent_resolved, str(parent_resolved)
+    ):
+        return []
 
     leaf_lower = leaf.lower()
     try:
         children = sorted(parent_resolved.iterdir(), key=lambda p: p.name.lower())
     except OSError:
-        return suggestions[:limit]
+        return []
 
+    suggestions: list[str] = []
     for child in children:
-        if not child.is_dir():
-            continue
-        if child.name.startswith('.') and not show_hidden:
+        try:
+            if not child.is_dir():
+                continue
+        except OSError:
             continue
         if leaf_lower and not child.name.lower().startswith(leaf_lower):
             continue
-        add(child.resolve())
+        try:
+            resolved = child.resolve()
+        except OSError:
+            resolved = child
+        # Match Add: a blocked system path is not addable, so do not suggest it.
+        if _is_blocked_workspace_path(resolved, str(child)):
+            continue
+        suggestions.append(str(resolved))
         if len(suggestions) >= limit:
             break
     return suggestions[:limit]
