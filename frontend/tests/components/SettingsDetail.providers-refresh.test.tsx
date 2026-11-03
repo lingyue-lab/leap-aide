@@ -40,6 +40,9 @@ vi.mock('@/services/api', () => ({
     getRaw: vi.fn().mockResolvedValue(''),
     saveRaw: vi.fn(),
   },
+  settingsService: {
+    setDefaultModel: vi.fn(),
+  },
 }));
 
 vi.mock('@/stores/useSettingsStore', () => {
@@ -264,6 +267,49 @@ describe('SettingsDetail — providers gate refresh', () => {
       expect(useModelsStore.getState().status).toBe('ready');
     });
     expect(mockedGetModels).toHaveBeenCalled();
+  });
+
+  // Deleting a key must refresh the catalog immediately too: the provider's
+  // models (and the configured default's availability warning) would
+  // otherwise stay stale for up to the store's 5-minute TTL.
+  it('after a successful deleteKey, the models store is invalidated and reloaded', async () => {
+    mockedGetProviders.mockResolvedValueOnce({
+      providers: [fakeProvider({ has_key: true })],
+      active_provider: 'tencent-tokenhub',
+    });
+    mockedDeleteKey.mockResolvedValue({ ok: true });
+    mockedGetProviders.mockResolvedValueOnce({
+      providers: [fakeProvider({ id: 'tencent-tokenhub', has_key: false })],
+      active_provider: 'tencent-tokenhub',
+    });
+
+    const { getByTitle } = render(<SettingsDetail />);
+    const deleteBtn = await waitFor(() => getByTitle('settings.providers.clear_key'));
+
+    // A fresh catalog that still lists the provider's models.  With the TTL
+    // this would otherwise be reused instead of re-fetched.
+    useModelsStore.setState({
+      data: {
+        groups: [
+          {
+            provider: 'Tencent TokenHub',
+            provider_id: 'tencent-tokenhub',
+            models: [{ id: '@tencent-tokenhub:hy3-preview', label: 'Hy3 Preview' }],
+          },
+        ],
+      },
+      status: 'ready',
+      error: null,
+      fetchedAt: Date.now(),
+    });
+    const callsBefore = mockedGetModels.mock.calls.length;
+
+    fireEvent.click(deleteBtn);
+
+    await waitFor(() => {
+      expect(mockedGetModels.mock.calls.length).toBeGreaterThan(callsBefore);
+    });
+    await waitFor(() => expect(useModelsStore.getState().status).toBe('ready'));
   });
 
   // Backend saved the key but could not verify it (network/timeout) —

@@ -882,6 +882,30 @@ def _is_quota_error(text) -> bool:
     return any(pattern in lowered for pattern in _QUOTA_ERROR_PATTERNS)
 
 
+# The SDK rejects agent construction when the configured provider has no API
+# key, with a message that names config.yaml and the provider env var.  That
+# is actionable for a CLI operator but confusing in the WebUI; classify it so
+# both stream error paths can show a short, Settings-oriented message.
+_MISSING_KEY_ERROR_FRAGMENTS = (
+    'no api key was found',
+    'is set in config.yaml but no api key',
+)
+
+_DEFAULT_MODEL_INVALID_MESSAGE = (
+    'Default model is not valid. Please configure it in Settings.'
+)
+_DEFAULT_MODEL_INVALID_HINT = (
+    "The API key for the default model's provider was removed. "
+    'Re-add the key in Settings → Model Providers, or choose another model.'
+)
+
+
+def _is_missing_key_error(text) -> bool:
+    """True when *text* is the SDK's "provider set but no API key" error."""
+    lowered = str(text or '').lower()
+    return any(fragment in lowered for fragment in _MISSING_KEY_ERROR_FRAGMENTS)
+
+
 def _ensure_failed_user_message(s, msg_text) -> None:
     """Keep a failed turn's user message in the transcript (issue #38).
 
@@ -2480,11 +2504,14 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                     # Billing verdicts from the SDK carry
                     # failure_reason='billing' — trust them even when the
                     # provider wording is not in the pattern list (issue #38).
+                    _is_missing_key = _is_missing_key_error(_err_str)
                     _is_quota = (
-                        _is_quota_error(_err_str)
-                        or (
-                            isinstance(result, dict)
-                            and str(result.get('failure_reason') or '').lower() == 'billing'
+                        not _is_missing_key and (
+                            _is_quota_error(_err_str)
+                            or (
+                                isinstance(result, dict)
+                                and str(result.get('failure_reason') or '').lower() == 'billing'
+                            )
                         )
                     )
                     _is_auth = (
@@ -2505,7 +2532,14 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                             or 'returned none after all retries' in _err_lower
                         )
                     )
-                    if _is_quota:
+                    if _is_missing_key:
+                        _err_label = 'Default model not available'
+                        _err_type = 'model_unavailable'
+                        _err_hint = _DEFAULT_MODEL_INVALID_HINT
+                        # Replace the SDK's config.yaml/env-var detail with a
+                        # user-facing message; diagnostics were printed above.
+                        _err_str = _DEFAULT_MODEL_INVALID_MESSAGE
+                    elif _is_quota:
                         _err_label = 'Out of credits'
                         _err_type = 'quota_exhausted'
                         _err_hint = 'Your provider account is out of credits. Top up your balance or switch providers via `hermes model`.'
@@ -2820,10 +2854,11 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
         if _stripped != err_str:
             err_str = _stripped
         _exc_lower = err_str.lower()
+        _exc_is_missing_key = _is_missing_key_error(err_str)
         # Classify before saving so the error message can be persisted to the session.
         # Check quota exhaustion first — OpenAI billing 429s use insufficient_quota which
         # also matches rate-limit patterns, so order matters.
-        _exc_is_quota = _is_quota_error(err_str)
+        _exc_is_quota = (not _exc_is_missing_key) and _is_quota_error(err_str)
         _exc_is_rate_limit = (not _exc_is_quota) and (
             'rate limit' in _exc_lower or '429' in err_str or 'RateLimitError' in type(e).__name__
         )
@@ -2845,7 +2880,15 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             or 'does not match any known model' in _exc_lower
             or 'unknown model' in _exc_lower
         )
-        if _exc_is_quota:
+        if _exc_is_missing_key:
+            _exc_label, _exc_type, _exc_hint = (
+                'Default model not available', 'model_unavailable',
+                _DEFAULT_MODEL_INVALID_HINT,
+            )
+            # Keep the provider/env-var detail in the server log (printed
+            # above) and show a short, Settings-oriented message to the user.
+            err_str = _DEFAULT_MODEL_INVALID_MESSAGE
+        elif _exc_is_quota:
             _exc_label, _exc_type, _exc_hint = (
                 'Out of credits', 'quota_exhausted',
                 'Your provider account is out of credits. Top up your balance or switch providers via `hermes model`.',

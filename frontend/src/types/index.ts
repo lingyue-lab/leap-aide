@@ -298,6 +298,18 @@ export interface StreamStatusResponse {
 export interface ModelsResponse {
   groups: ModelGroup[];
   default_model?: string;
+  /**
+   * Whether the configured default appears in the catalog. `null`/undefined
+   * means unknown (config-only response, in-flight build, or old disk
+   * snapshot) — only an explicit `false` should trigger an unavailable hint.
+   */
+  default_model_available?: boolean | null;
+  /**
+   * Whether the default model's provider has a configured API key. `null`
+   * when unknown or when the provider does not authenticate with a key
+   * (local/OAuth). Only an explicit `false` means the key is missing.
+   */
+  default_model_provider_has_key?: boolean | null;
   active_provider?: string;
   // Present only when the backend degraded (cold build still in flight or
   // failed): the groups may be stale/partial, so consumers should keep
@@ -317,6 +329,8 @@ export interface Model {
   id: string;
   label: string;
   supportsExtendedThinking?: boolean;
+  /** Injected configured default that the provider no longer offers. */
+  unavailable?: boolean;
 }
 
 export interface Provider {

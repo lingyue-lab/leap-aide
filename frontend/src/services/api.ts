@@ -267,6 +267,18 @@ export const settingsService = {
       body: JSON.stringify(settings),
     });
   },
+
+  /**
+   * Persist the default model to the active profile's config.yaml.
+   * The backend resolves the WebUI `@provider:model` form before writing;
+   * never write that form to config.yaml directly.
+   */
+  setDefaultModel: async (model: string) => {
+    return api<{ ok: boolean; model: string }>('/api/default-model', {
+      method: 'POST',
+      body: JSON.stringify({ model }),
+    });
+  },
 };
 
 // Models API 服务

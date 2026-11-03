@@ -13,7 +13,7 @@ import app.api.config as _cfg
 from app.api.config import (
     SESSION_DIR, SESSION_INDEX_FILE, SESSIONS, SESSIONS_MAX,
     LOCK, DEFAULT_WORKSPACE, DEFAULT_MODEL, PROJECTS_FILE, HOME,
-    get_effective_default_model, get_first_available_model,
+    get_default_model_for_new_session,
 )
 from app.api.agent_sessions import read_importable_agent_session_rows
 from app.api.stream_manager import stream_manager
@@ -1135,7 +1135,8 @@ def new_session(workspace=None, model=None, profile=None, defer_notify=False):
       - workspace: the built-in Default workspace (issue #7) — there is no
         global "last workspace"; workspace ownership lives on each session
         (state.db cwd), and welcome-state/"+" sessions default to Default
-      - model: first available model from the provider list
+      - model: configured default model, falling back to the first
+        available provider model when no default is configured
       - reasoning_effort: "high"
       - personality: None (global default)
       - skills: None (all skills available)
@@ -1159,7 +1160,7 @@ def new_session(workspace=None, model=None, profile=None, defer_notify=False):
             profile = get_active_profile_name()
         except ImportError:
             profile = None
-    effective_model = model or get_first_available_model()
+    effective_model = model or get_default_model_for_new_session()
     # Normalize bare model names to @provider:model so downstream paths
     # (drain, replay) can resolve the provider without ambiguity.
     effective_model = Session._normalize_model(effective_model)

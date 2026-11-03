@@ -136,6 +136,10 @@ CI 在每个触及双语配对的 PR 上运行 `--check-all`、`--check-tree doc
 ### 设置
 
 - **设置持久化**: 改一个设置，刷新，确认保留。
+- **默认模型**: 设置 → 智能体行为 → 选择默认模型并保存；确认当前 profile 的 `config.yaml`（`model.default` / `model.provider`）已更新，刷新后仍保持该选择。新建对话（欢迎页首条消息与 `+` 按钮）时 footer 与会话记录使用该模型。
+- **同名模型的两个来源**: 同时配置 DeepSeek 与 OpenRouter 的 key，并让 DeepSeek 处于 active；在默认模型下拉框中选 **OpenRouter** 分组的 DeepSeek 条目保存后，`config.yaml` 应为 `provider: openrouter` + `model.default: deepseek/...`；改选 DeepSeek 分组的条目则应为 `provider: deepseek` + 裸 id。两种选择新建对话后都必须调用各自 provider 的端点和 key。
+- **默认模型失效**: 把 `model.default` 改成 provider 已不再提供的 id，清空模型缓存并重启。设置页与 composer footer 显示失效提示，发送仍使用该配置值，`config.yaml` 不会被自动改写。
+- **删除服务商 API Key**: 把一个由某 provider 提供的模型设为默认模型，然后在 设置 → 模型服务商 中删除该 provider 的 API Key。该 provider 的模型必须立即从 composer picker 消失（不得回退到 JSON 基线）；Settings 立即显示“API Key 已删除”的专用提示；composer 仍显示配置的默认模型并标注不可用，同时给出“重新添加 key”的说明；发送时显示简短的 “Default model is not valid. Please configure it in Settings.”，而不是 SDK 的 `config.yaml` / 环境变量原始文本。若用户在 composer footer 中选择其他模型，该提示消失，并显示所选模型。
 
 ---
 

@@ -20,6 +20,18 @@ def test_models_has_required_fields():
     assert 'groups' in d
     assert 'default_model' in d
     assert 'active_provider' in d
+    # Issue #44: availability metadata is bool when a live catalog was
+    # consulted, or None when unknown (config-only / building / old cache).
+    assert 'default_model_available' in d
+    assert d['default_model_available'] is None or isinstance(
+        d['default_model_available'], bool
+    )
+    # Whether the default's provider has a key (only meaningful for
+    # catalog API-key providers; None otherwise).
+    assert 'default_model_provider_has_key' in d
+    assert d['default_model_provider_has_key'] is None or isinstance(
+        d['default_model_provider_has_key'], bool
+    )
 
 def test_models_groups_structure():
     """Each group has provider name and models list."""

@@ -833,9 +833,11 @@ def _apply_provider_prefix(raw_models: list[dict], provider_id: str) -> list[dic
     for m in raw_models:
         mid = m["id"]
         if mid.startswith("@"):
-            result.append({"id": mid, "label": m["label"]})
+            # Already an identity — keep the other keys (an unavailable
+            # default must survive a cache round-trip, issue #44).
+            result.append({**m, "id": mid})
         else:
-            result.append({"id": f"@{provider_id}:{mid}", "label": m["label"]})
+            result.append({**m, "id": f"@{provider_id}:{mid}"})
     return result
 
 
@@ -1125,6 +1127,145 @@ def get_first_catalog_model() -> str:
             if model_id:
                 return model_id
     return ""
+
+
+def _normalize_model_id_for_match(model_id: str) -> str:
+    """Normalize a model ID for cross-format availability checks.
+
+    config.yaml stores bare/slash names (``anthropic/claude-opus-4.6``),
+    while the catalog presents every model as ``@provider:model``
+    (``@nous:anthropic/claude-opus-4.6``).  Compare the trailing model
+    name so both forms and the ``-``/``.`` version spelling match.
+    """
+    mid = str(model_id or "").strip().lower()
+    if mid.startswith("@"):
+        mid = mid.split(":", 1)[-1]
+    if "/" in mid:
+        mid = mid.split("/", 1)[-1]
+    return mid.replace("-", ".")
+
+
+def _compute_default_model_available(
+    default_model: str, groups: list[dict]
+) -> bool | None:
+    """Return whether the configured default appears in *groups*.
+
+    ``None`` means "unknown" (no configured default, or no catalog to check
+    against); callers must only warn on an explicit ``False``.  This must be
+    computed BEFORE the default-model injection in the catalog build, or the
+    injected entry would make it always true.
+    """
+    default_id = str(default_model or "").strip()
+    if not default_id:
+        return None
+    target = _normalize_model_id_for_match(default_id)
+    return any(
+        _normalize_model_id_for_match(model.get("id", "")) == target
+        for group in groups
+        for model in group.get("models", [])
+    )
+
+
+def _resolve_default_model_provider(
+    default_model: str, active_provider: str | None
+) -> str:
+    """Return the provider that actually serves the configured default model.
+
+    config.yaml persists the provider separately (``model.provider``), so it
+    is authoritative: a slash in ``model.default`` is part of the model name
+    (OpenRouter's ``deepseek/deepseek-v4-flash`` must not be mistaken for the
+    DeepSeek direct provider).  Only when no provider is configured do we
+    infer a slash prefix that names a known catalog provider, preserving the
+    historical fallback for provider-less configs.
+    """
+    dm = str(default_model or "").strip()
+    if dm.startswith("@") and ":" in dm:
+        return _resolve_provider_alias(dm[1:].split(":", 1)[0])
+    if active_provider:
+        return str(active_provider)
+    if "/" in dm:
+        candidate = _resolve_provider_alias(dm.split("/", 1)[0])
+        if model_catalog.get_provider_record(candidate) is not None:
+            return candidate
+    return ""
+
+
+def _default_model_provider_has_key(
+    default_model: str, active_provider: str | None
+) -> bool | None:
+    """Whether the default model's provider has a configured API key.
+
+    ``None`` when the provider is unknown or does not authenticate with an
+    API key (local or OAuth providers), so the UI reports a missing key only
+    where one is actually required.
+    """
+    provider_id = _resolve_default_model_provider(default_model, active_provider)
+    if not provider_id:
+        return None
+    rec = model_catalog.get_provider_record(provider_id)
+    if rec is None or (rec.get("auth") or {}).get("type") != "api_key":
+        return None
+    try:
+        from app.api.providers import _provider_has_key
+
+        return bool(_provider_has_key(provider_id))
+    except ImportError:
+        return None
+
+
+def _provider_requires_api_key(provider_id: str) -> bool:
+    """True when the catalog declares API-key authentication for *provider_id*.
+
+    Unknown providers (custom endpoints, gateway variants) return ``False``:
+    the catalog cannot prove they are keyless, so callers should keep their
+    historical behaviour for them.
+    """
+    rec = model_catalog.get_provider_record(provider_id)
+    if rec is None:
+        return False
+    return (rec.get("auth") or {}).get("type") == "api_key"
+
+
+def get_default_model_for_new_session() -> str:
+    """Return the model a new session should start with.
+
+    A configured ``model.default`` wins even when the provider no longer
+    offers it: issue #44 keeps the user's choice and surfaces a warning
+    instead of silently switching models.  Only when nothing is configured
+    do we fall back to the first available catalog entry.
+
+    The returned value is always a routable ``@provider:model`` identity
+    (issue #55): the configured value is a bare/slash id, so it is mapped
+    onto its catalog entry, or onto the identity of the provider that
+    serves it, when the catalog does not know it.
+
+    ``peek_available_models()`` is called first so a config.yaml edit is
+    reloaded through its mtime guard without triggering a live catalog
+    build (the same latency constraint the previous first-available call
+    had on the chat-start path).  The configured value is then read
+    directly instead of from a possibly stale catalog snapshot.
+    """
+    try:
+        peek_available_models()
+    except Exception:
+        pass
+    configured = str(get_effective_default_model() or "").strip()
+    if not configured:
+        return get_first_catalog_model()
+    # A configured value that already carries its provider hint is routable
+    # as-is; anything else is mapped onto the catalog first.
+    identity = normalize_model_prefix(configured)
+    if identity.startswith("@"):
+        return identity
+    provider_id = _resolve_default_model_provider(configured, None)
+    if not provider_id:
+        try:
+            provider_id = _resolve_default_model_provider(
+                configured, peek_available_models().get("active_provider")
+            )
+        except Exception:
+            provider_id = ""
+    return _model_identity_for_provider(configured, provider_id)
 
 
 def normalize_model_prefix(model_id: str, *, catalog: dict | None = None) -> str:
@@ -1484,10 +1625,37 @@ def _load_models_cache_from_disk() -> dict | None:
             }
         else:
             _disk_provider_models = {}
+        default_model_available = cache.get("default_model_available")
+        if not isinstance(default_model_available, bool):
+            # Old snapshots predate the field; treat them as unknown rather
+            # than warning about a model that may still be available.
+            default_model_available = None
+        default_model_provider_has_key = cache.get(
+            "default_model_provider_has_key"
+        )
+        if not isinstance(default_model_provider_has_key, bool):
+            default_model_provider_has_key = None
+        groups = cache.get("groups", [])
+        active_provider = cache.get("active_provider")
+        if isinstance(groups, list):
+            # Snapshots written before the `@provider:model` convention can
+            # hold bare IDs (e.g. OpenRouter's ``deepseek/...``).  Re-apply
+            # the provider hint on load so a warm cache does not keep the
+            # ambiguous form after an upgrade; already-prefixed IDs pass
+            # through unchanged.
+            for group in groups:
+                if not isinstance(group, dict):
+                    continue
+                pid = group.get("provider_id")
+                models = group.get("models")
+                if pid and isinstance(models, list):
+                    group["models"] = _apply_provider_prefix(models, pid)
         return {
-            "active_provider": cache.get("active_provider"),
+            "active_provider": active_provider,
             "default_model": cache.get("default_model") or "",
-            "groups": cache.get("groups", []),
+            "default_model_available": default_model_available,
+            "default_model_provider_has_key": default_model_provider_has_key,
+            "groups": groups,
         }
     except Exception:
         return None
@@ -1505,10 +1673,21 @@ def _save_models_cache_to_disk(cache: dict) -> None:
     try:
         tmp = str(_models_cache_path) + f".{os.getpid()}.tmp"
         groups = cache.get("groups", []) or []
+        default_model_available = cache.get("default_model_available")
         payload = {
             "schema_version": 1,
             "active_provider": cache.get("active_provider"),
             "default_model": cache.get("default_model") or "",
+            "default_model_available": (
+                default_model_available
+                if isinstance(default_model_available, bool)
+                else None
+            ),
+            "default_model_provider_has_key": (
+                cache.get("default_model_provider_has_key")
+                if isinstance(cache.get("default_model_provider_has_key"), bool)
+                else None
+            ),
             "groups": groups,
             "provider_models": {
                 g.get("provider_id"): g.get("models", [])
@@ -1879,6 +2058,15 @@ def _build_available_models_uncached() -> dict:
 
     default_model, active_provider, auth_store = _config_only_catalog_fields()
     groups = []
+    # Whether the configured default is offered by a usable provider.
+    # Computed before the injection below; None = unknown.
+    default_model_available: bool | None = None
+    # Whether the default's provider requires (and has) an API key.  Lets
+    # the UI say "its API key was removed" instead of the generic "model
+    # no longer offered" when the provider group vanished with the key.
+    default_model_provider_has_key = _default_model_provider_has_key(
+        default_model, active_provider
+    )
 
     # 1. Read config.yaml model section (base_url only — provider/default
     #    were resolved by _config_only_catalog_fields above)
@@ -2057,9 +2245,7 @@ def _build_available_models_uncached() -> dict:
 
         _filtered = set()
         for _pid in detected_providers:
-            if _pid == active_provider:
-                _filtered.add(_pid)
-            elif _pid in _pool_explicit_providers:
+            if _pid in _pool_explicit_providers:
                 # Provider has at least one explicit credential_pool entry.
                 # _provider_has_key() only checks env vars + config.yaml, so
                 # it returns False here even though the credential is valid.
@@ -2067,6 +2253,13 @@ def _build_available_models_uncached() -> dict:
             elif _provider_is_oauth(_pid):
                 _filtered.add(_pid)
             elif _provider_has_key(_pid):
+                _filtered.add(_pid)
+            elif _pid == active_provider and not _provider_requires_api_key(_pid):
+                # Keep the active provider only when the catalog does not
+                # require an API key for it (local endpoints, custom/unknown
+                # providers).  A catalog API-key provider whose key was
+                # deleted must disappear together with its models — the
+                # baseline list would otherwise keep showing unusable ids.
                 _filtered.add(_pid)
         detected_providers = _filtered
     except ImportError:
@@ -2301,7 +2494,9 @@ def _build_available_models_uncached() -> dict:
     else:
         if default_model:
             # Only show default model if its provider has a configured key
-            _dm_provider = default_model.split("/")[0] if "/" in default_model else active_provider
+            _dm_provider = _resolve_default_model_provider(
+                default_model, active_provider
+            )
             _dm_has_key = False
             try:
                 from app.api.providers import _provider_has_key as _phk
@@ -2311,19 +2506,29 @@ def _build_available_models_uncached() -> dict:
             if _dm_has_key:
                 label = _get_label_for_model(default_model, groups)
                 _default_identity = (
-                    _model_identity_for_provider(default_model, active_provider)
-                    if active_provider
+                    _model_identity_for_provider(default_model, _dm_provider)
+                    if _dm_provider
                     else default_model
                 )
                 groups.append(
                     {"provider": "Default", "provider_id": "default", "models": [{"id": _default_identity, "label": label}]}
                 )
 
+    # Compute availability BEFORE injecting the configured default: after
+    # injection the check would always pass.  With no eligible provider the
+    # answer is normally "unknown" — except when the default's provider is a
+    # catalog API-key provider whose key is missing, which is definitively
+    # unavailable (the keyless group was filtered out above).
+    if detected_providers:
+        default_model_available = _compute_default_model_available(default_model, groups)
+    elif default_model and default_model_provider_has_key is False:
+        default_model_available = False
+
     if default_model:
         # Only inject default model if its provider has a configured key
         # that a live query has not rejected (auth_failed providers stay
         # hidden — no phantom "Default" group for a revoked key).
-        _dm_prov2 = default_model.split("/")[0] if "/" in default_model else active_provider
+        _dm_prov2 = _resolve_default_model_provider(default_model, active_provider)
         _dm_ok2 = False
         try:
             from app.api.providers import _provider_has_key as _phk2
@@ -2345,7 +2550,15 @@ def _build_available_models_uncached() -> dict:
         all_ids_norm = {_norm(m["id"]) for g in groups for m in g.get("models", [])}
         if _norm(default_model) not in all_ids_norm and _dm_ok2:
             label = _get_label_for_model(default_model, groups)
-            identity = _model_identity_for_provider(default_model, active_provider)
+            # The catalog speaks ``@provider:model``; the configured value
+            # is a bare/slash id, so it is turned into an identity first.
+            identity = _model_identity_for_provider(default_model, _dm_prov2)
+            injected_model = {"id": identity, "label": label}
+            if default_model_available is False:
+                # Keep the configured value selectable, but let the UI warn
+                # that the provider no longer offers it.  The value itself
+                # is never rewritten (issue #44: warn, do not fall back).
+                injected_model["unavailable"] = True
             target_display = (
                 model_catalog.provider_display(active_provider).lower()
                 if active_provider
@@ -2354,7 +2567,7 @@ def _build_available_models_uncached() -> dict:
             injected = False
             for g in groups:
                 if target_display and g.get("provider", "").lower() == target_display:
-                    g["models"].insert(0, {"id": identity, "label": label})
+                    g["models"].insert(0, injected_model)
                     injected = True
                     break
             if not injected and groups:
@@ -2362,7 +2575,7 @@ def _build_available_models_uncached() -> dict:
                     {
                         "provider": "Default",
                         "provider_id": active_provider or "default",
-                        "models": [{"id": identity, "label": label}],
+                        "models": [injected_model],
                     }
                 )
 
@@ -2378,6 +2591,8 @@ def _build_available_models_uncached() -> dict:
     return {
         "active_provider": active_provider,
         "default_model": default_model,
+        "default_model_available": default_model_available,
+        "default_model_provider_has_key": default_model_provider_has_key,
         "groups": groups,
     }
 
@@ -2564,6 +2779,10 @@ def get_available_models(*, wait_seconds: float | None = None) -> dict:
         result = {
             "active_provider": active_provider,
             "default_model": default_model,
+            # Unknown: no live catalog was consulted, so the UI must not
+            # warn about a removed model based on this fallback.
+            "default_model_available": None,
+            "default_model_provider_has_key": None,
             "groups": [],
             # Flags a fallback so consumers (the frontend store) keep
             # polling instead of treating the empty catalog as final.
@@ -2675,6 +2894,8 @@ def peek_available_models(*, wait_seconds: float = _PEEK_WAIT_S) -> dict:
         return {
             "active_provider": active_provider,
             "default_model": default_model,
+            "default_model_available": None,
+            "default_model_provider_has_key": None,
             "groups": [],
             # Flags a config-only fallback (no live catalog was consulted).
             # Consumers that need group-level routability — cross-provider
@@ -2756,6 +2977,8 @@ def peek_available_models(*, wait_seconds: float = _PEEK_WAIT_S) -> dict:
             return {
                 "active_provider": None,
                 "default_model": str(DEFAULT_MODEL or ""),
+                "default_model_available": None,
+                "default_model_provider_has_key": None,
                 "groups": [],
                 "config_only": True,
             }

@@ -490,7 +490,19 @@ def test_auth_store_active_provider_alias_is_resolved(monkeypatch, tmp_path):
         "providers": {},
         # Aliased name: 'google' → 'gemini' per the catalog alias table.
         "active_provider": "google",
-        "credential_pool": {},
+        # Eligibility requires a configured credential even for the active
+        # provider. A manual pool entry stands in for one without giving the
+        # catalog builder a key value, so no live (networked) query runs.
+        "credential_pool": {
+            "gemini": [
+                {
+                    "id": "gemini-manual",
+                    "label": "gemini-manual",
+                    "source": "manual",
+                    "auth_type": "api_key",
+                }
+            ]
+        },
     }
 
     result = _call_get_available_models(monkeypatch, tmp_path, auth_payload)

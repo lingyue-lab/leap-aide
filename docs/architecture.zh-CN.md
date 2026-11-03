@@ -173,12 +173,48 @@ Provider 的展示名、别名、基线模型列表、端点、认证头与刷�
 - **刷新触发**复用现有 `/api/models` 构建机制（不新增后台线程）：24h TTL、
   config.yaml 或 `model_catalog.json` mtime 变化、保存 key、启动预热。
   `refresh.mode=api` 的 provider 并发查询（`ThreadPoolExecutor`，≤6 worker）
-  并按 provider 超时。资格判定（有 key / OAuth）不变——目录只决定*展示什么
-  模型*，不决定*该 provider 是否有资格展示*。
+  并按 provider 超时。资格判定仍以 key/OAuth 为准：目录中声明 API-key 认证的
+  provider 在没有 key 时会被移除——active provider 也不例外，因此删除 key 会
+  连同该 provider 的模型一起消失，而不是回退到 JSON 基线。没有 API-key 要求
+  的 provider（本地端点、未知/自定义 provider）在 active 时保留；自定义
+  `model.base_url` 拉取仍会重新加入其 slug。
+- **Picker 的 provider 提示**：`/api/models` 会给非 active provider 分组的
+  每个模型 ID 加上 `@provider:` 前缀，含 `/` 的 ID 也不例外（OpenRouter 的
+  `deepseek/deepseek-v4-flash` 变成
+  `@openrouter:deepseek/deepseek-v4-flash`）。裸 slash ID 是有歧义的：
+  `resolve_model_provider()` 会剥掉与 `model.provider` 相同的前缀，因此没有
+  该提示时，只要 active provider 恰好是 `deepseek`，OpenRouter 的选择就会被
+  静默路由到 DeepSeek 直连 API。`custom:<name>` 形式的自定义 provider 例外
+  ——其提示本身含冒号。active provider 的 ID 保持原样（它就是默认路由）；
+  `POST /api/default-model` 在写入 config.yaml 前会把提示解析回
+  `model.default` + `model.provider`。
 - **磁盘 envelope**：模型缓存快照持久化
-  `{schema_version, active_provider, default_model, groups,
-  provider_models, fetched_at}`，重启后首个响应字段完整，并保留每 provider
-  的上次成功列表；旧的 `{仅 groups}` 文件仍可加载。
+  `{schema_version, active_provider, default_model,
+  default_model_available, default_model_provider_has_key, groups,
+  provider_models, fetched_at}`，重启后首个响应字段完整，并保留每
+  provider 的上次成功列表；旧的 `{仅 groups}` 文件仍可加载。
+- **默认模型可用性（issue #44）**：`/api/models` 返回
+  `default_model_available`（`true` / `false` / `null`）。该值在把配置的
+  默认模型注入 picker *之前*，由真实 provider 分组计算；未知时返回
+  `null`（config-only 响应、构建中或旧磁盘快照）。当没有任何 provider
+  通过资格过滤时，如果默认模型所属 provider 是目录中需要 API key 的
+  provider 且当前没有 key，则可用性为 `false`——这是确定的失败，而非未知。
+  配套字段 `default_model_provider_has_key`（`true` / `false` / `null`；
+  本地/OAuth/未知 provider 为 `null`）让 UI 能提示“provider 的 API key
+  已被删除”，而不是误报“provider 不再提供该模型”。配置的默认模型不可用时
+  仍会注入以便 UI 展示，并标记 `unavailable: true`；后端绝不会把它改写成
+  其他模型——只由 UI 提示。当 provider 分组随 key 一起消失时，composer
+  仍显示配置值并给出说明，而不是静默选中另一个模型；用户在 composer
+  中显式选择其他模型后，该提示消失，因为该选择会替代默认值用于当前会话。
+  SDK 原始的
+  “provider set in config.yaml but no API key” 错误会在两条流式失败路径中
+  被翻译为同一段面向 Settings 的提示。未显式指定模型的新会话通过
+  `get_default_model_for_new_session()` 解析：优先有效默认值（环境变量
+  `HERMES_MODEL` / `OPENAI_MODEL` / `LLM_MODEL` → config.yaml
+  `model.default` → 内置常量），仅当其为空时才使用目录中第一个可用模型。
+  Settings 通过 `POST /api/default-model` 保存该控件，由后端把 WebUI 内部
+  的 `@provider:model` 形式还原为 config.yaml 的 `model.default` +
+  `model.provider`。
 - **SSRF 防护**（`model_catalog._check_url_safe`）：scheme 白名单
   （http/https）+ 拒绝解析到私网 IP 的主机名；已知本机主机
   （ollama/localhost/lmstudio）、目录 `endpoint.trust_local` 与用户声明的

@@ -185,14 +185,57 @@ Key properties:
   `model_catalog.json` mtime changes, key saves, and the boot prewarm.
   Providers with `refresh.mode=api` are queried concurrently
   (`ThreadPoolExecutor`, ≤6 workers) with a per-provider timeout.
-  Eligibility (is a key present / is the provider OAuth) is unchanged —
-  the catalog decides *what* to show, never *whether* the provider is
-  eligible.
+  Eligibility remains key/OAuth based: a catalog provider that declares
+  API-key auth is dropped when no key is configured — including the active
+  provider, so deleting a key removes that provider's models instead of
+  falling back to its JSON baseline. Providers without an API-key
+  requirement (local endpoints, unknown/custom providers) stay visible when
+  active, and custom `model.base_url` fetches still re-add their slug.
+- **Picker provider hints**: `/api/models` prefixes every model ID from a
+  non-active provider group with `@provider:`, including slash-form IDs
+  (OpenRouter's `deepseek/deepseek-v4-flash` becomes
+  `@openrouter:deepseek/deepseek-v4-flash`). A bare slash ID is ambiguous:
+  `resolve_model_provider()` strips a prefix that matches `model.provider`,
+  so without the hint an OpenRouter selection would silently route to the
+  DeepSeek direct API whenever `deepseek` is the active provider. Custom
+  providers (`custom:<name>`) are exempt because their hint itself contains
+  a colon. The active provider's IDs are left untouched (it is the default
+  route), and `POST /api/default-model` resolves the hint back to
+  `model.default` + `model.provider` before writing config.yaml.
 - **Disk envelope**: the models cache snapshot persists
-  `{schema_version, active_provider, default_model, groups,
+  `{schema_version, active_provider, default_model,
+  default_model_available, default_model_provider_has_key, groups,
   provider_models, fetched_at}` so a restart serves a complete first
   response and keeps per-provider last-good lists; legacy `{groups-only}`
   files still load.
+- **Default model availability (issue #44)**: `/api/models` carries
+  `default_model_available` (`true` / `false` / `null`). It is computed
+  from the real provider groups *before* the configured default is
+  injected into the picker, and is `null` when unknown (config-only
+  response, in-flight build, or a legacy disk snapshot). When no provider
+  survives the eligibility filter, availability is `false` if the
+  default's provider is a catalog API-key provider without a key — that is
+  a definitive failure, not the unknown case. A companion field,
+  `default_model_provider_has_key` (`true` / `false` / `null`; `null` for
+  local/OAuth/unknown providers), lets the UI say the provider's API key
+  was removed rather than claiming the provider retired the model. An
+  unavailable configured default is still injected so the UI can display
+  it, and is marked `unavailable: true`; the backend never rewrites it to
+  another model — the UI only warns. When the provider group vanished with
+  the key, the composer keeps showing the configured value plus an
+  explanation instead of silently selecting a different model; an explicit
+  pick in the composer dismisses that warning, because the new selection
+  replaces the default for the conversation. The raw
+  SDK "provider set in config.yaml but no API key" error is translated in
+  both stream failure paths into the same Settings-oriented message.
+  New sessions created without an explicit model resolve through
+  `get_default_model_for_new_session()`: the effective default first (env
+  override `HERMES_MODEL` / `OPENAI_MODEL` / `LLM_MODEL` → config.yaml
+  `model.default` → built-in constant), then the first available catalog
+  model only when that is empty. Settings saves the control via
+  `POST /api/default-model`, which resolves the WebUI-only
+  `@provider:model` form back to `model.default` + `model.provider` in
+  config.yaml.
 - **SSRF guard** (`model_catalog._check_url_safe`): scheme allowlist
   (http/https) plus rejection of hostnames resolving to private IPs,
   with explicit escapes for known-local hosts (ollama/localhost/

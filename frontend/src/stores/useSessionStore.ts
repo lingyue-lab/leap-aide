@@ -138,15 +138,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // session_id on first send (see api/routes.py:_handle_chat_start auto-create
     // branch).  Format is arbitrary; the `new-local-` prefix only helps log triage.
     const placeholderSid = `new-local-${crypto.randomUUID()}`;
-    // Carry over the previous session's model only when it is a routable
-    // @provider:model identity.  settings.model is a CLI-shaped config value
-    // (bare or namespaced), so it is not used here — an empty placeholder
-    // lets the composer resolve the catalog identity itself (issue #55).
-    const previousModel = state.currentSession?.model ?? '';
-    const placeholderModel =
-      previousModel.startsWith('@') && previousModel.includes(':')
-        ? previousModel
-        : '';
+    // A new conversation starts from the configured default, never by
+    // inheriting the previous session's model — display and the first sent
+    // message must agree (issue #44).  settings.model is a CLI-shaped config
+    // value (bare or namespaced), so it is not used here either; an empty
+    // placeholder lets the composer resolve the live configured default's
+    // catalog identity itself (issue #55).
+    const placeholderModel = '';
     // New sessions default to the built-in Default workspace — no
     // inheritance from the current session (workspace ownership lives on
     // state.db cwd; the WebUI's only default is builtin Default, issue #7).

@@ -142,6 +142,10 @@ After changes that touch the UI, run the following tests manually:
 ### Settings
 
 - **Settings persistence**: change a setting, reload, confirm it is retained.
+- **Default model**: Settings → Agent Behavior → pick a default model and Save; confirm the active profile's `config.yaml` (`model.default` / `model.provider`) was updated and reloading keeps the selection. Start a new chat (welcome first message and the `+` button) — the footer and the session record use that model.
+- **Same model, two providers**: with both DeepSeek and OpenRouter keys configured and DeepSeek active, pick the **OpenRouter** group's DeepSeek entry as default and Save. `config.yaml` must record `provider: openrouter` + `model.default: deepseek/...`; picking the DeepSeek group entry must record `provider: deepseek` + the bare id. A new chat using either choice must call that provider's endpoint with its own key.
+- **Removed default model**: point `model.default` at an id the provider no longer offers, clear the models cache and restart. Settings and the composer footer mark it unavailable, sending still uses the configured value, and `config.yaml` is not rewritten automatically.
+- **Deleted provider key**: set the default model to one served by a provider, then delete that provider's key in Settings → Model Providers. The provider's models must disappear from the composer picker immediately (no baseline fallback), Settings must warn right away with the key-specific message, the composer must keep showing the configured default marked unavailable plus a "re-add the key" line, and sending must show the short "Default model is not valid. Please configure it in Settings." message instead of the SDK's `config.yaml` / environment-variable text. Picking another model in the composer footer must dismiss that warning and show the picked model.
 
 ---
 
