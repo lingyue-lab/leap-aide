@@ -25,7 +25,7 @@ export interface FileTreeNode {
 }
 
 /** Internal node type for react-arborist */
-interface ArboristNode {
+export interface ArboristNode {
   id: string;
   name: string;
   path: string;
@@ -119,7 +119,7 @@ function addNodeChild(nodes: ArboristNode[], parentId: string, child: ArboristNo
 }
 
 /** Immutably remove a node by id from the tree. */
-function removeNodeById(nodes: ArboristNode[], id: string): ArboristNode[] {
+export function removeNodeById(nodes: ArboristNode[], id: string): ArboristNode[] {
   return nodes
     .filter((n) => n.id !== id)
     .map((n) => {
@@ -128,6 +128,74 @@ function removeNodeById(nodes: ArboristNode[], id: string): ArboristNode[] {
       }
       return n;
     });
+}
+
+/** Same ordering as the backend loader: directories first, then by name. */
+function compareNodes(a: ArboristNode, b: ArboristNode): number {
+  if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+  return a.name.localeCompare(b.name);
+}
+
+/** Immutably add a child under `parentId`, keeping siblings sorted and
+ *  ignoring duplicates (the parent may already have reloaded its own data). */
+export function addNodeChildSorted(
+  nodes: ArboristNode[],
+  parentId: string,
+  child: ArboristNode,
+): ArboristNode[] {
+  return nodes.map((n) => {
+    if (n.id === parentId) {
+      if (n.children?.some((c) => c.id === child.id)) return n;
+      return { ...n, children: [...(n.children || []), child].sort(compareNodes) };
+    }
+    if (n.children) {
+      return { ...n, children: addNodeChildSorted(n.children, parentId, child) };
+    }
+    return n;
+  });
+}
+
+/** Immutably rename a node and relocate every descendant path. Node ids are
+ *  absolute paths, so both id and path must change together — otherwise the
+ *  next child load would fetch the old location. */
+export function renameNodeById(
+  nodes: ArboristNode[],
+  id: string,
+  newName: string,
+  newPath: string,
+): ArboristNode[] {
+  let changed = false;
+  const next = nodes.map((n) => {
+    if (n.id === id) {
+      changed = true;
+      const oldPath = n.path;
+      const relocate = (node: ArboristNode): ArboristNode => {
+        const relocated = newPath + node.path.slice(oldPath.length);
+        return {
+          ...node,
+          id: relocated,
+          path: relocated,
+          children: node.children?.map(relocate),
+        };
+      };
+      return { ...relocate(n), name: newName };
+    }
+    if (n.children) {
+      const children = renameNodeById(n.children, id, newName, newPath);
+      if (children !== n.children) {
+        changed = true;
+        return { ...n, children };
+      }
+    }
+    return n;
+  });
+  return changed ? next : nodes;
+}
+
+/** Join a parent path and a file name without doubling the separator. */
+function joinPath(parent: string, name: string): string {
+  if (!parent) return name;
+  return `${parent.replace(/\/+$/, '')}/${name}`;
 }
 
 // ── Resize hook ──────────────────────────────────────────────────
@@ -417,7 +485,6 @@ export default function FileTreePanel({
             }
           );
         }
-        items.push({ separator: true });
         if (onRename) {
           items.push({
             label: 'Rename',
@@ -429,8 +496,16 @@ export default function FileTreePanel({
           items.push({
             label: 'Delete',
             icon: <TrashMultiIcon size={16} />,
-            onClick: () => {
-              if (confirm(`Delete "${nodeData.name}"?`)) onDelete(nodeData.path, true);
+            onClick: async () => {
+              if (!confirm(`Delete "${nodeData.name}"?`)) return;
+              try {
+                await onDelete(nodeData.path, true);
+                // Update the row list in place; a root reload would collapse
+                // every expanded directory.
+                setNodes((prev) => removeNodeById(prev, nodeData.id));
+              } catch (err) {
+                alert(`Failed to delete: ${err instanceof Error ? err.message : String(err)}`);
+              }
             },
             danger: true,
           });
@@ -451,12 +526,17 @@ export default function FileTreePanel({
           });
         }
         if (onDelete) {
-          items.push({ separator: true });
           items.push({
             label: 'Delete',
             icon: <TrashMultiIcon size={16} />,
-            onClick: () => {
-              if (confirm(`Delete "${nodeData.name}"?`)) onDelete(nodeData.path, false);
+            onClick: async () => {
+              if (!confirm(`Delete "${nodeData.name}"?`)) return;
+              try {
+                await onDelete(nodeData.path, false);
+                setNodes((prev) => removeNodeById(prev, nodeData.id));
+              } catch (err) {
+                alert(`Failed to delete: ${err instanceof Error ? err.message : String(err)}`);
+              }
             },
             danger: true,
           });
@@ -513,14 +593,41 @@ export default function FileTreePanel({
       // Remove placeholder from wherever it is
       setNodes((prev) => removeNodeById(prev, id));
       // Submit to backend if name was entered
-      if (submittedName && onCreate) {
-        try {
-          await onCreate(parentP, submittedName, isDir);
-          loadRoot();
-        } catch (_) {}
+      if (!submittedName || !onCreate) return;
+
+      try {
+        await onCreate(parentP, submittedName, isDir);
+      } catch (err) {
+        // Surface the backend error (e.g. "Permission denied") instead of
+        // letting the placeholder vanish silently (#42).
+        alert(`Failed to create: ${err instanceof Error ? err.message : String(err)}`);
+        return;
       }
+
+      // Insert the created entry locally instead of reloading the root. A
+      // root reload replaces every node and unmounts the Tree while loading,
+      // which collapses all expanded directories (react-arborist keeps its
+      // open state in the Tree instance).
+      const fullPath = joinPath(parentP, submittedName);
+      const created: ArboristNode = {
+        id: fullPath,
+        name: submittedName,
+        path: fullPath,
+        isDir,
+      };
+      // In lazy mode the root itself is not a node in `nodes`: root-level
+      // entries live directly in the array. `parentP === rootPath` marks that
+      // case; otherwise the parent directory's id is its path.
+      const parentNodeId = parentP && parentP !== rootPath ? parentP : null;
+      setNodes((prev) => {
+        if (!parentNodeId) {
+          if (prev.some((n) => n.id === fullPath)) return prev;
+          return [...prev, created].sort(compareNodes);
+        }
+        return addNodeChildSorted(prev, parentNodeId, created);
+      });
     },
-    [nodes, onCreate, loadRoot]
+    [nodes, onCreate, rootPath]
   );
 
   /** Insert a creating placeholder at root or under a parent directory */
@@ -552,12 +659,34 @@ export default function FileTreePanel({
     async ({ name, node: nodeApi }) => {
       if (!onRename) return;
       const nodeData = nodeApi.data;
+      const trimmed = name.trim();
+      if (!trimmed || trimmed === nodeData.name) return;
       const p = parentPath(nodeData.path);
-      const newPath = p ? `${p}/${name}` : name;
+      const newPath = p ? `${p}/${trimmed}` : trimmed;
       if (newPath === nodeData.path) return;
+
       try {
         await onRename(nodeData.path, newPath, p);
-      } catch (_) {}
+      } catch (err) {
+        alert(`Failed to rename: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
+
+      // Apply the rename locally so the row updates immediately; a reload
+      // would unmount the Tree and collapse every expanded directory.
+      const openState = (treeRef.current?.openState ?? {}) as Record<string, boolean>;
+      setNodes((prev) => renameNodeById(prev, nodeData.id, trimmed, newPath));
+
+      // Ids are paths, so re-apply open state for the renamed directory and
+      // any expanded descendants under their new ids.
+      if (nodeData.isDir) {
+        for (const [openId, isOpen] of Object.entries(openState)) {
+          if (!isOpen) continue;
+          if (openId === nodeData.path || openId.startsWith(`${nodeData.path}/`)) {
+            treeRef.current?.open(newPath + openId.slice(nodeData.path.length), false);
+          }
+        }
+      }
     },
     [onRename]
   );

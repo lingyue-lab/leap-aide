@@ -12,6 +12,7 @@ import EditorView from '@/components/shared/EditorView';
 import CodeCopyButton from '@/components/shared/CodeCopyButton';
 import { FolderOpenIcon } from '@/components/common/Icons';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
+import { showToast } from '@/utils/toast';
 
 export default function SkillDetail() {
   const { t } = useTranslation('common');
@@ -122,8 +123,10 @@ export default function SkillDetail() {
     try {
       await skillsService.save(skillDirName, editContent, selectedSkill.category);
       setSelectedSkillContent(editContent);
-      setIsEditing(false);
       setEditError('');
+      // Stay in edit mode: Save is a checkpoint, not an exit, so the
+      // Save/Cancel toolbar behaves like the workspace file editor.
+      showToast(t('common.saved'));
     } catch (err) {
       setEditError(err instanceof Error ? err.message : 'Failed to save');
     }
@@ -142,7 +145,7 @@ export default function SkillDetail() {
     try {
       await skillsService.saveFile(skillDirName, activeFile, fileEditContent);
       setFileContent(fileEditContent);
-      setFileEditing(false);
+      showToast(t('common.saved'));
     } catch (err) {
       setFileError(err instanceof Error ? err.message : 'Failed to save');
     } finally {
@@ -249,14 +252,16 @@ export default function SkillDetail() {
       </div>
 
       <div className="topbar-chips">
-        {/* Files 按钮（始终在最后） */}
-        <button
-          className={`icon-btn${showFiles ? ' active' : ''}`}
-          onClick={() => setShowFiles(!showFiles)}
-          title={showFiles ? 'Hide files' : 'Show files'}
-        >
-          <FolderOpenIcon />
-        </button>
+        {/* The sidebar's header ✕ closes it; no duplicate toggle here. */}
+        {!showFiles && (
+          <button
+            className="icon-btn"
+            onClick={() => setShowFiles(true)}
+            title="Show files"
+          >
+            <FolderOpenIcon />
+          </button>
+        )}
       </div>
     </div>
   );

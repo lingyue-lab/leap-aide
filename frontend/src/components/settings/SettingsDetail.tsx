@@ -10,6 +10,7 @@ import FileView from '@/components/shared/FileView';
 import { EditIcon, Icon } from '@/components/common/Icons';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import CustomScrollbar from '@/components/common/CustomScrollbar';
+import { showToast } from '@/utils/toast';
 import type { Settings, Theme, SendKey, FontSize, Provider } from '@/types';
 
 // ─── Reusable field components ────────────────────────────────────────────────
@@ -483,10 +484,11 @@ function ProviderRow({ provider }: { provider: Provider }) {
       const res = await providersService.setKey(provider.id, apiKey.trim());
       if (res.ok) {
         if (res.warning) {
-          // Key saved but not verified (network/timeout) — surface the notice.
+          // Key saved but not verified (network/timeout) — surface the notice
+          // inline; a warning is not a plain success confirmation.
           flashFeedback('warn', res.warning);
         } else {
-          flashFeedback('ok', t('settings.providers.saved'));
+          showToast(t('settings.providers.saved'));
         }
         setApiKey('');
         setHasKey(true);
@@ -769,6 +771,7 @@ function ProvidersGroup() {
 }
 
 interface ConfigGroupProps {
+  content: string;
   editing: boolean;
   editContent: string;
   onEditChange: (v: string) => void;
@@ -781,14 +784,13 @@ interface ConfigGroupProps {
   onLoadError: (msg: string) => void;
 }
 
-function ConfigGroup({ editing, editContent, onEditChange, onSave, onCancel, saving, saveError, loadError, onContentLoaded, onLoadError }: ConfigGroupProps) {
-  const [content, setContent] = useState('');
+function ConfigGroup({ content, editing, editContent, onEditChange, onSave, onCancel, saving, saveError, loadError, onContentLoaded, onLoadError }: ConfigGroupProps) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setLoading(true);
     configFileService.getRaw()
-      .then((raw) => { setContent(raw); onContentLoaded(raw); })
+      .then((raw) => { onContentLoaded(raw); })
       .catch((e) => onLoadError((e as Error).message))
       .finally(() => setLoading(false));
   }, []);
@@ -842,13 +844,11 @@ export default function SettingsDetail() {
   const { settings, updateSettings, loadSettings } = useSettingsStore();
   const [form, setForm] = useState<Partial<Settings>>({});
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // ── Config group state (lifted from ConfigGroup) ──────────────────────────
   const [configEditing, setConfigEditing]     = useState(false);
   const [configSaving, setConfigSaving]       = useState(false);
-  const [configSaved, setConfigSaved]         = useState(false);
   const [configLoadError, setConfigLoadError] = useState<string | null>(null);
   const [configSaveError, setConfigSaveError] = useState<string | null>(null);
   const [configSource, setConfigSource]       = useState(''); // last-saved server content
@@ -862,15 +862,13 @@ export default function SettingsDetail() {
     if (settings) setForm({ ...settings });
   }, [settings]);
 
-  // Reset saved feedback when group changes
+  // Reset transient Save feedback when group changes
   useEffect(() => {
-    setSaved(false);
     setError(null);
     setConfigEditing(false);
     setConfigLoadError(null);
     setConfigSaveError(null);
     setConfigEditContent('');
-    setConfigSaved(false);
   }, [selectedGroup]);
 
   const setField = <K extends keyof Settings>(key: K, value: Settings[K]) => {
@@ -882,8 +880,7 @@ export default function SettingsDetail() {
     setError(null);
     try {
       await updateSettings(form as Settings);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2500);
+      showToast(t('common.saved'));
     } catch (err) {
       setError((err as Error).message || 'Failed to save settings');
     } finally {
@@ -895,7 +892,6 @@ export default function SettingsDetail() {
     setConfigEditContent(configSource);
     setConfigEditing(true);
     setConfigSaveError(null);
-    setConfigSaved(false);
   };
 
   const handleConfigCancel = () => {
@@ -910,9 +906,9 @@ export default function SettingsDetail() {
     try {
       await configFileService.saveRaw(configEditContent);
       setConfigSource(configEditContent);
-      setConfigSaved(true);
-      setConfigEditing(false);
-      setTimeout(() => setConfigSaved(false), 2500);
+      // Stay in edit mode: Save is a checkpoint, not an exit. The toolbar
+      // (Save/Cancel) remains, matching the workspace file editor.
+      showToast(t('common.saved'));
     } catch (e) {
       setConfigSaveError((e as Error).message);
     } finally {
@@ -936,9 +932,6 @@ export default function SettingsDetail() {
 
           {isConfig ? (
             <div className="flex items-center gap-2">
-              {configSaved && (
-                <span className="text-sm text-[var(--md-primary)]">{t('settings.actions.saved')}</span>
-              )}
               <button
                 className="icon-btn"
                 onClick={handleConfigEdit}
@@ -959,12 +952,10 @@ export default function SettingsDetail() {
                   disabled={saving}
                   className="cron-btn run text-sm"
                   style={{
-                    background: saved ? 'var(--md-primary-container)' : undefined,
-                    color: saved ? 'var(--md-on-primary-container)' : undefined,
                     opacity: saving ? 0.7 : 1,
                   }}
                 >
-                  {saving ? t('settings.actions.saving') : saved ? t('settings.actions.saved') : t('settings.actions.save')}
+                  {saving ? t('settings.actions.saving') : t('settings.actions.save')}
                 </button>
               </div>
             )
@@ -976,6 +967,7 @@ export default function SettingsDetail() {
       {isConfig ? (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <ConfigGroup
+            content={configSource}
             editing={configEditing}
             editContent={configEditContent}
             onEditChange={setConfigEditContent}

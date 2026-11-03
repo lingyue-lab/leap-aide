@@ -1,10 +1,13 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 import FileView from '@/components/shared/FileView';
 import type { FileType } from '@/components/shared/FileView';
 import { EditIcon, Icon } from '@/components/common/Icons';
+import { showToast } from '@/utils/toast';
 
 export default function FilePreview() {
+  const { t } = useTranslation('common');
   const {
     previewPath,
     previewContent,
@@ -14,6 +17,7 @@ export default function FilePreview() {
     previewEditing,
     updatePreviewContent,
     setPreviewEditing,
+    cancelPreviewEditing,
     savePreview,
     setPreview,
   } = useWorkspaceStore();
@@ -28,6 +32,7 @@ export default function FilePreview() {
     setSaving(true);
     try {
       await savePreview();
+      showToast(t('common.saved'));
     } catch (err) {
       alert(`Failed to save: ${(err as Error).message}`);
     } finally {
@@ -73,7 +78,7 @@ export default function FilePreview() {
         editContent={previewContent || ''}
         onEditChange={updatePreviewContent}
         onSave={handleSave}
-        onCancel={() => setPreviewEditing(false)}
+        onCancel={cancelPreviewEditing}
         saving={saving}
       />
     </div>

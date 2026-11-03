@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import Layout from './components/layout/Layout';
 import ChatInterface from './components/chat/ChatInterface';
 import DialogHost from './components/common/DialogHost';
+import Snackbar from './components/common/Snackbar';
 import { useSessionStore } from './stores/useSessionStore';
 import { useSettingsStore } from './stores/useSettingsStore';
 import { useTheme } from './contexts/ThemeContext';
@@ -87,6 +88,9 @@ function App() {
           request without prop drilling. Renders nothing when no dialog
           is open. */}
       <DialogHost />
+      {/* M3 snackbar host: brief non-modal feedback (e.g. "Saved") and
+          stream/agent notices, driven by the `show-toast` event. */}
+      <Snackbar />
     </ProtectedRoute>
   );
 }

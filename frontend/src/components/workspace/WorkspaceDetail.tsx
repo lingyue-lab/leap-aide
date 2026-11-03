@@ -10,6 +10,7 @@ import type { FileNode } from '@/types';
 import { FolderOpenIcon } from '@/components/common/Icons';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import WorkspaceOverview from './WorkspaceOverview';
+import { showToast } from '@/utils/toast';
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -23,15 +24,15 @@ function toFileType(t: string | null): FileType {
 
 interface WorkspaceFileMainProps {
   showFileTree: boolean;
-  onToggleFileTree: () => void;
+  onShowFileTree: () => void;
 }
 
-function WorkspaceFileMain({ showFileTree, onToggleFileTree }: WorkspaceFileMainProps) {
+function WorkspaceFileMain({ showFileTree, onShowFileTree }: WorkspaceFileMainProps) {
   const { t } = useTranslation('common');
   const {
     previewPath, previewContent, previewType, previewLoading,
     previewEditing, updatePreviewContent,
-    setPreviewEditing, savePreview, currentWorkspace,
+    cancelPreviewEditing, savePreview, currentWorkspace,
   } = useWorkspaceStore();
   const [saving, setSaving] = useState(false);
 
@@ -39,6 +40,9 @@ function WorkspaceFileMain({ showFileTree, onToggleFileTree }: WorkspaceFileMain
     setSaving(true);
     try {
       await savePreview();
+      // M3 snackbar is the prescribed transient confirmation for a completed
+      // action; it is rendered globally by <Snackbar /> in App.
+      showToast(t('common.saved'));
     } catch (err) {
       alert(`Failed to save: ${(err as Error).message}`);
     } finally {
@@ -65,14 +69,16 @@ function WorkspaceFileMain({ showFileTree, onToggleFileTree }: WorkspaceFileMain
           {fileName || <span className="italic text-[var(--muted)]">{t('no_file_selected')}</span>}
         </span>
         <div className="topbar-chips">
-          {/* Files toggle button */}
-          <button
-            className={`icon-btn${showFileTree ? ' active' : ''}`}
-            onClick={onToggleFileTree}
-            title={showFileTree ? 'Hide files' : 'Show files'}
-          >
-            <FolderOpenIcon />
-          </button>
+          {/* The sidebar's header ✕ closes it; no duplicate toggle here. */}
+          {!showFileTree && (
+            <button
+              className="icon-btn"
+              onClick={onShowFileTree}
+              title="Show files"
+            >
+              <FolderOpenIcon />
+            </button>
+          )}
         </div>
       </div>
       )}
@@ -87,7 +93,7 @@ function WorkspaceFileMain({ showFileTree, onToggleFileTree }: WorkspaceFileMain
         editContent={previewContent || ''}
         onEditChange={updatePreviewContent}
         onSave={handleSave}
-        onCancel={() => setPreviewEditing(false)}
+        onCancel={cancelPreviewEditing}
         saving={saving}
         emptyMessage={t('select_file_hint')}
       />
@@ -133,7 +139,7 @@ export default function WorkspaceDetail() {
   };
 
   const handleTreeDelete = async (path: string) => {
-    if (!confirm(`Delete "${path.split('/').pop()}"?`)) return;
+    // The tree's context menu already asked for confirmation.
     await deleteFile(path);
   };
 
@@ -147,7 +153,7 @@ export default function WorkspaceDetail() {
       {previewPath ? (
         <WorkspaceFileMain
           showFileTree={showFileTree}
-          onToggleFileTree={() => setShowFileTree(!showFileTree)}
+          onShowFileTree={() => setShowFileTree(true)}
         />
       ) : (
         <WorkspaceOverview />

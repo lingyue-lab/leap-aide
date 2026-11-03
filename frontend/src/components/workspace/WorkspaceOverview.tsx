@@ -34,6 +34,8 @@ export default function WorkspaceOverview() {
     currentWorkspace,
     workspaceInfo,
     workspaceInfoLoading,
+    workspaceInfoStale,
+    loadWorkspaceInfo,
     showFileTree,
     setShowFileTree,
   } = useWorkspaceStore();
@@ -44,6 +46,15 @@ export default function WorkspaceOverview() {
   useEffect(() => {
     setExpandedCommits(new Set());
   }, [currentWorkspace]);
+
+  // File-tree mutations (save/create/rename/delete) mark the cached stats
+  // stale. Refresh them whenever this panel is visible — including on mount
+  // after a file preview closes — so the summary stays in sync without a
+  // manual workspace refresh (#42).
+  useEffect(() => {
+    if (!currentWorkspace || !workspaceInfoStale) return;
+    void loadWorkspaceInfo(currentWorkspace, { silent: true });
+  }, [currentWorkspace, workspaceInfoStale, loadWorkspaceInfo]);
 
   if (!currentWorkspace) return null;
 
@@ -66,13 +77,18 @@ export default function WorkspaceOverview() {
           <div className="topbar-meta">{currentWorkspace}</div>
         </div>
         <div className="topbar-chips">
-          <button
-            className={`icon-btn${showFileTree ? ' active' : ''}`}
-            onClick={() => setShowFileTree(!showFileTree)}
-            title={showFileTree ? 'Hide file tree' : 'Show file tree'}
-          >
-            <FolderOpenIcon />
-          </button>
+          {/* Only offer "open" here: once the sidebar is visible, its own
+              header ✕ is the single close affordance — a second toggle
+              button offering the same action would be redundant. */}
+          {!showFileTree && (
+            <button
+              className="icon-btn"
+              onClick={() => setShowFileTree(true)}
+              title="Show file tree"
+            >
+              <FolderOpenIcon />
+            </button>
+          )}
         </div>
       </div>
 
