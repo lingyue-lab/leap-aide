@@ -406,27 +406,27 @@ def test_load_pool_explicit_credential_shows_provider(monkeypatch, tmp_path):
 
 
 def test_apply_provider_prefix_ollama_cloud_non_active():
-    """Bare ollama-cloud model ids get @ollama-cloud: prefix when not active."""
+    """Bare ollama-cloud model ids get @ollama-cloud: prefix."""
     from app.api.config import _apply_provider_prefix
 
     raw = [{"id": "gpt-oss:20b", "label": "gpt-oss:20b"}, {"id": "qwen3:30b-a3b", "label": "qwen3:30b-a3b"}]
-    result = _apply_provider_prefix(raw, "ollama-cloud", "openai-codex")
+    result = _apply_provider_prefix(raw, "ollama-cloud")
     ids = [m["id"] for m in result]
     assert ids == ["@ollama-cloud:gpt-oss:20b", "@ollama-cloud:qwen3:30b-a3b"], ids
 
 
 def test_apply_provider_prefix_copilot_non_active():
-    """Bare copilot model ids get @copilot: prefix when not active."""
+    """Bare copilot model ids get @copilot: prefix."""
     from app.api.config import _apply_provider_prefix
 
     raw = [{"id": "gpt-5.4", "label": "GPT-5.4"}, {"id": "claude-opus-4.6", "label": "Claude Opus 4.6"}]
-    result = _apply_provider_prefix(raw, "copilot", "openai-codex")
+    result = _apply_provider_prefix(raw, "copilot")
     ids = [m["id"] for m in result]
     assert ids == ["@copilot:gpt-5.4", "@copilot:claude-opus-4.6"], ids
 
 
 def test_apply_provider_prefix_no_double_prefix():
-    """Already-prefixed or provider/model ids are not double-prefixed."""
+    """Already-prefixed ids pass through; slash ids are prefixed too."""
     from app.api.config import _apply_provider_prefix
 
     raw = [
@@ -434,19 +434,23 @@ def test_apply_provider_prefix_no_double_prefix():
         {"id": "openai/gpt-5.4", "label": "slash form"},
         {"id": "bare-model", "label": "bare"},
     ]
-    result = _apply_provider_prefix(raw, "copilot", "openai-codex")
+    result = _apply_provider_prefix(raw, "copilot")
     ids = [m["id"] for m in result]
-    assert ids == ["@copilot:gpt-5.4", "openai/gpt-5.4", "@copilot:bare-model"], ids
+    assert ids == [
+        "@copilot:gpt-5.4",
+        "@copilot:openai/gpt-5.4",
+        "@copilot:bare-model",
+    ], ids
 
 
-def test_apply_provider_prefix_active_provider_no_prefix():
-    """No prefix is added when the provider is already the active one."""
+def test_apply_provider_prefix_active_provider_also_prefixed():
+    """The active provider's models are prefixed like every other group."""
     from app.api.config import _apply_provider_prefix
 
     raw = [{"id": "gpt-5.4", "label": "GPT-5.4"}]
-    result = _apply_provider_prefix(raw, "openai-codex", "openai-codex")
+    result = _apply_provider_prefix(raw, "openai-codex")
     ids = [m["id"] for m in result]
-    assert ids == ["gpt-5.4"], ids
+    assert ids == ["@openai-codex:gpt-5.4"], ids
 
 
 def test_copilot_mixed_pool_prefixed_models(monkeypatch, tmp_path):
@@ -478,10 +482,8 @@ def test_copilot_mixed_pool_prefixed_models(monkeypatch, tmp_path):
 def test_auth_store_active_provider_alias_is_resolved(monkeypatch, tmp_path):
     """active_provider read from auth.json must be alias-normalized.
 
-    Regression: previously the alias table was applied only to config.yaml's
-    active_provider, so an aliased name in auth.json (e.g. 'google') would
-    not match the canonical pid ('gemini') and the prefixing logic would
-    add an unwanted '@gemini:' prefix to the active provider's models.
+    The alias table maps 'google' to 'gemini', so the group's provider id —
+    and therefore its @provider:model prefixes — use the canonical slug.
     """
     auth_payload = {
         "version": 1,
@@ -494,13 +496,11 @@ def test_auth_store_active_provider_alias_is_resolved(monkeypatch, tmp_path):
     result = _call_get_available_models(monkeypatch, tmp_path, auth_payload)
     groups = _group_by_provider(result)
     # Gemini should appear under its canonical display name and its model
-    # ids should NOT be prefixed (it's the active provider).
+    # ids should carry the canonical @gemini: prefix.
     assert "Gemini" in groups, f"Expected Gemini in {list(groups)}"
     model_ids = [m["id"] for m in groups["Gemini"]]
     assert model_ids, "Gemini group should have models"
-    assert not any(mid.startswith("@") for mid in model_ids), (
-        f"Active provider models must not be prefixed; got {model_ids}"
-    )
+    assert all(mid.startswith("@gemini:") for mid in model_ids), model_ids
 
 
 def test_ollama_cloud_empty_catalog_skips_group(monkeypatch, tmp_path):

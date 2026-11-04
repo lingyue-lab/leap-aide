@@ -128,8 +128,8 @@ def _cmd_model(session, args: str) -> dict[str, Any]:
         }
     try:
         from app.api.models import Session as _Session
-        # An explicit @provider:model / namespaced id is the user's identity —
-        # preserve it verbatim; only bare ids need catalog normalization.
+        # An explicit @provider:model id is the user's identity — preserve it
+        # verbatim; only bare/namespaced values need catalog normalization.
         # _resolve_compatible_session_model may strip a matching @provider:
         # hint, which would lose the provider choice (issue #55).
         effective_model = _Session._normalize_model(model_name)
@@ -142,7 +142,7 @@ def _cmd_model(session, args: str) -> dict[str, Any]:
             return {
                 "content": (
                     f"Failed to switch model: '{effective_model}' does not "
-                    "name a provider. Use @provider:model or provider/model."
+                    "name a provider. Use @provider:model."
                 ),
                 "session_update": {"_as_card": True},
             }

@@ -155,7 +155,7 @@ def test_custom_provider_model_with_slash_routes_to_named_custom_provider():
         }],
     )
     assert model == 'google/gemma-4-26b-a4b'
-    assert provider == 'custom:local-lm-studio'
+    assert provider == 'local-lm-studio'
     assert base_url == 'http://lmstudio.local:1234/v1'
 
 
@@ -234,8 +234,8 @@ def test_no_duplicate_when_default_model_is_prefixed():
         _cfg.cfg.update(old_cfg)
 
 
-def test_default_provider_models_not_prefixed():
-    """The active provider's models remain bare (no @prefix added)."""
+def test_default_provider_models_are_prefixed():
+    """Every group, including the active provider, uses @provider:model ids."""
     from app.api import model_catalog
     raw_anthropic_ids = {
         m['id'] for m in model_catalog.provider_baseline_models('anthropic')
@@ -245,8 +245,11 @@ def test_default_provider_models_not_prefixed():
     if 'Anthropic' in groups:
         returned_ids = {m['id'] for m in groups['Anthropic']}
         for bare_id in raw_anthropic_ids:
-            assert bare_id in returned_ids, (
-                f"catalog baseline entry '{bare_id}' is missing from the Anthropic group"
+            # Some catalog baselines already carry their @provider: prefix.
+            expected = bare_id if bare_id.startswith("@") else f"@anthropic:{bare_id}"
+            assert expected in returned_ids, (
+                f"catalog baseline entry '{bare_id}' is missing its prefixed "
+                f"identity from the Anthropic group"
             )
 
 
@@ -460,7 +463,7 @@ def test_custom_endpoint_uses_model_config_api_key_for_model_discovery(monkeypat
     assert captured['ua'] == 'OpenAI/Python 1.0'
     groups = {g['provider']: [m['id'] for m in g['models']] for g in result['groups']}
     assert 'Custom' in groups
-    assert 'gpt-5.2' in groups['Custom']
+    assert '@custom:gpt-5.2' in groups['Custom']
 
 
 # -- Issue #230: custom provider with slash model name -----------------------

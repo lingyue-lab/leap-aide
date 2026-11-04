@@ -45,6 +45,13 @@ interface ChatComposerProps {
   onModelChange?: (modelId: string) => void;
 }
 
+/** Model part of an `@provider:model` id (or the id itself). */
+function bareModelId(id: string): string {
+  return id.startsWith('@') && id.includes(':')
+    ? id.slice(1).split(':').slice(1).join(':')
+    : id;
+}
+
 export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibleProp, className, placeholderText, defaultModelId, onModelChange }: ChatComposerProps) {
   const busy = useIsBusy();
   const { t } = useTranslation('chat');
@@ -60,6 +67,7 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
   // Shared model catalog (issue #16): all components read the same store —
   // concurrent mounts share one request and the TTL cache.
   const modelGroups = useModelsStore((s) => s.data?.groups ?? []);
+  const activeProvider = useModelsStore((s) => s.data?.active_provider ?? '');
   const modelsLoading = useModelsStore((s) => s.status === 'loading');
   const loadModels = useModelsStore((s) => s.load);
   const cancelModelsLoad = useModelsStore((s) => s.cancel);
@@ -347,6 +355,36 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
   }, [modelGroups]);
   const sessionModel = currentSession?.model ?? '';
   const settingsModel = settings?.model ?? '';
+  // settings.model is the CLI-shaped config.yaml value (usually bare or
+  // namespaced), while every catalog id is @provider:model.  Map it onto the
+  // catalog identity so the picker highlights the same model; when several
+  // providers offer the id, the active provider's group wins.
+  const settingsCatalogModel = useMemo(() => {
+    if (!settingsModel) return '';
+    if (allModelIds.has(settingsModel)) return settingsModel;
+    const bare = bareModelId(settingsModel);
+    // A namespaced config value ("anthropic/claude-opus-4.6") also matches
+    // the group whose provider id is that namespace (mirrors the backend's
+    // normalize_model_prefix).
+    const slash = settingsModel.indexOf('/');
+    const nsPrefix = slash >= 0 ? settingsModel.slice(0, slash).toLowerCase() : '';
+    const nsRest = slash >= 0 ? settingsModel.slice(slash + 1) : '';
+    const active = activeProvider.toLowerCase();
+    let fallback = '';
+    for (const g of modelGroups) {
+      for (const m of g.models) {
+        if (!m.id?.startsWith('@')) continue;
+        const modelBare = bareModelId(m.id);
+        const matches = modelBare === bare
+          || (nsPrefix && nsRest && g.provider_id?.toLowerCase() === nsPrefix && modelBare === nsRest);
+        if (!matches) continue;
+        if (active && g.provider_id?.toLowerCase() === active) return m.id;
+        if (!fallback) fallback = m.id;
+      }
+    }
+    // Cold catalog: keep the raw settings value until groups arrive.
+    return fallback || (allModelIds.size === 0 ? settingsModel : '');
+  }, [settingsModel, allModelIds, modelGroups, activeProvider]);
   // model__webui NULL (issue #55): the session has no model identity, and the
   // backend rejects chat start until the user picks one.  Show the
   // placeholder instead of impersonating the session with settings/default.
@@ -361,13 +399,12 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
     ? ''
     : sessionModel
       ? sessionModel
-      // No session model: fall back to settings.default when it is usable in
-      // the loaded catalog (otherwise the picker would highlight an unrelated
+      // No session model: fall back to settings.default when it resolves to a
+      // catalog identity (otherwise the picker would highlight an unrelated
       // provider, e.g. settings.model defaults to "anthropic/..." while only
       // DeepSeek is configured), then to the default/first catalog model.
-      : (settingsModel && (allModelIds.size === 0 || allModelIds.has(settingsModel))
-          ? settingsModel
-          : (defaultModelId && allModelIds.has(defaultModelId)
+      : (settingsCatalogModel
+          || (defaultModelId && allModelIds.has(defaultModelId)
               ? defaultModelId
               : firstCatalogModelId));
   // Show the bare model name: "@provider:model" keeps its full remainder

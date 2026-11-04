@@ -15,9 +15,9 @@ This file pins the contract:
 
 * ``_from_db_row`` prefers ``model__webui`` and marks the session invalid when
   the column is NULL (no heuristic reconstruction from SDK columns).
-* Only provider-qualified identities are routable: ``@provider:model`` with
-  non-empty parts, or namespaced ``provider/model``.  Bare ids, ``unknown``
-  and malformed ``@`` forms are invalid everywhere.
+* Only ``@provider:model`` identities are routable.  Bare ids, namespaced
+  ``provider/model`` values, ``unknown`` and malformed ``@`` forms are
+  invalid everywhere.
 * ``_sync_to_db`` writes ``model__webui`` (NULL for invalid/unknown models).
 * ``Session.compact()`` / ``copy_from()`` / ``clone()`` carry ``model_invalid``.
 * The display resolver and chat start never strip or rewrite a stored
@@ -98,8 +98,8 @@ def test_ensure_webui_columns_adds_model_column():
     [
         "@deepseek:deepseek-v4-flash",
         "@nous:anthropic/claude-opus-4.6",
-        "anthropic/claude-opus-4.6",
-        "openrouter/deepseek/deepseek-v4-flash",
+        "@openrouter:anthropic/claude-opus-4.6",
+        "@ollama1:qwen3-vl:235b",  # model half may itself contain colons
     ],
 )
 def test_valid_model_identity_accepts_provider_qualified_ids(model_id):
@@ -119,9 +119,12 @@ def test_valid_model_identity_accepts_provider_qualified_ids(model_id):
         "@:deepseek-v4-flash",
         "@deepseek:",
         "@:",
+        "@deepseek/model:foo",  # provider half must not contain '/'
         "/",
         "anthropic/",
         "/claude-opus-4.6",
+        "anthropic/claude-opus-4.6",       # namespaced model != identity
+        "openrouter/deepseek/deepseek-v4-flash",
     ],
 )
 def test_valid_model_identity_rejects_bare_or_malformed_ids(model_id):
@@ -170,12 +173,13 @@ def test_from_db_row_non_provider_model_webui_marks_invalid(stored):
     assert session.model_invalid is True
 
 
-def test_from_db_row_accepts_namespaced_identity():
+def test_from_db_row_rejects_namespaced_identity():
+    # provider/model is only a namespaced model id — it does not name the
+    # provider that should receive the request (issue #55).
     session = Session._from_db_row(
         _row(model="claude-opus-4.6", model__webui="anthropic/claude-opus-4.6")
     )
-    assert session.model == "anthropic/claude-opus-4.6"
-    assert session.model_invalid is False
+    assert session.model_invalid is True
 
 
 def test_from_db_row_does_not_leak_model_webui_kwarg():
@@ -393,20 +397,16 @@ def test_chat_start_rejects_bare_model_that_cannot_be_normalized(empty_catalog):
     assert error == "Session model is invalid. Please select a model."
 
 
-def test_chat_start_resolves_explicit_new_model(empty_catalog, monkeypatch):
-    """A model different from the stored identity goes through normal resolution."""
-    seen = []
+def test_chat_start_uses_explicit_new_model(empty_catalog, monkeypatch):
+    """A different explicit @provider:model is authoritative on its own."""
+    def _boom(_model):  # pragma: no cover - must not run
+        raise AssertionError("explicit @provider:model must not be re-resolved")
 
-    def _resolve(model_id):
-        seen.append(model_id)
-        return "@anthropic:claude-opus-4.6", True
-
-    monkeypatch.setattr(routes, "_resolve_compatible_session_model", _resolve)
+    monkeypatch.setattr(routes, "_resolve_compatible_session_model", _boom)
     session = Session(session_id="abc123def456", model="@deepseek:deepseek-v4-flash")
     model, normalized, error = routes._resolve_chat_start_model(
         session, "@anthropic:claude-opus-4.6"
     )
-    assert seen == ["@anthropic:claude-opus-4.6"]
     assert (model, normalized, error) == ("@anthropic:claude-opus-4.6", True, None)
 
 

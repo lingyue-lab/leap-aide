@@ -660,26 +660,104 @@ def _format_ollama_label(mid: str) -> str:
     return label
 
 
-def _apply_provider_prefix(
-    raw_models: list[dict],
-    provider_id: str,
-    active_provider: str | None,
-) -> list[dict]:
-    """Return *raw_models* with @provider: prefixes applied where needed.
+def custom_provider_slug(name: str) -> str:
+    """Return the canonical provider id for a named custom provider.
 
-    All non-active-provider model IDs are normalized to ``@provider:model``
-    so downstream paths (session storage, drain, resolve_model_provider)
-    can always extract the provider hint.  When *provider_id* equals
-    *active_provider* the bare ID is preserved — the active provider is
-    the default route, so prefixing is redundant and breaks dropdown UX
-    (the bare name is what `resolve_model_provider` returns).  Models that
-    already carry ``@`` or ``/`` are passed through unchanged.
+    Named ``custom_providers`` entries are identified in the WebUI exactly
+    like every other provider: ``@<slug>:model``.  The slug is the
+    lowercased provider name with spaces collapsed to dashes, which is the
+    alias the Hermes SDK already accepts for a named custom provider
+    (``custom_provider_aliases``), so the legacy ``custom:<name>`` form is
+    no longer needed.  Characters that would make the ``@provider:model``
+    identity ambiguous (``@``, ``:``, ``/``) are replaced with dashes.
+    """
+    raw = str(name or "").strip().lower()
+    for ch in ("@", ":", "/", " "):
+        raw = raw.replace(ch, "-")
+    while "--" in raw:
+        raw = raw.replace("--", "-")
+    return raw.strip("-")
+
+
+def named_custom_provider(provider_id: str) -> dict | None:
+    """Return the ``custom_providers`` entry named by *provider_id*.
+
+    Accepts the canonical slug (``ollama1``), the provider name as written
+    (case-insensitive, spaces allowed), and the legacy ``custom:<slug>``
+    form.  Returns None when no configured entry matches.
+    """
+    raw = str(provider_id or "").strip().lower()
+    if not raw:
+        return None
+    wanted = {raw, raw.replace(" ", "-")}
+    if raw.startswith("custom:"):
+        wanted.add(raw.split(":", 1)[1])
+    entries = cfg.get("custom_providers", [])
+    if not isinstance(entries, list):
+        return None
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "").strip()
+        if name and custom_provider_slug(name) in wanted:
+            return entry
+    return None
+
+
+def legacy_custom_identity_parts(identity: str) -> tuple[str, str] | None:
+    """Split the legacy ``custom:<name>:model`` identity form.
+
+    Before the unified scheme, named custom providers were identified as
+    ``@custom:<slug>:model``.  That form is only legacy when the middle
+    segment still names a configured custom provider; otherwise ``custom``
+    is the unnamed-custom pseudo-provider and everything after the first
+    colon is the model id — e.g. ``@custom:qwen3-vl:235b``.
+    """
+    text = str(identity or "").strip()
+    if not text.lower().startswith("custom:") or text.count(":") < 2:
+        return None
+    name, bare = text.split(":", 1)[1].split(":", 1)
+    if not bare or named_custom_provider(name) is None:
+        return None
+    slug = custom_provider_slug(name)
+    if not slug:
+        return None
+    return slug, bare
+
+
+def _model_identity_for_provider(model: str, provider_id: str) -> str:
+    """Return the ``@provider:model`` identity for a config-derived model.
+
+    Only used for config.yaml values (default model / default injection)
+    that are not yet catalog ids.  A namespace equal to the provider is
+    dropped, matching ``resolve_model_provider``'s provider/model handling.
+    """
+    value = str(model or "").strip()
+    pid = str(provider_id or "").strip()
+    if not value or not pid:
+        return value
+    if value.startswith("@"):
+        return value
+    if "/" in value:
+        prefix, bare = value.split("/", 1)
+        if prefix == pid and bare:
+            return f"@{pid}:{bare}"
+    return f"@{pid}:{value}"
+
+
+def _apply_provider_prefix(raw_models: list[dict], provider_id: str) -> list[dict]:
+    """Return *raw_models* normalized to ``@provider:model`` identities.
+
+    Every model in the picker carries its owning provider — including the
+    active provider and ids that already contain ``/`` (OpenRouter and
+    custom-gateway namespaces).  ``resolve_model_provider`` splits the hint
+    at the first colon, so the model half keeps any further slashes and
+    colons (e.g. ``@ollama1:qwen3-vl:235b``).
     """
     result = []
-    is_active = bool(active_provider) and provider_id == active_provider
     for m in raw_models:
         mid = m["id"]
-        if mid.startswith("@") or "/" in mid or is_active:
+        if mid.startswith("@"):
             result.append({"id": mid, "label": m["label"]})
         else:
             result.append({"id": f"@{provider_id}:{mid}", "label": m["label"]})
@@ -788,14 +866,16 @@ def resolve_runtime_for_provider(
 def resolve_model_provider(model_id: str) -> tuple:
     """Resolve model name, provider, and base_url for AIAgent.
 
-    Model IDs from the dropdown can be in several formats:
-      - 'claude-sonnet-4.6'            (bare name, uses config default provider)
-      - 'anthropic/claude-sonnet-4.6'  (OpenRouter-style provider/model)
-      - '@minimax:MiniMax-M2.7'        (explicit provider hint from dropdown)
+    Model IDs from the dropdown are ``@provider:model``:
+      - '@minimax:MiniMax-M2.7'
+      - '@openrouter:anthropic/claude-opus-4.6'   (gateway namespace kept)
+      - '@ollama1:qwen3-vl:235b'                  (named custom provider)
 
-    The @provider:model format is used for models from non-default provider
-    groups in the dropdown, so we can route them through the correct provider
-    via resolve_runtime_provider(requested=provider) instead of the default.
+    The model half keeps every character after the first colon, so both
+    gateway namespaces and Ollama tags survive.  Bare and ``provider/model``
+    values are still accepted here for config.yaml defaults and CLI sessions;
+    they are not valid WebUI session identities (see
+    ``Session._is_valid_model_identity``).
 
     Custom OpenAI-compatible endpoints are special: their model IDs often look
     like provider/model (for example ``google/gemma-4-26b-a4b``), which would be
@@ -819,6 +899,8 @@ def resolve_model_provider(model_id: str) -> tuple:
 
     # Custom providers declared in config.yaml should win over slash-based
     # OpenRouter heuristics. Their model IDs commonly contain '/' too.
+    # A bare value only matches the entry's singular ``model`` field (the
+    # config default); picker ids arrive as @provider:model below.
     custom_providers = cfg.get("custom_providers", [])
     if isinstance(custom_providers, list):
         for entry in custom_providers:
@@ -828,14 +910,33 @@ def resolve_model_provider(model_id: str) -> tuple:
             entry_name = (entry.get("name") or "").strip()
             entry_base_url = (entry.get("base_url") or "").strip()
             if entry_model and entry_name and model_id == entry_model:
-                provider_hint = "custom:" + entry_name.lower().replace(" ", "-")
-                return model_id, provider_hint, entry_base_url or None
+                return (
+                    model_id,
+                    custom_provider_slug(entry_name),
+                    entry_base_url or None,
+                )
 
     # @provider:model format — explicit provider hint from the dropdown.
     # Route through that provider directly (resolve_runtime_provider will
-    # resolve credentials in streaming.py).
+    # resolve credentials in streaming.py).  A named custom provider is
+    # returned with its base_url so streaming does not have to rediscover it.
     if model_id.startswith("@") and ":" in model_id:
-        provider_hint, bare_model = model_id[1:].split(":", 1)
+        identity = model_id[1:]
+        # Legacy WebUI identity for named custom providers:
+        # @custom:<known-name>:model -> @<name-slug>:model.
+        _legacy = legacy_custom_identity_parts(identity)
+        if _legacy is not None:
+            identity = f"{_legacy[0]}:{_legacy[1]}"
+        provider_hint, bare_model = identity.split(":", 1)
+        provider_hint = provider_hint.strip()
+        entry = named_custom_provider(provider_hint)
+        if entry is not None:
+            entry_name = str(entry.get("name") or provider_hint).strip()
+            return (
+                bare_model,
+                custom_provider_slug(entry_name),
+                str(entry.get("base_url") or "").strip() or None,
+            )
         return bare_model, provider_hint, None
 
     if "/" in model_id:
@@ -924,20 +1025,26 @@ def get_first_available_model() -> str:
 
 
 def normalize_model_prefix(model_id: str, *, catalog: dict | None = None) -> str:
-    """Ensure bare model names carry an ``@provider:`` prefix when applicable.
+    """Normalize a model value to the catalog's ``@provider:model`` identity.
 
-    Models from non-default provider groups are presented in the dropdown as
-    ``@provider:model`` (see ``_prefix_models_if_needed``).  Sessions created
-    before this convention — or imported from CLI/gateway — may store the bare
-    name (e.g. ``deepseek-v4-pro``), which causes the frontend model selector
-    to show no selection.  This helper normalizes the stored value so it
-    matches the dropdown format.
+    Every picker id is now prefixed with its owning provider, so stored
+    values that lack the prefix (bare ids, namespaced ``provider/model``
+    values carried over from config.yaml or CLI sessions, and the legacy
+    ``@custom:<name>:model`` form) are mapped back onto a catalog entry.
 
     Rules:
-      - Already has ``@provider:`` → return as-is.
-      - Contains ``/`` (OpenRouter-style) → return as-is.
-      - Bare name → look up in catalog; if found under a non-default provider
-        group, return ``@provider:model``.  Otherwise return as-is.
+      - Already ``@provider:model`` → returned as-is (legacy custom identity
+        is rewritten to the plain slug form).
+      - Otherwise look the value up in the catalog: a group whose model is
+        literally the value (gateway namespace), or whose provider id is the
+        value's ``/`` namespace (direct provider).  The active provider wins
+        across both; then the literal gateway match, then a unique direct
+        match.  An ambiguous id is returned unchanged.
+      - No match → returned unchanged.
+
+    Callers that need a routable identity must still validate the result
+    (``Session._is_valid_model_identity``); this helper never guesses a
+    provider.
 
     Args:
         catalog: pre-fetched catalog to consult (batch callers such as
@@ -947,30 +1054,63 @@ def normalize_model_prefix(model_id: str, *, catalog: dict | None = None) -> str
     model = (model_id or "").strip()
     if not model:
         return model
-    # Already prefixed or namespaced — nothing to do.
-    if model.startswith("@") or "/" in model:
+    if model.startswith("@"):
+        _legacy = legacy_custom_identity_parts(model[1:])
+        if _legacy is not None:
+            return f"@{_legacy[0]}:{_legacy[1]}"
         return model
 
     if catalog is None:
         try:
             # Non-blocking peek (issue #8): groups are best-effort here — on a
-            # cold cache the bare name is returned unchanged and normalized on a
+            # cold cache the value is returned unchanged and normalized on a
             # later request once the catalog is warm.
             catalog = peek_available_models()
         except Exception:
             return model
 
     active_provider = (catalog.get("active_provider") or "").lower()
+    # A namespaced config value (``anthropic/claude-opus-4.6``) matches a
+    # group two ways: the whole string is the model half of a gateway id
+    # (``@openrouter:anthropic/claude-opus-4.6``), or the group's provider
+    # id is the namespace and the remainder is the model
+    # (``@anthropic:claude-opus-4.6``).  The gateway form wins when both
+    # exist: its id literally contains the persisted value.
+    ns_prefix, ns_rest = ("", "")
+    if "/" in model:
+        ns_prefix, ns_rest = model.split("/", 1)
+        ns_prefix = model_catalog.resolve_alias(ns_prefix).strip().lower()
+    exact_matches: list[tuple[str, str]] = []
+    ns_matches: list[tuple[str, str]] = []
     for group in catalog.get("groups") or []:
         gid = (group.get("provider_id") or "").lower()
+        # "default" is a picker-only pseudo group, not a routable provider.
+        if not gid or gid == "default":
+            continue
         for m in group.get("models") or []:
             mid = m.get("id", "")
-            # Match either the bare name or a stored @gid:bare form.
-            if mid == model or (mid.startswith("@") and ":" in mid
-                                and mid.split(":", 1)[1] == model):
-                # Always return @provider:model for consistent identification.
-                return f"@{gid}:{model}"
-    return model
+            bare = mid.split(":", 1)[1] if mid.startswith("@") and ":" in mid else mid
+            if bare == model:
+                prefixed = mid if mid.startswith("@") else f"@{gid}:{mid}"
+                exact_matches.append((gid, prefixed))
+                break
+            if ns_prefix and gid == ns_prefix and bare == ns_rest:
+                prefixed = mid if mid.startswith("@") else f"@{gid}:{mid}"
+                ns_matches.append((gid, prefixed))
+                break
+    if not exact_matches and not ns_matches:
+        return model
+    # The active provider wins across both match kinds: a namespaced value
+    # under the active provider means that provider's own model
+    # (resolve_model_provider strips the prefix for it), even when a gateway
+    # group literally lists the same string.
+    for gid, prefixed in exact_matches + ns_matches:
+        if active_provider and gid == active_provider:
+            return prefixed
+    # Otherwise the literal gateway match wins over a direct namespace match.
+    if exact_matches:
+        return exact_matches[0][1] if len(exact_matches) == 1 else model
+    return ns_matches[0][1] if len(ns_matches) == 1 else model
 
 
 # ── Reasoning config (CLI parity for /reasoning) ─────────────────────────────
@@ -1119,7 +1259,7 @@ def set_hermes_default_model(model_id: str) -> dict:
         elif persisted_provider != previous_provider:
             if persisted_provider == "openai":
                 model_cfg["base_url"] = "https://api.openai.com/v1"
-            elif not persisted_provider.startswith("custom:"):
+            elif named_custom_provider(persisted_provider) is None:
                 model_cfg.pop("base_url", None)
         else:
             # Same SDK provider as before, no new base_url (selection was the
@@ -1327,7 +1467,7 @@ def invalidate_provider_models_cache(provider_id: str):
     is cleared so the provider's fresh models are used.
 
     Args:
-        provider_id: canonical provider id (e.g. 'openai', 'anthropic', 'custom:my-key')
+        provider_id: canonical provider id (e.g. 'openai', 'anthropic', 'my-key')
     """
     global _available_models_cache, _available_models_cache_ts, _CREDENTIAL_POOL_CACHE, _models_cache_generation
     with _available_models_cache_lock:
@@ -1362,7 +1502,12 @@ def _get_label_for_model(model_id: str, existing_groups: list) -> str:
         lookup_id = lookup_id.split(":", 1)[1]
 
     # Check existing groups for a matching label
-    _norm = lambda s: (s.split("/", 1)[-1] if "/" in s else s).replace("-", ".").lower()
+    def _norm(s: str) -> str:
+        # Group ids are @provider:model; compare on the model half.
+        if s.startswith("@") and ":" in s:
+            s = s.split(":", 1)[1]
+        return (s.split("/", 1)[-1] if "/" in s else s).replace("-", ".").lower()
+
     norm_lookup = _norm(lookup_id)
     for g in existing_groups:
         for m in g.get("models", []):
@@ -1499,6 +1644,7 @@ def _resolve_detected_provider_models(
     detected: set,
     active_provider,
     custom_fetch_provider: str = "",
+    named_custom_ids: set[str] | None = None,
 ) -> tuple[dict[str, list], set[str]]:
     """Live-resolve model lists for eligible detected providers (issue #10).
 
@@ -1544,7 +1690,9 @@ def _resolve_detected_provider_models(
 
     targets: list[str] = []
     for pid in sorted(detected):
-        if pid.startswith("custom:") or pid == custom_fetch_provider:
+        # Named custom providers are built from config.yaml in the group
+        # builder (their endpoint is user-declared, not a catalog endpoint).
+        if pid == custom_fetch_provider or (named_custom_ids and pid in named_custom_ids):
             continue
         rec = model_catalog.get_provider_record(pid)
         if rec is None or rec["refresh"]["mode"] != "api" or not rec.get("endpoint"):
@@ -1923,12 +2071,16 @@ def _build_available_models_uncached() -> dict:
     _custom_providers_cfg = cfg.get("custom_providers", [])
     _named_custom_groups: dict = {}
     if isinstance(_custom_providers_cfg, list):
-        _seen_custom_ids = {m["id"] for m in auto_detected_models}
+        # Unnamed entries fold into the shared auto-detected list; named
+        # entries keep their own group.  Dedupe is per group: two Ollama
+        # instances commonly serve the same model ids and must both appear.
+        _seen_unnamed_ids = {m["id"] for m in auto_detected_models}
+        _seen_named_ids: dict[str, set[str]] = {}
         for _cp in _custom_providers_cfg:
             if not isinstance(_cp, dict):
                 continue
             _cp_name = (_cp.get("name") or "").strip()
-            _slug = ("custom:" + _cp_name.lower().replace(" ", "-")) if _cp_name else None
+            _slug = custom_provider_slug(_cp_name) or None
 
             # Collect model IDs: singular "model" field first, then "models" dict keys
             _cp_model_ids: list[str] = []
@@ -1942,26 +2094,26 @@ def _build_available_models_uncached() -> dict:
                         _cp_model_ids.append(_m_id.strip())
 
             for _cp_model in _cp_model_ids:
-                if _cp_model and _cp_model not in _seen_custom_ids:
+                if not _cp_model:
+                    continue
+                if _slug:
+                    if _cp_model in _seen_named_ids.setdefault(_slug, set()):
+                        continue
+                    _seen_named_ids[_slug].add(_cp_model)
                     _cp_label = _get_label_for_model(_cp_model, [])
-                    _seen_custom_ids.add(_cp_model)
-                    if _slug:
-                        if _slug not in _named_custom_groups:
-                            _named_custom_groups[_slug] = (_cp_name, [])
-                        detected_providers.add(_slug)
-                        _named_custom_groups[_slug][1].append(
-                            {"id": _cp_model, "label": _cp_label}
-                        )
-                    else:
-                        auto_detected_models.append({"id": _cp_model, "label": _cp_label})
-                        detected_providers.add("custom")
+                    _named_custom_groups.setdefault(_slug, (_cp_name, []))[1].append(
+                        {"id": _cp_model, "label": _cp_label}
+                    )
+                    detected_providers.add(_slug)
+                elif _cp_model not in _seen_unnamed_ids:
+                    _cp_label = _get_label_for_model(_cp_model, [])
+                    _seen_unnamed_ids.add(_cp_model)
+                    auto_detected_models.append({"id": _cp_model, "label": _cp_label})
+                    detected_providers.add("custom")
 
     _has_custom_providers = isinstance(_custom_providers_cfg, list) and len(_custom_providers_cfg) > 0
     if active_provider and active_provider != "custom" and not _has_custom_providers:
         detected_providers.discard("custom")
-        for _slug in list(detected_providers):
-            if _slug.startswith("custom:") and not _has_custom_providers:
-                detected_providers.discard(_slug)
     elif active_provider == "custom" and _has_custom_providers:
         _has_unnamed = any(
             isinstance(_cp, dict) and not (_cp.get("name") or "").strip()
@@ -1974,7 +2126,11 @@ def _build_available_models_uncached() -> dict:
     #    build model groups from the JSON catalog + cfg overrides + live
     #    merge results.
     resolved_models, auth_failed = _resolve_detected_provider_models(
-        cfg, detected_providers, active_provider, _custom_fetch_provider
+        cfg,
+        detected_providers,
+        active_provider,
+        _custom_fetch_provider,
+        set(_named_custom_groups),
     )
     if detected_providers:
         for pid in sorted(detected_providers):
@@ -1982,17 +2138,23 @@ def _build_available_models_uncached() -> dict:
                 # Rejected credential (HTTP 401/403): omit the group — a bad
                 # key must not surface baseline models in the picker.
                 continue
-            if pid.startswith("custom:") and pid in _named_custom_groups:
+            if pid in _named_custom_groups:
                 _nc_display, _nc_models = _named_custom_groups[pid]
                 if _nc_models:
-                    groups.append({"provider": _nc_display, "provider_id": pid, "models": _nc_models})
+                    groups.append(
+                        {
+                            "provider": _nc_display,
+                            "provider_id": pid,
+                            "models": _apply_provider_prefix(_nc_models, pid),
+                        }
+                    )
                 continue
             provider_name = model_catalog.provider_display(pid)
             if auto_detected_models and pid == _custom_fetch_provider:
                 # Models from the user-declared model.base_url fetch — the
                 # exact endpoint/port the user configured wins over any
                 # catalog default (ollama/lmstudio/local/custom gateways).
-                models = _apply_provider_prefix(auto_detected_models, pid, active_provider)
+                models = _apply_provider_prefix(auto_detected_models, pid)
                 groups.append(
                     {"provider": provider_name, "provider_id": pid, "models": models}
                 )
@@ -2017,7 +2179,7 @@ def _build_available_models_uncached() -> dict:
                     # Historical behavior: Ollama Cloud only renders a group
                     # when models were actually discovered (baseline is []).
                     continue
-                models = _apply_provider_prefix(raw_models, pid, active_provider)
+                models = _apply_provider_prefix(raw_models, pid)
                 groups.append(
                     {
                         "provider": provider_name,
@@ -2031,7 +2193,9 @@ def _build_available_models_uncached() -> dict:
                         {
                             "provider": provider_name,
                             "provider_id": pid,
-                            "models": auto_detected_models,
+                            "models": _apply_provider_prefix(
+                                auto_detected_models, pid
+                            ),
                         }
                     )
     else:
@@ -2046,8 +2210,13 @@ def _build_available_models_uncached() -> dict:
                 _dm_has_key = True  # conservative: show if can't check
             if _dm_has_key:
                 label = _get_label_for_model(default_model, groups)
+                _default_identity = (
+                    _model_identity_for_provider(default_model, active_provider)
+                    if active_provider
+                    else default_model
+                )
                 groups.append(
-                    {"provider": "Default", "provider_id": "default", "models": [{"id": default_model, "label": label}]}
+                    {"provider": "Default", "provider_id": "default", "models": [{"id": _default_identity, "label": label}]}
                 )
 
     if default_model:
@@ -2063,10 +2232,20 @@ def _build_available_models_uncached() -> dict:
             _dm_ok2 = True
         if _dm_prov2 in auth_failed or active_provider in auth_failed:
             _dm_ok2 = False
-        _norm = lambda mid: (mid.split("/", 1)[-1] if "/" in mid else mid).replace("-", ".")
+        def _norm(mid: str) -> str:
+            value = (
+                mid[1:].split(":", 1)[1]
+                if mid.startswith("@") and ":" in mid
+                else mid
+            )
+            if "/" in value:
+                value = value.split("/", 1)[-1]
+            return value.replace("-", ".")
+
         all_ids_norm = {_norm(m["id"]) for g in groups for m in g.get("models", [])}
         if _norm(default_model) not in all_ids_norm and _dm_ok2:
             label = _get_label_for_model(default_model, groups)
+            identity = _model_identity_for_provider(default_model, active_provider)
             target_display = (
                 model_catalog.provider_display(active_provider).lower()
                 if active_provider
@@ -2075,7 +2254,7 @@ def _build_available_models_uncached() -> dict:
             injected = False
             for g in groups:
                 if target_display and g.get("provider", "").lower() == target_display:
-                    g["models"].insert(0, {"id": default_model, "label": label})
+                    g["models"].insert(0, {"id": identity, "label": label})
                     injected = True
                     break
             if not injected and groups:
@@ -2083,7 +2262,7 @@ def _build_available_models_uncached() -> dict:
                     {
                         "provider": "Default",
                         "provider_id": active_provider or "default",
-                        "models": [{"id": default_model, "label": label}],
+                        "models": [{"id": identity, "label": label}],
                     }
                 )
 

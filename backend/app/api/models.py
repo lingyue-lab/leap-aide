@@ -508,11 +508,13 @@ class Session:
 
     @staticmethod
     def _normalize_model(model: str, *, catalog: dict | None = None) -> str:
-        """Normalize bare model names to @provider:model format.
+        """Normalize a model value to the ``@provider:model`` identity.
 
-        Bare names like "deepseek-v4-pro" cannot uniquely identify a model
-        across providers. This method adds the @provider: prefix when the
-        model belongs to a non-default provider group.
+        The picker now emits ``@provider:model`` for every provider.  Bare
+        ids and namespaced ``provider/model`` values (config.yaml defaults,
+        CLI imports) are mapped onto a catalog entry when the provider is
+        unambiguous; the result is not guaranteed to be valid — callers
+        still run ``_is_valid_model_identity``.
 
         Args:
             catalog: pre-fetched model catalog for batch callers (GET
@@ -520,9 +522,6 @@ class Session:
                 row doesn't pay its own peek during a cold build, issue #16).
         """
         if not model:
-            return model
-        # Already prefixed or namespaced — nothing to do.
-        if model.startswith("@") or "/" in model:
             return model
         try:
             from app.api.config import normalize_model_prefix
@@ -532,24 +531,28 @@ class Session:
 
     @staticmethod
     def _is_valid_model_identity(model: str | None) -> bool:
-        """Return True when *model* names both a provider and a model.
+        """Return True when *model* is a routable ``@provider:model`` id.
 
-        The only routable identities are ``@provider:model`` and the
-        namespaced ``provider/model`` form.  A bare id (or ``unknown``) has
-        no provider hint: the SDK strips the prefix before a turn and
-        ``config.yaml`` then routes the bare id to its default endpoint,
-        which is how issue #55 sent a DeepSeek model to OpenRouter.  Such
-        values must never be written to ``model__webui`` or accepted at
-        chat start.
+        ``@provider:model`` is the only identity the WebUI persists in
+        ``model__webui`` and accepts at chat start.  A bare id (or
+        ``unknown``) has no provider hint, and a namespaced
+        ``provider/model`` value is just a model id that happens to contain
+        a slash — neither names the provider that should receive the
+        request.  The SDK strips the prefix before a turn, so config.yaml
+        then routes such values to its default endpoint, which is how issue
+        #55 sent a DeepSeek model to OpenRouter.
         """
         value = str(model or "").strip()
         if not value or value.lower() == "unknown":
             return False
-        if value.startswith("@"):
-            provider, sep, bare = value[1:].partition(":")
-        else:
-            provider, sep, bare = value.partition("/")
-        return bool(sep) and bool(provider.strip()) and bool(bare.strip())
+        if not value.startswith("@") or ":" not in value:
+            return False
+        provider, bare = value[1:].split(":", 1)
+        return (
+            bool(provider.strip())
+            and "/" not in provider
+            and bool(bare.strip())
+        )
 
     @property
     def mode(self) -> str:
@@ -833,9 +836,10 @@ class Session:
         # authoritative record of that selection.  When it is NULL the
         # session's model identity is unknown; never reconstruct it from the
         # SDK billing/model columns — mark the session invalid so chat start
-        # asks the user to pick a model again.  Values without a provider
-        # (bare ids, ``unknown``, malformed ``@`` forms) are invalid too: they
-        # cannot be routed once the SDK strips the prefix.
+        # asks the user to pick a model again.  Values without an @provider:
+        # identity (bare ids, namespaced ``provider/model`` values,
+        # ``unknown``, malformed ``@`` forms) are invalid too: they cannot
+        # be routed once the SDK strips the prefix.
         _webui_model = str(row.get('model__webui') or '').strip()
         if cls._is_valid_model_identity(_webui_model):
             kwargs['model'] = _webui_model

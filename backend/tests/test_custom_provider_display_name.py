@@ -98,8 +98,9 @@ class TestNamedCustomProviderGroup:
         )
         assert agent37_group is not None, "Expected an 'Agent37' group"
         model_ids = [m["id"] for m in agent37_group.get("models", [])]
-        assert "my-llm" in model_ids, (
-            f"Expected 'my-llm' in Agent37 group models, got {model_ids}"
+        # Every catalog id is provider-qualified (issue #55 identity scheme).
+        assert "@agent37:my-llm" in model_ids, (
+            f"Expected '@agent37:my-llm' in Agent37 group models, got {model_ids}"
         )
 
     def test_multiple_named_providers_each_get_their_own_group(self):
@@ -130,8 +131,8 @@ class TestNamedCustomProviderGroup:
             f"Expected exactly one 'Agent37' group, got {len(agent37_groups)}"
         )
         model_ids = [m["id"] for m in agent37_groups[0].get("models", [])]
-        assert "model-a" in model_ids
-        assert "model-b" in model_ids
+        assert "@agent37:model-a" in model_ids
+        assert "@agent37:model-b" in model_ids
 
 
 # ── Unnamed entry still falls back to 'Custom' ─────────────────────────────────

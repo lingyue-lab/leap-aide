@@ -311,6 +311,8 @@ export interface ModelsResponse {
 
 export interface ModelGroup {
   provider: string;
+  /** Canonical provider id used in `@provider:model` identities. */
+  provider_id?: string;
   models: Model[];
 }
 

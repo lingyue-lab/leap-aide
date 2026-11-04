@@ -204,44 +204,6 @@ def _normalize_provider_id(value: str | None) -> str:
     return "" 
 
 
-def _catalog_provider_id_sets(catalog: dict) -> tuple[set[str], set[str]]:
-    raw_provider_ids: set[str] = set()
-    normalized_provider_ids: set[str] = set()
-    for group in catalog.get("groups") or []:
-        raw = str(group.get("provider_id") or "").strip().lower()
-        if not raw:
-            continue
-        raw_provider_ids.add(raw)
-        normalized = _normalize_provider_id(raw)
-        if normalized:
-            normalized_provider_ids.add(normalized)
-    return raw_provider_ids, normalized_provider_ids
-
-
-def _catalog_has_provider(
-    provider_raw: str,
-    provider_normalized: str,
-    raw_provider_ids: set[str],
-    normalized_provider_ids: set[str],
-) -> bool:
-    return (
-        provider_raw in raw_provider_ids
-        or (provider_normalized and provider_normalized in raw_provider_ids)
-        or (provider_normalized and provider_normalized in normalized_provider_ids)
-    )
-
-
-def _model_matches_active_provider_family(
-    model: str,
-    active_provider: str,
-) -> bool:
-    model_lower = model.lower()
-    for bare_prefix in ("gpt", "claude", "gemini"):
-        if model_lower.startswith(bare_prefix):
-            return _normalize_provider_id(bare_prefix) == active_provider
-    return False
-
-
 def _bare_model_id(model_id: str | None) -> str:
     """Return the model part of an ``@provider:model`` id (or the id itself)."""
     model = str(model_id or "").strip()
@@ -256,8 +218,9 @@ def _resolve_compatible_session_model(model_id: str | None) -> tuple[str, bool]:
     Sessions can outlive provider changes. When an older session still points at
     a different provider namespace (for example `gemini/...` after switching the
     agent to OpenAI Codex), reusing that stale model causes chat startup to hit
-    the wrong backend and fail. Normalize only obvious cross-provider mismatches;
-    preserve bare model IDs and OpenRouter/custom setups.
+    the wrong backend and fail. Normalize only obvious cross-provider mismatches
+    for legacy bare values; an ``@provider:model`` identity is authoritative and
+    returned untouched.
 
     Uses peek_available_models() — a blocking catalog build here would delay
     the /api/chat/start HTTP response before begin_stream even runs (issue #8).
@@ -267,6 +230,13 @@ def _resolve_compatible_session_model(model_id: str | None) -> tuple[str, bool]:
     model = str(model_id or "").strip()
     if not model:
         return default_model, bool(default_model)
+
+    # @provider:model is the user's explicit identity.  It names the route
+    # itself (resolve_model_provider splits it), so no live-catalog heuristic
+    # may strip the hint or rewrite the model.  This is what keeps a stored
+    # session on its provider across turns (issue #55).
+    if model.startswith("@") and ":" in model:
+        return model, False
 
     # Cold cache: peek answered from the config-only catalog — there are no
     # groups to check routability against, so every cross-provider rewrite
@@ -285,44 +255,6 @@ def _resolve_compatible_session_model(model_id: str | None) -> tuple[str, bool]:
     # is stale relative to this unknown active provider. (#1023)
     raw_active_provider = str(catalog.get("active_provider") or "").strip().lower()
     if not active_provider and not raw_active_provider:
-        return model, False
-
-    if model.startswith("@") and ":" in model:
-        provider_hint, bare_model = model[1:].split(":", 1)
-        provider_raw = provider_hint.strip().lower()
-        provider_normalized = _normalize_provider_id(provider_raw)
-        bare_model = bare_model.strip()
-        if not provider_raw or not bare_model:
-            return model, False
-
-        raw_provider_ids, normalized_provider_ids = _catalog_provider_id_sets(catalog)
-        hint_matches_active = (
-            provider_raw == raw_active_provider
-            or provider_raw == active_provider
-            or (provider_normalized and provider_normalized == active_provider)
-        )
-        if hint_matches_active:
-            return bare_model, True
-
-        if _catalog_has_provider(
-            provider_raw,
-            provider_normalized,
-            raw_provider_ids,
-            normalized_provider_ids,
-        ):
-            return model, False
-
-        if _model_matches_active_provider_family(bare_model, active_provider):
-            return bare_model, True
-        if default_model:
-            return default_model, True
-        # If the @provider hint is not a known/normalized provider name it is
-        # likely a user-configured custom gateway (e.g. @kat_v1_anthropic_gateway:…).
-        # Preserve the original model ID so the displayed value matches the
-        # persisted session data.  If the provider is genuinely stale the error
-        # will surface at inference time.
-        if not provider_normalized:
-            return model, False
         return model, False
 
     slash = model.find("/")
@@ -406,6 +338,15 @@ def _resolve_chat_start_model(session, requested_model: str | None) -> tuple[str
         )
     ):
         return stored, False, None
+    # A different explicit @provider:model from the client (the user picked
+    # another model in the composer) names its own route and is authoritative.
+    if (
+        requested
+        and requested != stored
+        and requested.startswith("@")
+        and Session._is_valid_model_identity(requested)
+    ):
+        return requested, True, None
     model, normalized = _resolve_compatible_session_model(requested or stored)
     # Normalize bare model names to @provider:model for unique identification
     model = Session._normalize_model(model)
@@ -1773,8 +1714,9 @@ def handle_post(handler, parsed) -> bool:
                     str(body.get("model") or "").strip()
                 )
                 s.model = selected_model
-                # Only @provider:model / provider/model identities can be
-                # routed; bare ids and malformed forms are invalid (issue #55).
+                # Only @provider:model identities can be routed; bare ids,
+                # provider/model namespaces and malformed forms are invalid
+                # (issue #55).
                 s.model_invalid = not Session._is_valid_model_identity(
                     selected_model
                 )
@@ -4449,6 +4391,22 @@ def _handle_chat_sync(handler, body):
     )
 
 
+def _split_cron_model_identity(model: str) -> tuple[str, str | None, str | None]:
+    """Split a WebUI ``@provider:model`` id into cron's routing fields.
+
+    Cron jobs persist the bare model plus an optional provider/base_url, and
+    the SDK scheduler passes exactly those to the agent — ``@provider:`` is
+    WebUI-only syntax.  Bare values pass through untouched so an unpinned job
+    keeps following config.yaml.
+    """
+    value = str(model or "").strip()
+    if value.startswith("@") and ":" in value:
+        from app.api.config import resolve_model_provider
+
+        return resolve_model_provider(value)
+    return value, None, None
+
+
 def _handle_cron_create(handler, body):
     try:
         require(body, "prompt", "schedule")
@@ -4457,13 +4415,18 @@ def _handle_cron_create(handler, body):
     try:
         from cron.jobs import create_job
 
+        _model, _provider, _base_url = _split_cron_model_identity(
+            body.get("model") or ""
+        )
         job = create_job(
             prompt=body["prompt"],
             schedule=body["schedule"],
             name=body.get("name") or None,
             deliver=body.get("deliver") or "local",
             skills=body.get("skills") or [],
-            model=body.get("model") or None,
+            model=_model or None,
+            provider=body.get("provider") or _provider,
+            base_url=body.get("base_url") or _base_url,
             workdir=body.get("workdir") or None,
             script=body.get("script") or None,
             no_agent=bool(body.get("no_agent")),
@@ -4484,6 +4447,13 @@ def _handle_cron_update(handler, body):
     from cron.jobs import update_job
 
     updates = {k: v for k, v in body.items() if k != "job_id" and v is not None}
+    if "model" in updates:
+        _model, _provider, _base_url = _split_cron_model_identity(updates["model"])
+        updates["model"] = _model or None
+        if _provider:
+            updates.setdefault("provider", _provider)
+        if _base_url:
+            updates.setdefault("base_url", _base_url)
     job = update_job(body["job_id"], updates)
     if not job:
         return bad(handler, "Job not found", 404)
@@ -6051,7 +6021,9 @@ def _handle_session_import(handler, body):
         return bad(handler, 'JSON must contain a "messages" array')
     title = body.get("title", "Imported session")
     workspace = body.get("workspace", str(DEFAULT_WORKSPACE))
-    model = body.get("model", DEFAULT_MODEL)
+    # Imported JSON carries a display model, not necessarily an identity:
+    # map it onto the catalog and require a routable @provider:model value.
+    model = Session._normalize_model(str(body.get("model") or DEFAULT_MODEL))
     s = Session(
         title=title,
         workspace=workspace,
@@ -6059,6 +6031,7 @@ def _handle_session_import(handler, body):
         messages=messages,
         tool_calls=body.get("tool_calls", []),
     )
+    s.model_invalid = not Session._is_valid_model_identity(model)
     s.pinned = body.get("pinned", False)
     with LOCK:
         SESSIONS[s.session_id] = s
