@@ -67,6 +67,8 @@ After changes that touch the UI, run the following tests manually:
 ### Workspace & Panels
 
 - **Workspace browser**: click the top-right of the title to expand the directory tree, preview a text file, create + rename + delete files. When the workspace is a git repo, the git badge shows the branch and dirty-file count.
+- **Markdown table preview**: open a `.md` file containing the GFM table from issue #41 (a long inline-code path in the first column). Headers and cells share column widths, headers are left-aligned, borders and the header tint are visible, long paths wrap inside their cell, and the table stays within the 768px content column. Check both dark and light themes.
+- **Markdown prose baseline**: open a Markdown file (workspace preview) and a skill's `SKILL.md` (skill detail) containing headings, paragraphs, lists, a blockquote, inline code, a fenced code block, a link, and a horizontal rule. Both surfaces should share the same spacing, code-block border/background, and link/quote colors; check dark and light themes.
 - **Terminal panel**: open the terminal panel and run a simple command (`echo hi`).
 - **Theme & language**: switch the theme (system / dark / light) and language (English / 简体中文) in settings; both should persist across reload.
 

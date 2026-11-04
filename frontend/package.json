@@ -32,6 +32,7 @@
   },
   "devDependencies": {
     "@material/material-color-utilities": "^0.2.7",
+    "@tailwindcss/typography": "^0.5.20",
     "@testing-library/jest-dom": "^6.10.0",
     "@testing-library/react": "^14.3.1",
     "@types/katex": "^0.16.7",

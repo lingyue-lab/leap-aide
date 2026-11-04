@@ -302,7 +302,7 @@ export default function SkillDetail() {
               <div className="file-view-code">
                 <CodeCopyButton content={selectedSkillContent || ''} />
                 <div
-                  className="prose prose-sm text-[var(--foreground)]"
+                  className="prose text-[var(--foreground)]"
                   onClick={handleSkillMdLinkClick}
                   dangerouslySetInnerHTML={{ __html: renderedContent }}
                 />
