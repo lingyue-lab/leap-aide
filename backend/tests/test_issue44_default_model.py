@@ -9,6 +9,8 @@ Covers:
 """
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 import app.api.config as config
@@ -226,6 +228,52 @@ def test_build_availability_ignores_same_name_on_other_provider(monkeypatch):
     group_ids = [g.get("provider_id") for g in result["groups"]]
     assert "openrouter" not in group_ids
     assert "deepseek" in group_ids
+
+
+def test_build_credential_pool_credential_keeps_default_available(monkeypatch):
+    """Issue #44 follow-up: a pool-only credential is not a missing key.
+
+    The eligibility filter keeps a provider whose only credential is an
+    explicit credential_pool entry, but ``_provider_has_key()`` does not
+    read the pool.  An unconditional "has_key is False => unavailable"
+    override therefore marked the default unavailable although its group
+    existed and offered the configured model.
+    """
+    monkeypatch.setattr(
+        config,
+        "_config_only_catalog_fields",
+        lambda: (
+            "gemini-2.5-pro",
+            "gemini",
+            {
+                "credential_pool": {
+                    "gemini": [{"source": "manual", "label": "gemini-manual"}]
+                }
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        config, "_resolve_detected_provider_models", lambda *a, **k: ({}, set())
+    )
+    import app.api.providers as providers
+
+    # No env/config key: the pool entry is the only credential.
+    monkeypatch.setattr(providers, "_provider_has_key", lambda pid: False)
+    monkeypatch.setattr(providers, "_provider_is_oauth", lambda pid: False)
+    monkeypatch.setattr(config, "cfg", {})
+    # Force the ImportError fallback that inspects credential_pool entries.
+    monkeypatch.setitem(sys.modules, "agent.credential_pool", None)
+
+    result = config._build_available_models_uncached()
+    gemini = next(
+        (g for g in result["groups"] if g.get("provider_id") == "gemini"), None
+    )
+    assert gemini is not None, result["groups"]
+    assert any(m["id"] == "gemini-2.5-pro" for m in gemini["models"])
+    assert result["default_model_available"] is True
+    # The field itself stays pool-blind; only the availability override was
+    # wrong, so the UI must not turn it into a "key missing" warning.
+    assert result["default_model_provider_has_key"] is False
 
 
 # ── New-session resolution ───────────────────────────────────────────────────

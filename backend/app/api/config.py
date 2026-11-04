@@ -2538,14 +2538,16 @@ def _build_available_models_uncached() -> dict:
     # Compute availability BEFORE injecting the configured default: after
     # injection the check would always pass.  No groups means the live query
     # produced nothing to compare against, so the answer stays "unknown"
-    # rather than claiming the provider retired the model.  A missing key on
-    # a catalog API-key provider is definitive, though, and outranks any
-    # same-named model another provider may list.
+    # rather than claiming the provider retired the model.  Only in that
+    # case does a missing key on a catalog API-key provider settle it as
+    # unavailable: when groups exist, the provider-scoped match already
+    # reflects them, and _provider_has_key() cannot see credential_pool-only
+    # credentials (whose groups are kept by the eligibility filter above).
     if groups and detected_providers:
         default_model_available = _compute_default_model_available(
             default_model, groups, active_provider
         )
-    if default_model and default_model_provider_has_key is False:
+    elif default_model and default_model_provider_has_key is False:
         default_model_available = False
 
     if default_model:
