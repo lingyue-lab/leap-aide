@@ -475,7 +475,7 @@ def test_stale_openai_model_cleared_for_custom_only_provider(monkeypatch):
             "active_provider": "custom",
             "default_model": "",
             "groups": [
-                {"provider": "Agent37", "provider_id": "custom:agent37",
+                {"provider": "Agent37", "provider_id": "agent37",
                  "models": [{"id": "agent37/default", "label": "default"}]},
             ],
         },
@@ -507,7 +507,7 @@ def test_stale_openai_model_cleared_for_custom_provider_with_default(monkeypatch
             "active_provider": "custom",
             "default_model": "agent37/default",
             "groups": [
-                {"provider": "Agent37", "provider_id": "custom:agent37",
+                {"provider": "Agent37", "provider_id": "agent37",
                  "models": [{"id": "agent37/default", "label": "default"}]},
             ],
         },
@@ -559,7 +559,7 @@ def test_custom_namespace_model_always_preserved_on_custom_provider(monkeypatch)
             "active_provider": "custom",
             "default_model": "agent37/default",
             "groups": [
-                {"provider": "Agent37", "provider_id": "custom:agent37",
+                {"provider": "Agent37", "provider_id": "agent37",
                  "models": [{"id": "agent37/default", "label": "default"}]},
             ],
         },

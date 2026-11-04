@@ -385,7 +385,7 @@ class TestProviderEnvVars:
         """Custom providers and empty ids resolve to no env vars."""
         from app.api.providers import _provider_env_vars
         assert _provider_env_vars("") == []
-        assert _provider_env_vars("custom:acme") == []
+        assert _provider_env_vars("acme") == []
         assert _provider_env_vars("meta-llama") == []  # auth.type=none
 
     def test_has_key_detects_secondary_env_var(self, monkeypatch, tmp_path):

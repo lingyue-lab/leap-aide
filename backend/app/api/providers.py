@@ -883,10 +883,7 @@ def _clean_provider_key_from_config(provider_id: str) -> None:
                         if not cp_name:
                             continue
                         cp_id = custom_provider_slug(cp_name)
-                        if provider_id.lower() in {
-                            cp_id,
-                            f"custom:{cp_id}",
-                        }:
+                        if provider_id.lower() == cp_id:
                             if cp.get("api_key"):
                                 del cp["api_key"]
                                 changed = True

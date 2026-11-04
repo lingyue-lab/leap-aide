@@ -4397,12 +4397,18 @@ def _split_cron_model_identity(model: str) -> tuple[str, str | None, str | None]
     Cron jobs persist the bare model plus an optional provider/base_url, and
     the SDK scheduler passes exactly those to the agent — ``@provider:`` is
     WebUI-only syntax.  Bare values pass through untouched so an unpinned job
-    keeps following config.yaml.
+    keeps following config.yaml.  The retired ``@custom:<name>:model`` form
+    is rejected: it must never be interpreted as an unnamed-custom model.
     """
     value = str(model or "").strip()
     if value.startswith("@") and ":" in value:
-        from app.api.config import resolve_model_provider
+        from app.api.config import is_legacy_custom_identity, resolve_model_provider
 
+        if is_legacy_custom_identity(value[1:]):
+            raise ValueError(
+                "Legacy @custom:<name>:model identities are not supported; "
+                "use @<name>:model."
+            )
         return resolve_model_provider(value)
     return value, None, None
 
@@ -4448,7 +4454,12 @@ def _handle_cron_update(handler, body):
 
     updates = {k: v for k, v in body.items() if k != "job_id" and v is not None}
     if "model" in updates:
-        _model, _provider, _base_url = _split_cron_model_identity(updates["model"])
+        try:
+            _model, _provider, _base_url = _split_cron_model_identity(
+                updates["model"]
+            )
+        except ValueError as e:
+            return bad(handler, str(e))
         updates["model"] = _model or None
         if _provider:
             updates.setdefault("provider", _provider)

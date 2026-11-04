@@ -540,7 +540,9 @@ class Session:
         a slash — neither names the provider that should receive the
         request.  The SDK strips the prefix before a turn, so config.yaml
         then routes such values to its default endpoint, which is how issue
-        #55 sent a DeepSeek model to OpenRouter.
+        #55 sent a DeepSeek model to OpenRouter.  The retired
+        ``@custom:<name>:model`` form is rejected too — named custom
+        providers are identified by their name slug (``@ollama1:model``).
         """
         value = str(model or "").strip()
         if not value or value.lower() == "unknown":
@@ -548,11 +550,16 @@ class Session:
         if not value.startswith("@") or ":" not in value:
             return False
         provider, bare = value[1:].split(":", 1)
-        return (
+        if not (
             bool(provider.strip())
             and "/" not in provider
             and bool(bare.strip())
-        )
+        ):
+            return False
+        # The retired @custom:<name>:model form names a configured custom
+        # provider in its middle segment.  Reject it instead of routing it
+        # through the unnamed-custom pseudo-provider.
+        return not _cfg.is_legacy_custom_identity(value[1:])
 
     @property
     def mode(self) -> str:

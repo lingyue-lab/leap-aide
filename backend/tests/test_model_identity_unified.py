@@ -6,8 +6,8 @@ Every model in the picker is identified as ``@provider:model``:
   (``@openrouter:anthropic/claude-opus-4.6``) and Ollama tags
   (``@ollama1:qwen3-vl:235b``) survive intact;
 * named ``custom_providers`` entries use their name slug as the provider id
-  (``@ollama1:...``); the legacy ``@custom:<name>:model`` form is only
-  accepted as input and canonicalized to the slug form;
+  (``@ollama1:...``); the retired ``@custom:<name>:model`` form is rejected,
+  never canonicalized;
 * ``provider/model`` is a model namespace, not a provider identity.
 """
 import pytest
@@ -89,11 +89,12 @@ def test_custom_provider_slug(name, slug):
     assert config.custom_provider_slug(name) == slug
 
 
-def test_named_custom_provider_accepts_slug_name_and_legacy(custom_providers):
+def test_named_custom_provider_accepts_slug_and_name(custom_providers):
     assert config.named_custom_provider("ollama1")["name"] == "Ollama1"
     assert config.named_custom_provider("Ollama1")["name"] == "Ollama1"
     assert config.named_custom_provider("my key")["name"] == "My Key"
-    assert config.named_custom_provider("custom:ollama1")["name"] == "Ollama1"
+    # The retired custom:<slug> provider id is not accepted.
+    assert config.named_custom_provider("custom:ollama1") is None
     assert config.named_custom_provider("missing") is None
 
 
@@ -122,15 +123,29 @@ def test_named_custom_provider_name_with_space_resolves(custom_providers):
     )
 
 
-def test_legacy_custom_identity_resolves_to_slug(custom_providers):
+def test_legacy_custom_identity_is_not_resolved(custom_providers):
+    """The retired @custom:<name>:model form is never canonicalized."""
     model, provider, base_url = config.resolve_model_provider(
         "@custom:Ollama1:qwen3-vl:235b"
     )
     assert (model, provider, base_url) == (
-        "qwen3-vl:235b",
-        "ollama1",
-        "http://ollama1.local:11434/v1",
+        "Ollama1:qwen3-vl:235b",
+        "custom",
+        None,
     )
+
+
+def test_legacy_custom_identity_is_rejected(custom_providers):
+    """Named custom identities must use the slug; the old form is invalid."""
+    from app.api.models import Session
+
+    assert config.is_legacy_custom_identity(
+        "custom:Ollama1:qwen3-vl:235b"
+    ) is True
+    assert config.is_legacy_custom_identity("custom:qwen3-vl:235b") is False
+    assert Session._is_valid_model_identity(
+        "@custom:Ollama1:qwen3-vl:235b"
+    ) is False
 
 
 def test_unnamed_custom_identity_keeps_colon_model(custom_providers):
@@ -162,16 +177,21 @@ def test_builtin_identity_resolves_to_bare_model(custom_providers):
 # ── normalize_model_prefix ─────────────────────────────────────────────────
 
 
-def test_normalize_legacy_custom_identity_to_plain_slug(custom_providers):
+def test_normalize_does_not_rewrite_legacy_custom_identity(custom_providers):
+    """The retired form is rejected by validation, never canonicalized."""
     assert config.normalize_model_prefix(
         "@custom:My Key:private-llm"
-    ) == "@my-key:private-llm"
+    ) == "@custom:My Key:private-llm"
+    assert config.is_legacy_custom_identity("custom:My Key:private-llm") is True
 
 
-def test_normalize_keeps_unnamed_custom_identity_with_colon_model():
+def test_normalize_keeps_unnamed_custom_identity_with_colon_model(custom_providers):
+    from app.api.models import Session
+
     assert config.normalize_model_prefix(
         "@custom:qwen3-vl:235b"
     ) == "@custom:qwen3-vl:235b"
+    assert Session._is_valid_model_identity("@custom:qwen3-vl:235b") is True
 
 
 def test_normalize_namespaced_value_to_direct_provider_identity():
@@ -358,6 +378,11 @@ def test_cron_split_routes_custom_identity(custom_providers):
         "ollama1",
         "http://ollama1.local:11434/v1",
     )
+
+
+def test_cron_split_rejects_legacy_custom_identity(custom_providers):
+    with pytest.raises(ValueError, match="Legacy @custom"):
+        routes._split_cron_model_identity("@custom:Ollama1:qwen3-vl:235b")
 
 
 def test_cron_split_leaves_bare_model_unchanged(custom_providers):

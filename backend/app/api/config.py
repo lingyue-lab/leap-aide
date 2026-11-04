@@ -682,16 +682,14 @@ def custom_provider_slug(name: str) -> str:
 def named_custom_provider(provider_id: str) -> dict | None:
     """Return the ``custom_providers`` entry named by *provider_id*.
 
-    Accepts the canonical slug (``ollama1``), the provider name as written
-    (case-insensitive, spaces allowed), and the legacy ``custom:<slug>``
-    form.  Returns None when no configured entry matches.
+    Accepts the canonical slug (``ollama1``) and the provider name as written
+    (case-insensitive, spaces allowed).  The retired ``custom:<slug>``
+    provider id is not accepted.  Returns None when no entry matches.
     """
     raw = str(provider_id or "").strip().lower()
     if not raw:
         return None
     wanted = {raw, raw.replace(" ", "-")}
-    if raw.startswith("custom:"):
-        wanted.add(raw.split(":", 1)[1])
     entries = cfg.get("custom_providers", [])
     if not isinstance(entries, list):
         return None
@@ -704,25 +702,21 @@ def named_custom_provider(provider_id: str) -> dict | None:
     return None
 
 
-def legacy_custom_identity_parts(identity: str) -> tuple[str, str] | None:
-    """Split the legacy ``custom:<name>:model`` identity form.
+def is_legacy_custom_identity(identity: str) -> bool:
+    """Return True for the retired ``custom:<name>:model`` identity form.
 
-    Before the unified scheme, named custom providers were identified as
-    ``@custom:<slug>:model``.  That form is only legacy when the middle
-    segment still names a configured custom provider; otherwise ``custom``
-    is the unnamed-custom pseudo-provider and everything after the first
-    colon is the model id — e.g. ``@custom:qwen3-vl:235b``.
+    Named custom providers are identified by their name slug
+    (``@ollama1:model``); the old ``@custom:<name>:model`` form is not
+    accepted and must be rejected instead of being interpreted.  The middle
+    segment must name a configured custom provider, so
+    ``@custom:qwen3-vl:235b`` — the unnamed-custom provider serving a model
+    whose id contains a colon — is not mistaken for the retired form.
     """
     text = str(identity or "").strip()
     if not text.lower().startswith("custom:") or text.count(":") < 2:
-        return None
-    name, bare = text.split(":", 1)[1].split(":", 1)
-    if not bare or named_custom_provider(name) is None:
-        return None
-    slug = custom_provider_slug(name)
-    if not slug:
-        return None
-    return slug, bare
+        return False
+    name = text.split(":", 1)[1].split(":", 1)[0]
+    return bool(name) and named_custom_provider(name) is not None
 
 
 def _model_identity_for_provider(model: str, provider_id: str) -> str:
@@ -922,11 +916,6 @@ def resolve_model_provider(model_id: str) -> tuple:
     # returned with its base_url so streaming does not have to rediscover it.
     if model_id.startswith("@") and ":" in model_id:
         identity = model_id[1:]
-        # Legacy WebUI identity for named custom providers:
-        # @custom:<known-name>:model -> @<name-slug>:model.
-        _legacy = legacy_custom_identity_parts(identity)
-        if _legacy is not None:
-            identity = f"{_legacy[0]}:{_legacy[1]}"
         provider_hint, bare_model = identity.split(":", 1)
         provider_hint = provider_hint.strip()
         entry = named_custom_provider(provider_hint)
@@ -1028,13 +1017,13 @@ def normalize_model_prefix(model_id: str, *, catalog: dict | None = None) -> str
     """Normalize a model value to the catalog's ``@provider:model`` identity.
 
     Every picker id is now prefixed with its owning provider, so stored
-    values that lack the prefix (bare ids, namespaced ``provider/model``
-    values carried over from config.yaml or CLI sessions, and the legacy
-    ``@custom:<name>:model`` form) are mapped back onto a catalog entry.
+    values that lack the prefix (bare ids and namespaced ``provider/model``
+    values carried over from config.yaml or CLI sessions) are mapped back
+    onto a catalog entry.  The retired ``@custom:<name>:model`` form is not
+    rewritten; callers reject it via ``is_legacy_custom_identity``.
 
     Rules:
-      - Already ``@provider:model`` → returned as-is (legacy custom identity
-        is rewritten to the plain slug form).
+      - Already ``@provider:model`` → returned as-is.
       - Otherwise look the value up in the catalog: a group whose model is
         literally the value (gateway namespace), or whose provider id is the
         value's ``/`` namespace (direct provider).  The active provider wins
@@ -1055,9 +1044,6 @@ def normalize_model_prefix(model_id: str, *, catalog: dict | None = None) -> str
     if not model:
         return model
     if model.startswith("@"):
-        _legacy = legacy_custom_identity_parts(model[1:])
-        if _legacy is not None:
-            return f"@{_legacy[0]}:{_legacy[1]}"
         return model
 
     if catalog is None:
