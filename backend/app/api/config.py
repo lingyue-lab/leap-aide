@@ -1145,27 +1145,6 @@ def _normalize_model_id_for_match(model_id: str) -> str:
     return mid.replace("-", ".")
 
 
-def _compute_default_model_available(
-    default_model: str, groups: list[dict]
-) -> bool | None:
-    """Return whether the configured default appears in *groups*.
-
-    ``None`` means "unknown" (no configured default, or no catalog to check
-    against); callers must only warn on an explicit ``False``.  This must be
-    computed BEFORE the default-model injection in the catalog build, or the
-    injected entry would make it always true.
-    """
-    default_id = str(default_model or "").strip()
-    if not default_id:
-        return None
-    target = _normalize_model_id_for_match(default_id)
-    return any(
-        _normalize_model_id_for_match(model.get("id", "")) == target
-        for group in groups
-        for model in group.get("models", [])
-    )
-
-
 def _resolve_default_model_provider(
     default_model: str, active_provider: str | None
 ) -> str:
@@ -1188,6 +1167,48 @@ def _resolve_default_model_provider(
         if model_catalog.get_provider_record(candidate) is not None:
             return candidate
     return ""
+
+
+def _compute_default_model_available(
+    default_model: str,
+    groups: list[dict],
+    active_provider: str | None = None,
+) -> bool | None:
+    """Return whether the configured default is offered by its own provider.
+
+    ``None`` means "unknown" (no configured default, or no catalog to check
+    against); callers must only warn on an explicit ``False``.  This must be
+    computed BEFORE the default-model injection in the catalog build, or the
+    injected entry would make it always true.
+
+    The check is provider-scoped when config.yaml names the provider: two
+    providers can list the same trailing model name (OpenRouter's
+    ``deepseek/deepseek-v4-flash`` and DeepSeek's ``deepseek-v4-flash``), and
+    a name-only match would report the default as available after its own
+    provider's group was filtered out.  Provider-less configs keep the
+    historical name-only fallback.
+    """
+    default_id = str(default_model or "").strip()
+    if not default_id:
+        return None
+    target = _normalize_model_id_for_match(default_id)
+    provider_id = _resolve_default_model_provider(default_id, active_provider)
+
+    def _group_offers_target(group: dict) -> bool:
+        return any(
+            _normalize_model_id_for_match(model.get("id", "")) == target
+            for model in group.get("models", [])
+        )
+
+    if provider_id:
+        return any(
+            _group_offers_target(group)
+            for group in groups
+            if _resolve_provider_alias(
+                str(group.get("provider_id") or "")
+            ) == provider_id
+        )
+    return any(_group_offers_target(group) for group in groups)
 
 
 def _default_model_provider_has_key(
@@ -2515,13 +2536,16 @@ def _build_available_models_uncached() -> dict:
                 )
 
     # Compute availability BEFORE injecting the configured default: after
-    # injection the check would always pass.  With no eligible provider the
-    # answer is normally "unknown" — except when the default's provider is a
-    # catalog API-key provider whose key is missing, which is definitively
-    # unavailable (the keyless group was filtered out above).
-    if detected_providers:
-        default_model_available = _compute_default_model_available(default_model, groups)
-    elif default_model and default_model_provider_has_key is False:
+    # injection the check would always pass.  No groups means the live query
+    # produced nothing to compare against, so the answer stays "unknown"
+    # rather than claiming the provider retired the model.  A missing key on
+    # a catalog API-key provider is definitive, though, and outranks any
+    # same-named model another provider may list.
+    if groups and detected_providers:
+        default_model_available = _compute_default_model_available(
+            default_model, groups, active_provider
+        )
+    if default_model and default_model_provider_has_key is False:
         default_model_available = False
 
     if default_model:

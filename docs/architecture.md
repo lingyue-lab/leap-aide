@@ -199,8 +199,11 @@ Key properties:
   so without the hint an OpenRouter selection would silently route to the
   DeepSeek direct API whenever `deepseek` is the active provider. Custom
   providers (`custom:<name>`) are exempt because their hint itself contains
-  a colon. The active provider's IDs are left untouched (it is the default
-  route), and `POST /api/default-model` resolves the hint back to
+  a colon, and keyless catalog endpoints (`ollama`, `lmstudio`, `meta-llama`
+  — `auth.type: none`) are exempt because their slash IDs are served by the
+  configured `model.base_url`, which the `@provider:` route would discard.
+  The active provider's IDs are left untouched (it is the default route),
+  and `POST /api/default-model` resolves the hint back to
   `model.default` + `model.provider` before writing config.yaml.
 - **Disk envelope**: the models cache snapshot persists
   `{schema_version, active_provider, default_model,
@@ -212,10 +215,13 @@ Key properties:
   `default_model_available` (`true` / `false` / `null`). It is computed
   from the real provider groups *before* the configured default is
   injected into the picker, and is `null` when unknown (config-only
-  response, in-flight build, or a legacy disk snapshot). When no provider
-  survives the eligibility filter, availability is `false` if the
-  default's provider is a catalog API-key provider without a key — that is
-  a definitive failure, not the unknown case. A companion field,
+  response, in-flight build, or a legacy disk snapshot). Matching is
+  scoped to the default's own provider (`model.provider` is authoritative;
+  the name-only comparison is a fallback for provider-less configs), so a
+  same-named model under another provider cannot mask a removed default.
+  An empty group list (live results were empty or every provider was
+  rejected) also stays `null` — except when the default's provider is a
+  catalog API-key provider without a key, which is a definitive failure. A companion field,
   `default_model_provider_has_key` (`true` / `false` / `null`; `null` for
   local/OAuth/unknown providers), lets the UI say the provider's API key
   was removed rather than claiming the provider retired the model. An

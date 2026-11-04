@@ -895,7 +895,7 @@ _DEFAULT_MODEL_INVALID_MESSAGE = (
     'Default model is not valid. Please configure it in Settings.'
 )
 _DEFAULT_MODEL_INVALID_HINT = (
-    "The API key for the default model's provider was removed. "
+    "The API key for the default model's provider is missing or was removed. "
     'Re-add the key in Settings → Model Providers, or choose another model.'
 )
 

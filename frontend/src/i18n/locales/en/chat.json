@@ -18,7 +18,7 @@
     "send": "Send message",
     "stop": "Stop generating",
     "model_unavailable": "unavailable",
-    "default_model_key_missing": "Default model unavailable: its provider's API key was removed. Re-add it in Settings.",
+    "default_model_key_missing": "Default model unavailable: its provider's API key is missing or was removed. Re-add it in Settings.",
     "drop_files": "Drop files to attach",
     "voiceStart": "Voice input",
     "voiceStop": "Stop recording",

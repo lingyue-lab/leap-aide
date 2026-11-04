@@ -185,7 +185,10 @@ Provider 的展示名、别名、基线模型列表、端点、认证头与刷�
   `resolve_model_provider()` 会剥掉与 `model.provider` 相同的前缀，因此没有
   该提示时，只要 active provider 恰好是 `deepseek`，OpenRouter 的选择就会被
   静默路由到 DeepSeek 直连 API。`custom:<name>` 形式的自定义 provider 例外
-  ——其提示本身含冒号。active provider 的 ID 保持原样（它就是默认路由）；
+  ——其提示本身含冒号；无 key 的目录端点（`ollama`、`lmstudio`、
+  `meta-llama`，即 `auth.type: none`）同样例外——它们的 slash ID 由用户配置
+  的 `model.base_url` 提供服务，`@provider:` 路由会丢掉该端点。active
+  provider 的 ID 保持原样（它就是默认路由）；
   `POST /api/default-model` 在写入 config.yaml 前会把提示解析回
   `model.default` + `model.provider`。
 - **磁盘 envelope**：模型缓存快照持久化
@@ -196,9 +199,12 @@ Provider 的展示名、别名、基线模型列表、端点、认证头与刷�
 - **默认模型可用性（issue #44）**：`/api/models` 返回
   `default_model_available`（`true` / `false` / `null`）。该值在把配置的
   默认模型注入 picker *之前*，由真实 provider 分组计算；未知时返回
-  `null`（config-only 响应、构建中或旧磁盘快照）。当没有任何 provider
-  通过资格过滤时，如果默认模型所属 provider 是目录中需要 API key 的
-  provider 且当前没有 key，则可用性为 `false`——这是确定的失败，而非未知。
+  `null`（config-only 响应、构建中或旧磁盘快照）。匹配限定在默认模型
+  自己的 provider 内（以 `model.provider` 为准；仅无 provider 的配置才
+  回退到按模型名比较），因此其他 provider 下的同名模型不会掩盖默认模型
+  已被移除的事实。分组列表为空（实时结果为空或所有 provider 都被拒绝）
+  时同样保持 `null`——除非默认模型所属 provider 是目录中需要 API key 的
+  provider 且当前没有 key，这是确定的失败。
   配套字段 `default_model_provider_has_key`（`true` / `false` / `null`；
   本地/OAuth/未知 provider 为 `null`）让 UI 能提示“provider 的 API key
   已被删除”，而不是误报“provider 不再提供该模型”。配置的默认模型不可用时

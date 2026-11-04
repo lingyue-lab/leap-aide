@@ -39,9 +39,61 @@ def test_compute_default_model_available_unknown_when_unset():
 
 
 def test_compute_default_model_available_matches_across_prefixes():
-    groups = [{"models": [{"id": "@nous:anthropic/claude-opus-4.6"}]}]
+    groups = [
+        {
+            "provider_id": "nous",
+            "models": [{"id": "@nous:anthropic/claude-opus-4.6"}],
+        }
+    ]
     assert config._compute_default_model_available(
-        "anthropic/claude-opus-4.6", groups
+        "anthropic/claude-opus-4.6", groups, "nous"
+    ) is True
+
+
+def test_compute_default_model_available_is_provider_scoped():
+    """A same-named model on a different provider must not count (issue #44).
+
+    config: default=``deepseek/deepseek-v4-flash``, provider=``openrouter``.
+    The OpenRouter group was filtered out with its deleted key; DeepSeek's
+    group lists a model with the same trailing name.  Routing still targets
+    OpenRouter (config.yaml's provider), so the default is unavailable.
+    """
+    groups = [
+        {
+            "provider_id": "deepseek",
+            "models": [{"id": "@deepseek:deepseek-v4-flash"}],
+        }
+    ]
+    assert config._compute_default_model_available(
+        "deepseek/deepseek-v4-flash", groups, "openrouter"
+    ) is False
+
+
+def test_compute_default_model_available_matches_own_provider_group():
+    groups = [
+        {
+            "provider_id": "deepseek",
+            "models": [{"id": "@deepseek:deepseek-v4-flash"}],
+        },
+        {
+            "provider_id": "openrouter",
+            "models": [{"id": "deepseek/deepseek-v4-flash"}],
+        },
+    ]
+    assert config._compute_default_model_available(
+        "deepseek/deepseek-v4-flash", groups, "openrouter"
+    ) is True
+
+
+def test_compute_default_model_available_provider_less_falls_back_to_name():
+    groups = [
+        {
+            "provider_id": "nous",
+            "models": [{"id": "@nous:anthropic/claude-opus-4.6"}],
+        }
+    ]
+    assert config._compute_default_model_available(
+        "claude-opus-4.6", groups, None
     ) is True
 
 
@@ -108,6 +160,72 @@ def test_build_without_providers_reports_unknown(monkeypatch):
     )
     result = config._build_available_models_uncached()
     assert result["default_model_available"] is None
+
+
+def test_build_with_no_groups_reports_unknown(monkeypatch):
+    """An eligible provider that yields no models is not proof of removal.
+
+    ollama-cloud has an empty baseline and is omitted from the groups list, so
+    there is nothing to compare the configured default against; reporting
+    ``False`` here would show a misleading "model retired" warning.
+    """
+    monkeypatch.setattr(
+        config,
+        "_config_only_catalog_fields",
+        lambda: ("ollama-cloud-model", "ollama-cloud", {}),
+    )
+    monkeypatch.setattr(
+        config, "_resolve_detected_provider_models", lambda *a, **k: ({}, set())
+    )
+    import app.api.providers as providers
+
+    # Keep only the active provider: ambient env vars, hermes auth status and
+    # credential pools detected by other tests must not contribute groups.
+    monkeypatch.setattr(
+        providers, "_provider_has_key", lambda pid: pid == "ollama-cloud"
+    )
+    monkeypatch.setattr(providers, "_provider_is_oauth", lambda pid: False)
+    monkeypatch.setattr(config, "cfg", {})
+    result = config._build_available_models_uncached()
+    assert result["groups"] == []
+    assert result["default_model_available"] is None
+
+
+def test_build_availability_ignores_same_name_on_other_provider(monkeypatch):
+    """Issue #44 regression: deleted provider key + same-named model elsewhere.
+
+    config: ``model.default=deepseek/deepseek-v4-flash``,
+    ``model.provider=openrouter``.  OpenRouter's key is deleted (its group is
+    filtered out) while DeepSeek still has a key and lists a model with the
+    same trailing name.  A name-only match would report the default as
+    available although ``resolve_model_provider()`` still routes it to
+    OpenRouter, and the UI would show no warning.
+    """
+    monkeypatch.setattr(
+        config,
+        "_config_only_catalog_fields",
+        lambda: ("deepseek/deepseek-v4-flash", "openrouter", {}),
+    )
+    monkeypatch.setattr(
+        config, "_resolve_detected_provider_models", lambda *a, **k: ({}, set())
+    )
+    import app.api.providers as providers
+
+    monkeypatch.setattr(
+        providers, "_provider_has_key", lambda pid: pid != "openrouter"
+    )
+    monkeypatch.setattr(
+        config,
+        "cfg",
+        {**config.cfg, "providers": {"deepseek": {}}},
+    )
+
+    result = config._build_available_models_uncached()
+    assert result["default_model_available"] is False
+    assert result["default_model_provider_has_key"] is False
+    group_ids = [g.get("provider_id") for g in result["groups"]]
+    assert "openrouter" not in group_ids
+    assert "deepseek" in group_ids
 
 
 # ── New-session resolution ───────────────────────────────────────────────────

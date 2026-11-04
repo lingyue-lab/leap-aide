@@ -142,7 +142,7 @@ describe('ChatComposer — configured default availability', () => {
     expect(await screen.findByTitle('hy4-preview (unavailable)')).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Default model unavailable: its provider's API key was removed. Re-add it in Settings.",
+        "Default model unavailable: its provider's API key is missing or was removed. Re-add it in Settings.",
       ),
     ).toBeInTheDocument();
   });
@@ -176,7 +176,7 @@ describe('ChatComposer — configured default availability', () => {
 
     const trigger = await screen.findByTitle('hy4-preview (unavailable)');
     const warningText =
-      "Default model unavailable: its provider's API key was removed. Re-add it in Settings.";
+      "Default model unavailable: its provider's API key is missing or was removed. Re-add it in Settings.";
     expect(screen.getByText(warningText)).toBeInTheDocument();
 
     fireEvent.click(trigger);
@@ -187,5 +187,86 @@ describe('ChatComposer — configured default availability', () => {
 
     await waitFor(() => expect(screen.queryByText(warningText)).toBeNull());
     expect(screen.getByTitle('deepseek-chat')).toBeInTheDocument();
+  });
+
+  // Real welcome-state shape: the placeholder was created before settings
+  // loaded, so its model is the old hard-coded fallback rather than the
+  // configured default.  The warning must still appear, because
+  // handleWelcomeSend sends the configured default (`hy4-preview`).
+  it('warns in welcome state when the placeholder model predates settings', async () => {
+    h.catalog = {
+      groups: [],
+      active_provider: 'tencent-tokenhub',
+      default_model: 'hy4-preview',
+      default_model_available: false,
+      default_model_provider_has_key: false,
+    };
+    useSettingsStore.setState({ settings: null });
+    const placeholder = {
+      ...session('anthropic/claude-sonnet-4-5'),
+      session_id: 'new-local-aaaa',
+    };
+    useSessionStore.setState({
+      sessions: [],
+      currentSessionId: 'new-local-aaaa',
+      currentSession: placeholder,
+      pendingNewSession: placeholder,
+    });
+
+    render(<ChatComposer onSend={() => {}} onCancel={() => {}} />);
+
+    expect(await screen.findByTitle('hy4-preview (unavailable)')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Default model unavailable: its provider's API key is missing or was removed. Re-add it in Settings.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  // sameModelId() compares only the trailing name.  A user who explicitly
+  // picks the same trailing name on a different provider has chosen a
+  // different route, so the warning must clear and the footer must name it.
+  it('dismisses the warning for the same tail name on another provider', async () => {
+    h.catalog = {
+      groups: [
+        {
+          provider: 'OpenRouter',
+          provider_id: 'openrouter',
+          models: [
+            {
+              id: '@openrouter:deepseek/deepseek-v4-flash',
+              label: 'DeepSeek V4 Flash (OpenRouter)',
+            },
+          ],
+        },
+      ],
+      active_provider: 'deepseek',
+      default_model: 'deepseek-v4-flash',
+      default_model_available: false,
+      default_model_provider_has_key: false,
+    };
+    useSettingsStore.setState({ settings: null });
+    useSessionStore.setState({
+      sessions: [],
+      currentSessionId: 'sess-1',
+      currentSession: session(''),
+      pendingNewSession: null,
+    });
+
+    render(<ChatComposer onSend={() => {}} onCancel={() => {}} />);
+
+    const trigger = await screen.findByTitle('deepseek-v4-flash (unavailable)');
+    const warningText =
+      "Default model unavailable: its provider's API key is missing or was removed. Re-add it in Settings.";
+    expect(screen.getByText(warningText)).toBeInTheDocument();
+
+    fireEvent.click(trigger);
+    await waitFor(() =>
+      expect(document.querySelector('.selection-popover')).not.toBeNull(),
+    );
+    fireEvent.click(screen.getByText('DeepSeek V4 Flash (OpenRouter)'));
+
+    await waitFor(() => expect(screen.queryByText(warningText)).toBeNull());
+    expect(screen.getByTitle('deepseek-v4-flash')).toBeInTheDocument();
   });
 });

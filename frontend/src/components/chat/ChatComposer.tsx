@@ -370,6 +370,15 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
   // would 404). Parent is notified via onModelChange so the selection
   // survives the first send.
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+  const sessionId = currentSession?.session_id;
+  // A pick belongs to the conversation it was made in.  Switching sessions
+  // (including welcome → real promotion, which replaces the pending session)
+  // must not leak it into another conversation or keep suppressing that
+  // conversation's unavailable-default warning.
+  useEffect(() => {
+    setSelectedModelId(null);
+  }, [sessionId]);
+  const isPendingNewSession = !!sessionId?.startsWith('new-local-');
   const sessionModel = currentSession?.model ?? '';
   const settingsModel = settings?.model ?? '';
   // settings.model and the catalog's default_model are the CLI-shaped
@@ -414,14 +423,22 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
   const configuredDefaultCatalogId = catalogIdFor(configuredDefaultModel);
   // The model this conversation runs: the configured default for a new
   // conversation (the welcome state starts exactly that), the session's own
-  // model for an existing one.
-  const resolvedModel = sessionModel || settingsCatalogModel;
+  // model for an existing one.  A welcome placeholder's model is a snapshot
+  // taken when the placeholder was created (possibly before settings
+  // loaded), not an explicit user choice — deriving the display from the
+  // live configured default keeps it in step with what handleWelcomeSend
+  // actually sends (issue #44).
+  const resolvedModel = isPendingNewSession
+    ? settingsModel
+    : sessionModel || settingsCatalogModel;
   const isConfiguredDefault = !!resolvedModel
     && sameModelId(resolvedModel, configuredDefaultModel);
-  // A pick of the configured default itself (the injected unavailable entry)
-  // keeps the warning; any other pick makes it obsolete.
+  // A pick of the configured default itself (the injected unavailable entry,
+  // whose ID is exactly `default_model`) keeps the warning; any other pick —
+  // including the same trailing model name on a different provider — makes
+  // it obsolete, because that pick is the route that will be sent.
   const userPickedOtherModel = !!selectedModelId
-    && !sameModelId(selectedModelId, configuredDefaultModel);
+    && selectedModelId !== configuredDefaultModel;
   // Keep the configured default visible (and warn) when its provider stopped
   // offering it or its API key was removed.  In the welcome state before the
   // settings store loads, resolvedModel is empty — the catalog's
@@ -449,14 +466,15 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
     ? ''
     : showUnavailable
       ? configuredDefaultModel
-      : sessionModel
+      : !isPendingNewSession && sessionModel
         ? sessionModel
-        // No session model: fall back to the configured default's catalog
-        // identity (the welcome state sends exactly that model), then to
-        // settings.model, then to the default/first catalog model.  A value
-        // that resolves to no catalog entry is skipped — otherwise the
-        // picker would highlight an unrelated provider (e.g. settings.model
-        // defaults to "anthropic/..." while only DeepSeek is configured).
+        // New conversation (or a session with no model): fall back to the
+        // configured default's catalog identity (the welcome state sends
+        // exactly that model), then to settings.model, then to the
+        // default/first catalog model.  A value that resolves to no catalog
+        // entry is skipped — otherwise the picker would highlight an
+        // unrelated provider (e.g. settings.model defaults to "anthropic/..."
+        // while only DeepSeek is configured).
         : (configuredDefaultCatalogId
             || settingsCatalogModel
             || (defaultModelId && allModelIds.has(defaultModelId)

@@ -196,7 +196,7 @@ describe('SettingsDetail — default model (issue #44)', () => {
     );
     const { container } = render(<SettingsDetail />);
     expect(container.textContent).toContain(
-      "The API key for this model's provider was removed.",
+      "The API key for this model's provider is missing or was removed.",
     );
     expect(container.textContent).not.toContain(
       'This model is no longer offered by the configured provider.',
@@ -260,5 +260,79 @@ describe('SettingsDetail — default model (issue #44)', () => {
       expect(container.textContent).toContain('config write failed');
     });
     expect(mockedUpdateSettings).not.toHaveBeenCalled();
+  });
+
+  // config.yaml's `model.provider` is authoritative.  With the same trailing
+  // model name in two provider groups, a name-only match must resolve to the
+  // configured provider — otherwise the control displays (and a re-pick
+  // would save) the wrong route.
+  it('matches a configured model inside its own provider group', () => {
+    h.settings = {
+      model: 'deepseek/deepseek-v4-flash',
+      theme: 'dark',
+      language: 'en',
+    };
+    seedCatalog({
+      groups: [
+        {
+          provider: 'DeepSeek',
+          provider_id: 'deepseek',
+          models: [
+            { id: '@deepseek:deepseek-v4-flash', label: 'DeepSeek V4 Flash' },
+          ],
+        },
+        {
+          provider: 'OpenRouter',
+          provider_id: 'openrouter',
+          models: [
+            {
+              id: '@openrouter:deepseek/deepseek-v4-flash',
+              label: 'DeepSeek V4 Flash (OpenRouter)',
+            },
+          ],
+        },
+      ],
+      active_provider: 'openrouter',
+      default_model: 'deepseek/deepseek-v4-flash',
+      default_model_available: false,
+    });
+    const { container } = render(<SettingsDetail />);
+
+    expect(defaultModelSelect(container).value).toBe(
+      '@openrouter:deepseek/deepseek-v4-flash',
+    );
+  });
+
+  it('keeps the configured value when its provider group is gone', () => {
+    h.settings = {
+      model: 'deepseek/deepseek-v4-flash',
+      theme: 'dark',
+      language: 'en',
+    };
+    seedCatalog({
+      groups: [
+        {
+          provider: 'DeepSeek',
+          provider_id: 'deepseek',
+          models: [
+            { id: '@deepseek:deepseek-v4-flash', label: 'DeepSeek V4 Flash' },
+          ],
+        },
+      ],
+      active_provider: 'openrouter',
+      default_model: 'deepseek/deepseek-v4-flash',
+      default_model_available: false,
+      default_model_provider_has_key: false,
+    });
+    const { container } = render(<SettingsDetail />);
+
+    // Must not display DeepSeek's entry as if it were the OpenRouter route.
+    expect(defaultModelSelect(container).value).toBe(
+      'deepseek/deepseek-v4-flash',
+    );
+    const groupLabels = Array.from(
+      defaultModelSelect(container).querySelectorAll('optgroup'),
+    ).map((g) => g.label);
+    expect(groupLabels).toContain('Current');
   });
 });

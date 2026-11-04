@@ -139,7 +139,7 @@
       "default_model": "默认模型",
       "default_model_hint": "新对话使用的模型",
       "default_model_unavailable": "当前默认模型已不在服务商目录中。新对话仍会使用它，直到你选择其他模型。",
-      "default_model_key_missing": "当前默认模型所属服务商的 API Key 已被删除，请在模型服务商中重新添加。",
+      "default_model_key_missing": "当前默认模型所属服务商的 API Key 缺失或已被删除，请在模型服务商中重新添加。",
       "default_model_current": "当前",
       "default_mode": "默认审批模式",
       "default_mode_hint": "新会话的审批模式（手动确认/智能评估/全部放行）",

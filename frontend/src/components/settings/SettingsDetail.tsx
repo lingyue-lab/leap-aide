@@ -275,10 +275,13 @@ function AgentGroup({ form, set }: GroupProps) {
 
   // Group options by provider, mirroring the composer picker.  The catalog
   // may prefix non-active providers with `@provider:` while config.yaml
-  // stores the resolved form, so both the current value and option values
-  // are compared with sameModelId().
+  // stores the resolved form, so values are compared with sameModelId().
+  // Each option keeps its provider_id: config.yaml's `model.provider`
+  // (`active_provider` here) is authoritative, and a name-only match must
+  // not select another provider's same-named model.
   const currentModel = (form.model ?? '').trim();
   const modelGroups: SelectOptionGroup[] = [];
+  const allOptions: { value: string; label: string; providerId: string }[] = [];
   for (const group of modelsData?.groups ?? []) {
     const groupOptions = group.models.map((model) => ({
       value: model.id,
@@ -288,11 +291,19 @@ function AgentGroup({ form, set }: GroupProps) {
     }));
     if (groupOptions.length > 0) {
       modelGroups.push({ label: group.provider, options: groupOptions });
+      for (const option of groupOptions) {
+        allOptions.push({ ...option, providerId: group.provider_id ?? '' });
+      }
     }
   }
-  const allOptions = modelGroups.flatMap((group) => group.options);
+  const activeProvider = modelsData?.active_provider ?? '';
   const matchedOption = allOptions.find((option) => option.value === currentModel)
-    ?? allOptions.find((option) => sameModelId(option.value, currentModel));
+    ?? (activeProvider
+      ? allOptions.find(
+          (option) => option.providerId === activeProvider
+            && sameModelId(option.value, currentModel),
+        )
+      : allOptions.find((option) => sameModelId(option.value, currentModel)));
   if (currentModel && !matchedOption) {
     // Keep the configured value visible even when the provider no longer
     // lists it (issue #44: warn, never silently rewrite).

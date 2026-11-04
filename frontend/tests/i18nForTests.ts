@@ -36,7 +36,7 @@ void i18n
           composer: {
             model_unavailable: 'unavailable',
             default_model_key_missing:
-              "Default model unavailable: its provider's API key was removed. Re-add it in Settings.",
+              "Default model unavailable: its provider's API key is missing or was removed. Re-add it in Settings.",
             placeholder: 'Message LeapAide...',
             send: 'Send',
           },
@@ -68,7 +68,7 @@ void i18n
               default_model_hint: 'Model used for new conversations',
               default_model_unavailable: 'This model is no longer offered by the configured provider.',
               default_model_key_missing:
-                "The API key for this model's provider was removed. Re-add it in Model Providers.",
+                "The API key for this model's provider is missing or was removed. Re-add it in Model Providers.",
               default_model_current: 'Current',
               default_reasoning_effort: 'Default Reasoning Effort',
               default_reasoning_effort_hint: 'Global default reasoning effort',
