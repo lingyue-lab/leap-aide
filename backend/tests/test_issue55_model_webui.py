@@ -15,6 +15,9 @@ This file pins the contract:
 
 * ``_from_db_row`` prefers ``model__webui`` and marks the session invalid when
   the column is NULL (no heuristic reconstruction from SDK columns).
+* Only provider-qualified identities are routable: ``@provider:model`` with
+  non-empty parts, or namespaced ``provider/model``.  Bare ids, ``unknown``
+  and malformed ``@`` forms are invalid everywhere.
 * ``_sync_to_db`` writes ``model__webui`` (NULL for invalid/unknown models).
 * ``Session.compact()`` / ``copy_from()`` / ``clone()`` carry ``model_invalid``.
 * The display resolver and chat start never strip or rewrite a stored
@@ -87,6 +90,44 @@ def test_ensure_webui_columns_adds_model_column():
         conn.close()
 
 
+# ── Model identity validity ────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        "@deepseek:deepseek-v4-flash",
+        "@nous:anthropic/claude-opus-4.6",
+        "anthropic/claude-opus-4.6",
+        "openrouter/deepseek/deepseek-v4-flash",
+    ],
+)
+def test_valid_model_identity_accepts_provider_qualified_ids(model_id):
+    assert Session._is_valid_model_identity(model_id) is True
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        None,
+        "",
+        "   ",
+        "unknown",
+        "UNKNOWN",
+        "deepseek-v4-flash",  # bare id: no provider hint
+        "@deepseek",          # no model separator
+        "@:deepseek-v4-flash",
+        "@deepseek:",
+        "@:",
+        "/",
+        "anthropic/",
+        "/claude-opus-4.6",
+    ],
+)
+def test_valid_model_identity_rejects_bare_or_malformed_ids(model_id):
+    assert Session._is_valid_model_identity(model_id) is False
+
+
 # ── _from_db_row: model__webui is authoritative ─────────────────────────────
 
 
@@ -110,10 +151,31 @@ def test_from_db_row_missing_model_webui_marks_invalid():
     assert session.model_invalid is True
 
 
-@pytest.mark.parametrize("stored", ["", "   ", "unknown", "UNKNOWN"])
-def test_from_db_row_blank_or_unknown_model_webui_marks_invalid(stored):
+@pytest.mark.parametrize(
+    "stored",
+    [
+        "",
+        "   ",
+        "unknown",
+        "UNKNOWN",
+        "deepseek-v4-flash",  # bare id persisted by an older build
+        "@deepseek",
+        "@:deepseek-v4-flash",
+        "@deepseek:",
+        "anthropic/",
+    ],
+)
+def test_from_db_row_non_provider_model_webui_marks_invalid(stored):
     session = Session._from_db_row(_row(model="deepseek-v4-flash", model__webui=stored))
     assert session.model_invalid is True
+
+
+def test_from_db_row_accepts_namespaced_identity():
+    session = Session._from_db_row(
+        _row(model="claude-opus-4.6", model__webui="anthropic/claude-opus-4.6")
+    )
+    assert session.model == "anthropic/claude-opus-4.6"
+    assert session.model_invalid is False
 
 
 def test_from_db_row_does_not_leak_model_webui_kwarg():
@@ -210,6 +272,38 @@ def test_sync_to_db_writes_null_for_empty_model():
     assert params[0] is None
 
 
+@pytest.mark.parametrize(
+    "model_id",
+    ["deepseek-v4-flash", "@deepseek", "@:deepseek-v4-flash", "@deepseek:"],
+)
+def test_sync_to_db_writes_null_for_non_provider_identity(model_id):
+    # Even with a stale model_invalid=False flag, a value without a provider
+    # must never reach model__webui — it could not be routed next turn.
+    session = Session(session_id="abc123def456", model=model_id)
+    _sql, params = _sync(session)
+    assert params[0] is None
+
+
+# ── Session list: bare model__webui is invalid ─────────────────────────────
+
+
+def test_all_sessions_from_db_flags_bare_model_webui():
+    class _DB:
+        def list_sessions_rich(self, **_kwargs):
+            return [
+                _row(
+                    id="abc123def456",
+                    model="deepseek-v4-flash",
+                    model__webui="deepseek-v4-flash",
+                    message_count=2,
+                )
+            ]
+
+    rows = models._all_sessions_from_db(_DB(), set())
+    assert rows[0]["model_invalid"] is True
+    assert rows[0]["model"] == "deepseek-v4-flash"
+
+
 # ── Display resolver: stored identity is authoritative ─────────────────────
 
 
@@ -289,6 +383,14 @@ def test_chat_start_uses_stored_identity_when_client_sends_no_model(empty_catalo
     session = Session(session_id="abc123def456", model="@nous:anthropic/claude-opus-4.6")
     model, normalized, error = routes._resolve_chat_start_model(session, "")
     assert (model, normalized, error) == ("@nous:anthropic/claude-opus-4.6", False, None)
+
+
+def test_chat_start_rejects_bare_model_that_cannot_be_normalized(empty_catalog):
+    session = Session(session_id="abc123def456", model="not-a-real-model-xyz")
+    model, normalized, error = routes._resolve_chat_start_model(session, "")
+    assert model == ""
+    assert normalized is False
+    assert error == "Session model is invalid. Please select a model."
 
 
 def test_chat_start_resolves_explicit_new_model(empty_catalog, monkeypatch):
@@ -373,6 +475,30 @@ def test_session_update_clears_invalid_and_preserves_identity(cleanup_test_sessi
     row = db.get_session(sid)
     assert row["model"] == "deepseek-v4-flash"
     assert row["model__webui"] == "@deepseek:deepseek-v4-flash"
+
+
+def test_session_update_rejects_bare_model_identity(cleanup_test_sessions):
+    sid = uuid.uuid4().hex[:12]
+    db = models._get_session_db()
+    assert db is not None, "test state.db unavailable"
+    db.create_session(sid, "webui")
+    cleanup_test_sessions.append(sid)
+
+    body, status = post(
+        "/api/session/update",
+        {"session_id": sid, "model": "not-a-real-model-xyz"},
+    )
+    assert status == 200, body
+    assert body["session"]["model_invalid"] is True
+
+    # A bare id must not be persisted as the WebUI identity, and the SDK-owned
+    # model column must be left untouched.
+    row = db.get_session(sid)
+    assert row.get("model__webui") is None
+    assert row.get("model") is None
+
+    loaded = get_body(f"/api/session?session_id={sid}")
+    assert loaded["session"]["model_invalid"] is True
 
 
 def test_sessions_list_flag_matches_session_identity(cleanup_test_sessions):

@@ -530,6 +530,27 @@ class Session:
         except Exception:
             return model
 
+    @staticmethod
+    def _is_valid_model_identity(model: str | None) -> bool:
+        """Return True when *model* names both a provider and a model.
+
+        The only routable identities are ``@provider:model`` and the
+        namespaced ``provider/model`` form.  A bare id (or ``unknown``) has
+        no provider hint: the SDK strips the prefix before a turn and
+        ``config.yaml`` then routes the bare id to its default endpoint,
+        which is how issue #55 sent a DeepSeek model to OpenRouter.  Such
+        values must never be written to ``model__webui`` or accepted at
+        chat start.
+        """
+        value = str(model or "").strip()
+        if not value or value.lower() == "unknown":
+            return False
+        if value.startswith("@"):
+            provider, sep, bare = value[1:].partition(":")
+        else:
+            provider, sep, bare = value.partition("/")
+        return bool(sep) and bool(provider.strip()) and bool(bare.strip())
+
     @property
     def mode(self) -> str:
         return getattr(self, '_mode', 'manual')
@@ -620,9 +641,9 @@ class Session:
         # used to reconstruct the user's provider choice (issue #55).
         _webui_model = None
         if not getattr(self, 'model_invalid', False):
-            _webui_model = str(self.model or '').strip() or None
-            if _webui_model and _webui_model.lower() == 'unknown':
-                _webui_model = None
+            _stored_model = str(self.model or '').strip()
+            if self._is_valid_model_identity(_stored_model):
+                _webui_model = _stored_model
 
         def _do_write(conn):
             # Ensure llm_title_generated__webui column exists (added post-migration)
@@ -812,9 +833,11 @@ class Session:
         # authoritative record of that selection.  When it is NULL the
         # session's model identity is unknown; never reconstruct it from the
         # SDK billing/model columns — mark the session invalid so chat start
-        # asks the user to pick a model again.
+        # asks the user to pick a model again.  Values without a provider
+        # (bare ids, ``unknown``, malformed ``@`` forms) are invalid too: they
+        # cannot be routed once the SDK strips the prefix.
         _webui_model = str(row.get('model__webui') or '').strip()
-        if _webui_model and _webui_model.lower() != 'unknown':
+        if cls._is_valid_model_identity(_webui_model):
             kwargs['model'] = _webui_model
             kwargs['model_invalid'] = False
         else:
@@ -1142,9 +1165,10 @@ def new_session(workspace=None, model=None, profile=None, defer_notify=False):
         mode=default_mode,
         reasoning_effort="high",
     )
-    # No model resolved (empty catalog, no default): the session has no
-    # identity to persist, so mark it invalid until the user picks one.
-    s.model_invalid = not effective_model or effective_model.lower() == 'unknown'
+    # No routable model identity (empty catalog, no default, or a bare id the
+    # catalog could not attribute to a provider): mark the session invalid
+    # until the user picks one.
+    s.model_invalid = not Session._is_valid_model_identity(effective_model)
     with LOCK:
         SESSIONS[s.session_id] = s
         SESSIONS.move_to_end(s.session_id)
@@ -1318,7 +1342,7 @@ def _all_sessions_from_db(db, active_session_ids):
         # the composer asks the user to pick a model instead of silently
         # routing the next prompt through config.yaml's default provider.
         _webui_model = str(row.get('model__webui') or '').strip()
-        _webui_model_valid = bool(_webui_model) and _webui_model.lower() != 'unknown'
+        _webui_model_valid = Session._is_valid_model_identity(_webui_model)
         compact = {
             'session_id': sid,
             'title': row.get('title', 'Untitled'),
@@ -1628,9 +1652,10 @@ def import_cli_session(
         created_at=created_at,
         updated_at=updated_at,
     )
-    # CLI sessions often carry no model (default 'unknown'); without a real
-    # identity the session must ask the user to pick one before chatting.
-    s.model_invalid = not _imported_model or _imported_model.lower() == 'unknown'
+    # CLI sessions often carry no model (default 'unknown'); without a
+    # routable identity the session must ask the user to pick one before
+    # chatting.
+    s.model_invalid = not Session._is_valid_model_identity(_imported_model)
     s.sync_webui_metadata(touch_updated_at=False)
     return s
 

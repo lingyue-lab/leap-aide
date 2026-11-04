@@ -392,8 +392,8 @@ def _resolve_chat_start_model(session, requested_model: str | None) -> tuple[str
     requested = str(requested_model or "").strip()
     stored = str(getattr(session, "model", "") or "").strip()
     if (
-        stored.startswith("@")
-        and ":" in stored
+        Session._is_valid_model_identity(stored)
+        and stored.startswith("@")
         and (
             not requested
             or requested == stored
@@ -408,7 +408,13 @@ def _resolve_chat_start_model(session, requested_model: str | None) -> tuple[str
         return stored, False, None
     model, normalized = _resolve_compatible_session_model(requested or stored)
     # Normalize bare model names to @provider:model for unique identification
-    return Session._normalize_model(model), normalized, None
+    model = Session._normalize_model(model)
+    # Defence in depth: a value that still lacks a provider after
+    # normalization cannot be routed and would fall through to config.yaml's
+    # default endpoint (issue #55).  Refuse it instead of guessing.
+    if not Session._is_valid_model_identity(model):
+        return "", False, "Session model is invalid. Please select a model."
+    return model, normalized, None
 
 
 def _normalize_session_model_in_place(session) -> str:
@@ -1767,8 +1773,10 @@ def handle_post(handler, parsed) -> bool:
                     str(body.get("model") or "").strip()
                 )
                 s.model = selected_model
-                s.model_invalid = (
-                    not selected_model or selected_model.lower() == "unknown"
+                # Only @provider:model / provider/model identities can be
+                # routed; bare ids and malformed forms are invalid (issue #55).
+                s.model_invalid = not Session._is_valid_model_identity(
+                    selected_model
                 )
                 # ── Persist model to state.db via SDK API ──
                 # update_session_model unconditionally writes the SDK-owned
@@ -4318,9 +4326,14 @@ def _handle_chat_sync(handler, body):
         workspace = str(resolve_trusted_workspace(body.get("workspace") or s.workspace))
     except ValueError as e:
         return bad(handler, str(e))
+    requested_model = Session._normalize_model(body.get("model") or s.model)
+    # Same rule as chat start: a value without a provider cannot be routed
+    # safely, so refuse it instead of falling back to config.yaml (issue #55).
+    if not Session._is_valid_model_identity(requested_model):
+        return j(handler, {"error": "Session model is invalid. Please select a model."}, status=400)
     with _get_session_agent_lock(s.session_id):
         s.workspace = workspace
-        s.model = Session._normalize_model(body.get("model") or s.model)
+        s.model = requested_model
     from app.api.streaming import _ENV_LOCK
 
     # Register thread-local env overrides so subprocesses spawned by the agent

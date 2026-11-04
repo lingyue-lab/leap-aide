@@ -304,7 +304,6 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
   const sendMode = busy ? (settings?.busy_input_mode ?? 'interrupt') : undefined;
   // Allow sending while busy if mode is interrupt, queue, or steer
   const busyAllowsSend = !!(busy && sendMode && (sendMode === 'interrupt' || sendMode === 'queue' || sendMode === 'steer'));
-  const canSend = hasInput && (!busy || busyAllowsSend);
 
   // Derive last compression time: prefer persisted session field (survives page
   // refresh), fall back to scanning live messages' _compression metadata (SSE).
@@ -352,6 +351,12 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
   // backend rejects chat start until the user picks one.  Show the
   // placeholder instead of impersonating the session with settings/default.
   const sessionModelInvalid = Boolean(currentSession?.model_invalid);
+  // A session with no routable model identity cannot start a chat turn
+  // (issue #55).  Block prompts until a model is picked, but keep slash
+  // commands available so /model can repair the session.
+  const isSlashCommand = input.trim().startsWith('/');
+  const modelBlocksSend = sessionModelInvalid && !isSlashCommand;
+  const canSend = hasInput && (!busy || busyAllowsSend) && !modelBlocksSend;
   const effectiveModel = sessionModelInvalid
     ? ''
     : sessionModel
@@ -617,7 +622,7 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
 
   return (
     <div
-      className={`composer-wrap ${className ?? ''} ${isDragOver ? 'drag-over' : ''}`.trim()}
+      className={`composer-wrap ${className ?? ''} ${isDragOver ? 'drag-over' : ''} ${sessionModelInvalid ? 'composer-wrap--model-invalid' : ''}`.trim()}
       onDrop={handleDrop}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -731,6 +736,17 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
           disabled={cardVisible}
           />
         </div>
+
+        {/* Model identity error — the backend rejects chat start for a session
+            with no routable model (issue #55).  M3 error supporting text:
+            body-small, error color, icon + text so color is not the only
+            signal, announced to assistive tech as an alert. */}
+        {sessionModelInvalid && (
+          <div className="composer-model-error" role="alert">
+            <Icon name="warning" size={18} />
+            <span>{t('composer.modelRequired')}</span>
+          </div>
+        )}
 
         {/* Footer */}
         <div className="composer-footer">

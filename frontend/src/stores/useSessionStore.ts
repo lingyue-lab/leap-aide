@@ -469,10 +469,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const data = await response.json().catch(() => ({}));
       throw new Error((data as { error?: string }).error || 'Failed to update session model');
     }
+    // Trust the server's normalized identity: a picker id the backend cannot
+    // route (bare id outside the catalog) comes back with model_invalid=true,
+    // so the composer must keep the error text and send gating (issue #55).
+    const data = await response.json().catch(() => ({}));
+    const updated = (data as { session?: Partial<Session> }).session;
     set((state) => ({
       currentSession:
         state.currentSession?.session_id === id
-          ? { ...state.currentSession, model, model_invalid: false }
+          ? {
+              ...state.currentSession,
+              model: typeof updated?.model === 'string' ? updated.model : model,
+              model_invalid: Boolean(updated?.model_invalid),
+            }
           : state.currentSession,
     }));
   },

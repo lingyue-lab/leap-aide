@@ -138,6 +138,14 @@ def _cmd_model(session, args: str) -> dict[str, Any]:
                 "content": "Failed to switch model: model id is empty.",
                 "session_update": {"_as_card": True},
             }
+        if not _Session._is_valid_model_identity(effective_model):
+            return {
+                "content": (
+                    f"Failed to switch model: '{effective_model}' does not "
+                    "name a provider. Use @provider:model or provider/model."
+                ),
+                "session_update": {"_as_card": True},
+            }
         session.model = effective_model
         session.model_invalid = False
         session.sync_webui_metadata()
