@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect, useMemo, createContext, useCo
 import { Tree } from 'react-arborist';
 import type { NodeRendererProps, RenameHandler } from 'react-arborist';
 import ContextMenu, { type ContextMenuEntry } from './ContextMenu';
+import { showConfirmDialog } from '@/components/common/DialogHost';
 import {
   EditIcon,
   TrashMultiIcon,
@@ -497,7 +498,11 @@ export default function FileTreePanel({
             label: 'Delete',
             icon: <TrashMultiIcon size={16} />,
             onClick: async () => {
-              if (!confirm(`Delete "${nodeData.name}"?`)) return;
+              if (!(await showConfirmDialog({
+                title: `Delete "${nodeData.name}"?`,
+                severity: 'danger',
+                confirmText: 'Delete',
+              }))) return;
               try {
                 await onDelete(nodeData.path, true);
                 // Update the row list in place; a root reload would collapse
@@ -530,7 +535,11 @@ export default function FileTreePanel({
             label: 'Delete',
             icon: <TrashMultiIcon size={16} />,
             onClick: async () => {
-              if (!confirm(`Delete "${nodeData.name}"?`)) return;
+              if (!(await showConfirmDialog({
+                title: `Delete "${nodeData.name}"?`,
+                severity: 'danger',
+                confirmText: 'Delete',
+              }))) return;
               try {
                 await onDelete(nodeData.path, false);
                 setNodes((prev) => removeNodeById(prev, nodeData.id));

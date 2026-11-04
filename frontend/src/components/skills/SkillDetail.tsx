@@ -154,6 +154,11 @@ export default function SkillDetail() {
   };
 
   const handleFileCancel = () => {
+    // Discard the draft: Save is a checkpoint that keeps edit mode open, so
+    // Cancel is the only way to abandon changes. Without this reset, re-entering
+    // Edit for the same file (the activeFile effect does not re-run) would show
+    // the cancelled draft again.
+    setFileEditContent(fileContent ?? '');
     setFileEditing(false);
     setFileError('');
   };
@@ -197,8 +202,11 @@ export default function SkillDetail() {
       setIsEditing(true);
       return;
     }
-    // Regular files use local fileEditing state
+    // Regular files use local fileEditing state. When the file is already the
+    // active one, the activeFile effect will not re-run, so refill the draft
+    // from the on-disk content before starting a fresh edit session.
     if (activeFile !== path) setActiveFile(path);
+    else if (!fileEditing) setFileEditContent(fileContent ?? '');
     setFileEditing(true);
   };
 

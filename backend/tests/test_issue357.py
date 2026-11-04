@@ -156,23 +156,29 @@ class TestWorkspacePermissions:
         )
 
     def test_workspace_uses_sudo_chown(self):
-        """docker-entrypoint.sh must recursively chown the workspace to leap-aide.
+        """docker-entrypoint.sh must recursively chown the workspace to the runtime uid.
 
         Ownership is repaired (best-effort) before the writability probe, so a
         wrong-owner read-write mount is fixed instead of being mistaken for a
         read-only mount (#42). Recursion also repairs root-owned subdirectories
         Docker may have auto-created; a genuinely :ro mount makes the chown
-        fail harmlessly (#670).
+        fail harmlessly (#670). The target must be WANTED_UID:WANTED_GID, not
+        leap-aide's image uid: in root mode (WANTED_UID=0) the server runs as
+        root and leap-aide is intentionally never remapped.
         """
-        assert 'sudo chown -R leap-aide:leap-aide "$HERMES_WEBUI_DEFAULT_WORKSPACE"' in INIT_SCRIPT, (
-            "docker-entrypoint.sh must 'sudo chown -R leap-aide:leap-aide' the workspace "
+        assert 'sudo chown -R "${WANTED_UID}:${WANTED_GID}" "$HERMES_WEBUI_DEFAULT_WORKSPACE"' in INIT_SCRIPT, (
+            "docker-entrypoint.sh must 'sudo chown -R WANTED_UID:WANTED_GID' the workspace "
             "so the app user can write to it, including nested directories (#357, #42)"
+        )
+        assert 'sudo chown -R leap-aide:leap-aide' not in INIT_SCRIPT, (
+            "the workspace chown must not hard-code leap-aide's image uid — root mode "
+            "runs as 0, and rootless podman would map 1024 to a host subuid"
         )
 
     def test_workspace_mkdir_before_chown(self):
         """sudo mkdir must come before sudo chown in docker-entrypoint.sh."""
         mkdir_pos = INIT_SCRIPT.find('sudo mkdir -p "$HERMES_WEBUI_DEFAULT_WORKSPACE"')
-        chown_pos = INIT_SCRIPT.find('sudo chown -R leap-aide:leap-aide "$HERMES_WEBUI_DEFAULT_WORKSPACE"')
+        chown_pos = INIT_SCRIPT.find('sudo chown -R "${WANTED_UID}:${WANTED_GID}" "$HERMES_WEBUI_DEFAULT_WORKSPACE"')
         assert mkdir_pos != -1, "sudo mkdir for workspace not found"
         assert chown_pos != -1, "sudo chown for workspace not found"
         assert mkdir_pos < chown_pos, "sudo mkdir must come before sudo chown"
@@ -191,7 +197,7 @@ class TestWorkspacePermissions:
         leap-aide, so the guard misread it as a deliberate :ro mount and skipped
         the chown that would have repaired it for the container's lifetime.
         """
-        chown_pos = INIT_SCRIPT.find('sudo chown -R leap-aide:leap-aide "$HERMES_WEBUI_DEFAULT_WORKSPACE"')
+        chown_pos = INIT_SCRIPT.find('sudo chown -R "${WANTED_UID}:${WANTED_GID}" "$HERMES_WEBUI_DEFAULT_WORKSPACE"')
         probe_pos = INIT_SCRIPT.find('it="$HERMES_WEBUI_DEFAULT_WORKSPACE/.testfile"')
         assert chown_pos != -1, "workspace chown not found"
         assert probe_pos != -1, "workspace writability probe not found"

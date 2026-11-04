@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import FileTreePanel from '@/components/shared/FileTreePanel';
 import type { FileTreeNode } from '@/components/shared/FileTreePanel';
+import DialogHost from '@/components/common/DialogHost';
 
 const tree: FileTreeNode[] = [
   {
@@ -23,15 +24,16 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof FileTreePane
     onDelete: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
-  render(<FileTreePanel {...props} />);
+  render(
+    <>
+      <FileTreePanel {...props} />
+      <DialogHost />
+    </>
+  );
   return props;
 }
 
 describe('FileTreePanel — context-menu operations update in place', () => {
-  beforeEach(() => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
-  });
-
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -58,6 +60,10 @@ describe('FileTreePanel — context-menu operations update in place', () => {
 
     fireEvent.contextMenu(await screen.findByText('a.md'));
     fireEvent.click(screen.getByText('Delete'));
+
+    // Deletion goes through the M3 confirmation dialog — never window.confirm().
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
 
     await waitFor(() =>
       expect(props.onDelete).toHaveBeenCalledWith('/ws/docs/a.md', false)

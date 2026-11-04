@@ -451,22 +451,26 @@ if [ ! -d "$HERMES_WEBUI_DEFAULT_WORKSPACE" ]; then error_exit "HERMES_WEBUI_DEF
 # mount makes chown fail with EROFS and the probes below fall into the
 # read-only path (#670 stays supported). The recursive chown also repairs
 # root-owned subdirectories that Docker auto-created (#42 nested New File/save)
-# and is skipped when the top-level directory already belongs to leap-aide, so
-# a large workspace does not pay a full-tree walk on every boot. Policy mirrors
-# the HERMES_HOME chown -R above: the tree is aligned to WANTED_UID:WANTED_GID.
-if [ "$(stat -c '%u' "$HERMES_WEBUI_DEFAULT_WORKSPACE" 2>/dev/null)" != "$(id -u leap-aide)" ]; then
-  sudo chown -R leap-aide:leap-aide "$HERMES_WEBUI_DEFAULT_WORKSPACE" 2>/dev/null || true
+# and is skipped when the top-level directory already belongs to the runtime
+# user, so a large workspace does not pay a full-tree walk on every boot. Policy
+# mirrors the HERMES_HOME chown -R above: the tree is aligned to
+# WANTED_UID:WANTED_GID. Never hard-code leap-aide's image uid here: in root
+# mode (WANTED_UID=0) the leap-aide account keeps its build-time uid while the
+# server runs as 0, so a chown to leap-aide would hand the host files to a
+# subuid under rootless podman.
+if [ "$(stat -c '%u' "$HERMES_WEBUI_DEFAULT_WORKSPACE" 2>/dev/null)" != "$WANTED_UID" ]; then
+  sudo chown -R "${WANTED_UID}:${WANTED_GID}" "$HERMES_WEBUI_DEFAULT_WORKSPACE" 2>/dev/null || true
 fi
 it="$HERMES_WEBUI_DEFAULT_WORKSPACE/.testfile"
 if touch "$it" 2>/dev/null && rm -f "$it"; then
-  echo "-- HERMES_WEBUI_DEFAULT_WORKSPACE is writable (ownership aligned to leap-aide)"
+  echo "-- HERMES_WEBUI_DEFAULT_WORKSPACE is writable (ownership aligned to ${WANTED_UID}:${WANTED_GID})"
 elif sudo touch "$HERMES_WEBUI_DEFAULT_WORKSPACE/.rw_probe" 2>/dev/null; then
   # Root can create a file => read-write mount but leap-aide still cannot write
   # => loud, actionable warning (this is the #42 bug state).
   sudo rm -f "$HERMES_WEBUI_DEFAULT_WORKSPACE/.rw_probe"
   echo "!! WARNING: $HERMES_WEBUI_DEFAULT_WORKSPACE is a read-write mount but not writable by leap-aide."
   echo "!!          File create/save in the Workspace panel will fail with 'Permission denied'."
-  echo "!!          Check host: stat -c '%u %g %a' <host-dir>; container: id -u leap-aide."
+  echo "!!          Check host: stat -c '%u %g %a' <host-dir>; container: id -u (expected ${WANTED_UID})."
   echo "!!          Prefer scripts/ctl.sh start-docker (sets WANTED_UID to the invoking user),"
   echo "!!          or export WANTED_UID=\$(id -u) before 'docker compose up'."
 else
