@@ -1068,24 +1068,23 @@
     margin-bottom: 3px;
   }
 
-  /* Markdown 列表 — 恢复被 Tailwind Preflight 清掉的 list-style */
-  .msg-body ul, .reasoning-content ul, .skill-detail .prose ul,
+  /* Markdown lists — restore list-style stripped by Tailwind Preflight */
+  .msg-body ul, .reasoning-content ul,
   .task-detail ul, .file-view-code ul {
     list-style: disc;
   }
 
-  .msg-body ol, .reasoning-content ol, .skill-detail .prose ol,
+  .msg-body ol, .reasoning-content ol,
   .task-detail ol, .file-view-code ol {
     list-style: decimal;
   }
 
   .msg-body ul, .msg-body ol,
   .reasoning-content ul, .reasoning-content ol,
-  .skill-detail .prose ul, .skill-detail .prose ol,
   .task-detail ul, .task-detail ol,
   .file-view-code ul, .file-view-code ol {
     list-style-position: outside;
-    padding-left: 1.25em;   /* 给 marker 留位（Preflight 清零 padding） */
+    padding-left: 1.25em;   /* reserve marker space (Preflight zeroes padding) */
   }
 
   .msg-body h1, .msg-body h2, .msg-body h3 {
@@ -1166,9 +1165,11 @@
     position: relative;
   }
 
-  /* Markdown prose headings — match .skill-detail .prose styles.
-     Color variables feed @tailwindcss/typography so the prose baseline
-     follows the M3 theme instead of the plugin's own palette. */
+  /* Markdown prose — shared baseline for the workspace file preview and the
+     skill detail view. Both render marked output inside .file-view-code
+     .prose, so this is their single source of truth. Color variables feed
+     @tailwindcss/typography so the prose palette follows the M3 theme
+     instead of the plugin's own palette. */
   .file-view-code .prose {
     max-width: none; /* plugin defaults to 65ch, narrower than the 768px column */
     line-height: 1.7;
@@ -1183,12 +1184,56 @@
     --tw-prose-quotes: var(--muted);
     --tw-prose-quote-borders: var(--border2);
     --tw-prose-captions: var(--muted);
+    --tw-prose-kbd: var(--foreground);
+    --tw-prose-kbd-shadows: var(--border);
     --tw-prose-code: var(--code-text);
     --tw-prose-pre-code: var(--pre-text);
     --tw-prose-pre-bg: var(--code-bg);
     --tw-prose-th-borders: var(--border2);
     --tw-prose-td-borders: var(--border);
   }
+
+  .file-view-code .prose p {
+    margin: 0.6em 0;
+  }
+
+  .file-view-code .prose ul,
+  .file-view-code .prose ol {
+    margin: 0.5em 0;
+    padding-left: 1.5em;
+  }
+
+  .file-view-code .prose li {
+    margin: 0.25em 0;
+  }
+
+  .file-view-code .prose blockquote {
+    border-left: 3px solid var(--blue);
+    padding-left: 14px;
+    color: var(--muted);
+    font-style: italic;
+    margin: 0.8em 0;
+  }
+
+  .file-view-code .prose hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 1em 0;
+  }
+
+  .file-view-code .prose a {
+    color: var(--blue);
+    text-decoration: underline;
+  }
+
+  .file-view-code .prose strong {
+    font-weight: 700;
+  }
+
+  .file-view-code .prose em {
+    font-style: italic;
+  }
+
   .file-view-code .prose h1 {
     font-size: 1.5em;
     font-weight: 700;
@@ -1216,12 +1261,34 @@
     margin: 0.6em 0 0.3em;
   }
 
+  .file-view-code .prose pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border2);
+    border-radius: var(--md-shape-sm);
+    padding: 12px 16px;
+    margin: 0.8em 0;
+    overflow-x: auto;
+    font-size: 14.857px;
+    line-height: 1.6;
+    color: var(--pre-text);
+  }
+
+  .file-view-code .prose pre code {
+    background: none;
+    padding: 0;
+    border-radius: 0;
+    font-size: 14.857px;
+    line-height: 1.6;
+    color: var(--pre-text);
+  }
+
   /* Markdown tables — file/skill preview (issue #41).
-     Fixed layout stops one cell's intrinsic width (a long inline-code path)
-     from monopolising the 768px column and squeezing the rest; long tokens
-     wrap inside their own cell. */
+     Auto layout lets columns follow their content. overflow-wrap: anywhere
+     makes a long unbreakable token (an inline-code path) contribute almost
+     nothing to the column's min-content width, so it wraps inside its own
+     cell instead of widening the column and squeezing its neighbours. */
   .file-view-code .prose table {
-    table-layout: fixed;
+    table-layout: auto;
     width: 100%;
     border-collapse: collapse;
     margin: 0.8em 0;
@@ -1233,8 +1300,7 @@
     padding: 6px 12px;
     border: 1px solid var(--border2);
     vertical-align: top;
-    word-break: break-word;
-    overflow-wrap: break-word;
+    overflow-wrap: anywhere;
   }
 
   .file-view-code .prose th {
@@ -1257,6 +1323,12 @@
 
   .file-view-code .prose tbody tr:hover td {
     background: color-mix(in srgb, var(--border) 30%, transparent);
+  }
+
+  /* Keep inline code readable inside the 0.9em table; typography's 0.875em
+     would compound to ~12.6px. */
+  .file-view-code .prose table code {
+    font-size: 1em;
   }
 
   /* typography decorates inline code with backtick pseudo-elements. */
@@ -4930,207 +5002,76 @@
   font-size: 12.571px;
 }
 
-/* ─── Skill Detail: Markdown prose styling ─── */
-.skill-detail .prose {
-  line-height: 1.7;
-}
-
-.skill-detail .prose h1 {
-  font-size: 1.5em;
-  font-weight: 700;
-  margin: 1.2em 0 0.6em;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 0.3em;
-}
-
-.skill-detail .prose h2 {
-  font-size: 1.3em;
-  font-weight: 600;
-  margin: 1em 0 0.5em;
-  border-bottom: 1px solid var(--border2);
-  padding-bottom: 0.2em;
-}
-
-.skill-detail .prose h3 {
-  font-size: 1.15em;
-  font-weight: 600;
-  margin: 0.8em 0 0.4em;
-}
-
-.skill-detail .prose h4,
-.skill-detail .prose h5,
-.skill-detail .prose h6 {
-  font-size: 1em;
-  font-weight: 600;
-  margin: 0.6em 0 0.3em;
-}
-
-.skill-detail .prose p {
-  margin: 0.6em 0;
-}
-
-.skill-detail .prose ul,
-.skill-detail .prose ol {
-  margin: 0.5em 0;
-  padding-left: 1.5em;
-}
-
-.skill-detail .prose li {
-  margin: 0.25em 0;
-}
-
-.skill-detail .prose blockquote {
-  border-left: 3px solid var(--blue);
-  padding-left: 14px;
-  color: var(--muted);
-  font-style: italic;
-  margin: 0.8em 0;
-}
-
-.skill-detail .prose hr {
-  border: none;
-  border-top: 1px solid var(--border);
-  margin: 1em 0;
-}
-
-.skill-detail .prose a {
-  color: var(--blue);
-  text-decoration: underline;
-}
-
-.skill-detail .prose strong {
-  font-weight: 700;
-}
-
-.skill-detail .prose em {
-  font-style: italic;
-}
-
-/* ─── Skill Detail: Code blocks ─── */
-.skill-detail .prose pre {
-  background: var(--code-bg);
-  border: 1px solid var(--border2);
-  border-radius: var(--md-shape-sm);
-  padding: 12px 16px;
-  margin: 0.8em 0;
-  overflow-x: auto;
-  font-size: 14.857px;
-  line-height: 1.6;
-  color: var(--pre-text);
-}
-
-.skill-detail .prose pre code {
-  background: none;
-  padding: 0;
-  border-radius: 0;
-  font-size: 14.857px;
-  line-height: 1.6;
-  color: var(--pre-text);
-}
-
-.skill-detail .prose .inline-code {
-  background: color-mix(in srgb, var(--border) 80%, transparent);
-  padding: 2px 6px;
-  border-radius: 3px;
-  font-size: 0.85em;
-  font-family: var(--font-mono, monospace);
-  color: var(--accent);
-}
-
 /* ─── Light Theme: Prism syntax colors ───
-   prism-tomorrow 是暗色主题，其 token 色在亮色代码背景上会发白看不清。
-   此处仅作用于使用亮色 `--code-bg` 的 markdown 表面（聊天 + 技能详情），
-   把 token 色重映射为高对比度亮色配色；暗色主题保持 prism-tomorrow 不变。 */
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) code[class*="language-"],
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) pre[class*="language-"] {
+   prism-tomorrow is a dark theme; its token colors wash out on the light
+   `--code-bg`. Remap them for every Markdown surface that uses the light
+   background (chat messages, file preview, skill detail). The dark theme
+   keeps prism-tomorrow unchanged. */
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) code[class*="language-"],
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) pre[class*="language-"] {
   color: var(--pre-text);
 }
 
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.comment,
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.block-comment,
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.prolog,
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.doctype,
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.cdata {
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.comment,
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.block-comment,
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.prolog,
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.doctype,
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.cdata {
   color: var(--muted);
 }
 
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.punctuation {
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.punctuation {
   color: var(--pre-text);
 }
 
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.tag,
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.attr-name,
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.namespace,
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.inserted {
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.tag,
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.attr-name,
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.namespace,
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.inserted {
   color: #116329;
 }
 
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.deleted {
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.deleted {
   color: #cf222e;
 }
 
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.function-name,
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.function,
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.class-name {
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.function-name,
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.function,
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.class-name {
   color: #8250df;
 }
 
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.boolean,
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.number {
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.boolean,
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.number {
   color: #0550ae;
 }
 
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.property,
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.constant,
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.symbol {
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.property,
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.constant,
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.symbol {
   color: #953800;
 }
 
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.selector,
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.important,
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.atrule,
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.keyword,
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.builtin {
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.selector,
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.important,
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.atrule,
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.keyword,
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.builtin {
   color: #cf222e;
 }
 
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.string,
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.char,
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.attr-value,
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.regex,
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.variable {
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.string,
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.char,
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.attr-value,
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.regex,
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.variable {
   color: #0a3069;
 }
 
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.operator,
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.entity,
-:root[data-theme="light"] :is(.msg-body, .skill-detail .prose) .token.url {
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.operator,
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.entity,
+:root[data-theme="light"] :is(.msg-body, .file-view-code .prose) .token.url {
   color: var(--muted);
-}
-
-/* ─── Skill Detail: Tables ─── */
-.skill-detail .prose table {
-  width: 100%;
-  border-collapse: collapse;
-  margin: 0.8em 0;
-  font-size: 0.9em;
-}
-
-.skill-detail .prose table th {
-  background: color-mix(in srgb, var(--border) 70%, transparent);
-  font-weight: 600;
-  text-align: left;
-  padding: 8px 12px;
-  border: 1px solid var(--border2);
-}
-
-.skill-detail .prose table td {
-  padding: 6px 12px;
-  border: 1px solid var(--border2);
-}
-
-.skill-detail .prose table tr:hover td {
-  background: color-mix(in srgb, var(--border) 30%, transparent);
 }
 
 

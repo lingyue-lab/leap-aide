@@ -3,14 +3,15 @@ import { render } from '@testing-library/react';
 import FileView from '@/components/shared/FileView';
 
 /**
- * Regression test for issue #41: a GFM table in the workspace file preview
+ * DOM contract test for issue #41: a GFM table in the workspace file preview
  * had centered headers and columns squeezed by a long inline-code path.
  *
- * The layout fix lives in CSS (`.file-view-code .prose table` in index.css);
- * jsdom neither loads index.css nor performs layout, so this test locks the
- * DOM contract the selectors depend on — a bare marked table inside
- * `.file-view-code > .prose`, plus marked's `align` attributes, which the
- * stylesheet restores after @tailwindcss/typography resets cell alignment.
+ * This is not a visual regression test. The layout fix lives in CSS
+ * (`.file-view-code .prose table` in index.css); jsdom neither loads index.css
+ * nor performs layout, so this test locks the DOM contract the selectors
+ * depend on — a bare marked table inside `.file-view-code > .prose`, plus
+ * marked's `align` attributes, which the stylesheet restores after
+ * @tailwindcss/typography resets cell alignment.
  *
  * Visual regression is covered by the manual smoke checklist in
  * docs/testing.md (Workspace & Panels).
