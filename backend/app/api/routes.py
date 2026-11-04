@@ -242,6 +242,14 @@ def _model_matches_active_provider_family(
     return False
 
 
+def _bare_model_id(model_id: str | None) -> str:
+    """Return the model part of an ``@provider:model`` id (or the id itself)."""
+    model = str(model_id or "").strip()
+    if model.startswith("@") and ":" in model:
+        return model[1:].split(":", 1)[1].strip()
+    return model
+
+
 def _resolve_compatible_session_model(model_id: str | None) -> tuple[str, bool]:
     """Return (effective_model, was_normalized) for persisted session models.
 
@@ -367,6 +375,42 @@ def _resolve_compatible_session_model(model_id: str | None) -> tuple[str, bool]:
     return model, False
 
 
+def _resolve_chat_start_model(session, requested_model: str | None) -> tuple[str, bool, str | None]:
+    """Resolve the model for a chat turn from the session's persisted identity.
+
+    Returns ``(model, was_normalized, error)``.  ``error`` is a user-facing
+    message when the session has no WebUI model identity at all
+    (``model__webui`` is NULL): guessing a route from the SDK-owned bare
+    ``model`` column is what sent a DeepSeek session to OpenRouter (issue #55).
+
+    A stored ``@provider:model`` identity is authoritative: when the client
+    echoes it (verbatim or in its prefix-less display form) the stored value is
+    returned untouched so no catalog or provider heuristic can strip it.
+    """
+    if getattr(session, "model_invalid", False):
+        return "", False, "Session model is invalid. Please select a model."
+    requested = str(requested_model or "").strip()
+    stored = str(getattr(session, "model", "") or "").strip()
+    if (
+        stored.startswith("@")
+        and ":" in stored
+        and (
+            not requested
+            or requested == stored
+            # The frontend may echo the prefix-less display form of the same
+            # id; keep the stored identity either way.
+            or (
+                not requested.startswith("@")
+                and requested == _bare_model_id(stored)
+            )
+        )
+    ):
+        return stored, False, None
+    model, normalized = _resolve_compatible_session_model(requested or stored)
+    # Normalize bare model names to @provider:model for unique identification
+    return Session._normalize_model(model), normalized, None
+
+
 def _normalize_session_model_in_place(session) -> str:
     original_model = getattr(session, "model", None) or ""
     effective_model, changed = _resolve_compatible_session_model(original_model or None)
@@ -387,6 +431,14 @@ def _resolve_effective_session_model_for_display(session) -> str:
     effective model for the response payload only and leave disk state alone.
     """
     original_model = getattr(session, "model", None) or ""
+    # The WebUI-owned identity (model__webui, issue #55) is authoritative:
+    # it already names its provider, so nothing on this read path may strip or
+    # rewrite it — the live catalog is a picker list, not a validity oracle.
+    # An invalid session (model__webui is NULL) has no identity to resolve.
+    if getattr(session, "model_invalid", False):
+        return original_model
+    if original_model.startswith("@") and ":" in original_model:
+        return original_model
     effective_model, _changed = _resolve_compatible_session_model(original_model or None)
     result = effective_model or original_model
     # Warn on bare model names — they cannot uniquely identify a model across
@@ -1707,22 +1759,33 @@ def handle_post(handler, parsed) -> bool:
             return bad(handler, str(e))
         with _get_session_agent_lock(body["session_id"]):
             s.workspace = new_ws
-            s.model = body.get("model", s.model)
-            # ── Persist model to state.db via SDK API ──
-            # update_session_model unconditionally writes the model column
-            # (no COALESCE) so the sidebar reflects the user's latest choice
-            # even after a server restart.
-            # Normalize bare model names to @provider:model so the stored
-            # value can uniquely identify the model across providers.
-            persist_model = Session._normalize_model(s.model)
-            try:
-                from app.api.models import _get_session_db
-                db = _get_session_db()
-                if db is not None:
-                    db.update_session_model(s.session_id, persist_model)
-            except Exception:
-                logger.warning("Failed to persist model for session %s",
-                               s.session_id, exc_info=True)
+            if "model" in body:
+                # Explicit user selection: normalize bare ids to
+                # @provider:model when the catalog can, then record it as the
+                # WebUI-owned identity (model__webui, issue #55).
+                selected_model = Session._normalize_model(
+                    str(body.get("model") or "").strip()
+                )
+                s.model = selected_model
+                s.model_invalid = (
+                    not selected_model or selected_model.lower() == "unknown"
+                )
+                # ── Persist model to state.db via SDK API ──
+                # update_session_model unconditionally writes the SDK-owned
+                # model column (no COALESCE) so the CLI/dashboard view keeps
+                # up.  It must receive the bare id — the @provider: identity
+                # lives in model__webui and is written by
+                # sync_webui_metadata() below.
+                if not s.model_invalid:
+                    persist_model = _bare_model_id(selected_model)
+                    try:
+                        from app.api.models import _get_session_db
+                        db = _get_session_db()
+                        if db is not None:
+                            db.update_session_model(s.session_id, persist_model)
+                    except Exception:
+                        logger.warning("Failed to persist model for session %s",
+                                       s.session_id, exc_info=True)
             # Per-session reasoning effort (None = use global default)
             if "reasoning_effort" in body:
                 raw = str(body["reasoning_effort"] or "").strip().lower()
@@ -4151,10 +4214,16 @@ def _handle_chat_start(handler, body):
         workspace = str(resolve_trusted_workspace(body.get("workspace") or s.workspace))
     except ValueError as e:
         return bad(handler, str(e))
-    requested_model = body.get("model") or s.model
-    model, normalized_model = _resolve_compatible_session_model(requested_model)
-    # Normalize bare model names to @provider:model for unique identification
-    model = Session._normalize_model(model)
+    # ── Model identity (issue #55) ──
+    # The WebUI records the user's selection in model__webui.  When that
+    # column is NULL the session has no identity: refuse to guess a route from
+    # the SDK-owned bare model column or config.yaml's default provider, which
+    # is how a DeepSeek session once fell through to OpenRouter (HTTP 401).
+    model, normalized_model, model_error = _resolve_chat_start_model(
+        s, body.get("model")
+    )
+    if model_error:
+        return bad(handler, model_error, status=400)
     # Persist normalized model so drain/replay paths resolve the provider
     # correctly. The full sync at the end of this handler (line ~4175)
     # persists model + pending state together, so no extra sync here.
@@ -4239,6 +4308,9 @@ def _handle_chat_start(handler, body):
 def _handle_chat_sync(handler, body):
     """Fallback synchronous chat endpoint (POST /api/chat). Not used by frontend."""
     s = get_session(body["session_id"])
+    # See _handle_chat_start: no model__webui identity means no safe route.
+    if getattr(s, "model_invalid", False):
+        return j(handler, {"error": "Session model is invalid. Please select a model."}, status=400)
     msg = str(body.get("message", "")).strip()
     if not msg:
         return j(handler, {"error": "empty message"}, status=400)

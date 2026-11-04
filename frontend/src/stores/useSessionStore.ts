@@ -472,7 +472,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set((state) => ({
       currentSession:
         state.currentSession?.session_id === id
-          ? { ...state.currentSession, model }
+          ? { ...state.currentSession, model, model_invalid: false }
           : state.currentSession,
     }));
   },

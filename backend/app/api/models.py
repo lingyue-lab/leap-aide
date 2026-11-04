@@ -361,6 +361,11 @@ class Session:
         self.title = title
         self.workspace = str(Path(workspace).expanduser().resolve()) if workspace else ''
         self.model = model
+        # True when state.db has no model__webui value for this session: the
+        # WebUI never recorded which model the user picked (or the row predates
+        # model__webui).  Chat start refuses such sessions instead of guessing
+        # a route from the SDK-owned bare model column (issue #55).
+        self.model_invalid = False
         self.messages = messages or []
         self.tool_calls = tool_calls or []
         self.created_at = created_at or time.time()
@@ -414,6 +419,7 @@ class Session:
         self.title = other.title
         self.workspace = getattr(other, 'workspace', None)
         self.model = other.model
+        self.model_invalid = bool(getattr(other, 'model_invalid', False))
         self.messages = list(other.messages)       # copy content, not reference
         self.tool_calls = list(other.tool_calls)
         self.created_at = other.created_at
@@ -456,6 +462,7 @@ class Session:
         snapshot.title = self.title
         snapshot.workspace = getattr(self, 'workspace', None)
         snapshot.model = getattr(self, 'model', None)
+        snapshot.model_invalid = getattr(self, 'model_invalid', False)
         snapshot.messages = list(self.messages)
         snapshot.tool_calls = list(self.tool_calls)
         snapshot.created_at = getattr(self, 'created_at', 0)
@@ -585,7 +592,9 @@ class Session:
         ``original_content__webui``).  Non-webui fields (content, role,
         tool_calls, tokens, model, cwd, message_count,
         ``last_activity_at``, etc.) are managed by the hermes-agent SDK
-        and are never touched here.
+        and are never touched here.  The user's model selection is stored
+        in ``model__webui`` — the SDK-owned ``model`` column only holds
+        the bare agent.model and loses the ``@provider:`` identity.
 
         Messages are NOT written by this method — normal turns are
         persisted by the SDK's ``append_message`` inside
@@ -606,6 +615,15 @@ class Session:
         """
         sid = self.session_id
 
+        # WebUI-owned model identity.  NULL means "no valid selection": the
+        # SDK-owned ``model`` column only carries a bare id and must not be
+        # used to reconstruct the user's provider choice (issue #55).
+        _webui_model = None
+        if not getattr(self, 'model_invalid', False):
+            _webui_model = str(self.model or '').strip() or None
+            if _webui_model and _webui_model.lower() == 'unknown':
+                _webui_model = None
+
         def _do_write(conn):
             # Ensure llm_title_generated__webui column exists (added post-migration)
             try:
@@ -616,6 +634,7 @@ class Session:
                 pass  # column already exists
             conn.execute(
                 """UPDATE sessions SET
+                   model__webui = ?,
                    pinned__webui = ?,
                    archived__webui = ?,
                    project_id__webui = ?,
@@ -641,6 +660,7 @@ class Session:
                    llm_title_generated__webui = ?
                    WHERE id = ?""",
                 (
+                    _webui_model,
                     int(bool(self.pinned)),
                     int(bool(self.archived)),
                     self.project_id,
@@ -785,9 +805,25 @@ class Session:
             if _attr in kwargs:
                 kwargs[_attr] = bool(kwargs[_attr])
 
+        # ── WebUI model identity (issue #55) ──────────────────────────────
+        # The ``model`` column is SDK-owned and holds the bare agent.model the
+        # agent wrote after a turn — the ``@provider:`` prefix the user picked
+        # is gone.  ``model__webui`` is written by _sync_to_db and is the only
+        # authoritative record of that selection.  When it is NULL the
+        # session's model identity is unknown; never reconstruct it from the
+        # SDK billing/model columns — mark the session invalid so chat start
+        # asks the user to pick a model again.
+        _webui_model = str(row.get('model__webui') or '').strip()
+        if _webui_model and _webui_model.lower() != 'unknown':
+            kwargs['model'] = _webui_model
+            kwargs['model_invalid'] = False
+        else:
+            kwargs['model_invalid'] = True
+
         # Carry through any extra DB columns as kwargs so they survive
         # round-trips (e.g. llm_title_generated, session_approved already handled above)
         known = set(cls._DB_DIRECT_FIELDS) | set(cls._DB_MAPPED_FIELDS.keys())
+        known.add('model__webui')
         # Also block bare columns that have a __webui counterpart — the
         # __webui value was already mapped above and the bare value (always
         # 0 from the SDK schema) must not overwrite it.
@@ -937,6 +973,7 @@ class Session:
             'title': self.title,
             'workspace': self.workspace,
             'model': self.model,
+            'model_invalid': bool(getattr(self, 'model_invalid', False)),
             'message_count': _msg_count,
             'created_at': self.created_at,
             'updated_at': self.updated_at,
@@ -1105,6 +1142,9 @@ def new_session(workspace=None, model=None, profile=None, defer_notify=False):
         mode=default_mode,
         reasoning_effort="high",
     )
+    # No model resolved (empty catalog, no default): the session has no
+    # identity to persist, so mark it invalid until the user picks one.
+    s.model_invalid = not effective_model or effective_model.lower() == 'unknown'
     with LOCK:
         SESSIONS[s.session_id] = s
         SESSIONS.move_to_end(s.session_id)
@@ -1273,11 +1313,18 @@ def _all_sessions_from_db(db, active_session_ids):
     compact_list = []
     for row in rows:
         sid = row.get('id') or row.get('session_id')
+        # WebUI-owned model identity (issue #55).  Fall back to the SDK's bare
+        # ``model`` column for display only, and flag the row as invalid so
+        # the composer asks the user to pick a model instead of silently
+        # routing the next prompt through config.yaml's default provider.
+        _webui_model = str(row.get('model__webui') or '').strip()
+        _webui_model_valid = bool(_webui_model) and _webui_model.lower() != 'unknown'
         compact = {
             'session_id': sid,
             'title': row.get('title', 'Untitled'),
             'workspace': str(Path(row['cwd']).expanduser().resolve()) if row.get('cwd') else '',
-            'model': row.get('model', ''),
+            'model': _webui_model if _webui_model_valid else row.get('model', ''),
+            'model_invalid': not _webui_model_valid,
             'message_count': row.get('message_count', 0),
             'created_at': row.get('started_at', 0),
             'updated_at': row.get('last_activity_at') or row.get('started_at', 0),
@@ -1570,16 +1617,20 @@ def import_cli_session(
             f"state.db. CLI SDK should have created it during the chat turn."
         )
 
+    _imported_model = normalize_model_prefix(model)
     s = Session(
         session_id=session_id,
         title=title,
         workspace=workspace or str(DEFAULT_WORKSPACE),
-        model=normalize_model_prefix(model),
+        model=_imported_model,
         messages=messages,
         profile=profile,
         created_at=created_at,
         updated_at=updated_at,
     )
+    # CLI sessions often carry no model (default 'unknown'); without a real
+    # identity the session must ask the user to pick one before chatting.
+    s.model_invalid = not _imported_model or _imported_model.lower() == 'unknown'
     s.sync_webui_metadata(touch_updated_at=False)
     return s
 

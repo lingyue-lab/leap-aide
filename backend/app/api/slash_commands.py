@@ -120,7 +120,6 @@ def _cmd_help(session, args: str) -> dict[str, Any]:
 
 def _cmd_model(session, args: str) -> dict[str, Any]:
     """Switch the session model."""
-    from app.api.routes import _resolve_compatible_session_model
     model_name = args.strip()
     if not model_name:
         return {
@@ -128,12 +127,23 @@ def _cmd_model(session, args: str) -> dict[str, Any]:
             "session_update": {"_as_card": True},
         }
     try:
-        model, normalized = _resolve_compatible_session_model(model_name)
-        session.model = normalized or model
+        from app.api.models import Session as _Session
+        # An explicit @provider:model / namespaced id is the user's identity —
+        # preserve it verbatim; only bare ids need catalog normalization.
+        # _resolve_compatible_session_model may strip a matching @provider:
+        # hint, which would lose the provider choice (issue #55).
+        effective_model = _Session._normalize_model(model_name)
+        if not effective_model:
+            return {
+                "content": "Failed to switch model: model id is empty.",
+                "session_update": {"_as_card": True},
+            }
+        session.model = effective_model
+        session.model_invalid = False
         session.sync_webui_metadata()
         return {
-            "content": f"Model switched to {normalized or model}.",
-            "session_update": {"model": normalized or model, "_as_card": True},
+            "content": f"Model switched to {effective_model}.",
+            "session_update": {"model": effective_model, "_as_card": True},
         }
     except Exception as e:
         return {

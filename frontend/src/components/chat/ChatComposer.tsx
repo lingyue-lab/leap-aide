@@ -321,10 +321,10 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
   }, [currentSession?.last_compression_time, messages]);
 
   // Resolve displayed model: session model → settings default → 'Model'.
-  // When the resolved value is not in the loaded catalog, treat it as unset
-  // so the picker shows the placeholder instead of silently highlighting an
-  // unrelated provider (e.g. settings.model defaults to "anthropic/..." but
-  // the user only has DeepSeek configured).
+  // A session model persisted by the backend (state.db model__webui) is
+  // authoritative even when the live catalog no longer lists it: the send
+  // path uses that value, so substituting another model here would misreport
+  // which model the session actually runs (issue #55).
   const allModelIds = useMemo(() => {
     const ids = new Set<string>();
     for (const g of modelGroups) {
@@ -348,21 +348,30 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
   }, [modelGroups]);
   const sessionModel = currentSession?.model ?? '';
   const settingsModel = settings?.model ?? '';
-  const resolvedModel = sessionModel || settingsModel;
-  const effectiveModel =
-    resolvedModel && (allModelIds.size === 0 || allModelIds.has(resolvedModel))
-      ? resolvedModel
-      // Fall back to defaultModelId (welcome state) when session/settings model
-      // is empty or points at an unconfigured provider. Keeps the picker
-      // pre-selected instead of showing "Model" as the trigger label.  When
-      // defaultModelId is also unavailable or stale, fall back to the first
-      // model the catalog returns so the footer always shows something the
-      // user can actually run.
-      : (defaultModelId && allModelIds.has(defaultModelId)
-          ? defaultModelId
-          : firstCatalogModelId);
+  // model__webui NULL (issue #55): the session has no model identity, and the
+  // backend rejects chat start until the user picks one.  Show the
+  // placeholder instead of impersonating the session with settings/default.
+  const sessionModelInvalid = Boolean(currentSession?.model_invalid);
+  const effectiveModel = sessionModelInvalid
+    ? ''
+    : sessionModel
+      ? sessionModel
+      // No session model: fall back to settings.default when it is usable in
+      // the loaded catalog (otherwise the picker would highlight an unrelated
+      // provider, e.g. settings.model defaults to "anthropic/..." while only
+      // DeepSeek is configured), then to the default/first catalog model.
+      : (settingsModel && (allModelIds.size === 0 || allModelIds.has(settingsModel))
+          ? settingsModel
+          : (defaultModelId && allModelIds.has(defaultModelId)
+              ? defaultModelId
+              : firstCatalogModelId));
+  // Show the bare model name: "@provider:model" keeps its full remainder
+  // (which may itself be namespaced, e.g. "@nous:anthropic/claude-opus-4.6");
+  // namespaced ids keep the historical last-segment label.
   const displayModel = effectiveModel
-    ? effectiveModel.split('/').pop() ?? effectiveModel
+    ? effectiveModel.startsWith('@') && effectiveModel.includes(':')
+      ? effectiveModel.slice(1).split(':').slice(1).join(':')
+      : effectiveModel.split('/').pop() ?? effectiveModel
     : 'Model';
 
   // User's explicit pick (overrides effectiveModel for display + onSend).
@@ -373,6 +382,13 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
   // notified via onModelChange so the selection survives the first send.
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const activeDisplayModelId = selectedModelId ?? effectiveModel;
+
+  // A model pick belongs to the session that was active when it was made.
+  // Reset it on session switch (including placeholder → real promotion) so
+  // the trigger reflects the new session's model and model_invalid state.
+  useEffect(() => {
+    setSelectedModelId(null);
+  }, [currentSession?.session_id]);
 
   // Invalidate + reload the shared catalog when the providers gate
   // transitions (configured toggles between true / false). Without this,

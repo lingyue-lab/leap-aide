@@ -352,7 +352,11 @@ export default function ChatInterface({ sessionId: propSessionId }: ChatInterfac
   // ── Send / Cancel ────────────────────────────────────────────────────────────
   const handleSend = useCallback(async (text: string, attachments?: string[], mode?: string) => {
     if (!sessionId || !text.trim()) return;
-    const model = currentSession?.model || 'anthropic/claude-sonnet-4-5';
+    // Send the persisted session model verbatim.  Do not invent a fallback:
+    // when the session has no model identity (model_invalid) the backend
+    // rejects the turn with a "select a model" error instead of silently
+    // routing to some hard-coded provider (issue #55).
+    const model = currentSession?.model || '';
     await startStream(sessionId, text, model, currentSession?.workspace, attachments, mode);
     scrollToBottom();
   }, [sessionId, currentSession, startStream, scrollToBottom]);

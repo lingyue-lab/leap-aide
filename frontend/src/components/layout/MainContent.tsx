@@ -132,8 +132,9 @@ function WelcomeState() {
     //      points at an unconfigured provider — e.g. user only has
     //      DeepSeek but default_model is anthropic/claude-opus-4.6 — and
     //      the backend would 401 mid-stream.
-    //   3. hard-coded fallback
-    const model = welcomeModelId ?? firstAvailableModelId ?? 'anthropic/claude-sonnet-4-5';
+    //   3. empty string — lets the backend resolve its own default model
+    //      instead of inventing one the user has no provider for (issue #55)
+    const model = welcomeModelId ?? firstAvailableModelId ?? '';
     await startStream(placeholderSid, text, model, currentSession?.workspace, attachments, mode);
   }, [pendingNewSession, currentSession, startStream, firstAvailableModelId, welcomeModelId]);
 

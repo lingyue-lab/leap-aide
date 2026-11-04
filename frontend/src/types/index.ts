@@ -10,6 +10,9 @@ export interface Session {
   title: string;
   workspace?: string;
   model?: string;
+  /** True when the backend has no persisted WebUI model identity
+   *  (state.db model__webui is NULL). The user must pick a model again. */
+  model_invalid?: boolean;
   reasoning_effort?: string | null;  // 'minimal'|'low'|'medium'|'high'|'xhigh'|'none'|null
   messages: Message[];
   created_at: number;
@@ -53,6 +56,9 @@ export interface SessionListItem {
   updated_at?: number;
   pinned?: boolean;
   workspace?: string;
+  model?: string;
+  /** True when state.db has no WebUI model identity for this session. */
+  model_invalid?: boolean;
   skills?: string[] | null;
   personality?: string | null;
   reasoning_effort?: string | null;
