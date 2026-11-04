@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 import { useTheme } from '@/contexts/ThemeContext';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
+import { showToast } from '@/utils/toast';
 import type { Settings, Theme, SendKey } from '@/types';
 
 interface SettingsModalProps {
@@ -24,7 +25,6 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const { setTheme } = useTheme();
   const [form, setForm] = useState<Partial<Settings>>({});
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Load settings on mount if not already loaded
@@ -63,8 +63,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     setError(null);
     try {
       await updateSettings(form as Settings);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      showToast('Saved');
     } catch (err) {
       setError((err as Error).message || 'Failed to save settings');
     } finally {
@@ -293,16 +292,15 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                 padding: '8px 20px',
                 borderRadius: 8,
                 border: 'none',
-                background: saved ? 'rgba(34, 197, 94, 0.8)' : 'var(--blue)',
+                background: 'var(--blue)',
                 color: '#fff',
                 cursor: saving ? 'not-allowed' : 'pointer',
                 fontSize: 15,
                 fontWeight: 600,
                 opacity: saving ? 0.7 : 1,
-                transition: 'background 0.2s',
               }}
             >
-              {saving ? 'Saving…' : saved ? '✓ Saved' : 'Save Settings'}
+              {saving ? 'Saving…' : 'Save Settings'}
             </button>
           </div>
         </div>

@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useMemoryStore } from '@/stores/useMemoryStore';
 import type { MemoryFile } from '@/stores/useMemoryStore';
 import FileView from '@/components/shared/FileView';
 import { Icon } from '@/components/common/Icons';
+import { showToast } from '@/utils/toast';
 
 const FILE_LABELS: Record<MemoryFile, { filename: string; title: string }> = {
   memory: { filename: 'USER.md', title: 'Personal Memory' },
@@ -16,6 +18,7 @@ export default function MemoryDetail() {
   const error = useMemoryStore((s) => s.error);
   const loadMemory = useMemoryStore((s) => s.loadMemory);
   const writeMemory = useMemoryStore((s) => s.writeMemory);
+  const { t } = useTranslation('common');
 
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
@@ -60,8 +63,9 @@ export default function MemoryDetail() {
     setSaveError('');
     try {
       await writeMemory(selectedFile, editContent);
-      setEditing(false);
-      setEditContent('');
+      // Stay in edit mode after saving, consistent with the other file
+      // editors: the Save/Cancel toolbar does not vanish under the pointer.
+      showToast(t('common.saved'));
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Failed to save');
     } finally {

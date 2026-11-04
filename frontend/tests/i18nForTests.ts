@@ -33,6 +33,14 @@ void i18n
           close: 'Close',
         },
         common: {
+          // Components under test call t('common.save') etc.; the real
+          // en/common.json nests these under a top-level `common` object.
+          common: {
+            save: 'Save',
+            saving: 'Saving...',
+            saved: 'Saved',
+            cancel: 'Cancel',
+          },
           no_matching_commands: 'No matching commands',
           ok: 'OK',
           sessions: {

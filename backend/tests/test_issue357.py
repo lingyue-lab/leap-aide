@@ -156,21 +156,29 @@ class TestWorkspacePermissions:
         )
 
     def test_workspace_uses_sudo_chown(self):
-        """docker-entrypoint.sh must chown the workspace to leap-aide when writable.
+        """docker-entrypoint.sh must recursively chown the workspace to the runtime uid.
 
-        The chown is now conditional on the workspace being writable, to allow
-        read-only (:ro) workspace mounts without crashing (#670). The sudo chown
-        must still be present in the script (just guarded by [ -w ]).
+        Ownership is repaired (best-effort) before the writability probe, so a
+        wrong-owner read-write mount is fixed instead of being mistaken for a
+        read-only mount (#42). Recursion also repairs root-owned subdirectories
+        Docker may have auto-created; a genuinely :ro mount makes the chown
+        fail harmlessly (#670). The target must be WANTED_UID:WANTED_GID, not
+        leap-aide's image uid: in root mode (WANTED_UID=0) the server runs as
+        root and leap-aide is intentionally never remapped.
         """
-        assert 'sudo chown leap-aide:leap-aide "$HERMES_WEBUI_DEFAULT_WORKSPACE"' in INIT_SCRIPT, (
-            "docker-entrypoint.sh must 'sudo chown leap-aide:leap-aide' the workspace "
-            "when it is writable, so the app user can write to it (#357)"
+        assert 'sudo chown -R "${WANTED_UID}:${WANTED_GID}" "$HERMES_WEBUI_DEFAULT_WORKSPACE"' in INIT_SCRIPT, (
+            "docker-entrypoint.sh must 'sudo chown -R WANTED_UID:WANTED_GID' the workspace "
+            "so the app user can write to it, including nested directories (#357, #42)"
+        )
+        assert 'sudo chown -R leap-aide:leap-aide' not in INIT_SCRIPT, (
+            "the workspace chown must not hard-code leap-aide's image uid — root mode "
+            "runs as 0, and rootless podman would map 1024 to a host subuid"
         )
 
     def test_workspace_mkdir_before_chown(self):
         """sudo mkdir must come before sudo chown in docker-entrypoint.sh."""
         mkdir_pos = INIT_SCRIPT.find('sudo mkdir -p "$HERMES_WEBUI_DEFAULT_WORKSPACE"')
-        chown_pos = INIT_SCRIPT.find('sudo chown leap-aide:leap-aide "$HERMES_WEBUI_DEFAULT_WORKSPACE"')
+        chown_pos = INIT_SCRIPT.find('sudo chown -R "${WANTED_UID}:${WANTED_GID}" "$HERMES_WEBUI_DEFAULT_WORKSPACE"')
         assert mkdir_pos != -1, "sudo mkdir for workspace not found"
         assert chown_pos != -1, "sudo chown for workspace not found"
         assert mkdir_pos < chown_pos, "sudo mkdir must come before sudo chown"
@@ -181,19 +189,32 @@ class TestWorkspacePermissions:
             "sudo mkdir for workspace must call error_exit on failure"
         )
 
-    def test_workspace_chown_is_conditional_on_writable(self):
-        """chown and write-test must be skipped for read-only workspace mounts (#670).
+    def test_workspace_chown_precedes_writability_probe(self):
+        """chown must run before the writability probe; :ro mounts stay supported.
 
-        The script must check [ -w "$HERMES_WEBUI_DEFAULT_WORKSPACE" ] before
-        attempting chown or a write test, so :ro bind-mounts don't crash startup.
+        Regression for #42: guarding the chown behind [ -w ] was a
+        chicken-and-egg bug — a wrong-owner read-write mount is not writable by
+        leap-aide, so the guard misread it as a deliberate :ro mount and skipped
+        the chown that would have repaired it for the container's lifetime.
         """
-        assert '[ -w "$HERMES_WEBUI_DEFAULT_WORKSPACE" ]' in INIT_SCRIPT, (
-            "docker-entrypoint.sh must guard chown with [ -w ] to support read-only "
-            "workspace mounts (:ro) without crashing (#670)"
+        chown_pos = INIT_SCRIPT.find('sudo chown -R "${WANTED_UID}:${WANTED_GID}" "$HERMES_WEBUI_DEFAULT_WORKSPACE"')
+        probe_pos = INIT_SCRIPT.find('it="$HERMES_WEBUI_DEFAULT_WORKSPACE/.testfile"')
+        assert chown_pos != -1, "workspace chown not found"
+        assert probe_pos != -1, "workspace writability probe not found"
+        assert chown_pos < probe_pos, (
+            "the workspace chown must run before the writability probe (#42)"
         )
-        # Read-only path must log a clear message rather than calling error_exit
+        # The old [ -w ]-first guard must not come back.
+        assert '[ -w "$HERMES_WEBUI_DEFAULT_WORKSPACE" ]' not in INIT_SCRIPT, (
+            "the workspace chown must not be guarded by [ -w ] — that is the #42 bug"
+        )
+        # Read-only (:ro) mounts must still start cleanly (#670).
         assert "read-only workspace is supported" in INIT_SCRIPT, (
             "docker-entrypoint.sh must print a clear message when workspace is read-only (#670)"
+        )
+        # rw-but-unwritable states must be called out loudly with actionable text.
+        assert "is a read-write mount but not writable by leap-aide" in INIT_SCRIPT, (
+            "docker-entrypoint.sh must warn loudly when an rw workspace is not writable (#42)"
         )
 
     def test_init_script_syntax_valid(self):

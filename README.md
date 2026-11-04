@@ -85,6 +85,8 @@ After the Docker container starts successfully, open [http://localhost:8787](htt
 
 The current configuration mounts `~/.hermes` to `/home/leap-aide/.hermes` and `~/.hermes_workspaces` to `/workspaces`. These two persistent directories hold runtime data so the service can recover properly across restarts. Data exchange between the host machine and LeapAide also goes through `~/.hermes_workspaces`.
 
+On startup the container aligns the ownership of both directories with `WANTED_UID`/`WANTED_GID`, so Workspace file creation and saving also work when the host directories were previously owned by another user. `scripts/ctl.sh start-docker` uses the invoking user's IDs automatically; with plain `docker compose up`, set `WANTED_UID=$(id -u) WANTED_GID=$(id -g)` if the host user is not 1000:1000.
+
 See `docker-compose.yml` for more detailed configuration; change the published port and the system configuration as needed. All system configuration is done through environment variables.
 
 Building the Docker image:

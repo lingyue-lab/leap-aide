@@ -4590,6 +4590,43 @@
   .m3-dialog__actions .m3-btn { width: 100%; }
 }
 
+/* ── M3 snackbar ──
+   Spec: inverse-surface fill, inverse-on-surface text, 4dp corners,
+   level-3 elevation, bottom-center, brief auto-dismiss (4–10s).
+   z-index sits below modal dialogs (9999) so a confirmation never
+   covers a scrim/dialog, but above regular content. */
+.m3-snackbar {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translate(-50%, 8px);
+  box-sizing: border-box;
+  min-width: 344px;
+  max-width: min(672px, calc(100vw - 32px));
+  padding: 14px 16px;
+  border-radius: var(--md-shape-xs, 4px);
+  background: var(--md-inverse-surface);
+  color: var(--md-inverse-on-surface);
+  box-shadow: var(--md-elevation-3);
+  font: var(--md-typescale-body-medium);
+  letter-spacing: 0.25px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 9000;
+}
+.m3-snackbar--visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+@media (max-width: 480px) {
+  .m3-snackbar {
+    min-width: 0;
+    width: calc(100vw - 32px);
+    bottom: 16px;
+  }
+}
+
 /* Session date header */
 .sidebar-item-date-header {
   display: flex;

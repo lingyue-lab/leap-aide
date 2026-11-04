@@ -83,6 +83,8 @@ Docker 容器启动成功后，用户直接访问 [http://localhost:8787](http:/
 
 当前配置把 `~/.hermes` 挂载到 `/home/leap-aide/.hermes`、`~/.hermes_workspaces` 挂载到 `/workspaces`。这两个持久化目录用于保存运行数据，确保服务重启能够正常恢复。本机环境和 LeapAide的数据交换也通过`~/.hermes_workspaces`进行。
 
+容器启动时会把这两个目录的所有者对齐到 `WANTED_UID`/`WANTED_GID`，因此即使宿主机目录此前属于其他用户，Workspace 的文件创建与保存也能正常工作。`scripts/ctl.sh start-docker` 会自动使用执行者的 UID/GID；直接使用 `docker compose up` 时，若宿主机用户不是 1000:1000，请设置 `WANTED_UID=$(id -u) WANTED_GID=$(id -g)`。
+
 更多详细配置见 `docker-compose.yml`，用户可根据需要更改发布端口以及更改系统配置。系统的配置全部通过环境变量进行。
 
 构建 Docker 镜像：
