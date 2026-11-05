@@ -2438,11 +2438,18 @@ def get_available_models(*, wait_seconds: float | None = None) -> dict:
             _available_models_cache = None
             _available_models_cache_ts = 0.0
             _models_cache_generation += 1
-        if _catalog_json_changed:
+        if _catalog_json_changed and model_catalog.catalog_mtime() != _model_catalog_mtime:
             # Mirror the config-change handling: force-reload the catalog,
             # bust the memory cache, discard any in-flight build's result,
             # and drop the disk snapshot (its model lists came from the
             # old catalog).
+            #
+            # The mtime is re-checked under the lock: concurrent cold
+            # callers all read the same stale mtime before the first one
+            # applied it, and each of them would bump the generation —
+            # which discards the in-flight build's result and forces a
+            # second full build (issue #16: 48-160s of provider discovery).
+            # Only the caller that actually applies the change may bump.
             model_catalog.load_catalog(force=True)
             _model_catalog_mtime = model_catalog.catalog_mtime()
             _available_models_cache = None
@@ -2484,11 +2491,28 @@ def get_available_models(*, wait_seconds: float | None = None) -> dict:
     # The flag flip is the single-flight guard — no second worker can start
     # until this one clears it.
     spawned = False
+    fresh_cache = None
     with _available_models_cache_lock:
-        if not _cache_build_in_progress:
+        # Re-check the cache under the same lock before spawning.  The disk
+        # load above runs OUTSIDE the lock, so a build that was in flight
+        # when we passed the fast path may have finished meanwhile: it
+        # published the catalog and cleared the flag.  Spawning then would
+        # repeat the whole provider discovery (issue #16's 48-160s build)
+        # for a catalog we already have — serve the fresh one instead.
+        now = time.monotonic()
+        if (
+            _available_models_cache is not None
+            and (now - _available_models_cache_ts) < _AVAILABLE_MODELS_CACHE_TTL
+        ):
+            fresh_cache = _available_models_cache
+        elif not _cache_build_in_progress:
             _cache_build_in_progress = True
             _models_build_error = None
             spawned = True
+    if fresh_cache is not None:
+        # Deep-copy outside the lock: the cache object is replaced whole,
+        # never mutated in place.
+        return copy.deepcopy(fresh_cache)
     if spawned:
         try:
             threading.Thread(

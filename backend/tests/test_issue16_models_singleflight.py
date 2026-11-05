@@ -54,6 +54,7 @@ _FULL_CATALOG = {
 def isolated_catalog(monkeypatch):
     """Isolate the catalog cache globals and all disk/config side effects."""
     import app.api.config as config
+    import app.api.model_catalog as model_catalog
 
     saved = {
         "_available_models_cache": config._available_models_cache,
@@ -62,6 +63,7 @@ def isolated_catalog(monkeypatch):
         "_models_cache_generation": config._models_cache_generation,
         "_models_build_error": config._models_build_error,
         "_cfg_mtime": config._cfg_mtime,
+        "_model_catalog_mtime": config._model_catalog_mtime,
     }
 
     monkeypatch.setattr(
@@ -70,6 +72,7 @@ def isolated_catalog(monkeypatch):
     monkeypatch.setattr(config, "reload_config", lambda: None)
     monkeypatch.setattr(config, "_load_models_cache_from_disk", lambda: None)
     monkeypatch.setattr(config, "_save_models_cache_to_disk", lambda cache: None)
+    monkeypatch.setattr(config, "_delete_models_cache_on_disk", lambda: None)
 
     # _get_config_path is stubbed to a missing file (mtime 0.0), so keep
     # _cfg_mtime at 0.0 too — otherwise every call would take the
@@ -79,6 +82,11 @@ def isolated_catalog(monkeypatch):
     config._available_models_cache_ts = 0.0
     config._cache_build_in_progress = False
     config._models_build_error = None
+    # Same for the catalog JSON: its mtime starts out stale (0.0) in a fresh
+    # process, so the first caller would take the catalog-changed branch and
+    # invalidate the cache under test.  Pin it to the file's real mtime so
+    # the tests below exercise the single-flight only.
+    config._model_catalog_mtime = model_catalog.catalog_mtime()
 
     yield config
 
@@ -89,6 +97,7 @@ def isolated_catalog(monkeypatch):
     config._available_models_cache_ts = saved["_available_models_cache_ts"]
     config._cache_build_in_progress = saved["_cache_build_in_progress"]
     config._models_cache_generation = saved["_models_cache_generation"]
+    config._model_catalog_mtime = saved["_model_catalog_mtime"]
     config._models_build_error = saved["_models_build_error"]
     config._cfg_mtime = saved["_cfg_mtime"]
 
@@ -141,6 +150,55 @@ def test_concurrent_cold_build_runs_once(isolated_catalog, monkeypatch):
     for r in results:
         assert r["groups"] == _FULL_CATALOG["groups"]
         assert "building" not in r, "a completed build must not be flagged building"
+
+
+def test_concurrent_cold_callers_apply_one_catalog_change_once(
+    isolated_catalog, monkeypatch
+):
+    """A catalog change is applied by ONE caller, not by every caller.
+
+    All concurrent cold callers read the same stale catalog mtime before
+    the first one applied it.  Each of them used to bump the build
+    generation, which made the in-flight build discard its result and build
+    a second time (issue #16's 48-160s provider discovery, twice).
+    """
+    config = isolated_catalog
+    release = threading.Event()  # main thread releases the build
+    build_calls = []
+
+    def fake_build():
+        build_calls.append(1)
+        assert release.wait(10.0), "harness must release the build"
+        return dict(_FULL_CATALOG)
+
+    monkeypatch.setattr(config, "_build_available_models_uncached", fake_build)
+
+    # Stale catalog mtime: the change is real and must be applied once.
+    config._model_catalog_mtime = 0.0
+    gen_before = config._models_cache_generation
+
+    results, errors = [], []
+
+    def call():
+        try:
+            results.append(config.get_available_models(wait_seconds=5.0))
+        except Exception as exc:  # pragma: no cover - failure path asserted below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=call) for _ in range(6)]
+    for t in threads:
+        t.start()
+    time.sleep(0.3)  # let every thread reach the gate / CV
+    release.set()
+    for t in threads:
+        t.join(timeout=10.0)
+
+    assert errors == [], f"waiters must not raise: {errors}"
+    assert len(build_calls) == 1, "one catalog change must not trigger a second build"
+    assert (
+        config._models_cache_generation == gen_before + 1
+    ), "the catalog change must bump the generation exactly once"
+    assert len(results) == 6
 
 
 # ── 2. Bounded waiter degrades with building:True, then recovers ─────────────
