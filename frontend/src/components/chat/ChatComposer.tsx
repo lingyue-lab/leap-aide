@@ -425,11 +425,17 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const activeDisplayModelId = selectedModelId ?? effectiveModel;
 
+  // A model pick that the backend refused to save.  Shown under the input so
+  // the failure is visible instead of leaving the picker showing a model the
+  // session does not actually run.
+  const [modelSaveError, setModelSaveError] = useState<string | null>(null);
+
   // A model pick belongs to the session that was active when it was made.
   // Reset it on session switch (including placeholder → real promotion) so
   // the trigger reflects the new session's model and model_invalid state.
   useEffect(() => {
     setSelectedModelId(null);
+    setModelSaveError(null);
   }, [currentSession?.session_id]);
 
   // Invalidate + reload the shared catalog when the providers gate
@@ -453,6 +459,7 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
     // (selectedModelId overrides effectiveModel in display), and notify the
     // parent so the choice is honored on first send in welcome state.
     setSelectedModelId(modelId);
+    setModelSaveError(null);
     onModelChange?.(modelId);
     // Persist via SDK API only when we have a real backend session.
     // Welcome-state placeholder sessions have no backend row yet — POSTing
@@ -462,10 +469,15 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
     if (!sid || sid.startsWith('new-local-')) return;
     try {
       await updateSessionModel(sid, modelId);
-    } catch {
-      // silently ignore
+    } catch (err) {
+      // The pick did not reach the backend, so the session still runs the
+      // old model.  Say so and fall back to the session's real model in the
+      // trigger — otherwise the picker claimed a model the session does
+      // not use.
+      setModelSaveError((err as Error)?.message || t('composer.modelSaveFailed'));
+      setSelectedModelId(null);
     }
-  }, [currentSession, updateSessionModel, onModelChange]);
+  }, [currentSession, updateSessionModel, onModelChange, t]);
 
   // Wrapper for the model chip's popover: gate first, then load models.
   // Lets the user see the gate dialog (with "Configure providers" CTA) when
@@ -782,6 +794,17 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
           <div className="composer-model-error" role="alert">
             <Icon name="warning" size={18} />
             <span>{t('composer.modelRequired')}</span>
+          </div>
+        )}
+
+        {/* The model pick was not saved — the session still runs its previous
+            model.  Same M3 error supporting text as the identity error
+            above; without it the failure was swallowed and the picker kept
+            claiming the unsaved pick. */}
+        {modelSaveError && (
+          <div className="composer-model-error" role="alert">
+            <Icon name="warning" size={18} />
+            <span>{modelSaveError}</span>
           </div>
         )}
 

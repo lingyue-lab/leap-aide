@@ -285,6 +285,10 @@ export function useChatStream() {
       dismissInfoCard(sessionId);
     }
 
+    // Clear the error of the previous attempt: the welcome state renders it
+    // as a banner, and a stale one would linger after a successful retry.
+    useChatStore.getState().setLastError(null);
+
     const store = useChatStore.getState();
 
     // For interrupt mode: show a spinner while the backend cancels the old
@@ -467,6 +471,7 @@ export function useChatStream() {
           return;
         }
         const errorMsg = (err as Error).message || 'Unknown error';
+        store.setLastError(errorMsg);
         store.addMessage({
           role: 'assistant',
           content: `**Error:** ${errorMsg}`,
@@ -649,6 +654,7 @@ export function useChatStream() {
         return;
       }
       const errorMsg = (err as Error).message || 'Unknown error';
+      store.setLastError(errorMsg);
       store.addMessage({
         role: 'assistant',
         content: `**Error:** ${errorMsg}`,

@@ -155,7 +155,7 @@ def test_custom_provider_model_with_slash_routes_to_named_custom_provider():
         }],
     )
     assert model == 'google/gemma-4-26b-a4b'
-    assert provider == 'local-lm-studio'
+    assert provider == 'custom:local-lm-studio'
     assert base_url == 'http://lmstudio.local:1234/v1'
 
 
@@ -689,6 +689,68 @@ def test_set_default_model_back_to_plain_gateway_clears_stale_base_url(
         assert result["ok"] is True
         saved = yaml.safe_load(cfgfile.read_text(encoding="utf-8"))
         assert saved["model"]["provider"] == "xiaomi"
+        assert "base_url" not in saved["model"]
+    finally:
+        config.cfg.clear()
+        config.cfg.update(old_cfg)
+        config._cfg_mtime = old_mtime
+
+
+def test_set_default_model_to_custom_endpoint_keeps_base_url(monkeypatch, tmp_path):
+    """Switching the default to a catalog custom endpoint keeps the base_url.
+
+    ``ollama`` is the user's own server (the catalog marks it ``is_custom``),
+    so the base_url they configured for it must survive the switch — dropping
+    it would point the agent at the SDK's built-in endpoint instead.
+    """
+    import yaml
+
+    cfgfile = tmp_path / "config.yaml"
+    cfgfile.write_text(
+        "model:\n"
+        "  provider: custom\n"
+        "  base_url: http://127.0.0.1:11434/v1\n"
+        "  default: qwen3\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "_get_config_path", lambda: cfgfile)
+    old_cfg = dict(config.cfg)
+    old_mtime = config._cfg_mtime
+    try:
+        config.reload_config()
+        result = config.set_hermes_default_model("@ollama:qwen3")
+        assert result["ok"] is True
+        saved = yaml.safe_load(cfgfile.read_text(encoding="utf-8"))
+        assert saved["model"]["provider"] == "ollama"
+        assert saved["model"]["default"] == "qwen3"
+        assert saved["model"]["base_url"] == "http://127.0.0.1:11434/v1"
+    finally:
+        config.cfg.clear()
+        config.cfg.update(old_cfg)
+        config._cfg_mtime = old_mtime
+
+
+def test_set_default_model_to_vendor_provider_drops_base_url(monkeypatch, tmp_path):
+    """The counterpart: a vendor provider still clears the stale base_url."""
+    import yaml
+
+    cfgfile = tmp_path / "config.yaml"
+    cfgfile.write_text(
+        "model:\n"
+        "  provider: ollama\n"
+        "  base_url: http://127.0.0.1:11434/v1\n"
+        "  default: qwen3\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "_get_config_path", lambda: cfgfile)
+    old_cfg = dict(config.cfg)
+    old_mtime = config._cfg_mtime
+    try:
+        config.reload_config()
+        result = config.set_hermes_default_model("@deepseek:deepseek-v4-pro")
+        assert result["ok"] is True
+        saved = yaml.safe_load(cfgfile.read_text(encoding="utf-8"))
+        assert saved["model"]["provider"] == "deepseek"
         assert "base_url" not in saved["model"]
     finally:
         config.cfg.clear()

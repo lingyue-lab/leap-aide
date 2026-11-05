@@ -56,9 +56,6 @@ export interface SessionListItem {
   updated_at?: number;
   pinned?: boolean;
   workspace?: string;
-  model?: string;
-  /** True when state.db has no WebUI model identity for this session. */
-  model_invalid?: boolean;
   skills?: string[] | null;
   personality?: string | null;
   reasoning_effort?: string | null;

@@ -8,7 +8,8 @@
     "plan_msg": "Break down the following task into steps"
   },
   "welcome": {
-    "greeting": "Hello, how can I help you?"
+    "greeting": "Hello, how can I help you?",
+    "sendFailed": "Message not sent:"
   },
   "working": "Working...",
   "composer": {
@@ -19,7 +20,8 @@
     "drop_files": "Drop files to attach",
     "voiceStart": "Voice input",
     "voiceStop": "Stop recording",
-    "modelRequired": "This session has no model selected. Choose one to continue."
+    "modelRequired": "This session has no model selected. Choose one to continue.",
+    "modelSaveFailed": "Failed to save the selected model."
   },
   "approval": {
     "title": "Command Approval Required",

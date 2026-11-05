@@ -665,11 +665,13 @@ def custom_provider_slug(name: str) -> str:
 
     Named ``custom_providers`` entries are identified in the WebUI exactly
     like every other provider: ``@<slug>:model``.  The slug is the
-    lowercased provider name with spaces collapsed to dashes, which is the
-    alias the Hermes SDK already accepts for a named custom provider
-    (``custom_provider_aliases``), so the legacy ``custom:<name>`` form is
-    no longer needed.  Characters that would make the ``@provider:model``
-    identity ambiguous (``@``, ``:``, ``/``) are replaced with dashes.
+    lowercased provider name with spaces collapsed to dashes.  Characters
+    that would make the ``@provider:model`` identity ambiguous (``@``,
+    ``:``, ``/``) are replaced with dashes.
+
+    This is the WebUI-side slug only.  It is deliberately not the id the
+    Hermes SDK expects for a named custom provider — see
+    ``sdk_custom_provider_id``.
     """
     raw = str(name or "").strip().lower()
     for ch in ("@", ":", "/", " "):
@@ -679,27 +681,106 @@ def custom_provider_slug(name: str) -> str:
     return raw.strip("-")
 
 
+def sdk_custom_provider_id(name: str, provider_key: str = "") -> str:
+    """Return the Hermes SDK's canonical id for a user-defined provider.
+
+    The SDK identifies a named custom provider as ``custom:<slug>`` and
+    branches on that prefix in several places: the ``extra_body`` lookup in
+    ``agent/agent_init.py`` only fires for ``custom``/``custom:*``, the
+    runtime provider resolution defers a bare name to a built-in provider
+    of the same name (``hermes_cli/runtime_provider.py``), and the agent's
+    own lookup accepts only the SDK's alias set — the display name, the
+    name with spaces collapsed, and ``custom:<that>``.
+
+    The WebUI keeps its own sanitized slug for the ``@provider:model``
+    identity, because the SDK slug only collapses spaces and may still
+    contain ``/`` or ``:``, which would make the identity ambiguous.  The
+    id handed to the SDK must be the SDK's own, so the two are kept apart:
+    storage and display use ``custom_provider_slug``, the SDK call sites
+    use this function.
+    """
+    display = str(name or "").strip()
+    key = str(provider_key or "").strip()
+    try:
+        from hermes_cli.providers import custom_provider_slug as sdk_slug
+
+        return sdk_slug(display, key)
+    except Exception:
+        # The SDK is not importable (e.g. a bare backend checkout): mirror
+        # its normalization — lower case, spaces collapsed to dashes.
+        normalized = (key or display).lower().replace(" ", "-")
+        return normalized if normalized.startswith("custom:") else f"custom:{normalized}"
+
+
 def named_custom_provider(provider_id: str) -> dict | None:
     """Return the ``custom_providers`` entry named by *provider_id*.
 
     Accepts the canonical slug (``ollama1``) and the provider name as written
     (case-insensitive, spaces allowed).  The retired ``custom:<slug>``
     provider id is not accepted.  Returns None when no entry matches.
+
+    Only the ``custom_providers:`` list form is covered.  The ``providers:``
+    dict form is deliberately left to the SDK: that dict also holds
+    credential overrides for built-in providers (``providers.openai`` and
+    friends), so a match there cannot be told apart from a user-defined
+    endpoint without misrouting the built-ins.
     """
     raw = str(provider_id or "").strip().lower()
     if not raw:
         return None
     wanted = {raw, raw.replace(" ", "-")}
     entries = cfg.get("custom_providers", [])
-    if not isinstance(entries, list):
-        return None
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        name = str(entry.get("name") or "").strip()
-        if name and custom_provider_slug(name) in wanted:
-            return entry
+    if isinstance(entries, list):
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            name = str(entry.get("name") or "").strip()
+            if name and custom_provider_slug(name) in wanted:
+                return entry
     return None
+
+
+def is_user_defined_provider(provider_id: str) -> bool:
+    """Return True when *provider_id* names a user-defined provider.
+
+    Accepts the WebUI slug (``ollama1``), the provider name as written and
+    the SDK's canonical id (``custom:ollama1``) — the three spellings the
+    same entry travels under.  A catalog custom endpoint (``ollama``,
+    ``lmstudio``, the synthetic ``local``) counts too: the user's own
+    server, not a vendor API.
+    """
+    raw = str(provider_id or "").strip().lower()
+    if not raw:
+        return False
+    if raw.startswith("custom:"):
+        raw = raw.split(":", 1)[1].strip()
+    if named_custom_provider(raw) is not None:
+        return True
+    try:
+        from app.api import model_catalog
+
+        return model_catalog.is_custom_provider(raw)
+    except Exception:
+        return False
+
+
+def _is_custom_endpoint_slug(provider_id: str) -> bool:
+    """Return True when *provider_id* names a user-side custom endpoint.
+
+    The catalog owns the answer (``is_custom`` on the provider record);
+    the synthetic ``local`` slug the WebUI infers for an unrecognized
+    private endpoint counts as well.  A custom endpoint is the user's own
+    server: it needs no API key and keeps the base_url the user configured.
+    """
+    slug = str(provider_id or "").strip().lower()
+    if not slug:
+        return False
+    try:
+        from app.api import model_catalog
+
+        return model_catalog.is_custom_provider(slug)
+    except Exception:
+        return False
 
 
 def is_legacy_custom_identity(identity: str) -> bool:
@@ -906,7 +987,9 @@ def resolve_model_provider(model_id: str) -> tuple:
             if entry_model and entry_name and model_id == entry_model:
                 return (
                     model_id,
-                    custom_provider_slug(entry_name),
+                    sdk_custom_provider_id(
+                        entry_name, str(entry.get("provider_key") or "")
+                    ),
                     entry_base_url or None,
                 )
 
@@ -923,7 +1006,12 @@ def resolve_model_provider(model_id: str) -> tuple:
             entry_name = str(entry.get("name") or provider_hint).strip()
             return (
                 bare_model,
-                custom_provider_slug(entry_name),
+                # The SDK id, not the WebUI slug: the SDK branches on the
+                # "custom:" prefix (extra_body, built-in shadowing) and
+                # accepts only its own alias set for a named provider.
+                sdk_custom_provider_id(
+                    entry_name, str(entry.get("provider_key") or "")
+                ),
                 str(entry.get("base_url") or "").strip() or None,
             )
         return bare_model, provider_hint, None
@@ -1011,6 +1099,32 @@ def get_first_available_model() -> str:
     except Exception:
         pass
     return get_effective_default_model()
+
+
+def get_first_catalog_model() -> str:
+    """Return a routable ``@provider:model`` id from the model catalog.
+
+    Returns "" when the catalog has no models.  Unlike
+    ``get_first_available_model`` this never falls back to
+    ``get_effective_default_model()``: that value is a bare model id with no
+    provider, so it cannot be routed (issue #55).
+
+    The catalog ids are already ``@provider:model`` identities, so whatever
+    this returns can be handed to the SDK as-is.  The catalog itself is built
+    by the startup prewarm on a background worker — callers that must not
+    race that build wait for it through
+    ``app.api.prewarm.wait_for_models``.
+    """
+    try:
+        catalog = peek_available_models()
+    except Exception:
+        return ""
+    for group in catalog.get('groups') or []:
+        for model in group.get('models') or []:
+            model_id = str((model or {}).get('id') or '').strip()
+            if model_id:
+                return model_id
+    return ""
 
 
 def normalize_model_prefix(model_id: str, *, catalog: dict | None = None) -> str:
@@ -1245,7 +1359,7 @@ def set_hermes_default_model(model_id: str) -> dict:
         elif persisted_provider != previous_provider:
             if persisted_provider == "openai":
                 model_cfg["base_url"] = "https://api.openai.com/v1"
-            elif named_custom_provider(persisted_provider) is None:
+            elif not is_user_defined_provider(persisted_provider):
                 model_cfg.pop("base_url", None)
         else:
             # Same SDK provider as before, no new base_url (selection was the
@@ -2014,7 +2128,7 @@ def _build_available_models_uncached() -> dict:
                     api_key = (all_env.get(key) or os.getenv(key) or "").strip()
                     if api_key:
                         break
-            if not api_key and provider not in ("ollama", "lmstudio", "local"):
+            if not api_key and not _is_custom_endpoint_slug(provider):
                 # Public endpoint without API key — skip model fetch
                 # to avoid listing models that would fail at runtime.
                 raise ValueError(f"No API key configured for {base_url}")

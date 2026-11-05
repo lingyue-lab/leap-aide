@@ -44,6 +44,7 @@ from app.api.config import (
     _API_MODELS_WAIT_S,
     get_available_models,
     peek_available_models,
+    get_first_catalog_model,
     load_settings,
     IMAGE_EXTS,
     MD_EXTS,
@@ -77,6 +78,14 @@ from app.api.helpers import (
     _redact_text,
 )
 from app.api.stream_manager import stream_manager
+
+# How long the chat-start path waits for the cold model catalog to become
+# warm before refusing a turn.  The catalog is built by the boot prewarm on a
+# background worker; the first message after a cold start used to race that
+# build and fail with 400 "Session model is invalid" (issue #55).  The wait
+# only joins a build that is already running — it never pays the provider
+# discovery cost on the request thread.
+_COLD_START_WAIT_S = float(os.getenv("HERMES_WEBUI_COLD_START_WAIT_S", "5.0"))
 
 # ── CSRF: validate Origin/Referer on POST ────────────────────────────────────
 
@@ -354,8 +363,52 @@ def _resolve_chat_start_model(session, requested_model: str | None) -> tuple[str
     # normalization cannot be routed and would fall through to config.yaml's
     # default endpoint (issue #55).  Refuse it instead of guessing.
     if not Session._is_valid_model_identity(model):
-        return "", False, "Session model is invalid. Please select a model."
+        # The catalog was cold, so the normalization above had no groups to
+        # attribute the model to.  Wait for the startup build once and retry
+        # before refusing the turn.
+        if _wait_for_warm_catalog():
+            model, normalized = _resolve_compatible_session_model(requested or stored)
+            model = Session._normalize_model(model)
+        if not Session._is_valid_model_identity(model):
+            return "", False, "Session model is invalid. Please select a model."
     return model, normalized, None
+
+
+def _wait_for_warm_catalog() -> bool:
+    """Wait (bounded) for the startup model-catalog build to finish.
+
+    The catalog is built by the boot prewarm on a background worker; the
+    chat-start path used to race that build and refuse the turn with 400
+    "Session model is invalid" (issue #55).  Returns True when the catalog
+    holds a routable identity afterwards.
+    """
+    from app.api.prewarm import wait_for_models
+    if not wait_for_models(_COLD_START_WAIT_S):
+        return False
+    return bool(get_first_catalog_model())
+
+
+def _resolve_new_session_model(requested_model: str | None) -> str:
+    """Return the model identity for a brand-new session, or "" when there is none.
+
+    A client whose picker is still empty (cold catalog) sends no identity at
+    all; the catalog supplies one instead of config.yaml's bare default,
+    which carries no provider and cannot be routed (issue #55).  The catalog
+    build is waited for (bounded) so the first message after a cold start is
+    not refused.
+    """
+    requested = str(requested_model or "").strip()
+    if Session._is_valid_model_identity(requested):
+        return requested
+    # Wait for the catalog first: a bare id from the client can then still
+    # be attributed to its provider instead of being thrown away.
+    _wait_for_warm_catalog()
+    if requested:
+        model = Session._normalize_model(requested)
+        if Session._is_valid_model_identity(model):
+            return model
+    model = get_first_catalog_model()
+    return model if Session._is_valid_model_identity(model) else ""
 
 
 def _normalize_session_model_in_place(session) -> str:
@@ -4131,6 +4184,11 @@ def _handle_chat_start(handler, body):
         require(body, "session_id")
     except ValueError as e:
         return bad(handler, str(e))
+    msg = str(body.get("message", "")).strip()
+    if not msg:
+        # Refuse before the session is created — a rejected turn must not
+        # leave an empty session row behind.
+        return bad(handler, "message is required")
     try:
         s = get_session(body["session_id"])
     except KeyError:
@@ -4140,15 +4198,19 @@ def _handle_chat_start(handler, body):
         # defer_notify=True — skip the upsert_session notify here because
         # begin_stream() below fires its own closely-related notify. Saves
         # one notify IPC round-trip on the welcome-state critical path.
+        #
+        # The model identity is resolved BEFORE the session is created: a
+        # refused turn (no routable identity, cold catalog) must not leave an
+        # empty session row behind — every retry used to leak one (issue #55).
+        _model = _resolve_new_session_model(body.get("model"))
+        if not _model:
+            return bad(handler, "Session model is invalid. Please select a model.", status=400)
         s = new_session(
             workspace=(str(body.get("workspace")) if body.get("workspace") else None),
-            model=body.get("model"),
+            model=_model,
             profile=body.get("profile") or None,
             defer_notify=True,
         )
-    msg = str(body.get("message", "")).strip()
-    if not msg:
-        return bad(handler, "message is required")
 
     # Accept original_msg from frontend (set by dispatch for slash commands)
     _original_msg = body.get("original_msg")

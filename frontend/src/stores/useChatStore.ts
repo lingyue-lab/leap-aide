@@ -21,10 +21,19 @@ interface ChatState {
   queuedMessages: QueuedMessage[];
   /** True during cancel — freezes UI rendering of messages but keeps memory updates flowing. */
   canceling: boolean;
+  /**
+   * Last chat-start failure (e.g. the backend refused the turn with 400
+   * "Session model is invalid").  The chat view shows it as an assistant
+   * message; the welcome state has no message list, so it renders this
+   * banner instead — without it the error was invisible and the user saw
+   * the input cleared and nothing else (issue #55 follow-up).
+   */
+  lastError: string | null;
   // Global reasoning display toggle (from config.yaml display.show_reasoning)
   showReasoning: boolean;
   setShowReasoning: (v: boolean) => void;
   setCanceling: (v: boolean) => void;
+  setLastError: (message: string | null) => void;
   // Per-session state cache to preserve data across session switches
   _sessionCache: Map<string, SessionCache>;
   // Current session ID tracked by chat store (to know which cache slot to use)
@@ -79,6 +88,7 @@ export const useChatStore = create<ChatState>((set) => ({
   abortController: null,
   queuedMessages: [],
   canceling: false,
+  lastError: null,
   showReasoning: true,  // default: show (matches CLI default)
   _sessionCache: new Map<string, SessionCache>(),
   _currentSessionId: null,
@@ -234,6 +244,7 @@ export const useChatStore = create<ChatState>((set) => ({
 
   setShowReasoning: (v) => set({ showReasoning: v }),
   setCanceling: (v) => set({ canceling: v }),
+  setLastError: (message) => set({ lastError: message }),
   setBusy: (busy) => set({ busy }),
 
   setActiveStreamId: (id) => set({ activeStreamId: id }),
@@ -284,6 +295,7 @@ export const useChatStore = create<ChatState>((set) => ({
     lastUsage: null,
     abortController: null,
     queuedMessages: [],
+    lastError: null,
   }),
 
   // Save current chat state into per-session cache

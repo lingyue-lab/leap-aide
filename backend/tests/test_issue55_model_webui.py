@@ -516,3 +516,68 @@ def test_sessions_list_flag_matches_session_identity(cleanup_test_sessions):
     row = next(s for s in sessions if s["session_id"] == sid)
     assert row["model"] == "@deepseek:deepseek-v4-flash"
     assert row.get("model_invalid") is False
+
+
+# ── Cold start: the first message must not race the catalog build ───────────
+
+
+def test_new_session_model_keeps_an_explicit_identity(monkeypatch):
+    """An explicit @provider:model from the client is used as-is."""
+    def _boom():  # pragma: no cover - must not run
+        raise AssertionError("an explicit identity must not wait for the catalog")
+
+    monkeypatch.setattr(routes, "_wait_for_warm_catalog", _boom)
+    assert (
+        routes._resolve_new_session_model("@deepseek:deepseek-v4-flash")
+        == "@deepseek:deepseek-v4-flash"
+    )
+
+
+def test_new_session_model_falls_back_to_the_catalog(monkeypatch):
+    """An empty picker (cold catalog) takes an identity from the catalog."""
+    monkeypatch.setattr(routes, "_wait_for_warm_catalog", lambda: True)
+    monkeypatch.setattr(
+        routes, "get_first_catalog_model", lambda: "@openrouter:openai/gpt-5.4-mini"
+    )
+    assert (
+        routes._resolve_new_session_model("")
+        == "@openrouter:openai/gpt-5.4-mini"
+    )
+
+
+def test_new_session_model_is_empty_without_a_catalog(monkeypatch):
+    """No catalog and no client identity → nothing routable (refuse)."""
+    monkeypatch.setattr(routes, "_wait_for_warm_catalog", lambda: False)
+    monkeypatch.setattr(routes, "get_first_catalog_model", lambda: "")
+    assert routes._resolve_new_session_model("") == ""
+
+
+def test_chat_start_without_a_picker_never_leaves_an_empty_session(
+    cleanup_test_sessions,
+):
+    """A first send with no identity either routes or refuses cleanly.
+
+    The welcome-state first send carries no identity while the picker is
+    still empty (cold catalog).  Whatever the catalog holds, the turn must
+    end in one of two states: a routable session, or a refusal that leaves
+    no session row behind.  The refused turn used to leak an empty session
+    on every retry, because ``new_session()`` ran before the model check
+    (issue #55 follow-up).
+    """
+    before = {s["session_id"] for s in get_body("/api/sessions")["sessions"]}
+    sid = f"new-local-{uuid.uuid4().hex[:12]}"
+    body, status = post(
+        "/api/chat/start",
+        {"session_id": sid, "message": "hello", "model": ""},
+    )
+    if status == 200:
+        real_sid = body["session_id"]
+        cleanup_test_sessions.append(real_sid)
+        loaded = get_body(f"/api/session?session_id={real_sid}")
+        assert loaded["session"]["model_invalid"] is False
+        assert loaded["session"]["model"].startswith("@")
+        return
+    assert status == 400, body
+    assert "Session model is invalid" in body["error"]
+    after = {s["session_id"] for s in get_body("/api/sessions")["sessions"]}
+    assert after == before

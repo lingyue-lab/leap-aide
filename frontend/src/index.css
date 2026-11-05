@@ -1697,6 +1697,24 @@
     flex-shrink: 0;
   }
 
+  /* Welcome-state error banner — the welcome state has no message list, so a
+     failed first send is reported here (M3 error supporting text). */
+  .welcome-state__error {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 640px;
+    color: var(--md-error);
+    font-size: 12px;
+    line-height: 16px;
+    letter-spacing: 0.4px;
+    text-align: left;
+  }
+
+  .welcome-state__error .icon-wrap {
+    flex-shrink: 0;
+  }
+
   .composer-footer {
     display: flex;
     align-items: center;

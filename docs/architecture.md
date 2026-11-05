@@ -128,6 +128,7 @@ External dependencies: `pyyaml` only (plus the Hermes Agent SDK and its own deps
 | `HERMES_WEBUI_FORCE_IPV4` | *(enabled)* | Prefer IPv4 for outbound connections (skips blackholed-IPv6 stalls); `=0` disables |
 | `HERMES_WEBUI_CONNECTIVITY_PROBE` | *(enabled)* | Background provider reachability probe at boot and after saving a key; `=0` disables |
 | `HERMES_WEBUI_CATALOG_QUERY_TIMEOUT_S` | `3.0` | Per-provider timeout (seconds) for live model-list queries during a catalog build |
+| `HERMES_WEBUI_COLD_START_WAIT_S` | `5.0` | Max seconds a chat start waits for the boot model-catalog build before it refuses the turn; `=0` never waits |
 | `LOG_LEVEL` | `WARNING` | Python logging level |
 
 ---
@@ -144,15 +145,25 @@ file is the only source of truth for *what models a provider offers*.
 
 Key properties:
 
-- **Per-provider record**: `display_name`, `aliases[]`,
+- **Per-provider record**: `display_name`, `is_custom`, `aliases[]`,
   `auth{type,env_var(s),header}` (`x-api-key` for Anthropic, Bearer
   otherwise), `endpoint{base_url,models_path,trust_local}`,
   `refresh{mode: api|none, membership: replace|curated, timeout_s}`,
-  `default_model`, and a human-curated `models[]` initial list (model ids
-  keep their historical shapes — bare for MiniMax, `@provider:`-prefixed
-  for the rest). For `refresh.mode=none` providers it is the only source;
+  `default_model`, and a human-curated `models[]` initial list. The model
+  ids are stored in the `@provider:model` form the picker uses; the few
+  providers that keep bare ids (gemini, minimax, openrouter — e.g.
+  `MiniMax-M2.7`, `openai/gpt-5.4-mini`) get the `@provider:` prefix
+  applied when the picker is assembled, so every id the user sees is
+  `@provider:model`. For `refresh.mode=none` providers it is the only source;
   for `refresh.mode=api` providers it is only the first-boot seed — once
   a live query succeeds, the API result fully replaces it.
+- **Custom endpoints**: `is_custom` (default `false`) marks a provider
+  whose endpoint is the user's own OpenAI-compatible server rather than a
+  vendor API — `ollama` and `lmstudio` in the shipped catalog. Such a
+  provider needs no API key, and the `base_url` the user configured for it
+  survives a change of the default model (switching to a vendor provider
+  still clears it). The flag is data, not a hardcoded slug list:
+  `model_catalog.is_custom_provider()`.
 - **Single deterministic merge** (`resolve_provider_models`): explicit
   `providers.<id>.models` in config.yaml always wins and is never
   queried. For `membership=replace` a successful live query is the
@@ -192,6 +203,41 @@ Key properties:
   existing ids preserved with `--map-labels`). It prints a JSON fragment
   for manual review and never writes the catalog itself; it is not part
   of CI.
+
+---
+
+## Model identity (`@provider:model`)
+
+Every model the WebUI shows is identified as `@provider:model`. The
+provider half is split at the **first** colon, so gateway namespaces
+(`@openrouter:anthropic/claude-opus-4.6`) and Ollama tags
+(`@ollama1:qwen3-vl:235b`) survive intact.
+
+- **Storage**: the identity lives in the WebUI-owned `model__webui`
+  column of `state.db`. The SDK-owned `model` column keeps only the bare
+  model id — the SDK never sees the `@provider:` prefix.
+- **Only routable form**: a bare id, a namespaced `provider/model` value
+  or `unknown` has no provider hint and cannot be routed, so it is
+  rejected (`Session._is_valid_model_identity`) instead of falling through
+  to config.yaml's default endpoint. The retired `@custom:<name>:model`
+  form is rejected too — a named custom provider is identified by its
+  name slug (`@ollama1:model`).
+- **Named custom providers**: the WebUI slug (lower-cased name, spaces
+  collapsed to dashes, `@ : /` replaced) is the storage and display form.
+  The id handed to the SDK is the SDK's own `custom:<slug>`
+  (`config.sdk_custom_provider_id`) — the SDK branches on that prefix for
+  `extra_body` and to bypass built-in shadowing, and accepts only its own
+  alias set.
+- **Custom endpoints** come in two flavours. A *named* provider declared in
+  config.yaml (`custom_providers:`) is identified by its name slug and the
+  SDK receives `custom:<slug>`. A *catalog* custom endpoint (`is_custom`:
+  `ollama`, `lmstudio`, plus the synthetic `local` slug) keeps its catalog
+  slug — the SDK knows those names — needs no API key, and keeps the
+  `base_url` the user configured for it when the default model changes.
+- **Cold start**: the chat-start path waits (bounded by
+  `HERMES_WEBUI_COLD_START_WAIT_S`) for the boot catalog build before
+  refusing a turn, so the first message after a cold start is not rejected
+  with "Session model is invalid".
 
 ---
 

@@ -101,13 +101,61 @@ def test_named_custom_provider_accepts_slug_and_name(custom_providers):
 # ── resolve_model_provider ─────────────────────────────────────────────────
 
 
+def test_sdk_custom_provider_id_matches_sdk_slug():
+    """The SDK id for a named provider is ``custom:<normalized name>``."""
+    assert config.sdk_custom_provider_id("Ollama1") == "custom:ollama1"
+    assert config.sdk_custom_provider_id("My Key") == "custom:my-key"
+    # The SDK keeps "/" and ":" in its slug — only the WebUI slug sanitizes
+    # them away, because they would make the @provider:model identity
+    # ambiguous.
+    assert config.sdk_custom_provider_id("My/Provider") == "custom:my/provider"
+    assert config.custom_provider_slug("My/Provider") == "my-provider"
+
+
+def test_sdk_custom_provider_id_honours_provider_key():
+    """A configured ``provider_key`` is the durable identity, not the name."""
+    assert config.sdk_custom_provider_id("Renamed Later", "my-key") == "custom:my-key"
+
+
+def test_webui_slug_stays_the_storage_and_display_form(custom_providers):
+    """Storage, display and the picker keep using the WebUI-side slug."""
+    assert config.custom_provider_slug("Ollama1") == "ollama1"
+    assert config.named_custom_provider("ollama1")["name"] == "Ollama1"
+    # The WebUI slug is what the ``@provider:model`` identity is built from.
+    assert config.named_custom_provider("custom:ollama1") is None
+
+
+def test_is_user_defined_provider_accepts_both_spellings(custom_providers):
+    assert config.is_user_defined_provider("ollama1") is True
+    assert config.is_user_defined_provider("Ollama1") is True
+    assert config.is_user_defined_provider("custom:ollama1") is True
+    assert config.is_user_defined_provider("anthropic") is False
+    assert config.is_user_defined_provider("") is False
+
+
+def test_is_user_defined_provider_covers_catalog_custom_endpoints():
+    """The catalog's ``is_custom`` flag marks user-side endpoints.
+
+    A user-defined provider is the user's own server, not a vendor API:
+    it needs no API key and keeps its configured base_url.
+    """
+    assert config.is_user_defined_provider("ollama") is True
+    assert config.is_user_defined_provider("lmstudio") is True
+    assert config.is_user_defined_provider("local") is True
+    # Vendor providers stay vendor providers.
+    assert config.is_user_defined_provider("anthropic") is False
+    assert config.is_user_defined_provider("deepseek") is False
+    assert config.is_user_defined_provider("no-such-provider") is False
+
+
 def test_named_custom_slug_resolves_with_base_url(custom_providers):
+    """A named custom provider resolves to the SDK's ``custom:<slug>`` id."""
     model, provider, base_url = config.resolve_model_provider(
         "@ollama1:qwen3-vl:235b"
     )
     assert (model, provider, base_url) == (
         "qwen3-vl:235b",
-        "ollama1",
+        "custom:ollama1",
         "http://ollama1.local:11434/v1",
     )
 
@@ -118,7 +166,7 @@ def test_named_custom_provider_name_with_space_resolves(custom_providers):
     )
     assert (model, provider, base_url) == (
         "private-llm",
-        "my-key",
+        "custom:my-key",
         "http://my-key.local:8000/v1",
     )
 
@@ -375,7 +423,7 @@ def test_cron_split_routes_custom_identity(custom_providers):
     )
     assert (model, provider, base_url) == (
         "qwen3-vl:235b",
-        "ollama1",
+        "custom:ollama1",
         "http://ollama1.local:11434/v1",
     )
 

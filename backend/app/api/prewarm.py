@@ -31,6 +31,7 @@ _MCP_DONE = threading.Event()
 _TOOL_DEFS_DONE = threading.Event()
 _TOOL_DEFS_LOCK = threading.Lock()
 _TOOL_DEFS_RAN = False  # single-flight flag for warm_tool_definitions
+_MODELS_DONE = threading.Event()
 
 # Set by server.main() once the socket is listening AND the post-bind init
 # (state.db validation, session displays, sync prewarm imports) has finished.
@@ -59,6 +60,25 @@ def begin_prewarm() -> None:
 def mark_mcp_done() -> None:
     """Signal that the startup MCP discovery prewarm finished (success or failure)."""
     _MCP_DONE.set()
+
+
+def mark_models_done() -> None:
+    """Signal that the startup model-catalog prewarm finished (success or failure)."""
+    _MODELS_DONE.set()
+
+
+def wait_for_models(timeout: float) -> bool:
+    """Block until the startup model-catalog prewarm finishes (issue #55).
+
+    The chat-start path needs a routable ``@provider:model`` identity, and the
+    catalog is built by the startup prewarm — a chat sent during boot used to
+    race that build and be refused with 400 "Session model is invalid".  The
+    wait is bounded by *timeout*; returns True when the prewarm finished (or
+    was never active, as in tests and embedders).
+    """
+    if not PREWARM_ACTIVE or _MODELS_DONE.is_set():
+        return True
+    return _MODELS_DONE.wait(timeout)
 
 
 def wait_for_mcp_discovery(timeout: float) -> bool:
