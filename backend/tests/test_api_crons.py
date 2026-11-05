@@ -4,6 +4,7 @@ memory API, session/workspace input validation.
 """
 import json, uuid, urllib.request, urllib.error
 
+from tests._pytest_port import TEST_ROUTABLE_MODEL
 from tests._test_helpers import get, post, make_session_tracked
 
 
@@ -137,7 +138,9 @@ def test_session_update_rejects_workspace_outside_trusted_root(tmp_path):
 
 
 def test_chat_start_rejects_workspace_outside_trusted_root(tmp_path):
-    d, _ = post("/api/session/new", {})
+    # An explicit routable identity (issue #55) keeps the session valid even
+    # on a cold catalog, so the rejection below is the workspace one.
+    d, _ = post("/api/session/new", {"model": TEST_ROUTABLE_MODEL})
     sid = d["session"]["session_id"]
     outside = tmp_path / "outside-chat"
     outside.mkdir(parents=True, exist_ok=True)
@@ -170,7 +173,10 @@ def test_workspace_add_rejects_system_paths():
 
 def test_legacy_chat_rejects_workspace_outside_trusted_root(tmp_path):
     """Legacy /api/chat must use the same trusted workspace validation as /api/chat/start."""
-    d, _ = post("/api/session/new", {})
+    # The legacy handler checks the model identity before the workspace, so
+    # the session needs a routable identity (issue #55) for the test to
+    # reach the workspace check.
+    d, _ = post("/api/session/new", {"model": TEST_ROUTABLE_MODEL})
     sid = d["session"]["session_id"]
     outside = tmp_path / "outside-legacy-chat"
     outside.mkdir(parents=True, exist_ok=True)

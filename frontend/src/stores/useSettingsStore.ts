@@ -16,7 +16,9 @@ interface SettingsState {
 }
 
 const defaultSettings: Settings = {
-  model: 'anthropic/claude-sonnet-4-5',
+  // Empty until loadSettings() returns config.yaml's value; never invent a
+  // model identity the backend cannot route (issue #55).
+  model: '',
   send_key: 'enter',
   theme: 'dark',
   language: 'en',

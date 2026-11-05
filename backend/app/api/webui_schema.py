@@ -20,6 +20,10 @@ class IncompatibleSchemaError(Exception):
 # means the database is from an incompatible older version and must be recreated.
 
 WEBUI_EXPECTED_COLUMNS: dict[str, str] = {
+    # WebUI-owned model identity (@provider:model).  The SDK owns the bare
+    # ``model`` column and overwrites it with agent.model after a turn, so the
+    # prefixed identity the user picked must live in its own column.
+    "model__webui":                         "TEXT",
     "personality__webui":                   "TEXT",
     "reasoning_effort__webui":              "TEXT",
     "service_tier__webui":                  "TEXT",

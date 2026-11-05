@@ -1,9 +1,10 @@
 {
   "schema_version": 1,
-  "_readme": "models = the provider's INITIAL model list, not a permanent fallback. For refresh.mode=none providers (no verified endpoint — OAuth portals such as copilot/nous/openai-codex) it is the only source and is shown as-is. For refresh.mode=api providers it seeds the first catalog build; once a live GET /models succeeds, the live list fully replaces it (the baseline only donates display labels for ids the API still lists; membership=curated keeps the baseline shortlist instead) and subsequent live failures show the last successful live list instead. Do not rename this field to fallback_models — the name 'models' is intentional.",
+  "_readme": "models = the provider's INITIAL model list, not a permanent fallback. For refresh.mode=none providers (no verified endpoint — OAuth portals such as copilot/nous/openai-codex) it is the only source and is shown as-is. For refresh.mode=api providers it seeds the first catalog build; once a live GET /models succeeds, the live list fully replaces it (the baseline only donates display labels for ids the API still lists; membership=curated keeps the baseline shortlist instead) and subsequent live failures show the last successful live list instead. Do not rename this field to fallback_models — the name 'models' is intentional. is_custom = the endpoint is the user's own server rather than a vendor API (default false; true for ollama/lmstudio): such a provider needs no API key and keeps the base_url the user configured, so switching the default model to it must not drop that base_url.",
   "providers": {
     "anthropic": {
       "display_name": "Anthropic",
+      "is_custom": false,
       "aliases": ["claude", "claude-code"],
       "auth": {"type": "api_key", "env_var": "ANTHROPIC_API_KEY", "header": "x-api-key"},
       "endpoint": {"base_url": "https://api.anthropic.com/v1", "models_path": "/models"},
@@ -18,6 +19,7 @@
     },
     "openai": {
       "display_name": "OpenAI",
+      "is_custom": false,
       "auth": {"type": "api_key", "env_var": "OPENAI_API_KEY"},
       "endpoint": {"base_url": "https://api.openai.com/v1", "models_path": "/models"},
       "refresh": {"mode": "api", "membership": "replace"},
@@ -31,6 +33,7 @@
     },
     "openai-codex": {
       "display_name": "OpenAI Codex",
+      "is_custom": false,
       "auth": {"type": "oauth"},
       "refresh": {"mode": "none"},
       "models": [
@@ -47,6 +50,7 @@
     },
     "google": {
       "display_name": "Google",
+      "is_custom": false,
       "auth": {"type": "api_key", "env_var": "GOOGLE_API_KEY"},
       "endpoint": {"base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "models_path": "/models"},
       "refresh": {"mode": "api", "membership": "replace"},
@@ -60,6 +64,7 @@
     },
     "gemini": {
       "display_name": "Gemini",
+      "is_custom": false,
       "aliases": ["google-gemini", "google-ai-studio", "google"],
       "auth": {"type": "api_key", "env_var": "GEMINI_API_KEY"},
       "endpoint": {"base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "models_path": "/models"},
@@ -74,6 +79,7 @@
     },
     "deepseek": {
       "display_name": "DeepSeek",
+      "is_custom": false,
       "aliases": ["deep-seek"],
       "auth": {"type": "api_key", "env_var": "DEEPSEEK_API_KEY"},
       "endpoint": {"base_url": "https://api.deepseek.com/v1", "models_path": "/models"},
@@ -88,6 +94,7 @@
     },
     "nous": {
       "display_name": "Nous Portal",
+      "is_custom": false,
       "auth": {"type": "oauth"},
       "refresh": {"mode": "none"},
       "models": [
@@ -99,6 +106,7 @@
     },
     "zai": {
       "display_name": "Z.AI / GLM",
+      "is_custom": false,
       "aliases": ["glm", "z-ai", "z.ai", "zhipu"],
       "auth": {"type": "api_key", "env_var": "GLM_API_KEY"},
       "endpoint": {"base_url": "https://api.z.ai/api/paas/v4", "models_path": "/models"},
@@ -114,6 +122,7 @@
     },
     "kimi-coding": {
       "display_name": "Kimi / Moonshot",
+      "is_custom": false,
       "aliases": ["kimi", "moonshot"],
       "auth": {"type": "api_key", "env_var": "KIMI_API_KEY"},
       "endpoint": {"base_url": "https://api.moonshot.cn/v1", "models_path": "/models"},
@@ -128,6 +137,7 @@
     },
     "xiaomi": {
       "display_name": "Xiaomi MiMo",
+      "is_custom": false,
       "aliases": ["mimo", "xiaomi-mimo"],
       "auth": {"type": "api_key", "env_var": "XIAOMI_API_KEY"},
       "endpoint": {"base_url": "https://api.xiaomimimo.com/v1", "base_url_env": "XIAOMI_BASE_URL", "models_path": "/models"},
@@ -141,6 +151,7 @@
     },
     "xiaomi-token-plan": {
       "display_name": "Xiaomi MiMo (Token Plan)",
+      "is_custom": false,
       "aliases": ["mimo-token-plan"],
       "auth": {"type": "api_key", "env_var": "XIAOMI_TOKEN_PLAN_API_KEY"},
       "endpoint": {"base_url": "https://token-plan-cn.xiaomimimo.com/v1", "models_path": "/models"},
@@ -155,6 +166,7 @@
     },
     "minimax": {
       "display_name": "MiniMax",
+      "is_custom": false,
       "auth": {"type": "api_key", "env_vars": ["MINIMAX_API_KEY", "MINIMAX_CN_API_KEY"]},
       "endpoint": {"base_url": "https://api.minimax.chat/v1", "models_path": "/models"},
       "refresh": {"mode": "api", "membership": "replace"},
@@ -168,6 +180,7 @@
     },
     "copilot": {
       "display_name": "GitHub Copilot",
+      "is_custom": false,
       "aliases": ["github", "github-copilot", "github-models", "github-model"],
       "auth": {"type": "oauth"},
       "refresh": {"mode": "none"},
@@ -184,6 +197,7 @@
     },
     "opencode-zen": {
       "display_name": "OpenCode Zen",
+      "is_custom": false,
       "aliases": ["opencode"],
       "auth": {"type": "api_key", "env_var": "OPENCODE_ZEN_API_KEY"},
       "endpoint": {"base_url": "https://opencode.ai/zen/v1", "models_path": "/models"},
@@ -228,6 +242,7 @@
     },
     "opencode-go": {
       "display_name": "OpenCode Go",
+      "is_custom": false,
       "auth": {"type": "api_key", "env_var": "OPENCODE_GO_API_KEY"},
       "endpoint": {"base_url": "https://opencode.ai/zen/go/v1", "models_path": "/models"},
       "refresh": {"mode": "api", "membership": "replace"},
@@ -243,6 +258,7 @@
     },
     "mistralai": {
       "display_name": "Mistral",
+      "is_custom": false,
       "auth": {"type": "api_key", "env_var": "MISTRAL_API_KEY"},
       "endpoint": {"base_url": "https://api.mistral.ai/v1", "models_path": "/models"},
       "refresh": {"mode": "api", "membership": "replace"},
@@ -253,6 +269,7 @@
     },
     "qwen": {
       "display_name": "Qwen",
+      "is_custom": false,
       "aliases": ["aliyun", "dashscope", "alibaba-cloud", "alibaba"],
       "auth": {"type": "api_key", "env_vars": ["DASHSCOPE_API_KEY"]},
       "endpoint": {"base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "models_path": "/models"},
@@ -264,6 +281,7 @@
     },
     "x-ai": {
       "display_name": "xAI",
+      "is_custom": false,
       "aliases": ["grok", "x.ai", "xai"],
       "auth": {"type": "api_key", "env_var": "XAI_API_KEY"},
       "endpoint": {"base_url": "https://api.x.ai/v1", "models_path": "/models"},
@@ -274,6 +292,7 @@
     },
     "ark": {
       "display_name": "Volcano Ark",
+      "is_custom": false,
       "aliases": ["volcano", "volc", "volcano-ark", "doubao"],
       "auth": {"type": "api_key", "env_var": "ARK_API_KEY"},
       "endpoint": {"base_url": "https://ark.cn-beijing.volces.com/api/v3", "models_path": "/models"},
@@ -282,6 +301,7 @@
     },
     "openrouter": {
       "display_name": "OpenRouter",
+      "is_custom": false,
       "auth": {"type": "api_key", "env_var": "OPENROUTER_API_KEY"},
       "endpoint": {"base_url": "https://openrouter.ai/api/v1", "models_path": "/models"},
       "refresh": {"mode": "api", "membership": "curated", "timeout_s": 10},
@@ -305,6 +325,7 @@
     },
     "ollama": {
       "display_name": "Ollama",
+      "is_custom": true,
       "auth": {"type": "none"},
       "endpoint": {"base_url": "http://localhost:11434/v1", "models_path": "/models", "trust_local": true},
       "refresh": {"mode": "api", "membership": "replace"},
@@ -312,6 +333,7 @@
     },
     "lmstudio": {
       "display_name": "LM Studio",
+      "is_custom": true,
       "auth": {"type": "none"},
       "endpoint": {"base_url": "http://localhost:1234/v1", "models_path": "/models", "trust_local": true},
       "refresh": {"mode": "api", "membership": "replace"},
@@ -319,6 +341,7 @@
     },
     "ollama-cloud": {
       "display_name": "Ollama Cloud",
+      "is_custom": false,
       "auth": {"type": "api_key", "env_var": "OLLAMA_API_KEY"},
       "endpoint": {"base_url": "https://ollama.com/v1", "models_path": "/models"},
       "refresh": {"mode": "api", "membership": "replace"},
@@ -326,12 +349,14 @@
     },
     "meta-llama": {
       "display_name": "Meta Llama",
+      "is_custom": false,
       "auth": {"type": "none"},
       "refresh": {"mode": "none"},
       "models": []
     },
     "huggingface": {
       "display_name": "HuggingFace",
+      "is_custom": false,
       "auth": {"type": "api_key", "env_var": "HF_TOKEN"},
       "endpoint": {"base_url": "https://router.huggingface.co/v1", "models_path": "/models"},
       "refresh": {"mode": "api", "membership": "replace"},
@@ -339,6 +364,7 @@
     },
     "tencent-tokenhub": {
       "display_name": "Tencent TokenHub",
+      "is_custom": false,
       "aliases": ["tencent", "tokenhub", "tencent-cloud", "tencentmaas"],
       "auth": {"type": "api_key", "env_var": "TOKENHUB_API_KEY"},
       "endpoint": {"base_url": "https://tokenhub.tencentmaas.com/v1", "models_path": "/models"},

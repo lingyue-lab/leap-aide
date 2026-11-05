@@ -31,6 +31,7 @@ import Tooltip from '@/components/common/Tooltip';
 import { Icon } from '@/components/common/Icons';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import ChatComposer from '@/components/chat/ChatComposer';
+import { useChatStore } from '@/stores/useChatStore';
 import { useChatStream } from '@/hooks/useChatStream';
 import { gateProviders } from '@/utils/providersGate';
 
@@ -58,6 +59,11 @@ function WelcomeState() {
   const { t } = useTranslation(['common', 'chat']);
   const { currentSession, pendingNewSession, pendingNewSessionPromoting, enterPendingNewSession } = useSessionStore();
   const { startStream } = useChatStream();
+  // The welcome state has no message list, so a failed first send had
+  // nowhere to show up: the chat store collected the error as an assistant
+  // message that nobody rendered and the user saw the input cleared and
+  // nothing else.  Surface it as a banner instead (issue #55 follow-up).
+  const lastError = useChatStore((s) => s.lastError);
 
   // Ensure a placeholder Session exists while welcome state is rendered.
   // NonTerminalContent routes here when EITHER `pendingNewSession` is set OR
@@ -132,8 +138,9 @@ function WelcomeState() {
     //      points at an unconfigured provider — e.g. user only has
     //      DeepSeek but default_model is anthropic/claude-opus-4.6 — and
     //      the backend would 401 mid-stream.
-    //   3. hard-coded fallback
-    const model = welcomeModelId ?? firstAvailableModelId ?? 'anthropic/claude-sonnet-4-5';
+    //   3. empty string — lets the backend resolve its own default model
+    //      instead of inventing one the user has no provider for (issue #55)
+    const model = welcomeModelId ?? firstAvailableModelId ?? '';
     await startStream(placeholderSid, text, model, currentSession?.workspace, attachments, mode);
   }, [pendingNewSession, currentSession, startStream, firstAvailableModelId, welcomeModelId]);
 
@@ -161,6 +168,17 @@ function WelcomeState() {
               size={36}
               text={t('welcome.creating', { ns: 'chat' }) || t('loading')}
             />
+          </div>
+        )}
+        {/* Failed first send — M3 error supporting text: body-small, error
+            color, icon + text so color is not the only signal, announced to
+            assistive tech as an alert. */}
+        {lastError && (
+          <div className="welcome-state__error" role="alert">
+            <Icon name="warning" size={18} />
+            <span>
+              {t('welcome.sendFailed', { ns: 'chat' })} {lastError}
+            </span>
           </div>
         )}
         <ChatComposer

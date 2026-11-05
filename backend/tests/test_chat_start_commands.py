@@ -20,7 +20,7 @@ import json
 import urllib.error
 import urllib.request
 
-from tests._pytest_port import BASE, TEST_DEFAULT_MODEL
+from tests._pytest_port import BASE, TEST_ROUTABLE_MODEL
 
 
 def _post(url: str, payload: dict) -> dict:
@@ -40,8 +40,14 @@ def _post_soft(url: str, payload: dict) -> dict:
 
 
 def _create_session() -> str:
-    """Create a fresh session via /api/session/new and return its id."""
-    result = _post(f"{BASE}/api/session/new", {})
+    """Create a fresh session via /api/session/new and return its id.
+
+    The session is created with an explicit routable identity (issue #55):
+    without one the backend picks a model from the catalog, and on a cold
+    catalog that pick is a bare/namespaced id which /api/chat/start then
+    rejects with "Session model is invalid".
+    """
+    result = _post(f"{BASE}/api/session/new", {"model": TEST_ROUTABLE_MODEL})
     return result["session"]["session_id"]
 
 
@@ -56,7 +62,7 @@ class TestChatDispatchDirectResponse:
         payload = {
             "session_id": sid,
             "message": "/help",
-            "model": TEST_DEFAULT_MODEL,
+            "model": TEST_ROUTABLE_MODEL,
         }
         result = _post(f"{BASE}/api/chat/dispatch", payload)
         assert result.get("action") == "direct", (
@@ -71,7 +77,7 @@ class TestChatDispatchDirectResponse:
         """Help output mentions built-in commands."""
         sid = _create_session()
         cleanup_test_sessions.append(sid)
-        payload = {"session_id": sid, "message": "/help", "model": TEST_DEFAULT_MODEL}
+        payload = {"session_id": sid, "message": "/help", "model": TEST_ROUTABLE_MODEL}
         result = _post(f"{BASE}/api/chat/dispatch", payload)
         assert result.get("action") == "direct"
         content = result.get("content", "")
@@ -83,8 +89,8 @@ class TestChatDispatchDirectResponse:
         cleanup_test_sessions.append(sid)
         payload = {
             "session_id": sid,
-            "message": f"/model {TEST_DEFAULT_MODEL}",
-            "model": TEST_DEFAULT_MODEL,
+            "message": f"/model {TEST_ROUTABLE_MODEL}",
+            "model": TEST_ROUTABLE_MODEL,
         }
         result = _post(f"{BASE}/api/chat/dispatch", payload)
         assert result.get("action") == "direct", f"Expected action=direct, got: {result}"
@@ -97,9 +103,9 @@ class TestChatDispatchDirectResponse:
         cleanup_test_sessions.append(sid)
         # Populate history with a regular message first
         _post_soft(f"{BASE}/api/chat/dispatch", {
-            "session_id": sid, "message": "Hello", "model": TEST_DEFAULT_MODEL,
+            "session_id": sid, "message": "Hello", "model": TEST_ROUTABLE_MODEL,
         })
-        payload = {"session_id": sid, "message": "/clear", "model": TEST_DEFAULT_MODEL}
+        payload = {"session_id": sid, "message": "/clear", "model": TEST_ROUTABLE_MODEL}
         result = _post(f"{BASE}/api/chat/dispatch", payload)
         assert result.get("action") == "direct"
         update = result.get("session_update", {})
@@ -112,7 +118,7 @@ class TestChatDispatchDirectResponse:
         payload = {
             "session_id": sid,
             "message": "/new Test Session",
-            "model": TEST_DEFAULT_MODEL,
+            "model": TEST_ROUTABLE_MODEL,
         }
         result = _post(f"{BASE}/api/chat/dispatch", payload)
         assert result.get("action") == "direct"
@@ -135,7 +141,7 @@ class TestChatDispatchSkillCommand:
         payload = {
             "session_id": sid,
             "message": "/nonexistent-skill-xyz",
-            "model": TEST_DEFAULT_MODEL,
+            "model": TEST_ROUTABLE_MODEL,
         }
         result = _post(f"{BASE}/api/chat/dispatch", payload)
         assert result.get("action") == "proceed", (
@@ -150,7 +156,7 @@ class TestChatDispatchSkillCommand:
         payload = {
             "session_id": sid,
             "message": "/simplify-code test.py",
-            "model": TEST_DEFAULT_MODEL,
+            "model": TEST_ROUTABLE_MODEL,
         }
         result = _post_soft(f"{BASE}/api/chat/dispatch", payload)
         # Either action=direct (skill error/missing) or action=proceed (skill OK)
@@ -169,7 +175,7 @@ class TestChatDispatchPassthrough:
         payload = {
             "session_id": sid,
             "message": "Hello, how are you?",
-            "model": TEST_DEFAULT_MODEL,
+            "model": TEST_ROUTABLE_MODEL,
         }
         result = _post(f"{BASE}/api/chat/dispatch", payload)
         assert result.get("action") == "proceed", (
@@ -184,7 +190,7 @@ class TestChatDispatchPassthrough:
         payload = {
             "session_id": sid,
             "message": "/arbitrary-text-12345",
-            "model": TEST_DEFAULT_MODEL,
+            "model": TEST_ROUTABLE_MODEL,
         }
         result = _post(f"{BASE}/api/chat/dispatch", payload)
         assert result.get("action") == "proceed", (
@@ -203,7 +209,7 @@ class TestChatStartStreamContract:
         payload = {
             "session_id": sid,
             "message": "ping",
-            "model": TEST_DEFAULT_MODEL,
+            "model": TEST_ROUTABLE_MODEL,
         }
         result = _post(f"{BASE}/api/chat/start", payload)
         assert "stream_id" in result, (
@@ -226,7 +232,7 @@ class TestChatStartStreamContract:
         payload = {
             "session_id": sid,
             "message": "/help",  # would historically return {direct: true}
-            "model": TEST_DEFAULT_MODEL,
+            "model": TEST_ROUTABLE_MODEL,
         }
         try:
             result = _post(f"{BASE}/api/chat/start", payload)

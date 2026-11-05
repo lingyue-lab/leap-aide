@@ -153,8 +153,13 @@ def test_prefixed_google_session_model_normalizes_to_active_provider_default(mon
     assert effective == "gpt-5.4-mini"
 
 
-def test_legacy_at_provider_session_model_normalizes_when_provider_hidden(monkeypatch):
-    """Old @provider:model session values must not bypass stale-model recovery."""
+def test_legacy_at_provider_session_model_is_preserved(monkeypatch):
+    """A stored @provider:model identity is authoritative (issue #55).
+
+    It is not rewritten to the active provider's default even when its
+    provider is currently absent from the live catalog — a picker list is
+    not a validity oracle.
+    """
     import app.api.routes as routes
 
     monkeypatch.setattr(
@@ -177,12 +182,12 @@ def test_legacy_at_provider_session_model_normalizes_when_provider_hidden(monkey
         "@copilot:gpt-5.5"
     )
 
-    assert changed is True
-    assert effective == "gpt-5.5"
+    assert changed is False
+    assert effective == "@copilot:gpt-5.5"
 
 
-def test_active_at_provider_session_model_strips_redundant_hint(monkeypatch):
-    """@active-provider:model is an old persisted form; use the bare model now."""
+def test_active_at_provider_session_model_keeps_identity(monkeypatch):
+    """@active-provider:model keeps its hint — never down-converted to bare."""
     import app.api.routes as routes
 
     monkeypatch.setattr(
@@ -205,8 +210,8 @@ def test_active_at_provider_session_model_strips_redundant_hint(monkeypatch):
         "@openai-codex:gpt-5.4-mini"
     )
 
-    assert changed is True
-    assert effective == "gpt-5.4-mini"
+    assert changed is False
+    assert effective == "@openai-codex:gpt-5.4-mini"
 
 
 def test_routable_non_active_at_provider_session_model_is_preserved(monkeypatch):
@@ -242,8 +247,12 @@ def test_routable_non_active_at_provider_session_model_is_preserved(monkeypatch)
     assert effective == "@copilot:gpt-5.4"
 
 
-def test_stale_at_provider_model_falls_back_when_family_mismatches(monkeypatch):
-    """Unroutable @provider:model should not invent a bare model for another family."""
+def test_stale_at_provider_model_keeps_identity(monkeypatch):
+    """An @provider:model identity is never silently rerouted (issue #55).
+
+    If the provider is genuinely gone, the error must surface at inference
+    time instead of the session switching models behind the user's back.
+    """
     import app.api.routes as routes
 
     monkeypatch.setattr(
@@ -266,8 +275,8 @@ def test_stale_at_provider_model_falls_back_when_family_mismatches(monkeypatch):
         "@copilot:claude-opus-4.6"
     )
 
-    assert changed is True
-    assert effective == "gpt-5.5"
+    assert changed is False
+    assert effective == "@copilot:claude-opus-4.6"
 
 
 def test_google_active_provider_keeps_valid_gemini_session_model(monkeypatch):
@@ -466,7 +475,7 @@ def test_stale_openai_model_cleared_for_custom_only_provider(monkeypatch):
             "active_provider": "custom",
             "default_model": "",
             "groups": [
-                {"provider": "Agent37", "provider_id": "custom:agent37",
+                {"provider": "Agent37", "provider_id": "agent37",
                  "models": [{"id": "agent37/default", "label": "default"}]},
             ],
         },
@@ -498,7 +507,7 @@ def test_stale_openai_model_cleared_for_custom_provider_with_default(monkeypatch
             "active_provider": "custom",
             "default_model": "agent37/default",
             "groups": [
-                {"provider": "Agent37", "provider_id": "custom:agent37",
+                {"provider": "Agent37", "provider_id": "agent37",
                  "models": [{"id": "agent37/default", "label": "default"}]},
             ],
         },
@@ -550,7 +559,7 @@ def test_custom_namespace_model_always_preserved_on_custom_provider(monkeypatch)
             "active_provider": "custom",
             "default_model": "agent37/default",
             "groups": [
-                {"provider": "Agent37", "provider_id": "custom:agent37",
+                {"provider": "Agent37", "provider_id": "agent37",
                  "models": [{"id": "agent37/default", "label": "default"}]},
             ],
         },

@@ -56,6 +56,12 @@ _DEFAULT_DNS_TIMEOUT_S = float(os.getenv("HERMES_WEBUI_CATALOG_DNS_TIMEOUT_S", "
 # (local model services declared by the user).
 _KNOWN_LOCAL_HOST_MARKERS = ("ollama", "localhost", "127.0.0.1", "lmstudio", "lm-studio")
 
+# Synthetic custom slugs: the WebUI infers them for a user-side endpoint
+# that no catalog record covers (a private/loopback base_url that is
+# neither ollama nor lmstudio).  They behave like the catalog's
+# ``is_custom`` providers: no API key, the user's base_url is kept.
+_SYNTHETIC_CUSTOM_SLUGS = frozenset({"local"})
+
 _VALID_AUTH_TYPES = ("api_key", "oauth", "none")
 _VALID_REFRESH_MODES = ("api", "none")
 _VALID_MEMBERSHIPS = ("replace", "curated")
@@ -180,6 +186,21 @@ def _validate_provider(slug: str, rec: object) -> dict | None:
             )
             sdk_provider = None
 
+    # Custom endpoint: the provider is the user's own server rather than a
+    # vendor API (ollama, lmstudio).  Such a provider needs no API key and
+    # the base_url the user configured must survive a change of the default
+    # model — the catalog is the single source of truth for that flag.
+    # A wrong type is a catalog authoring mistake: warn and treat the
+    # provider as a normal one instead of dropping the whole record.
+    is_custom = rec.get("is_custom", False)
+    if not isinstance(is_custom, bool):
+        logger.warning(
+            "model_catalog: provider %r has invalid is_custom %r; treated as false",
+            slug,
+            is_custom,
+        )
+        is_custom = False
+
     raw_models = rec.get("models") or []
     if not isinstance(raw_models, list):
         logger.warning("model_catalog: provider %r models must be a list; skipped", slug)
@@ -196,6 +217,7 @@ def _validate_provider(slug: str, rec: object) -> dict | None:
 
     out = {
         "display_name": display_name.strip(),
+        "is_custom": is_custom,
         "aliases": [str(a) for a in (rec.get("aliases") or []) if str(a).strip()],
         "auth": {
             "type": auth_type,
@@ -335,6 +357,21 @@ def provider_display(slug: str) -> str:
     if rec is not None:
         return rec["display_name"]
     return str(slug).title()
+
+
+def is_custom_provider(slug: str) -> bool:
+    """Return True when *slug* is a user-side custom endpoint.
+
+    Custom providers (ollama, lmstudio) are the user's own OpenAI-compatible
+    server, not a vendor API: they need no API key, and the ``base_url`` the
+    user configured for them must survive a change of the default model.
+    The flag lives in the catalog JSON so the answer is data, not a
+    hardcoded slug list.
+    """
+    rec = get_provider_record(slug)
+    if rec is None:
+        return str(slug or "").strip().lower() in _SYNTHETIC_CUSTOM_SLUGS
+    return bool(rec.get("is_custom"))
 
 
 def provider_baseline_models(slug: str) -> list[dict]:

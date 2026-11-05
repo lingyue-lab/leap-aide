@@ -45,6 +45,13 @@ interface ChatComposerProps {
   onModelChange?: (modelId: string) => void;
 }
 
+/** Model part of an `@provider:model` id (or the id itself). */
+function bareModelId(id: string): string {
+  return id.startsWith('@') && id.includes(':')
+    ? id.slice(1).split(':').slice(1).join(':')
+    : id;
+}
+
 export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibleProp, className, placeholderText, defaultModelId, onModelChange }: ChatComposerProps) {
   const busy = useIsBusy();
   const { t } = useTranslation('chat');
@@ -60,6 +67,7 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
   // Shared model catalog (issue #16): all components read the same store —
   // concurrent mounts share one request and the TTL cache.
   const modelGroups = useModelsStore((s) => s.data?.groups ?? []);
+  const activeProvider = useModelsStore((s) => s.data?.active_provider ?? '');
   const modelsLoading = useModelsStore((s) => s.status === 'loading');
   const loadModels = useModelsStore((s) => s.load);
   const cancelModelsLoad = useModelsStore((s) => s.cancel);
@@ -304,7 +312,6 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
   const sendMode = busy ? (settings?.busy_input_mode ?? 'interrupt') : undefined;
   // Allow sending while busy if mode is interrupt, queue, or steer
   const busyAllowsSend = !!(busy && sendMode && (sendMode === 'interrupt' || sendMode === 'queue' || sendMode === 'steer'));
-  const canSend = hasInput && (!busy || busyAllowsSend);
 
   // Derive last compression time: prefer persisted session field (survives page
   // refresh), fall back to scanning live messages' _compression metadata (SSE).
@@ -321,10 +328,10 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
   }, [currentSession?.last_compression_time, messages]);
 
   // Resolve displayed model: session model → settings default → 'Model'.
-  // When the resolved value is not in the loaded catalog, treat it as unset
-  // so the picker shows the placeholder instead of silently highlighting an
-  // unrelated provider (e.g. settings.model defaults to "anthropic/..." but
-  // the user only has DeepSeek configured).
+  // A session model persisted by the backend (state.db model__webui) is
+  // authoritative even when the live catalog no longer lists it: the send
+  // path uses that value, so substituting another model here would misreport
+  // which model the session actually runs (issue #55).
   const allModelIds = useMemo(() => {
     const ids = new Set<string>();
     for (const g of modelGroups) {
@@ -348,21 +355,65 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
   }, [modelGroups]);
   const sessionModel = currentSession?.model ?? '';
   const settingsModel = settings?.model ?? '';
-  const resolvedModel = sessionModel || settingsModel;
-  const effectiveModel =
-    resolvedModel && (allModelIds.size === 0 || allModelIds.has(resolvedModel))
-      ? resolvedModel
-      // Fall back to defaultModelId (welcome state) when session/settings model
-      // is empty or points at an unconfigured provider. Keeps the picker
-      // pre-selected instead of showing "Model" as the trigger label.  When
-      // defaultModelId is also unavailable or stale, fall back to the first
-      // model the catalog returns so the footer always shows something the
-      // user can actually run.
-      : (defaultModelId && allModelIds.has(defaultModelId)
-          ? defaultModelId
-          : firstCatalogModelId);
+  // settings.model is the CLI-shaped config.yaml value (usually bare or
+  // namespaced), while every catalog id is @provider:model.  Map it onto the
+  // catalog identity so the picker highlights the same model; when several
+  // providers offer the id, the active provider's group wins.
+  const settingsCatalogModel = useMemo(() => {
+    if (!settingsModel) return '';
+    if (allModelIds.has(settingsModel)) return settingsModel;
+    const bare = bareModelId(settingsModel);
+    // A namespaced config value ("anthropic/claude-opus-4.6") also matches
+    // the group whose provider id is that namespace (mirrors the backend's
+    // normalize_model_prefix).
+    const slash = settingsModel.indexOf('/');
+    const nsPrefix = slash >= 0 ? settingsModel.slice(0, slash).toLowerCase() : '';
+    const nsRest = slash >= 0 ? settingsModel.slice(slash + 1) : '';
+    const active = activeProvider.toLowerCase();
+    let fallback = '';
+    for (const g of modelGroups) {
+      for (const m of g.models) {
+        if (!m.id?.startsWith('@')) continue;
+        const modelBare = bareModelId(m.id);
+        const matches = modelBare === bare
+          || (nsPrefix && nsRest && g.provider_id?.toLowerCase() === nsPrefix && modelBare === nsRest);
+        if (!matches) continue;
+        if (active && g.provider_id?.toLowerCase() === active) return m.id;
+        if (!fallback) fallback = m.id;
+      }
+    }
+    // Cold catalog: keep the raw settings value until groups arrive.
+    return fallback || (allModelIds.size === 0 ? settingsModel : '');
+  }, [settingsModel, allModelIds, modelGroups, activeProvider]);
+  // model__webui NULL (issue #55): the session has no model identity, and the
+  // backend rejects chat start until the user picks one.  Show the
+  // placeholder instead of impersonating the session with settings/default.
+  const sessionModelInvalid = Boolean(currentSession?.model_invalid);
+  // A session with no routable model identity cannot start a chat turn
+  // (issue #55).  Block prompts until a model is picked, but keep slash
+  // commands available so /model can repair the session.
+  const isSlashCommand = input.trim().startsWith('/');
+  const modelBlocksSend = sessionModelInvalid && !isSlashCommand;
+  const canSend = hasInput && (!busy || busyAllowsSend) && !modelBlocksSend;
+  const effectiveModel = sessionModelInvalid
+    ? ''
+    : sessionModel
+      ? sessionModel
+      // No session model: fall back to settings.default when it resolves to a
+      // catalog identity (otherwise the picker would highlight an unrelated
+      // provider, e.g. settings.model defaults to "anthropic/..." while only
+      // DeepSeek is configured), then to the default/first catalog model.
+      : (settingsCatalogModel
+          || (defaultModelId && allModelIds.has(defaultModelId)
+              ? defaultModelId
+              : firstCatalogModelId));
+  // Show the bare model name: "@provider:model" keeps its full remainder
+  // (which may itself be namespaced, e.g. "@nous:anthropic/claude-opus-4.6");
+  // namespaced ids keep the historical last-segment label.
   const displayModel = effectiveModel
-    ? effectiveModel.split('/').pop() ?? effectiveModel
+    ? effectiveModel.startsWith('@') && effectiveModel.includes(':')
+      ? effectiveModel.slice(1).split(':').slice(1).join(':')
+      : effectiveModel.split('/').pop() ?? effectiveModel
     : 'Model';
 
   // User's explicit pick (overrides effectiveModel for display + onSend).
@@ -373,6 +424,19 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
   // notified via onModelChange so the selection survives the first send.
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const activeDisplayModelId = selectedModelId ?? effectiveModel;
+
+  // A model pick that the backend refused to save.  Shown under the input so
+  // the failure is visible instead of leaving the picker showing a model the
+  // session does not actually run.
+  const [modelSaveError, setModelSaveError] = useState<string | null>(null);
+
+  // A model pick belongs to the session that was active when it was made.
+  // Reset it on session switch (including placeholder → real promotion) so
+  // the trigger reflects the new session's model and model_invalid state.
+  useEffect(() => {
+    setSelectedModelId(null);
+    setModelSaveError(null);
+  }, [currentSession?.session_id]);
 
   // Invalidate + reload the shared catalog when the providers gate
   // transitions (configured toggles between true / false). Without this,
@@ -395,6 +459,7 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
     // (selectedModelId overrides effectiveModel in display), and notify the
     // parent so the choice is honored on first send in welcome state.
     setSelectedModelId(modelId);
+    setModelSaveError(null);
     onModelChange?.(modelId);
     // Persist via SDK API only when we have a real backend session.
     // Welcome-state placeholder sessions have no backend row yet — POSTing
@@ -404,10 +469,15 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
     if (!sid || sid.startsWith('new-local-')) return;
     try {
       await updateSessionModel(sid, modelId);
-    } catch {
-      // silently ignore
+    } catch (err) {
+      // The pick did not reach the backend, so the session still runs the
+      // old model.  Say so and fall back to the session's real model in the
+      // trigger — otherwise the picker claimed a model the session does
+      // not use.
+      setModelSaveError((err as Error)?.message || t('composer.modelSaveFailed'));
+      setSelectedModelId(null);
     }
-  }, [currentSession, updateSessionModel, onModelChange]);
+  }, [currentSession, updateSessionModel, onModelChange, t]);
 
   // Wrapper for the model chip's popover: gate first, then load models.
   // Lets the user see the gate dialog (with "Configure providers" CTA) when
@@ -601,7 +671,7 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
 
   return (
     <div
-      className={`composer-wrap ${className ?? ''} ${isDragOver ? 'drag-over' : ''}`.trim()}
+      className={`composer-wrap ${className ?? ''} ${isDragOver ? 'drag-over' : ''} ${sessionModelInvalid ? 'composer-wrap--model-invalid' : ''}`.trim()}
       onDrop={handleDrop}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -715,6 +785,28 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
           disabled={cardVisible}
           />
         </div>
+
+        {/* Model identity error — the backend rejects chat start for a session
+            with no routable model (issue #55).  M3 error supporting text:
+            body-small, error color, icon + text so color is not the only
+            signal, announced to assistive tech as an alert. */}
+        {sessionModelInvalid && (
+          <div className="composer-model-error" role="alert">
+            <Icon name="warning" size={18} />
+            <span>{t('composer.modelRequired')}</span>
+          </div>
+        )}
+
+        {/* The model pick was not saved — the session still runs its previous
+            model.  Same M3 error supporting text as the identity error
+            above; without it the failure was swallowed and the picker kept
+            claiming the unsaved pick. */}
+        {modelSaveError && (
+          <div className="composer-model-error" role="alert">
+            <Icon name="warning" size={18} />
+            <span>{modelSaveError}</span>
+          </div>
+        )}
 
         {/* Footer */}
         <div className="composer-footer">

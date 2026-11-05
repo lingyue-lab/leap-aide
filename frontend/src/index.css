@@ -1667,6 +1667,54 @@
     color: var(--muted);
   }
 
+  /* M3 error state for the composer's model identity (issue #55).  The
+     outline carries the error color in rest and focus states; the supporting
+     text below the input names the problem and the fix. */
+  .composer-wrap--model-invalid .composer-box {
+    border-color: var(--md-error);
+  }
+
+  .composer-wrap--model-invalid .composer-box:focus-within {
+    border-color: var(--md-error);
+    box-shadow: 0 0 0 1px var(--md-error);
+  }
+
+  /* M3 error supporting text: body-small (12/16, 0.4 tracking), error color,
+     icon + text so color is not the only signal.  Sits between the textarea
+     and the footer, 4dp above the footer. */
+  .composer-model-error {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 16px 4px;
+    color: var(--md-error);
+    font-size: 12px;
+    line-height: 16px;
+    letter-spacing: 0.4px;
+  }
+
+  .composer-model-error .icon-wrap {
+    flex-shrink: 0;
+  }
+
+  /* Welcome-state error banner — the welcome state has no message list, so a
+     failed first send is reported here (M3 error supporting text). */
+  .welcome-state__error {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 640px;
+    color: var(--md-error);
+    font-size: 12px;
+    line-height: 16px;
+    letter-spacing: 0.4px;
+    text-align: left;
+  }
+
+  .welcome-state__error .icon-wrap {
+    flex-shrink: 0;
+  }
+
   .composer-footer {
     display: flex;
     align-items: center;

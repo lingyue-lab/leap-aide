@@ -746,10 +746,14 @@ def _drain_process_notifications_for_session(session, session_id):
             # causing resolve_runtime_provider to fall back to OpenRouter.
             _drain_model = session.model
             try:
-                from app.api.routes import _resolve_compatible_session_model
                 from app.api.models import Session as _DrainSession
-                _drain_model, _ = _resolve_compatible_session_model(_drain_model)
-                _drain_model = _DrainSession._normalize_model(_drain_model)
+                _stored = str(_drain_model or '').strip()
+                if not (_stored.startswith("@") and ":" in _stored):
+                    from app.api.routes import _resolve_compatible_session_model
+                    _drain_model, _ = _resolve_compatible_session_model(_drain_model)
+                    _drain_model = _DrainSession._normalize_model(_drain_model)
+                # else: the stored @provider:model identity is authoritative
+                # (model__webui, issue #55) — never strip the provider hint.
             except Exception:
                 pass
             thr = threading.Thread(

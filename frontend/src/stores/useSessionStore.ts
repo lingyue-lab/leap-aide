@@ -1,6 +1,5 @@
 import { create } from 'zustand';
 import type { Session, SessionListItem } from '@/types';
-import { useSettingsStore } from '@/stores/useSettingsStore';
 import { useChatStore } from '@/stores/useChatStore';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 
@@ -139,12 +138,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // session_id on first send (see api/routes.py:_handle_chat_start auto-create
     // branch).  Format is arbitrary; the `new-local-` prefix only helps log triage.
     const placeholderSid = `new-local-${crypto.randomUUID()}`;
-    // Default the placeholder's model to the user's settings (loadSettings
-    // runs once at app boot, so settings?.model is reliably populated by the
-    // time any + click happens).  Fallback matches defaultSettings.model in
-    // useSettingsStore.ts.  Without this the composer footer shows no
-    // selected model in welcome state.
-    const defaultModel = useSettingsStore.getState().settings?.model;
+    // Carry over the previous session's model only when it is a routable
+    // @provider:model identity.  settings.model is a CLI-shaped config value
+    // (bare or namespaced), so it is not used here — an empty placeholder
+    // lets the composer resolve the catalog identity itself (issue #55).
+    const previousModel = state.currentSession?.model ?? '';
+    const placeholderModel =
+      previousModel.startsWith('@') && previousModel.includes(':')
+        ? previousModel
+        : '';
     // New sessions default to the built-in Default workspace — no
     // inheritance from the current session (workspace ownership lives on
     // state.db cwd; the WebUI's only default is builtin Default, issue #7).
@@ -155,7 +157,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       session_id: placeholderSid,
       title: 'Untitled',
       workspace: workspace || builtinDefaultWs || undefined,
-      model: state.currentSession?.model ?? defaultModel ?? 'anthropic/claude-sonnet-4-5',
+      model: placeholderModel,
       reasoning_effort: null,
       personality: null,
       pinned: false,
@@ -469,10 +471,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const data = await response.json().catch(() => ({}));
       throw new Error((data as { error?: string }).error || 'Failed to update session model');
     }
+    // Trust the server's normalized identity: a picker id the backend cannot
+    // route (bare id outside the catalog) comes back with model_invalid=true,
+    // so the composer must keep the error text and send gating (issue #55).
+    const data = await response.json().catch(() => ({}));
+    const updated = (data as { session?: Partial<Session> }).session;
     set((state) => ({
       currentSession:
         state.currentSession?.session_id === id
-          ? { ...state.currentSession, model }
+          ? {
+              ...state.currentSession,
+              model: typeof updated?.model === 'string' ? updated.model : model,
+              model_invalid: Boolean(updated?.model_invalid),
+            }
           : state.currentSession,
     }));
   },

@@ -44,6 +44,7 @@ from app.api.config import (
     _API_MODELS_WAIT_S,
     get_available_models,
     peek_available_models,
+    get_first_catalog_model,
     load_settings,
     IMAGE_EXTS,
     MD_EXTS,
@@ -77,6 +78,14 @@ from app.api.helpers import (
     _redact_text,
 )
 from app.api.stream_manager import stream_manager
+
+# How long the chat-start path waits for the cold model catalog to become
+# warm before refusing a turn.  The catalog is built by the boot prewarm on a
+# background worker; the first message after a cold start used to race that
+# build and fail with 400 "Session model is invalid" (issue #55).  The wait
+# only joins a build that is already running — it never pays the provider
+# discovery cost on the request thread.
+_COLD_START_WAIT_S = float(os.getenv("HERMES_WEBUI_COLD_START_WAIT_S", "5.0"))
 
 # ── CSRF: validate Origin/Referer on POST ────────────────────────────────────
 
@@ -204,42 +213,12 @@ def _normalize_provider_id(value: str | None) -> str:
     return "" 
 
 
-def _catalog_provider_id_sets(catalog: dict) -> tuple[set[str], set[str]]:
-    raw_provider_ids: set[str] = set()
-    normalized_provider_ids: set[str] = set()
-    for group in catalog.get("groups") or []:
-        raw = str(group.get("provider_id") or "").strip().lower()
-        if not raw:
-            continue
-        raw_provider_ids.add(raw)
-        normalized = _normalize_provider_id(raw)
-        if normalized:
-            normalized_provider_ids.add(normalized)
-    return raw_provider_ids, normalized_provider_ids
-
-
-def _catalog_has_provider(
-    provider_raw: str,
-    provider_normalized: str,
-    raw_provider_ids: set[str],
-    normalized_provider_ids: set[str],
-) -> bool:
-    return (
-        provider_raw in raw_provider_ids
-        or (provider_normalized and provider_normalized in raw_provider_ids)
-        or (provider_normalized and provider_normalized in normalized_provider_ids)
-    )
-
-
-def _model_matches_active_provider_family(
-    model: str,
-    active_provider: str,
-) -> bool:
-    model_lower = model.lower()
-    for bare_prefix in ("gpt", "claude", "gemini"):
-        if model_lower.startswith(bare_prefix):
-            return _normalize_provider_id(bare_prefix) == active_provider
-    return False
+def _bare_model_id(model_id: str | None) -> str:
+    """Return the model part of an ``@provider:model`` id (or the id itself)."""
+    model = str(model_id or "").strip()
+    if model.startswith("@") and ":" in model:
+        return model[1:].split(":", 1)[1].strip()
+    return model
 
 
 def _resolve_compatible_session_model(model_id: str | None) -> tuple[str, bool]:
@@ -248,8 +227,9 @@ def _resolve_compatible_session_model(model_id: str | None) -> tuple[str, bool]:
     Sessions can outlive provider changes. When an older session still points at
     a different provider namespace (for example `gemini/...` after switching the
     agent to OpenAI Codex), reusing that stale model causes chat startup to hit
-    the wrong backend and fail. Normalize only obvious cross-provider mismatches;
-    preserve bare model IDs and OpenRouter/custom setups.
+    the wrong backend and fail. Normalize only obvious cross-provider mismatches
+    for legacy bare values; an ``@provider:model`` identity is authoritative and
+    returned untouched.
 
     Uses peek_available_models() — a blocking catalog build here would delay
     the /api/chat/start HTTP response before begin_stream even runs (issue #8).
@@ -259,6 +239,13 @@ def _resolve_compatible_session_model(model_id: str | None) -> tuple[str, bool]:
     model = str(model_id or "").strip()
     if not model:
         return default_model, bool(default_model)
+
+    # @provider:model is the user's explicit identity.  It names the route
+    # itself (resolve_model_provider splits it), so no live-catalog heuristic
+    # may strip the hint or rewrite the model.  This is what keeps a stored
+    # session on its provider across turns (issue #55).
+    if model.startswith("@") and ":" in model:
+        return model, False
 
     # Cold cache: peek answered from the config-only catalog — there are no
     # groups to check routability against, so every cross-provider rewrite
@@ -277,44 +264,6 @@ def _resolve_compatible_session_model(model_id: str | None) -> tuple[str, bool]:
     # is stale relative to this unknown active provider. (#1023)
     raw_active_provider = str(catalog.get("active_provider") or "").strip().lower()
     if not active_provider and not raw_active_provider:
-        return model, False
-
-    if model.startswith("@") and ":" in model:
-        provider_hint, bare_model = model[1:].split(":", 1)
-        provider_raw = provider_hint.strip().lower()
-        provider_normalized = _normalize_provider_id(provider_raw)
-        bare_model = bare_model.strip()
-        if not provider_raw or not bare_model:
-            return model, False
-
-        raw_provider_ids, normalized_provider_ids = _catalog_provider_id_sets(catalog)
-        hint_matches_active = (
-            provider_raw == raw_active_provider
-            or provider_raw == active_provider
-            or (provider_normalized and provider_normalized == active_provider)
-        )
-        if hint_matches_active:
-            return bare_model, True
-
-        if _catalog_has_provider(
-            provider_raw,
-            provider_normalized,
-            raw_provider_ids,
-            normalized_provider_ids,
-        ):
-            return model, False
-
-        if _model_matches_active_provider_family(bare_model, active_provider):
-            return bare_model, True
-        if default_model:
-            return default_model, True
-        # If the @provider hint is not a known/normalized provider name it is
-        # likely a user-configured custom gateway (e.g. @kat_v1_anthropic_gateway:…).
-        # Preserve the original model ID so the displayed value matches the
-        # persisted session data.  If the provider is genuinely stale the error
-        # will surface at inference time.
-        if not provider_normalized:
-            return model, False
         return model, False
 
     slash = model.find("/")
@@ -367,6 +316,101 @@ def _resolve_compatible_session_model(model_id: str | None) -> tuple[str, bool]:
     return model, False
 
 
+def _resolve_chat_start_model(session, requested_model: str | None) -> tuple[str, bool, str | None]:
+    """Resolve the model for a chat turn from the session's persisted identity.
+
+    Returns ``(model, was_normalized, error)``.  ``error`` is a user-facing
+    message when the session has no WebUI model identity at all
+    (``model__webui`` is NULL): guessing a route from the SDK-owned bare
+    ``model`` column is what sent a DeepSeek session to OpenRouter (issue #55).
+
+    A stored ``@provider:model`` identity is authoritative: when the client
+    echoes it (verbatim or in its prefix-less display form) the stored value is
+    returned untouched so no catalog or provider heuristic can strip it.
+    """
+    if getattr(session, "model_invalid", False):
+        return "", False, "Session model is invalid. Please select a model."
+    requested = str(requested_model or "").strip()
+    stored = str(getattr(session, "model", "") or "").strip()
+    if (
+        Session._is_valid_model_identity(stored)
+        and stored.startswith("@")
+        and (
+            not requested
+            or requested == stored
+            # The frontend may echo the prefix-less display form of the same
+            # id; keep the stored identity either way.
+            or (
+                not requested.startswith("@")
+                and requested == _bare_model_id(stored)
+            )
+        )
+    ):
+        return stored, False, None
+    # A different explicit @provider:model from the client (the user picked
+    # another model in the composer) names its own route and is authoritative.
+    if (
+        requested
+        and requested != stored
+        and requested.startswith("@")
+        and Session._is_valid_model_identity(requested)
+    ):
+        return requested, True, None
+    model, normalized = _resolve_compatible_session_model(requested or stored)
+    # Normalize bare model names to @provider:model for unique identification
+    model = Session._normalize_model(model)
+    # Defence in depth: a value that still lacks a provider after
+    # normalization cannot be routed and would fall through to config.yaml's
+    # default endpoint (issue #55).  Refuse it instead of guessing.
+    if not Session._is_valid_model_identity(model):
+        # The catalog was cold, so the normalization above had no groups to
+        # attribute the model to.  Wait for the startup build once and retry
+        # before refusing the turn.
+        if _wait_for_warm_catalog():
+            model, normalized = _resolve_compatible_session_model(requested or stored)
+            model = Session._normalize_model(model)
+        if not Session._is_valid_model_identity(model):
+            return "", False, "Session model is invalid. Please select a model."
+    return model, normalized, None
+
+
+def _wait_for_warm_catalog() -> bool:
+    """Wait (bounded) for the startup model-catalog build to finish.
+
+    The catalog is built by the boot prewarm on a background worker; the
+    chat-start path used to race that build and refuse the turn with 400
+    "Session model is invalid" (issue #55).  Returns True when the catalog
+    holds a routable identity afterwards.
+    """
+    from app.api.prewarm import wait_for_models
+    if not wait_for_models(_COLD_START_WAIT_S):
+        return False
+    return bool(get_first_catalog_model())
+
+
+def _resolve_new_session_model(requested_model: str | None) -> str:
+    """Return the model identity for a brand-new session, or "" when there is none.
+
+    A client whose picker is still empty (cold catalog) sends no identity at
+    all; the catalog supplies one instead of config.yaml's bare default,
+    which carries no provider and cannot be routed (issue #55).  The catalog
+    build is waited for (bounded) so the first message after a cold start is
+    not refused.
+    """
+    requested = str(requested_model or "").strip()
+    if Session._is_valid_model_identity(requested):
+        return requested
+    # Wait for the catalog first: a bare id from the client can then still
+    # be attributed to its provider instead of being thrown away.
+    _wait_for_warm_catalog()
+    if requested:
+        model = Session._normalize_model(requested)
+        if Session._is_valid_model_identity(model):
+            return model
+    model = get_first_catalog_model()
+    return model if Session._is_valid_model_identity(model) else ""
+
+
 def _normalize_session_model_in_place(session) -> str:
     original_model = getattr(session, "model", None) or ""
     effective_model, changed = _resolve_compatible_session_model(original_model or None)
@@ -387,6 +431,14 @@ def _resolve_effective_session_model_for_display(session) -> str:
     effective model for the response payload only and leave disk state alone.
     """
     original_model = getattr(session, "model", None) or ""
+    # The WebUI-owned identity (model__webui, issue #55) is authoritative:
+    # it already names its provider, so nothing on this read path may strip or
+    # rewrite it — the live catalog is a picker list, not a validity oracle.
+    # An invalid session (model__webui is NULL) has no identity to resolve.
+    if getattr(session, "model_invalid", False):
+        return original_model
+    if original_model.startswith("@") and ":" in original_model:
+        return original_model
     effective_model, _changed = _resolve_compatible_session_model(original_model or None)
     result = effective_model or original_model
     # Warn on bare model names — they cannot uniquely identify a model across
@@ -1707,22 +1759,36 @@ def handle_post(handler, parsed) -> bool:
             return bad(handler, str(e))
         with _get_session_agent_lock(body["session_id"]):
             s.workspace = new_ws
-            s.model = body.get("model", s.model)
-            # ── Persist model to state.db via SDK API ──
-            # update_session_model unconditionally writes the model column
-            # (no COALESCE) so the sidebar reflects the user's latest choice
-            # even after a server restart.
-            # Normalize bare model names to @provider:model so the stored
-            # value can uniquely identify the model across providers.
-            persist_model = Session._normalize_model(s.model)
-            try:
-                from app.api.models import _get_session_db
-                db = _get_session_db()
-                if db is not None:
-                    db.update_session_model(s.session_id, persist_model)
-            except Exception:
-                logger.warning("Failed to persist model for session %s",
-                               s.session_id, exc_info=True)
+            if "model" in body:
+                # Explicit user selection: normalize bare ids to
+                # @provider:model when the catalog can, then record it as the
+                # WebUI-owned identity (model__webui, issue #55).
+                selected_model = Session._normalize_model(
+                    str(body.get("model") or "").strip()
+                )
+                s.model = selected_model
+                # Only @provider:model identities can be routed; bare ids,
+                # provider/model namespaces and malformed forms are invalid
+                # (issue #55).
+                s.model_invalid = not Session._is_valid_model_identity(
+                    selected_model
+                )
+                # ── Persist model to state.db via SDK API ──
+                # update_session_model unconditionally writes the SDK-owned
+                # model column (no COALESCE) so the CLI/dashboard view keeps
+                # up.  It must receive the bare id — the @provider: identity
+                # lives in model__webui and is written by
+                # sync_webui_metadata() below.
+                if not s.model_invalid:
+                    persist_model = _bare_model_id(selected_model)
+                    try:
+                        from app.api.models import _get_session_db
+                        db = _get_session_db()
+                        if db is not None:
+                            db.update_session_model(s.session_id, persist_model)
+                    except Exception:
+                        logger.warning("Failed to persist model for session %s",
+                                       s.session_id, exc_info=True)
             # Per-session reasoning effort (None = use global default)
             if "reasoning_effort" in body:
                 raw = str(body["reasoning_effort"] or "").strip().lower()
@@ -4118,6 +4184,11 @@ def _handle_chat_start(handler, body):
         require(body, "session_id")
     except ValueError as e:
         return bad(handler, str(e))
+    msg = str(body.get("message", "")).strip()
+    if not msg:
+        # Refuse before the session is created — a rejected turn must not
+        # leave an empty session row behind.
+        return bad(handler, "message is required")
     try:
         s = get_session(body["session_id"])
     except KeyError:
@@ -4127,15 +4198,19 @@ def _handle_chat_start(handler, body):
         # defer_notify=True — skip the upsert_session notify here because
         # begin_stream() below fires its own closely-related notify. Saves
         # one notify IPC round-trip on the welcome-state critical path.
+        #
+        # The model identity is resolved BEFORE the session is created: a
+        # refused turn (no routable identity, cold catalog) must not leave an
+        # empty session row behind — every retry used to leak one (issue #55).
+        _model = _resolve_new_session_model(body.get("model"))
+        if not _model:
+            return bad(handler, "Session model is invalid. Please select a model.", status=400)
         s = new_session(
             workspace=(str(body.get("workspace")) if body.get("workspace") else None),
-            model=body.get("model"),
+            model=_model,
             profile=body.get("profile") or None,
             defer_notify=True,
         )
-    msg = str(body.get("message", "")).strip()
-    if not msg:
-        return bad(handler, "message is required")
 
     # Accept original_msg from frontend (set by dispatch for slash commands)
     _original_msg = body.get("original_msg")
@@ -4151,10 +4226,16 @@ def _handle_chat_start(handler, body):
         workspace = str(resolve_trusted_workspace(body.get("workspace") or s.workspace))
     except ValueError as e:
         return bad(handler, str(e))
-    requested_model = body.get("model") or s.model
-    model, normalized_model = _resolve_compatible_session_model(requested_model)
-    # Normalize bare model names to @provider:model for unique identification
-    model = Session._normalize_model(model)
+    # ── Model identity (issue #55) ──
+    # The WebUI records the user's selection in model__webui.  When that
+    # column is NULL the session has no identity: refuse to guess a route from
+    # the SDK-owned bare model column or config.yaml's default provider, which
+    # is how a DeepSeek session once fell through to OpenRouter (HTTP 401).
+    model, normalized_model, model_error = _resolve_chat_start_model(
+        s, body.get("model")
+    )
+    if model_error:
+        return bad(handler, model_error, status=400)
     # Persist normalized model so drain/replay paths resolve the provider
     # correctly. The full sync at the end of this handler (line ~4175)
     # persists model + pending state together, so no extra sync here.
@@ -4239,6 +4320,9 @@ def _handle_chat_start(handler, body):
 def _handle_chat_sync(handler, body):
     """Fallback synchronous chat endpoint (POST /api/chat). Not used by frontend."""
     s = get_session(body["session_id"])
+    # See _handle_chat_start: no model__webui identity means no safe route.
+    if getattr(s, "model_invalid", False):
+        return j(handler, {"error": "Session model is invalid. Please select a model."}, status=400)
     msg = str(body.get("message", "")).strip()
     if not msg:
         return j(handler, {"error": "empty message"}, status=400)
@@ -4246,9 +4330,14 @@ def _handle_chat_sync(handler, body):
         workspace = str(resolve_trusted_workspace(body.get("workspace") or s.workspace))
     except ValueError as e:
         return bad(handler, str(e))
+    requested_model = Session._normalize_model(body.get("model") or s.model)
+    # Same rule as chat start: a value without a provider cannot be routed
+    # safely, so refuse it instead of falling back to config.yaml (issue #55).
+    if not Session._is_valid_model_identity(requested_model):
+        return j(handler, {"error": "Session model is invalid. Please select a model."}, status=400)
     with _get_session_agent_lock(s.session_id):
         s.workspace = workspace
-        s.model = Session._normalize_model(body.get("model") or s.model)
+        s.model = requested_model
     from app.api.streaming import _ENV_LOCK
 
     # Register thread-local env overrides so subprocesses spawned by the agent
@@ -4364,6 +4453,28 @@ def _handle_chat_sync(handler, body):
     )
 
 
+def _split_cron_model_identity(model: str) -> tuple[str, str | None, str | None]:
+    """Split a WebUI ``@provider:model`` id into cron's routing fields.
+
+    Cron jobs persist the bare model plus an optional provider/base_url, and
+    the SDK scheduler passes exactly those to the agent — ``@provider:`` is
+    WebUI-only syntax.  Bare values pass through untouched so an unpinned job
+    keeps following config.yaml.  The retired ``@custom:<name>:model`` form
+    is rejected: it must never be interpreted as an unnamed-custom model.
+    """
+    value = str(model or "").strip()
+    if value.startswith("@") and ":" in value:
+        from app.api.config import is_legacy_custom_identity, resolve_model_provider
+
+        if is_legacy_custom_identity(value[1:]):
+            raise ValueError(
+                "Legacy @custom:<name>:model identities are not supported; "
+                "use @<name>:model."
+            )
+        return resolve_model_provider(value)
+    return value, None, None
+
+
 def _handle_cron_create(handler, body):
     try:
         require(body, "prompt", "schedule")
@@ -4372,13 +4483,18 @@ def _handle_cron_create(handler, body):
     try:
         from cron.jobs import create_job
 
+        _model, _provider, _base_url = _split_cron_model_identity(
+            body.get("model") or ""
+        )
         job = create_job(
             prompt=body["prompt"],
             schedule=body["schedule"],
             name=body.get("name") or None,
             deliver=body.get("deliver") or "local",
             skills=body.get("skills") or [],
-            model=body.get("model") or None,
+            model=_model or None,
+            provider=body.get("provider") or _provider,
+            base_url=body.get("base_url") or _base_url,
             workdir=body.get("workdir") or None,
             script=body.get("script") or None,
             no_agent=bool(body.get("no_agent")),
@@ -4399,6 +4515,18 @@ def _handle_cron_update(handler, body):
     from cron.jobs import update_job
 
     updates = {k: v for k, v in body.items() if k != "job_id" and v is not None}
+    if "model" in updates:
+        try:
+            _model, _provider, _base_url = _split_cron_model_identity(
+                updates["model"]
+            )
+        except ValueError as e:
+            return bad(handler, str(e))
+        updates["model"] = _model or None
+        if _provider:
+            updates.setdefault("provider", _provider)
+        if _base_url:
+            updates.setdefault("base_url", _base_url)
     job = update_job(body["job_id"], updates)
     if not job:
         return bad(handler, "Job not found", 404)
@@ -5966,7 +6094,9 @@ def _handle_session_import(handler, body):
         return bad(handler, 'JSON must contain a "messages" array')
     title = body.get("title", "Imported session")
     workspace = body.get("workspace", str(DEFAULT_WORKSPACE))
-    model = body.get("model", DEFAULT_MODEL)
+    # Imported JSON carries a display model, not necessarily an identity:
+    # map it onto the catalog and require a routable @provider:model value.
+    model = Session._normalize_model(str(body.get("model") or DEFAULT_MODEL))
     s = Session(
         title=title,
         workspace=workspace,
@@ -5974,6 +6104,7 @@ def _handle_session_import(handler, body):
         messages=messages,
         tool_calls=body.get("tool_calls", []),
     )
+    s.model_invalid = not Session._is_valid_model_identity(model)
     s.pinned = body.get("pinned", False)
     with LOCK:
         SESSIONS[s.session_id] = s

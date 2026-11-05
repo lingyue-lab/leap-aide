@@ -39,7 +39,9 @@ def test_chat_start_creates_session_when_missing():
     payload = {
         "session_id": placeholder_sid,
         "message": "hello",
-        "model": "anthropic/claude-sonnet-4-5",
+        # The WebUI identity is @provider:model (issue #55); a bare or
+        # namespaced value has no routable provider and is rejected with 400.
+        "model": "@anthropic:claude-sonnet-4-5",
     }
     result = _post(f"{BASE}/api/chat/start", payload)
     # Backend minted its own 12-hex id, not the placeholder.
@@ -47,6 +49,10 @@ def test_chat_start_creates_session_when_missing():
     assert re.fullmatch(r"[0-9a-fA-F]{12}", result["session_id"])
     assert "stream_id" in result
     assert len(result["stream_id"]) > 8
+    # The auto-created session adopts the requested @provider:model identity
+    # (issue #55) and is therefore routable.
+    assert result["session"]["model"] == "@anthropic:claude-sonnet-4-5"
+    assert result["session"]["model_invalid"] is False
 
 
 def test_chat_start_creates_session_when_id_format_invalid():
@@ -54,7 +60,7 @@ def test_chat_start_creates_session_when_id_format_invalid():
     payload = {
         "session_id": "literally-anything-not-a-uuid",
         "message": "hello",
-        "model": "anthropic/claude-sonnet-4-5",
+        "model": "@anthropic:claude-sonnet-4-5",
     }
     result = _post(f"{BASE}/api/chat/start", payload)
     assert result["session_id"] != "literally-anything-not-a-uuid"

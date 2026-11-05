@@ -10,6 +10,9 @@ export interface Session {
   title: string;
   workspace?: string;
   model?: string;
+  /** True when the backend has no persisted WebUI model identity
+   *  (state.db model__webui is NULL). The user must pick a model again. */
+  model_invalid?: boolean;
   reasoning_effort?: string | null;  // 'minimal'|'low'|'medium'|'high'|'xhigh'|'none'|null
   messages: Message[];
   created_at: number;
@@ -305,6 +308,8 @@ export interface ModelsResponse {
 
 export interface ModelGroup {
   provider: string;
+  /** Canonical provider id used in `@provider:model` identities. */
+  provider_id?: string;
   models: Model[];
 }
 

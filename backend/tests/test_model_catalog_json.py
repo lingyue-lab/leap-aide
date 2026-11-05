@@ -171,6 +171,37 @@ class TestPackagedCatalog:
         assert rec["endpoint"]["base_url_env"] == "XIAOMI_BASE_URL"
         assert rec["endpoint"]["base_url"] == "https://api.xiaomimimo.com/v1"
 
+    def test_is_custom_defaults_to_false(self):
+        # Every provider declares the flag; only the user's own servers are
+        # custom.  A vendor API is never one.
+        for slug, rec in mc.load_catalog()["providers"].items():
+            assert isinstance(rec["is_custom"], bool), slug
+        for slug in ("anthropic", "openai", "deepseek", "openrouter", "ollama-cloud"):
+            assert mc.get_provider_record(slug)["is_custom"] is False, slug
+
+    def test_local_endpoints_are_marked_custom(self):
+        # ollama / lmstudio are the user's own OpenAI-compatible server.
+        for slug in ("ollama", "lmstudio"):
+            assert mc.get_provider_record(slug)["is_custom"] is True, slug
+            assert mc.is_custom_provider(slug) is True, slug
+        assert mc.is_custom_provider("anthropic") is False
+        assert mc.is_custom_provider("no-such-provider") is False
+
+    def test_synthetic_local_slug_counts_as_custom(self):
+        # The WebUI infers "local" for a private endpoint no catalog record
+        # covers — it behaves like the catalog's custom providers.
+        assert mc.is_custom_provider("local") is True
+
+    def test_invalid_is_custom_type_falls_back_to_false(self, tmp_path):
+        # A typo in the flag must not take the provider down — warn and
+        # treat the provider as a normal one.
+        payload = _minimal_catalog(is_custom="yes")
+        _write_catalog(tmp_path, payload)
+        rec = mc.get_provider_record("test")
+        assert rec is not None
+        assert rec["is_custom"] is False
+        assert mc.is_custom_provider("test") is False
+
 
 class TestBaseUrlEnvOverride:
     """endpoint.base_url_env: env/.env override beats the packaged default."""

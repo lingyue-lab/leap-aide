@@ -128,6 +128,7 @@ hermes-agent SDK            AIAgent.run_conversation()、tools、gateway
 | `HERMES_WEBUI_FORCE_IPV4` | *（默认启用）* | 出网连接优先 IPv4（规避 IPv6 黑洞挂起）；`=0` 关闭 |
 | `HERMES_WEBUI_CONNECTIVITY_PROBE` | *（默认启用）* | 后台提供商连通性探测（启动时 + 保存 key 后）；`=0` 关闭 |
 | `HERMES_WEBUI_CATALOG_QUERY_TIMEOUT_S` | `3.0` | 目录构建期间每个 provider 实时模型查询的超时（秒） |
+| `HERMES_WEBUI_COLD_START_WAIT_S` | `5.0` | 聊天开始时等待启动期模型目录构建的最长秒数，超时则拒绝本轮；`=0` 不等待 |
 | `LOG_LEVEL` | `WARNING` | Python 日志级别 |
 
 ---
@@ -143,14 +144,21 @@ Provider 的展示名、别名、基线模型列表、端点、认证头与刷�
 
 要点：
 
-- **每 provider 记录**：`display_name`、`aliases[]`、
+- **每 provider 记录**：`display_name`、`is_custom`、`aliases[]`、
   `auth{type,env_var(s),header}`（Anthropic 用 `x-api-key`，其余 Bearer）、
   `endpoint{base_url,models_path,trust_local}`、
   `refresh{mode: api|none, membership: replace|curated, timeout_s}`、
-  `default_model`，以及人工维护的 `models[]` 初始列表（模型 id 保留历史形态：
-  MiniMax 为裸 id，其余带 `@provider:` 前缀。对 `refresh.mode=none` 的
-  provider 它是唯一来源；对 `refresh.mode=api` 的 provider 它只是首启
-  种子——一旦实时查询成功即被 API 结果整体取代）。
+  `default_model`，以及人工维护的 `models[]` 初始列表（模型 id 以选择器使用的
+  `@provider:model` 形态存放；少数 provider 保留裸 id —— gemini、minimax、
+  openrouter，如 `MiniMax-M2.7`、`openai/gpt-5.4-mini` —— 在组装选择器时补上
+  `@provider:` 前缀，因此用户看到的 id 一律是 `@provider:model`）。对
+  `refresh.mode=none` 的 provider 它是唯一来源；对 `refresh.mode=api` 的
+  provider 它只是首启种子——一旦实时查询成功即被 API 结果整体取代）。
+- **自定义端点**：`is_custom`（默认 `false`）标记端点是用户自己的
+  OpenAI 兼容服务器、而非厂商 API 的 provider——随包目录里是 `ollama` 与
+  `lmstudio`。这类 provider 不需要 API key，且用户为它配置的 `base_url`
+  在切换默认模型时会保留（切到厂商 provider 仍然会清掉）。这个标记是数据，
+  不是硬编码的 slug 列表：`model_catalog.is_custom_provider()`。
 - **单一确定合并规则**（`resolve_provider_models`）：config.yaml 中显式的
   `providers.<id>.models` 永远最优先且不参与查询。`membership=replace`
   时实时查询成功的结果是唯一事实来源——成员与顺序以 API 为准，JSON 基线
@@ -178,6 +186,35 @@ Provider 的展示名、别名、基线模型列表、端点、认证头与刷�
   `/api/v1/models` 端点拉取并生成基线草稿（`--map-labels` 保留已有 id 的
   策展标签）。脚本只输出 JSON 片段供人工审核，绝不直接写目录文件，也不在
   CI 中运行。
+
+---
+
+## 模型身份（`@provider:model`）
+
+WebUI 展示的每个模型都以 `@provider:model` 标识。provider 段按**第一个**
+冒号切分，因此网关命名空间（`@openrouter:anthropic/claude-opus-4.6`）与
+Ollama tag（`@ollama1:qwen3-vl:235b`）都能原样保留。
+
+- **存放位置**：身份存在 WebUI 自有的 `model__webui` 列里。SDK 自有的
+  `model` 列只保存裸模型 id——SDK 永远看不到 `@provider:` 前缀。
+- **唯一可路由形态**：裸 id、带命名空间的 `provider/model` 值或 `unknown`
+  都没有 provider 提示，无法路由，因此一律拒绝
+  （`Session._is_valid_model_identity`），而不是落到 config.yaml 的默认
+  端点。已废弃的 `@custom:<name>:model` 形式同样被拒绝——具名自定义
+  provider 用名称 slug 标识（`@ollama1:model`）。
+- **具名自定义 provider**：WebUI slug（名称小写、空格折叠为短横、`@ : /`
+  替换为短横）是存放与展示形态；交给 SDK 的则是 SDK 自己的
+  `custom:<slug>`（`config.sdk_custom_provider_id`）——SDK 依据该前缀
+  决定是否应用 `extra_body`、绕过内置 provider 遮蔽，且只接受自己的别名
+  集合。
+- **自定义端点**分两类。config.yaml 里声明的*具名* provider（`custom_providers:`）
+  用名称 slug 标识，交给 SDK 的是 `custom:<slug>`。*目录里的*自定义端点
+  （`is_custom`：`ollama`、`lmstudio`，以及合成的 `local` slug）保留目录
+  slug——SDK 认识这些名字——不需要 API key，且切换默认模型时保留用户为它
+  配置的 `base_url`。
+- **冷启动**：聊天开始路径会等待启动期目录构建（有界等待，由
+  `HERMES_WEBUI_COLD_START_WAIT_S` 控制）再决定是否拒绝本轮，因此冷启动
+  后的第一条消息不会以 "Session model is invalid" 收场。
 
 ---
 

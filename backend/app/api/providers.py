@@ -18,8 +18,10 @@ from app.api import model_catalog
 from app.api.config import (
     _get_config_path,
     _save_yaml_config_file,
+    custom_provider_slug,
     get_config,
     invalidate_models_cache,
+    named_custom_provider,
     reload_config,
 )
 
@@ -261,15 +263,10 @@ def _provider_has_key(provider_id: str) -> bool:
         provider_cfg = providers_cfg.get(provider_id, {})
         if isinstance(provider_cfg, dict) and str(provider_cfg.get("api_key") or "").strip():
             return True
-    # Check custom_providers
-    custom_providers = cfg.get("custom_providers", [])
-    if isinstance(custom_providers, list):
-        for cp in custom_providers:
-            if isinstance(cp, dict):
-                cp_name = (cp.get("name") or "").strip().lower().replace(" ", "-")
-                if f"custom:{cp_name}" == provider_id or cp.get("name", "").strip().lower() == provider_id:
-                    if str(cp.get("api_key") or "").strip():
-                        return True
+    # Check custom_providers (provider id is the normalized name slug)
+    _cp = named_custom_provider(provider_id)
+    if _cp is not None and str(_cp.get("api_key") or "").strip():
+        return True
     return False
 
 
@@ -440,13 +437,9 @@ def _resolve_probe_endpoint(provider_id: str | None) -> tuple[str, str, str] | N
             base_url = str(model_cfg.get("base_url") or "").strip()
     # 3. custom_providers[].base_url (same match logic as _provider_has_key)
     if not base_url:
-        for cp in cfg.get("custom_providers", []) or []:
-            if not isinstance(cp, dict):
-                continue
-            cp_name = (cp.get("name") or "").strip().lower().replace(" ", "-")
-            if f"custom:{cp_name}" == pid or cp.get("name", "").strip().lower() == pid:
-                base_url = str(cp.get("base_url") or "").strip()
-                break
+        cp = named_custom_provider(pid)
+        if cp is not None:
+            base_url = str(cp.get("base_url") or "").strip()
     # 4. Well-known OpenAI-compatible endpoint from the JSON catalog.
     #    The probe appends "/models" itself, so use the raw base_url rather
     #    than model_catalog.provider_endpoint() (which joins models_path).
@@ -497,15 +490,11 @@ def _resolve_probe_key(cfg: dict, provider_id: str, model_cfg: dict) -> str:
             key = str(prov.get("api_key") or "").strip()
             if key:
                 return key
-    custom_providers = cfg.get("custom_providers", [])
-    if isinstance(custom_providers, list):
-        for cp in custom_providers:
-            if isinstance(cp, dict):
-                cp_name = (cp.get("name") or "").strip().lower().replace(" ", "-")
-                if f"custom:{cp_name}" == provider_id or cp.get("name", "").strip().lower() == provider_id:
-                    key = str(cp.get("api_key") or "").strip()
-                    if key:
-                        return key
+    cp = named_custom_provider(provider_id)
+    if cp is not None:
+        key = str(cp.get("api_key") or "").strip()
+        if key:
+            return key
     return ""
 
 
@@ -890,8 +879,11 @@ def _clean_provider_key_from_config(provider_id: str) -> None:
             if isinstance(custom_providers, list):
                 for cp in custom_providers:
                     if isinstance(cp, dict):
-                        cp_name = (cp.get("name") or "").strip().lower().replace(" ", "-")
-                        if f"custom:{cp_name}" == provider_id or cp.get("name", "").strip().lower() == provider_id:
+                        cp_name = str(cp.get("name") or "").strip()
+                        if not cp_name:
+                            continue
+                        cp_id = custom_provider_slug(cp_name)
+                        if provider_id.lower() == cp_id:
                             if cp.get("api_key"):
                                 del cp["api_key"]
                                 changed = True

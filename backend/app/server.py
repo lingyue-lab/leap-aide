@@ -299,6 +299,11 @@ def _prewarm() -> None:
         except Exception:
             logger.warning('Pre-warm: models cache failed (%.1fs)',
                            time.monotonic() - t0, exc_info=True)
+        finally:
+            # Release chat-start waiters: the catalog build is done (or
+            # failed), so a turn that needs a routable @provider:model
+            # identity can decide instead of racing the build (issue #55).
+            _prewarm_coord.mark_models_done()
 
     def _warm_mcp():
         t0 = time.monotonic()

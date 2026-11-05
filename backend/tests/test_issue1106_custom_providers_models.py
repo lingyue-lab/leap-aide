@@ -34,12 +34,19 @@ def _models_with_cfg(model_cfg=None, custom_providers=None, active_provider=None
         config._cfg_mtime = old_mtime
 
 
+def _bare_id(model_id):
+    """Strip the @provider: prefix from a catalog id for readable assertions."""
+    if model_id.startswith("@") and ":" in model_id:
+        return model_id[1:].split(":", 1)[1]
+    return model_id
+
+
 def _all_model_ids(result):
-    """Extract all model IDs from all groups."""
+    """Extract the bare model names from all groups."""
     ids = []
     for g in result.get("groups", []):
         for m in g.get("models", []):
-            ids.append(m["id"])
+            ids.append(_bare_id(m["id"]))
     return ids
 
 
@@ -189,10 +196,66 @@ class TestCustomProvidersModelsDict:
         group_b = _group_for(result, "Server-B")
         assert group_a is not None, "Server-A group missing"
         assert group_b is not None, "Server-B group missing"
-        ids_a = [m["id"] for m in group_a["models"]]
-        ids_b = [m["id"] for m in group_b["models"]]
+        ids_a = [_bare_id(m["id"]) for m in group_a["models"]]
+        ids_b = [_bare_id(m["id"]) for m in group_b["models"]]
         assert "model-a1" in ids_a and "model-a2" in ids_a
         assert "model-b1" in ids_b and "model-b2" in ids_b
         # No cross-contamination
         assert "model-b1" not in ids_a
         assert "model-a1" not in ids_b
+
+
+class TestCustomProviderIdentity:
+    """Custom provider entries always emit @provider:model catalog ids.
+
+    The provider half is the named entry's slug (``Server-A`` -> ``server-a``)
+    or ``custom`` for unnamed entries; the ``custom:`` pseudo-provider is no
+    longer part of a model identity.
+    """
+
+    def test_named_entry_ids_use_the_name_slug(self):
+        result = _models_with_cfg(
+            model_cfg={"provider": "custom"},
+            custom_providers=[
+                {"name": "Ollama1", "model": "qwen3-vl:235b", "models": {"llama-4": {}}},
+            ],
+        )
+        group = _group_for(result, "Ollama1")
+        assert group is not None
+        ids = [m["id"] for m in group["models"]]
+        assert ids == ["@ollama1:qwen3-vl:235b", "@ollama1:llama-4"], ids
+
+    def test_unnamed_entry_ids_use_custom_provider(self):
+        result = _models_with_cfg(
+            model_cfg={"provider": "custom"},
+            custom_providers=[{"model": "unnamed-model"}],
+        )
+        group = _group_for(result, "Custom")
+        assert group is not None
+        assert [m["id"] for m in group["models"]] == ["@custom:unnamed-model"]
+
+    def test_two_named_providers_serving_the_same_models_both_appear(self):
+        """Per-group dedupe: two Ollama instances may serve identical ids."""
+        result = _models_with_cfg(
+            model_cfg={"provider": "custom"},
+            custom_providers=[
+                {"name": "Ollama1", "model": "qwen3-vl:235b"},
+                {"name": "Ollama2", "model": "qwen3-vl:235b"},
+            ],
+        )
+        group1 = _group_for(result, "Ollama1")
+        group2 = _group_for(result, "Ollama2")
+        assert group1 is not None, "Ollama1 group missing"
+        assert group2 is not None, "Ollama2 group missing"
+        assert [m["id"] for m in group1["models"]] == ["@ollama1:qwen3-vl:235b"]
+        assert [m["id"] for m in group2["models"]] == ["@ollama2:qwen3-vl:235b"]
+
+    def test_provider_id_is_the_plain_slug(self):
+        result = _models_with_cfg(
+            model_cfg={"provider": "custom"},
+            custom_providers=[{"name": "My Key", "model": "m"}],
+        )
+        group = _group_for(result, "My Key")
+        assert group is not None
+        assert group["provider_id"] == "my-key"
+        assert [m["id"] for m in group["models"]] == ["@my-key:m"]
