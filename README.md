@@ -1,3 +1,7 @@
+---
+title: LeapAide
+---
+
 <div align="center">
 
 **English** | [中文](README.zh-CN.md)

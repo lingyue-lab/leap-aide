@@ -1,0 +1,44 @@
+# Bilingual-pair consistency record for architecture.md / architecture.zh-CN.md.
+# Per heading-slug section: sha256-16 of prose outside code blocks.
+# Editing EITHER side requires aligning the OTHER side first, then
+# re-recording:
+#   python3 backend/scripts/check_translation_pairing.py --write docs/architecture.md
+/:
+  en: f8f02318acf323d5
+  zh: 44669fcf6e0a6215
+/leapaide-architecture-guide:
+  en: 079f223be61b768f
+  zh: 6e2869798941972e
+/system-overview:
+  en: 4301fa2f9b6da454
+  zh: 26a9881517ecff53
+/backend:
+  en: e7b6f35ce8516a41
+  zh: f593e82e70941762
+/api:
+  en: 41cedc5d41aa891e
+  zh: 27007fde9b1532b7
+/frontend-frontendsrc:
+  en: 34acb110b74598a2
+  zh: ce53e01ded400886
+/data-flow-full-chat-path:
+  en: c8181b582a88ecd4
+  zh: 612d55b160a25da9
+/database:
+  en: 90638c14485bcdc9
+  zh: 4e446332be87d702
+/configuration:
+  en: f67e0ca8ab2f8c0e
+  zh: 17e201925016f490
+/model-catalog-refresh:
+  en: 416dd3fec906d315
+  zh: 3db37ebb762a9c93
+/model-identity-providermodel:
+  en: c28b826917f9146d
+  zh: 4dd17336e00feb87
+/architecture-decision-records-adr:
+  en: 32e7c9eb31529388
+  zh: 8576cef337afced8
+/adr-001-example:
+  en: f0c1cb4e934b88c8
+  zh: c06e01c75a52c04a

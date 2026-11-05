@@ -1,3 +1,7 @@
+---
+title: LeapAide 测试指南
+---
+
 <div align="center">
 
 [English](testing.md) | **中文**
@@ -44,6 +48,63 @@ CI 会在由仓库 `Dockerfile` 构建出的 testing 镜像里跑同样的套件
 以 `./scripts/run-test.sh help` 的输出为准，那是最新的权威用法说明。
 
 测试结果文件写入 `backend/tests/.results/` 与 `frontend/tests/.results/`。
+
+---
+
+## 双语一致性门禁
+
+每一篇双语文档都是三个文件：
+
+| 文件 | 作用 |
+|---|---|
+| `docs/foo.md` | 英文文档（检查器指向的*锚点*） |
+| `docs/foo.zh-CN.md` | 中文配套文档 |
+| `docs/foo.i18n.yaml` | 一致性记录：每个章节、两种语言各一个 `sha256-16` 摘要 |
+
+`backend/scripts/check_translation_pairing.py` 负责强制这套约定。推送前先跑一遍：
+
+```bash
+# Verify one pair
+python3 backend/scripts/check_translation_pairing.py docs/architecture.md
+# Verify every pair that has a record
+python3 backend/scripts/check_translation_pairing.py --check-all
+# Check that a directory has no document missing its companion or record
+python3 backend/scripts/check_translation_pairing.py --check-tree docs
+python3 backend/scripts/check_translation_pairing.py --check-tree . --depth 1
+# Re-record the digests after aligning BOTH language files
+python3 backend/scripts/check_translation_pairing.py --write docs/architecture.md
+```
+
+门禁强制的内容：
+
+- 两个文件都必须以 YAML frontmatter 开头，且从字节 0 开始。
+- 两个文件的前 20 行内都要有语言切换器。
+- 两个文件的标题结构必须一致（层级相同、顺序相同）。
+- 围栏代码块在两侧必须逐字节相同 —— 代码块里是事实（端口、路径、schema），绝不能漂移。
+- 每个章节的散文摘要都要与记录一致。
+
+新增一篇文档：
+
+1. 创建 `docs/foo.md` 与 `docs/foo.zh-CN.md`，各自以 frontmatter 和语言切换器开头。
+2. 标题结构完全对齐 —— 层级相同、顺序相同。
+3. 围栏代码块在两侧保持逐字节相同。
+4. 执行 `--write docs/foo.md` 生成记录，三个文件一起提交。
+
+有意为之的单边修改（例如某个 typo 没有对应的中文改动），在该配对的记录里用
+`waiver:` 段落声明：
+
+```yaml
+waiver:
+  side: en
+  reason: "English typo fix only, no semantic change"
+  expires: "2026-12-31"
+```
+
+豁免只对 co-change 门禁生效 —— 摘要仍然必须对得上，所以 `--write` 依然要跑。
+豁免会出现在 PR 的 diff 里，而且会过期，因此不会悄悄削弱门禁。
+
+CI 在每个触及双语配对的 PR 上运行 `--check-all`、`--check-tree docs`、
+`--check-tree . --depth 1` 以及 git co-change 门禁。
 
 ---
 

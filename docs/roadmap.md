@@ -1,3 +1,7 @@
+---
+title: LeapAide Roadmap
+---
+
 <div align="center">
 
 **English** | [中文](roadmap.zh-CN.md)

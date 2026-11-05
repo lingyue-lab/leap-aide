@@ -1,3 +1,7 @@
+---
+title: LeapAide Testing Guide
+---
+
 <div align="center">
 
 **English** | [中文](testing.zh-CN.md)
@@ -45,6 +49,66 @@ Useful environment overrides:
 The output of `./scripts/run-test.sh help` is authoritative; it is the latest usage documentation.
 
 Test result files are written to `backend/tests/.results/` and `frontend/tests/.results/`.
+
+---
+
+## Bilingual Pair Consistency Gate
+
+Every bilingual document is a triple of files:
+
+| File | Role |
+|---|---|
+| `docs/foo.md` | English document (the *anchor* the checker is pointed at) |
+| `docs/foo.zh-CN.md` | Chinese companion |
+| `docs/foo.i18n.yaml` | Consistency record: one `sha256-16` digest per section, for both languages |
+
+`backend/scripts/check_translation_pairing.py` enforces the pair. Run it before pushing:
+
+```bash
+# Verify one pair
+python3 backend/scripts/check_translation_pairing.py docs/architecture.md
+# Verify every pair that has a record
+python3 backend/scripts/check_translation_pairing.py --check-all
+# Check that a directory has no document missing its companion or record
+python3 backend/scripts/check_translation_pairing.py --check-tree docs
+python3 backend/scripts/check_translation_pairing.py --check-tree . --depth 1
+# Re-record the digests after aligning BOTH language files
+python3 backend/scripts/check_translation_pairing.py --write docs/architecture.md
+```
+
+What the gate enforces:
+
+- Both files open with a YAML frontmatter block at byte 0.
+- Both files carry a language switcher in their first 20 lines.
+- Both files have the same heading structure (same levels, in the same order).
+- Fenced code blocks are byte-identical across the pair — code blocks carry
+  facts (ports, paths, schemas) and must never drift.
+- Every section's prose digest matches the record.
+
+Adding a new document:
+
+1. Create `docs/foo.md` and `docs/foo.zh-CN.md`, each starting with the frontmatter
+   block and the language switcher.
+2. Mirror the heading structure exactly — same levels, same order.
+3. Keep fenced code blocks byte-identical across the pair.
+4. Run `--write docs/foo.md` to create the record, and commit all three files.
+
+A deliberate one-sided edit (a typo fix with no Chinese counterpart) is declared
+with a `waiver:` stanza in the pair's record:
+
+```yaml
+waiver:
+  side: en
+  reason: "English typo fix only, no semantic change"
+  expires: "2026-12-31"
+```
+
+The waiver is honoured by the co-change gate only — the digests still have to
+match, so `--write` is still required. It shows up in the pull-request diff, and
+it expires, so it cannot silently weaken the gate.
+
+CI runs `--check-all`, `--check-tree docs`, `--check-tree . --depth 1`, and the
+git co-change gate on every pull request that touches a bilingual pair.
 
 ---
 

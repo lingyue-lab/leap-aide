@@ -1,0 +1,35 @@
+# Bilingual-pair consistency record for testing.md / testing.zh-CN.md.
+# Per heading-slug section: sha256-16 of prose outside code blocks.
+# Editing EITHER side requires aligning the OTHER side first, then
+# re-recording:
+#   python3 backend/scripts/check_translation_pairing.py --write docs/testing.md
+/:
+  en: b2cbd54a3b2e9025
+  zh: 54d840d3d3779a1e
+/leapaide-testing-guide:
+  en: ff641513f9d4913f
+  zh: 4e9da6fc088e5a74
+/automated-unit-tests:
+  en: 2cf30541e3e2b84a
+  zh: 1252797d2615f597
+/bilingual-pair-consistency-gate:
+  en: ac1b0b61fef3bbf6
+  zh: b312cf3695184865
+/manual-smoke-tests:
+  en: 3f9c3887f947e292
+  zh: e5e4d1076c0d3e90
+/session-lifecycle:
+  en: 84f50a0a917fdecf
+  zh: 83ab709b6a6c4472
+/chat-streaming:
+  en: bb50464e57d3f0b1
+  zh: 10ed22cec48a6ec1
+/workspace-panels:
+  en: 8abed82ba872a240
+  zh: f2fd1d0caf3550bc
+/settings:
+  en: 034e5d59ac52f8ef
+  zh: 00cda9c18ba82e20
+/adding-tests:
+  en: 00d49a7fbee91c73
+  zh: 6e6b6639f00d0131

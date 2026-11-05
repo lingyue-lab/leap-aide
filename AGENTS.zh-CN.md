@@ -1,3 +1,7 @@
+---
+title: LeapAide 开发指南
+---
+
 <div align="center">
 
 [English](AGENTS.md) | **中文**
@@ -19,10 +23,10 @@
 ## 构建与开发命令
 
 ```bash
-# 启动服务器
+# Start the server
 bash scripts/ctl.sh restart
 
-# 构建服务
+# Build the service
 bash scripts/build.sh
 ```
 
@@ -50,6 +54,7 @@ bash scripts/build.sh
 - 前端：TypeScript strict 模式。状态管理用 Zustand store，样式遵循Google Design M3前端规范。
 - 禁止使用原生 `confirm()`/`prompt()` — 使用 `showConfirmDialog()`/`showPromptDialog()`。
 - 路径穿越防护：文件操作始终使用 `safe_resolve(root, requested)`。
+- 双语配对由 `backend/scripts/check_translation_pairing.py` 强制 —— 推送前跑 `--check-all` 与 `--check-tree docs`；每篇新增文档都要带上 `.zh-CN.md` 配套文件和 `.i18n.yaml` 记录。
 
 ---
 

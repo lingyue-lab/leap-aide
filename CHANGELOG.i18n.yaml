@@ -1,0 +1,8 @@
+# Bilingual-pair consistency record for CHANGELOG.md / CHANGELOG.zh-CN.md.
+# Per heading-slug section: sha256-16 of prose outside code blocks.
+# Editing EITHER side requires aligning the OTHER side first, then
+# re-recording:
+#   python3 backend/scripts/check_translation_pairing.py --write CHANGELOG.md
+/:
+  en: 4df5465a7b17863c
+  zh: 3420c977b5e4fc7a

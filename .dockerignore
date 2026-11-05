@@ -109,8 +109,15 @@ archive/
 screenshot-*.png
 full-UI.png
 
-# --- Docs (the Dockerfile never reads them) ---
-docs/
+# --- Docs ---
+# The runtime image never reads the docs, but the testing image runs the
+# backend pytest suite, which includes the bilingual-pair consistency gate
+# over docs/. Keep the markdown and the *.i18n.yaml records in the build
+# context; the 700 KB screenshot under docs/images/ stays out.
+docs/*
+!docs/*.md
+!docs/*.i18n.yaml
+docs/images/
 
 # --- Local buildah image store + runroot (BUILDAH_ROOT / BUILDAH_RUNROOT).
 # Must never enter the build context: `COPY . /build` would walk the whole
