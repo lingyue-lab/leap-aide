@@ -813,6 +813,19 @@ RUN rm -rf /app/frontend/node_modules \
            /app/frontend/.tsbuildinfo \
            /app/.venv
 
+# ── Trim docs and agent instructions ────────────────────────────────────────
+# The testing image needs these: backend/tests/test_docs_i18n_pairing.py
+# verifies docs/ against their *.i18n.yaml records and reads the repo-root
+# bilingual pair (AGENTS.md / AGENTS.zh-CN.md / AGENTS.i18n.yaml) plus
+# .gitignore. The runtime image reads none of it, and the shipped image
+# should not carry it either — drop it so the runtime stage stays exactly
+# as small as it was before the bilingual-pair gate landed.
+RUN rm -rf /app/docs \
+           /app/AGENTS.md \
+           /app/AGENTS.zh-CN.md \
+           /app/AGENTS.i18n.yaml \
+           /app/.gitignore
+
 # ── Trim npm caches ──────────────────────────────────────────────────────────
 # Preserve /root/.npm/_npx/ — backend/scripts/agent-browser-wrapper.sh looks up
 # agent-browser in this cache (line 90) as the primary path; only falls back to

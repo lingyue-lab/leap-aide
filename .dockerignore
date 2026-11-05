@@ -13,6 +13,8 @@
 #   .build.env                           -> scripts/{install,npm_warmup}.sh
 #   .dockerignore                        -> backend/tests/test_build_env_file.py (in-image)
 #   .github/workflows/                   -> backend/tests/test_build_{env_file,version_wiring}.py (in-image)
+#   AGENTS.md + AGENTS.i18n.yaml         -> backend/tests/test_docs_i18n_pairing.py (in-image)
+#   .gitignore                           -> backend/tests/test_docs_i18n_pairing.py (in-image)
 #
 # Rules of thumb:
 #   * Mirror .gitignore: what is not worth committing is not worth shipping.
@@ -98,6 +100,18 @@ AGENTS.md
 copilot-instructions.md
 git_commit_head.txt
 
+# --- ...except the two the bilingual-pair gate reads from the testing
+# --- image. backend/tests/test_docs_i18n_pairing.py verifies the complete
+# --- repo-root pair (AGENTS.md / AGENTS.zh-CN.md / AGENTS.i18n.yaml) and
+# --- asserts the .gitignore negation that keeps docs/*.i18n.yaml
+# --- committable. Without these two the image carries a HALF pair — the
+# --- Chinese side and the record, but not the English anchor — and the
+# --- gate fails inside the image (the check runs in the testing image, so
+# --- it goes red there, not just on a developer checkout).
+# --- The runtime stage drops all three again.
+!AGENTS.md
+!.gitignore
+
 # --- Local-only review harness, scratch, backups ---
 graphify-out/
 archive/
@@ -113,7 +127,8 @@ full-UI.png
 # The runtime image never reads the docs, but the testing image runs the
 # backend pytest suite, which includes the bilingual-pair consistency gate
 # over docs/. Keep the markdown and the *.i18n.yaml records in the build
-# context; the 700 KB screenshot under docs/images/ stays out.
+# context; the 700 KB screenshot under docs/images/ stays out. The runtime
+# stage removes /app/docs again, so the shipped image is unaffected.
 docs/*
 !docs/*.md
 !docs/*.i18n.yaml

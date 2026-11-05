@@ -82,7 +82,8 @@ What the gate enforces:
 - Both files carry a language switcher in their first 20 lines.
 - Both files have the same heading structure (same levels, in the same order).
 - Fenced code blocks are byte-identical across the pair — code blocks carry
-  facts (ports, paths, schemas) and must never drift.
+  facts (ports, paths, schemas) and must never drift. Comments inside a fence
+  stay in English in both files, so that the byte comparison holds.
 - Every section's prose digest matches the record.
 
 Adding a new document:
@@ -90,7 +91,8 @@ Adding a new document:
 1. Create `docs/foo.md` and `docs/foo.zh-CN.md`, each starting with the frontmatter
    block and the language switcher.
 2. Mirror the heading structure exactly — same levels, same order.
-3. Keep fenced code blocks byte-identical across the pair.
+3. Keep fenced code blocks byte-identical across the pair — including the
+   comments inside them, which stay in English on both sides.
 4. Run `--write docs/foo.md` to create the record, and commit all three files.
 
 A deliberate one-sided edit (a typo fix with no Chinese counterpart) is declared
@@ -108,7 +110,8 @@ match, so `--write` is still required. It shows up in the pull-request diff, and
 it expires, so it cannot silently weaken the gate.
 
 CI runs `--check-all`, `--check-tree docs`, `--check-tree . --depth 1`, and the
-git co-change gate on every pull request that touches a bilingual pair.
+git co-change gate on every pull request that touches a bilingual pair. The gate
+reports rather than blocks the merge — `main` is not branch-protected yet.
 
 ---
 

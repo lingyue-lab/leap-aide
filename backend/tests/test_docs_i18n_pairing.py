@@ -46,6 +46,14 @@ def _run(*args):
     )
 
 
+def _run_in(cwd: Path, *args):
+    """Run the checker with a different working directory."""
+    return subprocess.run(
+        [sys.executable, str(CHECKER), *args],
+        capture_output=True, text=True, cwd=str(cwd),
+    )
+
+
 def _record_for(anchor: Path) -> Path:
     return anchor.with_name(anchor.name[: -len(".md")] + ".i18n.yaml")
 
@@ -66,7 +74,10 @@ def test_every_pair_has_all_three_files():
     """Each bilingual pair ships the English file, the Chinese file and the
     consistency record."""
     for anchor, companion in PAIRS:
-        assert anchor.is_file(), f"missing {anchor}"
+        assert anchor.is_file(), (
+            f"missing {anchor} — inside the testing image the repo-root pair "
+            f"must be whitelisted in .dockerignore (see the HARD CONSTRAINTS "
+            f"block there), otherwise the image carries a half pair")
         assert companion.is_file(), f"missing {companion}"
         record = _record_for(anchor)
         assert record.is_file(), f"missing {record}"
@@ -100,6 +111,29 @@ def test_root_tree_is_complete():
     proc = _run("--check-tree", ".", "--depth", "1")
     assert proc.returncode == 0, (
         f"--check-tree . --depth 1 failed:\n{proc.stderr or proc.stdout}")
+
+
+def test_check_tree_ignores_gitignored_files(tmp_path):
+    """A gitignored file must not fail --check-tree.
+
+    The gate reads the filesystem, so a local scratch file that .gitignore
+    lists (CLAUDE.md, copilot-instructions.md) would otherwise be reported
+    as a document missing its Chinese companion.
+    """
+    if shutil.which("git") is None:
+        pytest.skip("git is not available")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True)
+    (repo / ".gitignore").write_text("scratch.md\n", encoding="utf-8")
+    (repo / "scratch.md").write_text("# scratch\n", encoding="utf-8")
+    (repo / "fresh.md").write_text("# fresh\n", encoding="utf-8")
+    proc = _run_in(repo, "--check-tree", ".", "--depth", "1")
+    assert "scratch.md" not in proc.stderr, (
+        f"a gitignored file was reported:\n{proc.stderr}")
+    assert "fresh.md" in proc.stderr, (
+        f"a real document was not reported:\n{proc.stderr}")
+    assert proc.returncode == 1
 
 
 # ── document shape ───────────────────────────────────────────────────────
@@ -136,6 +170,23 @@ def test_records_are_not_gitignored():
     assert "!docs/*.i18n.yaml" in gitignore, (
         ".gitignore must re-include docs/*.i18n.yaml — docs/* would "
         "otherwise swallow the consistency records")
+
+
+def test_dockerignore_keeps_the_repo_root_pair_complete():
+    """The testing image must carry the whole repo-root bilingual pair.
+
+    .dockerignore excludes AGENTS.md, and **/.* hides .gitignore, so both
+    need an explicit `!` whitelist entry. Without them the image holds a
+    half pair (the Chinese side and the record, but not the English
+    anchor) and the gate fails inside the image — which is where CI runs it.
+    """
+    dockerignore = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8")
+    assert "!AGENTS.md" in dockerignore, (
+        ".dockerignore must re-include AGENTS.md — the bilingual-pair test "
+        "verifies the complete repo-root pair inside the testing image")
+    assert "!.gitignore" in dockerignore, (
+        ".dockerignore must re-include .gitignore — the bilingual-pair test "
+        "asserts the ignore rules from inside the testing image")
 
 
 # ── the gate actually rejects drift ──────────────────────────────────────

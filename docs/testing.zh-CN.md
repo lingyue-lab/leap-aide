@@ -80,14 +80,14 @@ python3 backend/scripts/check_translation_pairing.py --write docs/architecture.m
 - 两个文件都必须以 YAML frontmatter 开头，且从字节 0 开始。
 - 两个文件的前 20 行内都要有语言切换器。
 - 两个文件的标题结构必须一致（层级相同、顺序相同）。
-- 围栏代码块在两侧必须逐字节相同 —— 代码块里是事实（端口、路径、schema），绝不能漂移。
+- 围栏代码块在两侧必须逐字节相同 —— 代码块里是事实（端口、路径、schema），绝不能漂移。围栏里的注释在中文版也保持英文，逐字节比较才成立。
 - 每个章节的散文摘要都要与记录一致。
 
 新增一篇文档：
 
 1. 创建 `docs/foo.md` 与 `docs/foo.zh-CN.md`，各自以 frontmatter 和语言切换器开头。
 2. 标题结构完全对齐 —— 层级相同、顺序相同。
-3. 围栏代码块在两侧保持逐字节相同。
+3. 围栏代码块在两侧保持逐字节相同 —— 围栏里的注释在中文版也保持英文。
 4. 执行 `--write docs/foo.md` 生成记录，三个文件一起提交。
 
 有意为之的单边修改（例如某个 typo 没有对应的中文改动），在该配对的记录里用
@@ -104,7 +104,8 @@ waiver:
 豁免会出现在 PR 的 diff 里，而且会过期，因此不会悄悄削弱门禁。
 
 CI 在每个触及双语配对的 PR 上运行 `--check-all`、`--check-tree docs`、
-`--check-tree . --depth 1` 以及 git co-change 门禁。
+`--check-tree . --depth 1` 以及 git co-change 门禁。门禁只报错、不阻塞合并 ——
+`main` 目前还没开分支保护。
 
 ---
 

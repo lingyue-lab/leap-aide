@@ -536,6 +536,41 @@ def discover_tracked_records(root: Path):
             if line.strip()]
 
 
+def _git_ignored_paths(paths: list) -> set:
+    """The subset of paths that git ignores.
+
+    --check-tree walks the filesystem, so a local scratch file that
+    .gitignore lists (CLAUDE.md, copilot-instructions.md) would be reported
+    as a document missing its Chinese companion — even though the
+    repository does not contain it. git check-ignore answers that question
+    without walking the working tree, and it does not report tracked
+    files as ignored. Outside a git checkout nothing is ignored.
+    """
+    try:
+        top = _repo_root()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return set()
+    by_rel = {}
+    for p in paths:
+        try:
+            by_rel[p.resolve().relative_to(top).as_posix()] = p
+        except ValueError:
+            continue  # outside the checkout — not git's business
+    if not by_rel:
+        return set()
+    try:
+        out = subprocess.run(
+            ["git", "check-ignore", "--stdin", "-z"],
+            input="\0".join(by_rel) + "\0",
+            capture_output=True, text=True, cwd=str(top), check=False)
+    except (OSError, FileNotFoundError):
+        return set()
+    if out.returncode not in (0, 1):
+        return set()  # 0 = at least one ignored, 1 = none ignored
+    ignored = {line for line in out.stdout.split("\0") if line}
+    return {by_rel[rel] for rel in ignored if rel in by_rel}
+
+
 def _iter_files(root: Path, suffix: str, depth=None):
     """Yield files with the given suffix under root.
 
@@ -607,7 +642,15 @@ def check_tree(root: Path, depth=None) -> int:
 
     violations = []
     anchors = []
-    for md in _iter_files(root, ".md", depth):
+    md_files = list(_iter_files(root, ".md", depth))
+    rec_files = list(_iter_files(root, RECORD_SUFFIX, depth))
+    # A file git ignores is not part of the repository — reporting it as a
+    # document without a companion would be a false positive.
+    ignored = _git_ignored_paths(md_files + rec_files)
+    md_files = [p for p in md_files if p not in ignored]
+    rec_files = [p for p in rec_files if p not in ignored]
+
+    for md in md_files:
         if md.name.endswith(ZH_SUFFIX):
             anchor = md.with_name(md.name[: -len(ZH_SUFFIX)] + ".md")
             if not anchor.is_file():
@@ -623,7 +666,7 @@ def check_tree(root: Path, depth=None) -> int:
             violations.append(f"{md}: missing consistency record "
                               f"{record.name} (create it with --write)")
 
-    for rec in _iter_files(root, RECORD_SUFFIX, depth):
+    for rec in rec_files:
         anchor, zh, _rec = record_to_pair(rec)
         if not anchor.is_file() or not zh.is_file():
             violations.append(f"{rec}: orphan record "

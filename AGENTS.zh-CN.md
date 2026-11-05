@@ -54,7 +54,7 @@ bash scripts/build.sh
 - 前端：TypeScript strict 模式。状态管理用 Zustand store，样式遵循Google Design M3前端规范。
 - 禁止使用原生 `confirm()`/`prompt()` — 使用 `showConfirmDialog()`/`showPromptDialog()`。
 - 路径穿越防护：文件操作始终使用 `safe_resolve(root, requested)`。
-- 双语配对由 `backend/scripts/check_translation_pairing.py` 强制 —— 推送前跑 `--check-all` 与 `--check-tree docs`；每篇新增文档都要带上 `.zh-CN.md` 配套文件和 `.i18n.yaml` 记录。
+- 双语配对由 `backend/scripts/check_translation_pairing.py` 强制 —— 推送前跑 `--check-all`、`--check-tree docs` 与 `--check-tree . --depth 1`；每篇新增文档都要带上 `.zh-CN.md` 配套文件和 `.i18n.yaml` 记录。
 
 ---
 

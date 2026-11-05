@@ -76,14 +76,15 @@ git commit log 必须为英文。
 
 这一条不是靠自觉，而是有机器强制的。每个双语配对都带一份一致性记录
 （`docs/foo.i18n.yaml`），里面按章节存放两种语言各自的 `sha256-16` 摘要，
-由 `backend/scripts/check_translation_pairing.py` 校验。CI 会拦下只改了一种语言的
-PR，也会拦下新增文档却忘了写中文版或忘了生成记录的情况。
+由 `backend/scripts/check_translation_pairing.py` 校验。CI 会在每个触及双语配对的
+PR 上跑这个检查：只改了一种语言的 PR、或新增文档却没带中文版 / 记录的 PR，
+都会报错。`main` 目前还没开分支保护，所以门禁只报错、不阻塞合并。
 
 新增一篇文档：
 
 1. 创建 `docs/foo.md` 与 `docs/foo.zh-CN.md`，各自以 YAML frontmatter 块和语言切换器开头。
 2. 标题结构完全对齐 —— 层级相同、顺序相同。
-3. 围栏代码块在两侧保持逐字节相同。
+3. 围栏代码块在两侧保持逐字节相同 —— 围栏里的注释在中文版也保持英文。
 4. 执行 `python3 backend/scripts/check_translation_pairing.py --write docs/foo.md`
    生成记录，三个文件一起提交。
 
