@@ -50,4 +50,25 @@ TEST_STATE_DIR = pathlib.Path(os.environ.get(
 # DeepSeek V4 Flash is the smoke default because it's cheap/fast; CI/local
 # runs that need a different model set HERMES_WEBUI_DEFAULT_MODEL before
 # invoking pytest.
+#
+# This is the CLI-shaped default (a bare/namespaced id).  It belongs to the
+# config.yaml side of the model identity and is what /api/default-model
+# expects — NOT what a chat request may carry (see TEST_ROUTABLE_MODEL).
 TEST_DEFAULT_MODEL = os.environ.get('HERMES_WEBUI_DEFAULT_MODEL', 'deepseek/deepseek-v4-flash')
+
+# A routable WebUI model identity, i.e. the only form /api/chat/start accepts
+# (issue #55): the picker's "@provider:model" id.  A bare or namespaced value
+# carries no provider hint, so the backend has to map it onto a catalog entry
+# before it can be routed — and that mapping needs a warm model catalog.  The
+# server answers /health as soon as it starts listening while the boot
+# prewarm is still building the catalog, so a legacy value in a chat request
+# races the prewarm and the request is rejected with 400 "Session model is
+# invalid".  Tests that POST to /api/chat/start must therefore use a
+# canonical identity: it is routable without consulting the catalog at all.
+#
+# OpenRouter is used because the non-live test server has no provider key
+# (the conftest injects a stub OPENROUTER_API_KEY); the identity is what
+# matters, not whether the provider answers.
+TEST_ROUTABLE_MODEL = os.environ.get(
+    'HERMES_WEBUI_ROUTABLE_MODEL', '@openrouter:deepseek/deepseek-v4-flash'
+)

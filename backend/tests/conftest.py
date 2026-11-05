@@ -158,6 +158,24 @@ def _live_default_model() -> str:
         return "@google:gemini-2.5-flash"
     return "deepseek/deepseek-v4-flash"
 
+def _live_routable_model() -> str:
+    """A routable "@provider:model" identity for chat requests.
+
+    Same credential priority as _live_default_model(), but the result always
+    names its provider: a bare or namespaced id is not a routable WebUI
+    identity (issue #55) and /api/chat/start rejects it.  OpenRouter is the
+    fall-through because the slash-form default already routes through it.
+    """
+    if os.environ.get("DEEPSEEK_API_KEY"):
+        return "@deepseek:deepseek-v4-flash"
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return "@anthropic:claude-sonnet-4-6"
+    if os.environ.get("OPENAI_API_KEY"):
+        return "@openai:gpt-5.4-mini"
+    if os.environ.get("GOOGLE_API_KEY"):
+        return "@google:gemini-2.5-flash"
+    return "@openrouter:deepseek/deepseek-v4-flash"
+
 LIVE_TESTS_ENABLED = bool(os.environ.get("TEST_USING_LIVE_KEY")) and any(
     os.environ.get(_k) for _k in LIVE_PROVIDER_KEY_VARS
 )
@@ -179,6 +197,20 @@ if LIVE_TESTS_ENABLED:
     os.environ.setdefault('HERMES_WEBUI_DEFAULT_MODEL', _live_default_model())
 else:
     os.environ.setdefault('HERMES_WEBUI_DEFAULT_MODEL', 'deepseek/deepseek-v4-flash')
+
+# Routable model identity for chat requests (read by
+# _pytest_port.TEST_ROUTABLE_MODEL).  /api/chat/start only accepts an
+# "@provider:model" id: a bare or namespaced value has to be mapped onto a
+# catalog entry first, which needs a warm model catalog — and the server
+# starts answering /health before the boot prewarm has built one.  A
+# canonical identity is routable without the catalog, so chat requests in
+# tests never race the prewarm.  With live opt-in the identity points at the
+# provider that actually holds the credential.
+os.environ.setdefault(
+    'HERMES_WEBUI_ROUTABLE_MODEL',
+    _live_routable_model() if LIVE_TESTS_ENABLED
+    else '@openrouter:deepseek/deepseek-v4-flash',
+)
 
 # ── Server script: always relative to repo root ───────────────────────────
 SERVER_SCRIPT = ACTUAL_REPO_ROOT / 'backend' / 'app' / 'server.py'

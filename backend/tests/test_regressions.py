@@ -13,7 +13,7 @@ import urllib.request
 import urllib.parse
 REPO_ROOT = pathlib.Path(__file__).parent.parent.resolve()
 
-from tests._pytest_port import BASE, TEST_DEFAULT_MODEL
+from tests._pytest_port import BASE, TEST_ROUTABLE_MODEL
 
 def get(path):
     with urllib.request.urlopen(BASE + path, timeout=10) as r:
@@ -35,7 +35,13 @@ def post(path, body=None):
         return json.loads(e.read()), e.code
 
 def make_session(created_list):
-    d, _ = post("/api/session/new", {})
+    # Create the session with an explicit routable identity (issue #55).
+    # Without one the backend has to pick a model from the catalog, which
+    # yields a bare/namespaced id when the catalog is still cold -- and such
+    # a session is rejected by /api/chat/start with "Session model is
+    # invalid".  Passing @provider:model keeps the session routable no
+    # matter how warm the catalog is.
+    d, _ = post("/api/session/new", {"model": TEST_ROUTABLE_MODEL})
     sid = d["session"]["session_id"]
     created_list.append(sid)
     return sid
@@ -51,7 +57,7 @@ def test_chat_start_returns_stream_id(cleanup_test_sessions):
     data, status = post("/api/chat/start", {
         "session_id": sid,
         "message": "ping",
-        "model": "openai/gpt-5.4-mini",
+        "model": TEST_ROUTABLE_MODEL,
     })
     # Must return 200 with a stream_id -- not 500
     assert status == 200, f"chat/start failed with {status}: {data}"
@@ -78,7 +84,7 @@ def test_chat_stream_opens_successfully(cleanup_test_sessions):
     data, status = post("/api/chat/start", {
         "session_id": sid,
         "message": "say: hello",
-        "model": TEST_DEFAULT_MODEL,
+        "model": TEST_ROUTABLE_MODEL,
     })
     assert status == 200, f"chat/start failed: {data}"
     assert "stream_id" in data, f"chat/start must return stream_id, got: {data}"
@@ -317,7 +323,7 @@ def test_chat_start_persists_pending_turn_metadata_for_reload_recovery(cleanup_t
     server can accept back at /api/chat/cancel.
     """
     sid = make_session(cleanup_test_sessions)
-    payload = {"session_id": sid, "message": "ping", "model": TEST_DEFAULT_MODEL}
+    payload = {"session_id": sid, "message": "ping", "model": TEST_ROUTABLE_MODEL}
     result, _ = post("/api/chat/start", payload)
     stream_id = result["stream_id"]
     assert stream_id, "chat/start must return a non-empty stream_id"

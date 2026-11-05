@@ -24,7 +24,7 @@ import pathlib
 import urllib.error
 import urllib.request
 
-from tests._pytest_port import BASE
+from tests._pytest_port import BASE, TEST_ROUTABLE_MODEL
 from tests.conftest import TEST_STATE_DIR
 
 REPO_ROOT = pathlib.Path(__file__).parent.parent.resolve()
@@ -105,14 +105,18 @@ def test_models_endpoint_responds():
 def test_chat_start_returns_stream_id(cleanup_test_sessions):
     """R1 regression: chat/start must always return a stream_id (or a known
     direct/skill response shape) — never 500 due to missing uuid import."""
-    data, status = _post("/api/session/new", {})
+    # The session is created with an explicit routable identity (issue #55):
+    # a session created without one has to borrow a model from the catalog,
+    # and on a cold catalog that pick is not a routable identity, so
+    # /api/chat/start would reject it with "Session model is invalid".
+    data, status = _post("/api/session/new", {"model": TEST_ROUTABLE_MODEL})
     assert status == 200
     sid = data["session"]["session_id"]
     cleanup_test_sessions.append(sid)
     payload, pstatus = _post("/api/chat/start", {
         "session_id": sid,
         "message": "ping",
-        "model": os.getenv("HERMES_WEBUI_DEFAULT_MODEL", "deepseek/deepseek-v4-flash"),
+        "model": TEST_ROUTABLE_MODEL,
     })
     assert pstatus == 200, f"chat/start returned {pstatus}: {payload}"
     # Three valid shapes per test_chat_start_commands.py

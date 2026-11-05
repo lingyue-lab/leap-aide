@@ -85,15 +85,16 @@ class TestConfigYamlModelsLoading:
             },
         }
         result = _available_models_with_cfg(cfg)
-        # Find Anthropic group
+        # Find Anthropic group.  Every picker id carries its owning provider
+        # as an @provider:model identity (issue #55).
         for g in result["groups"]:
             if g["provider"] == "Anthropic":
                 model_ids = [m["id"] for m in g["models"]]
-                assert "claude-custom-1" in model_ids, (
-                    f"claude-custom-1 not in Anthropic models: {model_ids}"
+                assert "@anthropic:claude-custom-1" in model_ids, (
+                    f"@anthropic:claude-custom-1 not in Anthropic models: {model_ids}"
                 )
-                assert "claude-custom-2" in model_ids, (
-                    f"claude-custom-2 not in Anthropic models: {model_ids}"
+                assert "@anthropic:claude-custom-2" in model_ids, (
+                    f"@anthropic:claude-custom-2 not in Anthropic models: {model_ids}"
                 )
                 break
 
@@ -111,8 +112,8 @@ class TestConfigYamlModelsLoading:
         for g in result["groups"]:
             if g["provider"] == "Anthropic":
                 model_ids = [m["id"] for m in g["models"]]
-                assert "claude-list-only-1" in model_ids, (
-                    f"claude-list-only-1 not in Anthropic models: {model_ids}"
+                assert "@anthropic:claude-list-only-1" in model_ids, (
+                    f"@anthropic:claude-list-only-1 not in Anthropic models: {model_ids}"
                 )
                 break
 

@@ -91,17 +91,21 @@ def test_session_update():
     child_ws = current_ws / f"session-update-{uuid.uuid4().hex[:6]}"
     child_ws.mkdir(parents=True, exist_ok=True)
 
+    # The WebUI identity is always @provider:model (issue #55): the update
+    # records the pick in model__webui and echoes it back unchanged.
     updated, status = post("/api/session/update", {
         "session_id": sid,
         "workspace": str(child_ws),
-        "model": "anthropic/claude-sonnet-4.6"
+        "model": "@deepseek:deepseek-v4-flash"
     })
     assert status == 200
-    assert updated["session"]["model"] == "anthropic/claude-sonnet-4.6"
+    assert updated["session"]["model"] == "@deepseek:deepseek-v4-flash"
+    assert updated["session"]["model_invalid"] is False
 
     # Reload and verify persistence
     reloaded = get_body(f"/api/session?session_id={sid}")
-    assert reloaded["session"]["model"] == "anthropic/claude-sonnet-4.6"
+    assert reloaded["session"]["model"] == "@deepseek:deepseek-v4-flash"
+    assert reloaded["session"]["model_invalid"] is False
 
 
 def test_session_delete():
