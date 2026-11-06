@@ -171,7 +171,27 @@ def _wait_for_tcp_port(host: str, port: int, timeout: float = 10.0) -> bool:
 
 # Only these sections list input methods. The group header carries its own
 # "Name=" line ("Name=Default") which names the GROUP, not an IM.
-_FCITX5_ITEM_SECTION_RE = re.compile(r"^\[Groups/\d+/Items/\d+\]$")
+_FCITX5_GROUP_SECTION_RE = re.compile(r"^\[Groups/(\d+)\]$")
+_FCITX5_ITEM_SECTION_RE = re.compile(r"^\[Groups/(\d+)/Items/(\d+)\]$")
+
+# The profile written when there is no usable one to upgrade.
+_FCITX5_SEED_PROFILE = (
+    "[Groups/0]\n"
+    "Name=Default\n"
+    "Default Layout=us\n"
+    "DefaultIM=pinyin\n"
+    "\n"
+    "[Groups/0/Items/0]\n"
+    "Name=keyboard-us\n"
+    "Layout=\n"
+    "\n"
+    "[Groups/0/Items/1]\n"
+    "Name=pinyin\n"
+    "Layout=\n"
+    "\n"
+    "[GroupOrder]\n"
+    "0=Default\n"
+)
 
 
 def _fcitx5_profile_input_methods(text: str) -> list[str]:
@@ -193,6 +213,134 @@ def _fcitx5_profile_input_methods(text: str) -> list[str]:
         if in_item and line.startswith("Name="):
             names.append(line[len("Name="):].strip())
     return names
+
+
+def _fcitx5_profile_sections(text: str) -> list[tuple[str, list[str]]]:
+    """Split a profile into (section header, body lines) pairs.
+
+    A header is a "[Name]" line; its body holds the keys below it together
+    with the comment lines fcitx5 writes above them.  Text before the first
+    header is returned under an empty header.
+    """
+    sections: list[tuple[str, list[str]]] = []
+    header = ""
+    body: list[str] = []
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            if header or body:
+                sections.append((header, body))
+            header = stripped
+            body = []
+        else:
+            body.append(raw)
+    if header or body:
+        sections.append((header, body))
+    return sections
+
+
+def _fcitx5_body_set(body: list[str], key: str, value: str) -> list[str]:
+    """Return a section body with "key=value" set.
+
+    An existing entry is replaced in place; otherwise the pair is inserted
+    after the last key of the section, so the comment lines fcitx5 writes
+    above each key stay attached to the key they belong to.
+    """
+    out = list(body)
+    last_key = -1
+    for i, line in enumerate(out):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        name = stripped.partition("=")[0]
+        if name.strip() == key:
+            out[i] = f"{key}={value}"
+            return out
+        last_key = i
+    if last_key >= 0:
+        out.insert(last_key + 1, f"{key}={value}")
+    else:
+        out.append(f"{key}={value}")
+    return out
+
+
+def _fcitx5_add_pinyin(text: str) -> str | None:
+    """Add the pinyin input method to an existing profile, in place.
+
+    Rewriting the whole file would drop whatever the user configured in the
+    fcitx5 config tool -- a second keyboard layout, the group's default
+    layout, the group's other keys -- so the existing text is edited
+    instead: the input group's "DefaultIM" points at pinyin and a pinyin
+    item is appended to that group.
+
+    Returns None when the profile holds no recognisable input group, so
+    the caller can fall back to writing a fresh profile.
+    """
+    sections = _fcitx5_profile_sections(text)
+
+    # The active group is the one named by [GroupOrder]; fall back to the
+    # first group when that section is missing or stale.
+    active_name = None
+    for header, body in sections:
+        if header == "[GroupOrder]":
+            for line in body:
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#") and "=" in stripped:
+                    active_name = stripped.partition("=")[2].strip()
+                    break
+            break
+
+    group_indexes = [
+        i for i, (header, _) in enumerate(sections)
+        if _FCITX5_GROUP_SECTION_RE.match(header)
+    ]
+    if not group_indexes:
+        return None
+    target = group_indexes[0]
+    if active_name:
+        for i in group_indexes:
+            body = sections[i][1]
+            name = next(
+                (
+                    line.strip().partition("=")[2].strip()
+                    for line in body
+                    if line.strip().startswith("Name=")
+                ),
+                None,
+            )
+            if name == active_name:
+                target = i
+                break
+
+    group_no = _FCITX5_GROUP_SECTION_RE.match(sections[target][0]).group(1)
+    sections[target] = (
+        sections[target][0],
+        _fcitx5_body_set(sections[target][1], "DefaultIM", "pinyin"),
+    )
+
+    # Append the pinyin item behind the last item of that group.
+    item_nos = []
+    insert_at = target + 1
+    for i, (header, _) in enumerate(sections):
+        match = _FCITX5_ITEM_SECTION_RE.match(header)
+        if match and match.group(1) == group_no:
+            item_nos.append(int(match.group(2)))
+            insert_at = i + 1
+    item_no = max(item_nos) + 1 if item_nos else 0
+    sections.insert(
+        insert_at,
+        (
+            f"[Groups/{group_no}/Items/{item_no}]",
+            ["# Name", "Name=pinyin", "# Layout", "Layout=", ""],
+        ),
+    )
+
+    lines: list[str] = []
+    for header, body in sections:
+        if header:
+            lines.append(header)
+        lines.extend(body)
+    return "\n".join(lines) + "\n"
 
 
 # -- GlobalDesktop -----------------------------------------------------------
@@ -303,17 +451,20 @@ class GlobalDesktop:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-                time.sleep(2.0)  # let fcitx5 fully initialize
 
                 # The trigger key can only be set once fcitx5 owns
                 # org.fcitx.Fcitx5 on the session bus; a fixed sleep raced
                 # the daemon on slow nodes and left the trigger key at
                 # fcitx5's default (Control+space) — Shift+Space then
                 # toggled nothing. Wait for the name, then set the key.
-                self._wait_for_fcitx5_dbus(fcitx_env, timeout=15.0)
-
-                # Set trigger key via D-Bus (like the GUI config tool does)
-                self._configure_fcitx5_trigger_key(fcitx_env)
+                if self._wait_for_fcitx5_dbus(fcitx_env, timeout=15.0):
+                    # Set trigger key via D-Bus (like the GUI config tool does)
+                    self._configure_fcitx5_trigger_key(fcitx_env)
+                else:
+                    logger.warning(
+                        "fcitx5 D-Bus controller unavailable — the trigger "
+                        "key stays at fcitx5's default (Control+space)"
+                    )
 
                 # 4. Start openbox window manager
                 self.openbox_proc = subprocess.Popen(
@@ -688,6 +839,10 @@ class GlobalDesktop:
         e.g. the k8s deployment, which runs the service as ``leap-aide``
         with a persistent ``$HOME``, where fcitx5's own first-run profile
         (keyboard-us only) was written once and then never upgraded.
+
+        An existing profile is upgraded in place rather than rewritten, so
+        a second keyboard layout or any other setting the user made in the
+        fcitx5 config tool survives the seeding.
         """
         profile = Path.home() / ".config" / "fcitx5" / "profile"
         try:
@@ -704,22 +859,9 @@ class GlobalDesktop:
             return  # user added a custom IM — do not touch
         try:
             profile.parent.mkdir(parents=True, exist_ok=True)
+            upgraded = _fcitx5_add_pinyin(text) if text else None
             profile.write_text(
-                "[Groups/0]\n"
-                "Name=Default\n"
-                "Default Layout=us\n"
-                "DefaultIM=pinyin\n"
-                "\n"
-                "[Groups/0/Items/0]\n"
-                "Name=keyboard-us\n"
-                "Layout=\n"
-                "\n"
-                "[Groups/0/Items/1]\n"
-                "Name=pinyin\n"
-                "Layout=\n"
-                "\n"
-                "[GroupOrder]\n"
-                "0=Default\n",
+                upgraded if upgraded else _FCITX5_SEED_PROFILE,
                 encoding="utf-8",
             )
             logger.info("fcitx5 profile seeded with pinyin (%s)", profile)
@@ -737,8 +879,7 @@ class GlobalDesktop:
         at fcitx5's default, Control+space).
         """
         script = (
-            "import dbus, dbus.mainloop.glib\n"
-            "dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)\n"
+            "import dbus\n"
             "bus = dbus.SessionBus()\n"
             "try:\n"
             "    bus.get_name_owner('org.fcitx.Fcitx5')\n"
@@ -755,7 +896,8 @@ class GlobalDesktop:
                     env=fcitx_env, timeout=5,
                     capture_output=True,
                 )
-                if b"ready" in result.stdout:
+                # Exact match: "not-ready" contains "ready" as a substring.
+                if result.stdout.strip() == b"ready":
                     return True
             except Exception as exc:  # noqa: BLE001 - best-effort probe
                 logger.debug("fcitx5 D-Bus probe failed: %s", exc)
@@ -774,8 +916,8 @@ class GlobalDesktop:
         """Set fcitx5 trigger key via D-Bus (same as GUI config tool).
 
         Uses fcitx://config/global URI and SetConfig API to set
-        TriggerKeys to Shift+space.  Retried a few times: the daemon may
-        still be registering its bus name when the first call lands.
+        TriggerKeys to Shift+space.  Retried a few times: the daemon owns
+        its bus name a moment before its controller starts answering.
         """
         script = (
             "import dbus, dbus.mainloop.glib\n"
