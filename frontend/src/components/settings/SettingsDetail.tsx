@@ -5,17 +5,18 @@ import { useSettingsStore } from '@/stores/useSettingsStore';
 import { useProvidersGateStore } from '@/stores/useProvidersGateStore';
 import { useModelsStore } from '@/stores/useModelsStore';
 import { useTheme } from '@/contexts/ThemeContext';
-import { configFileService, providersService } from '@/services/api';
+import { configFileService, providersService, settingsService } from '@/services/api';
 import FileView from '@/components/shared/FileView';
 import { EditIcon, Icon } from '@/components/common/Icons';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import CustomScrollbar from '@/components/common/CustomScrollbar';
 import { showToast } from '@/utils/toast';
+import { sameModelId } from '@/utils/modelSelection';
 import type { Settings, Theme, SendKey, FontSize, Provider } from '@/types';
 
 // ─── Reusable field components ────────────────────────────────────────────────
 
-function FieldRow({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
+function FieldRow({ label, children, hint }: { label: string; children: React.ReactNode; hint?: React.ReactNode }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '12px 0', borderBottom: '1px solid var(--md-outline-variant)' }}>
       <div style={{ minWidth: 0 }}>
@@ -62,16 +63,24 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
   );
 }
 
-function SelectField({ value, onChange, options }: {
+type SelectOptionGroup = {
+  label: string;
+  options: { value: string; label: string }[];
+};
+
+function SelectField({ value, onChange, options, optionGroups, disabled = false }: {
   value: string;
   onChange: (v: string) => void;
-  options: { value: string; label: string }[];
+  options?: { value: string; label: string }[];
+  optionGroups?: SelectOptionGroup[];
+  disabled?: boolean;
 }) {
   return (
     <div style={{ position: 'relative', display: 'inline-block' }}>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
         style={{
           padding: '5px 28px 5px 10px',
           borderRadius: 'var(--md-shape-xs)',
@@ -79,16 +88,25 @@ function SelectField({ value, onChange, options }: {
           background: 'var(--md-surface-container-highest)',
           color: 'var(--md-on-surface)',
           fontSize: 16,
-          cursor: 'pointer',
+          cursor: disabled ? 'default' : 'pointer',
+          opacity: disabled ? 0.6 : 1,
           // 统一下限 200px（对齐 TextInput），上限 280px（M3 菜单 max-width）
           minWidth: 200,
           maxWidth: 280,
           appearance: 'none',
         }}
       >
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>{o.label}</option>
-        ))}
+        {optionGroups
+          ? optionGroups.map((group) => (
+              <optgroup key={group.label} label={group.label}>
+                {group.options.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </optgroup>
+            ))
+          : options?.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
       </select>
       <Icon
         name="keyboard_arrow_down"
@@ -246,6 +264,64 @@ function SessionsGroup({ form, set }: GroupProps) {
 
 function AgentGroup({ form, set }: GroupProps) {
   const { t } = useTranslation();
+  const modelsData = useModelsStore((s) => s.data);
+  const modelsStatus = useModelsStore((s) => s.status);
+  const loadModels = useModelsStore((s) => s.load);
+
+  // Same catalog source as the composer footer: one shared /api/models call.
+  useEffect(() => {
+    void loadModels();
+  }, [loadModels]);
+
+  // Group options by provider, mirroring the composer picker.  The catalog
+  // may prefix non-active providers with `@provider:` while config.yaml
+  // stores the resolved form, so values are compared with sameModelId().
+  // Each option keeps its provider_id: config.yaml's `model.provider`
+  // (`active_provider` here) is authoritative, and a name-only match must
+  // not select another provider's same-named model.
+  const currentModel = (form.model ?? '').trim();
+  const modelGroups: SelectOptionGroup[] = [];
+  const allOptions: { value: string; label: string; providerId: string }[] = [];
+  for (const group of modelsData?.groups ?? []) {
+    const groupOptions = group.models.map((model) => ({
+      value: model.id,
+      label: model.unavailable
+        ? `${model.label} (${t('composer.model_unavailable', { ns: 'chat' })})`
+        : model.label,
+    }));
+    if (groupOptions.length > 0) {
+      modelGroups.push({ label: group.provider, options: groupOptions });
+      for (const option of groupOptions) {
+        allOptions.push({ ...option, providerId: group.provider_id ?? '' });
+      }
+    }
+  }
+  const activeProvider = modelsData?.active_provider ?? '';
+  const matchedOption = allOptions.find((option) => option.value === currentModel)
+    ?? (activeProvider
+      ? allOptions.find(
+          (option) => option.providerId === activeProvider
+            && sameModelId(option.value, currentModel),
+        )
+      : allOptions.find((option) => sameModelId(option.value, currentModel)));
+  if (currentModel && !matchedOption) {
+    // Keep the configured value visible even when the provider no longer
+    // lists it (issue #44: warn, never silently rewrite).
+    modelGroups.unshift({
+      label: t('settings.fields.default_model_current'),
+      options: [{ value: currentModel, label: currentModel }],
+    });
+  }
+  const modelSelectValue = matchedOption?.value ?? currentModel;
+  const defaultModelUnavailable =
+    modelsData?.default_model_available === false
+    && sameModelId(currentModel, modelsData.default_model);
+  // Distinguish "provider removed the model" from "the provider's key was
+  // deleted" — the latter is fixed by re-adding the key, not by picking a
+  // different model.
+  const defaultModelKeyMissing =
+    defaultModelUnavailable
+    && modelsData?.default_model_provider_has_key === false;
 
   // Global default reasoning effort (from config.yaml, not WebUI settings)
   const [globalEffort, setGlobalEffort] = useState<string>('');
@@ -287,6 +363,28 @@ function AgentGroup({ form, set }: GroupProps) {
 
   return (
     <>
+      <FieldRow
+        label={t('settings.fields.default_model')}
+        hint={
+          <>
+            <div>{t('settings.fields.default_model_hint')}</div>
+            {defaultModelUnavailable && (
+              <div style={{ color: 'var(--md-error)', marginTop: 4 }}>
+                {defaultModelKeyMissing
+                  ? t('settings.fields.default_model_key_missing')
+                  : t('settings.fields.default_model_unavailable')}
+              </div>
+            )}
+          </>
+        }
+      >
+        <SelectField
+          value={modelSelectValue}
+          onChange={(v) => set('model', v)}
+          optionGroups={modelGroups}
+          disabled={modelsStatus === 'loading' && modelGroups.length === 0}
+        />
+      </FieldRow>
       <FieldRow label={t('settings.fields.default_reasoning_effort')} hint={t('settings.fields.default_reasoning_effort_hint')}>
         <SelectField
           value={globalEffort}
@@ -532,6 +630,14 @@ function ProviderRow({ provider }: { provider: Provider }) {
         setApiKey('');
         setHasKey(false);
         setKeyStatus(null);
+        // Removing the key can drop the provider (and the configured default
+        // model) from the catalog immediately.  Without this invalidation the
+        // shared store keeps serving its 5-minute TTL snapshot, so the
+        // Agent Behavior warning and the composer picker lag behind the
+        // deletion.  Mirror handleSave's refresh.
+        const ms = useModelsStore.getState();
+        ms.invalidate();
+        void ms.load();
         // Refresh the gate with a fresh provider list. Fail-closed on
         // network error (user just deleted a key — assume they may now
         // have zero configured providers; the next chat / tasks click
@@ -878,8 +984,28 @@ export default function SettingsDetail() {
   const handleSave = async () => {
     setSaving(true);
     setError(null);
+    // Capture before any await: the settings store may be refreshed below.
+    const originalModel = settings?.model ?? '';
+    const nextModel = (form.model ?? '').trim();
+    // Exact-string comparison intentionally: `deepseek/x` and `@deepseek:x`
+    // route differently, so a normalized match must still be saved.
+    const modelChanged = !!nextModel && nextModel !== originalModel;
     try {
+      // Save the default model FIRST (config.yaml via the backend resolver).
+      // If it fails, the rest of the form is left unsaved and can be retried.
+      if (modelChanged) {
+        await settingsService.setDefaultModel(nextModel);
+      }
       await updateSettings(form as Settings);
+      if (modelChanged) {
+        // Re-read the server-authoritative value so the form shows the
+        // resolved config.yaml form, then refresh the catalog so the new
+        // default's availability is current.
+        await loadSettings();
+        const models = useModelsStore.getState();
+        models.invalidate();
+        void models.load();
+      }
       showToast(t('common.saved'));
     } catch (err) {
       setError((err as Error).message || 'Failed to save settings');

@@ -18,7 +18,7 @@ void i18n
     lng: 'en',
     fallbackLng: 'en',
     defaultNS: 'common',
-    ns: ['common'],
+    ns: ['common', 'chat'],
     interpolation: { escapeValue: false },
     resources: {
       en: {
@@ -32,6 +32,25 @@ void i18n
           close_preview: 'Close preview',
           close: 'Close',
         },
+        chat: {
+          composer: {
+            model_unavailable: 'unavailable',
+            default_model_key_missing:
+              "Default model unavailable: its provider's API key is missing or was removed. Re-add it in Settings.",
+            placeholder: 'Message LeapAide...',
+            send: 'Send',
+          },
+          mode: { manual: 'Manual', smart: 'Smart', yolo: 'YOLO' },
+          reasoning: {
+            default: 'Default',
+            none: 'None',
+            minimal: 'Minimal',
+            low: 'Low',
+            medium: 'Medium',
+            high: 'High',
+            xhigh: 'XHigh',
+          },
+        },
         common: {
           // Components under test call t('common.save') etc.; the real
           // en/common.json nests these under a top-level `common` object.
@@ -43,6 +62,24 @@ void i18n
           },
           no_matching_commands: 'No matching commands',
           ok: 'OK',
+          settings: {
+            fields: {
+              default_model: 'Default Model',
+              default_model_hint: 'Model used for new conversations',
+              default_model_unavailable: 'This model is no longer offered by the configured provider.',
+              default_model_key_missing:
+                "The API key for this model's provider is missing or was removed. Re-add it in Model Providers.",
+              default_model_current: 'Current',
+              default_reasoning_effort: 'Default Reasoning Effort',
+              default_reasoning_effort_hint: 'Global default reasoning effort',
+              default_mode: 'Default Approval Mode',
+              default_mode_hint: 'Approval mode for new sessions',
+              approval_timeout: 'Approval Timeout',
+              approval_timeout_hint: 'Auto-deny after N seconds',
+              clarify_timeout: 'Clarify Timeout',
+              clarify_timeout_hint: 'Auto-pick after N seconds',
+            },
+          },
           sessions: {
             subagent: 'Subagent',
             actions: 'Actions',

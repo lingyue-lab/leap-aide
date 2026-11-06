@@ -298,6 +298,18 @@ export interface StreamStatusResponse {
 export interface ModelsResponse {
   groups: ModelGroup[];
   default_model?: string;
+  /**
+   * Whether the configured default appears in the catalog. `null`/undefined
+   * means unknown (config-only response, in-flight build, or old disk
+   * snapshot) — only an explicit `false` should trigger an unavailable hint.
+   */
+  default_model_available?: boolean | null;
+  /**
+   * Whether the default model's provider has a configured API key. `null`
+   * when unknown or when the provider does not authenticate with a key
+   * (local/OAuth). Only an explicit `false` means the key is missing.
+   */
+  default_model_provider_has_key?: boolean | null;
   active_provider?: string;
   // Present only when the backend degraded (cold build still in flight or
   // failed): the groups may be stale/partial, so consumers should keep
@@ -313,10 +325,37 @@ export interface ModelGroup {
   models: Model[];
 }
 
+/**
+ * Availability of a single model id (GET /api/models/availability).
+ *
+ * The catalog only reports the configured default's availability, so an
+ * existing session asks the backend about the model its conversation
+ * actually uses — a conversation must never silently switch models when its
+ * provider stops offering them.
+ */
+export interface ModelAvailability {
+  model: string;
+  /** Provider that serves the model ("" when it cannot be determined). */
+  provider: string;
+  /**
+   * Whether the model's provider still offers it. `null` means unknown (no
+   * catalog to compare against) — only an explicit `false` is a failure.
+   */
+  available: boolean | null;
+  /**
+   * Whether the model's provider has a configured API key. `null` when
+   * unknown or when the provider does not authenticate with a key
+   * (local/OAuth). Only an explicit `false` means the key is missing.
+   */
+  provider_has_key: boolean | null;
+}
+
 export interface Model {
   id: string;
   label: string;
   supportsExtendedThinking?: boolean;
+  /** Injected configured default that the provider no longer offers. */
+  unavailable?: boolean;
 }
 
 export interface Provider {

@@ -1715,6 +1715,26 @@
     flex-shrink: 0;
   }
 
+  /* Issue #44: the conversation's model is no longer usable (provider retired
+     it or its API key was removed).  Same M3 supporting-text treatment as the
+     identity error above; the model stays visible in the picker. */
+  .composer-model-warning {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 12px 4px;
+    color: var(--md-error);
+    font-size: 12px;
+    line-height: 18px;
+    min-width: 0;
+  }
+
+  .composer-model-warning span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .composer-footer {
     display: flex;
     align-items: center;

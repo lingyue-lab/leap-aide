@@ -267,12 +267,35 @@ export const settingsService = {
       body: JSON.stringify(settings),
     });
   },
+
+  /**
+   * Persist the default model to the active profile's config.yaml.
+   * The backend resolves the WebUI `@provider:model` form before writing;
+   * never write that form to config.yaml directly.
+   */
+  setDefaultModel: async (model: string) => {
+    return api<{ ok: boolean; model: string }>('/api/default-model', {
+      method: 'POST',
+      body: JSON.stringify({ model }),
+    });
+  },
 };
 
 // Models API 服务
 export const modelsService = {
   getModels: async (init?: RequestInit) => {
     return api<import('@/types').ModelsResponse>('/api/models', init);
+  },
+  /**
+   * Availability of a single model id.  The catalog only reports the
+   * configured default's availability; a conversation that runs another
+   * model needs its own verdict so the UI can warn instead of silently
+   * switching to a different model.
+   */
+  getModelAvailability: async (model: string) => {
+    return api<import('@/types').ModelAvailability>(
+      `/api/models/availability?model=${encodeURIComponent(model)}`,
+    );
   },
 };
 

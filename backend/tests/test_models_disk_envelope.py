@@ -36,6 +36,8 @@ def cache_path(tmp_path, monkeypatch):
 _SAMPLE_CACHE = {
     "active_provider": "anthropic",
     "default_model": "claude-sonnet-4.6",
+    "default_model_available": True,
+    "default_model_provider_has_key": True,
     "groups": [
         {
             "provider": "Anthropic",
@@ -69,6 +71,8 @@ class TestEnvelopeRoundTrip:
         assert loaded is not None
         assert loaded["active_provider"] == "anthropic"
         assert loaded["default_model"] == "claude-sonnet-4.6"
+        assert loaded["default_model_available"] is True
+        assert loaded["default_model_provider_has_key"] is True
         assert loaded["groups"] == _SAMPLE_CACHE["groups"]
 
         # Per-provider map is stashed for the last-success fallback.
@@ -87,6 +91,8 @@ class TestEnvelopeRoundTrip:
         assert payload["schema_version"] == 1
         assert payload["active_provider"] == "anthropic"
         assert payload["default_model"] == "claude-sonnet-4.6"
+        assert payload["default_model_available"] is True
+        assert payload["default_model_provider_has_key"] is True
         assert payload["groups"] == _SAMPLE_CACHE["groups"]
         assert "provider_models" in payload
         assert "fetched_at" in payload
@@ -108,6 +114,50 @@ class TestEnvelopeRoundTrip:
         assert config._disk_provider_models == {}
 
 
+class TestPickerHintRehydration:
+
+    def test_bare_slash_ids_from_non_active_group_get_hint_on_load(self, cache_path):
+        """A snapshot written before the issue #44 fix may hold OpenRouter's
+        bare ``deepseek/...`` id while DeepSeek is active.  Loading it must
+        add the ``@openrouter:`` hint so the selection cannot be misrouted
+        to the DeepSeek direct API."""
+        cache = {
+            "active_provider": "deepseek",
+            "default_model": "deepseek-v4-flash",
+            "default_model_available": True,
+            "groups": [
+                {
+                    "provider": "DeepSeek",
+                    "provider_id": "deepseek",
+                    "models": [
+                        {"id": "@deepseek:deepseek-v4-flash", "label": "DeepSeek V4 Flash"},
+                    ],
+                },
+                {
+                    "provider": "OpenRouter",
+                    "provider_id": "openrouter",
+                    "models": [
+                        {
+                            "id": "deepseek/deepseek-v4-flash",
+                            "label": "DeepSeek V4 Flash",
+                            "supports_extended_thinking": False,
+                        },
+                    ],
+                },
+            ],
+        }
+        config._save_models_cache_to_disk(cache)
+
+        loaded = config._load_models_cache_from_disk()
+
+        by_pid = {g["provider_id"]: g for g in loaded["groups"]}
+        assert by_pid["deepseek"]["models"][0]["id"] == "@deepseek:deepseek-v4-flash"
+        openrouter_model = by_pid["openrouter"]["models"][0]
+        assert openrouter_model["id"] == "@openrouter:deepseek/deepseek-v4-flash"
+        # Enrichment fields written by the build survive the rewrite.
+        assert openrouter_model["supports_extended_thinking"] is False
+
+
 class TestLegacySnapshotCompat:
 
     def test_groups_only_file_still_loads(self, cache_path):
@@ -122,6 +172,9 @@ class TestLegacySnapshotCompat:
         assert loaded is not None
         assert loaded["active_provider"] is None
         assert loaded["default_model"] == ""
+        # Old snapshots predate issue #44's availability field.
+        assert loaded["default_model_available"] is None
+        assert loaded["default_model_provider_has_key"] is None
         assert loaded["groups"] == _SAMPLE_CACHE["groups"]
         # No envelope map in legacy files — stays empty.
         assert config._disk_provider_models == {}

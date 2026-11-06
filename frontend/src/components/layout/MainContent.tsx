@@ -9,6 +9,7 @@ import { useMemoryStore } from '@/stores/useMemoryStore';
 import { useTerminalStore } from '@/stores/useTerminalStore';
 import { useBrowserDesktopStore } from '@/stores/useBrowserDesktopStore';
 import { useSettingsTabStore } from '@/stores/useSettingsTabStore';
+import { useSettingsStore } from '@/stores/useSettingsStore';
 import { useModelsStore } from '@/stores/useModelsStore';
 import SkillDetail from '@/components/skills/SkillDetail';
 import SkillForm from '@/components/skills/SkillForm';
@@ -88,14 +89,18 @@ function WelcomeState() {
     }
   }, [pendingNewSession, enterPendingNewSession]);
 
-  // Eagerly fetch the model catalog so the picker shows a default selection
-  // on first render.  Without this, settings.model can point at an
-  // unconfigured provider (e.g. user only has DeepSeek configured but
-  // settings.default_model is anthropic/...) and the menu opens with
-  // nothing preselected.  Goes through the shared store (issue #16) so a
-  // welcome-page mount joins the composer's in-flight request instead of
-  // stacking a second one on a cold backend.
+  // Eagerly fetch the model catalog so the picker shows the configured
+  // default selection on first render.  Goes through the shared store
+  // (issue #16) so a welcome-page mount joins the composer's in-flight
+  // request instead of stacking a second one on a cold backend.
   const firstAvailableModelId = useModelsStore((s) => s.data?.groups?.[0]?.models?.[0]?.id);
+  // Issue #44: the configured default (config.yaml) drives new chats.
+  // `/api/models` carries it; the settings mirror covers the window before
+  // the catalog lands.  first-available remains the fallback when no
+  // default is configured.
+  const catalogDefaultModelId = useModelsStore((s) => s.data?.default_model);
+  const settingsModelId = useSettingsStore((s) => s.settings?.model);
+  const configuredDefaultModelId = catalogDefaultModelId || settingsModelId;
   const loadModels = useModelsStore((s) => s.load);
   useEffect(() => {
     void loadModels();
@@ -132,17 +137,16 @@ function WelcomeState() {
     // Resolve the model to use for this turn.  Order:
     //   1. welcomeModelId — user's explicit pick in the picker (highest
     //      priority; honors what they actually clicked)
-    //   2. firstAvailableModelId — the eager-load fallback that is
-    //      guaranteed to be in the provider catalog (the user has keys
-    //      for it).  settings.model is unreliable when settings.default_model
-    //      points at an unconfigured provider — e.g. user only has
-    //      DeepSeek but default_model is anthropic/claude-opus-4.6 — and
-    //      the backend would 401 mid-stream.
-    //   3. empty string — lets the backend resolve its own default model
+    //   2. configuredDefaultModelId — the default saved in Settings
+    //      (config.yaml).  Used even when the provider no longer lists it:
+    //      issue #44 warns instead of silently falling back.
+    //   3. firstAvailableModelId — fallback for a deployment with no
+    //      configured default.
+    //   4. empty string — lets the backend resolve its own default model
     //      instead of inventing one the user has no provider for (issue #55)
-    const model = welcomeModelId ?? firstAvailableModelId ?? '';
+    const model = welcomeModelId ?? configuredDefaultModelId ?? firstAvailableModelId ?? '';
     await startStream(placeholderSid, text, model, currentSession?.workspace, attachments, mode);
-  }, [pendingNewSession, currentSession, startStream, firstAvailableModelId, welcomeModelId]);
+  }, [pendingNewSession, currentSession, startStream, configuredDefaultModelId, firstAvailableModelId, welcomeModelId]);
 
   const handleWelcomeCancel = useCallback(() => {
     // Welcome is a single-way door (per design decision): Escape/cancel is no-op.
@@ -187,7 +191,7 @@ function WelcomeState() {
           cardVisible={false}
           className="composer-wrap--centered"
           placeholderText={t('composer.placeholder', { ns: 'chat' })}
-          defaultModelId={firstAvailableModelId}
+          defaultModelId={configuredDefaultModelId ?? firstAvailableModelId}
           onModelChange={handleWelcomeModelChange}
         />
       </div>

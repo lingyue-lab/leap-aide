@@ -185,14 +185,98 @@ Key properties:
   `model_catalog.json` mtime changes, key saves, and the boot prewarm.
   Providers with `refresh.mode=api` are queried concurrently
   (`ThreadPoolExecutor`, ≤6 workers) with a per-provider timeout.
-  Eligibility (is a key present / is the provider OAuth) is unchanged —
-  the catalog decides *what* to show, never *whether* the provider is
-  eligible.
+  Eligibility remains key/OAuth based: a catalog provider that declares
+  API-key auth is dropped when no key is configured — including the active
+  provider, so deleting a key removes that provider's models instead of
+  falling back to its JSON baseline. Providers without an API-key
+  requirement (local endpoints, unknown/custom providers) stay visible when
+  active, and custom `model.base_url` fetches still re-add their slug.
+- **Picker provider hints**: `/api/models` prefixes every model ID with its
+  owning provider (`@provider:model`), including slash-form IDs
+  (OpenRouter's `deepseek/deepseek-v4-flash` becomes
+  `@openrouter:deepseek/deepseek-v4-flash`) and the active provider's own
+  models. A bare or slash-only ID does not name a route:
+  `resolve_model_provider()` strips a prefix that matches `model.provider`,
+  so without the hint an OpenRouter selection would silently route to the
+  DeepSeek direct API whenever `deepseek` is the active provider. The hint is
+  split at the first colon, so the model half keeps any further slashes and
+  colons (e.g. `@ollama1:qwen3-vl:235b`), and `POST /api/default-model`
+  resolves the hint back to `model.default` + `model.provider` before writing
+  config.yaml.
+- **Stored session model vs. picker entries**: the picker compares ids
+  literally, so a session model has to use the same form as the catalog entry
+  it refers to — otherwise the popover opens with nothing selected. Every
+  catalog id is `@provider:model`, and `normalize_model_prefix()` maps a bare
+  or namespaced config value (`deepseek-flash`, `anthropic/claude-opus-4.6`)
+  onto the identity of the provider that serves it, so that is what a session
+  stores. Sessions created earlier may carry a form the catalog no longer
+  lists (a bare name, or a model its provider stopped offering): the frontend
+  resolves the stored id to the catalog entry (`findCatalogModelId()`) for
+  selection, and the WebUI-owned identity (`model__webui`) is authoritative
+  on the display path. The hint is internal routing plumbing and never
+  appears in the UI text.
 - **Disk envelope**: the models cache snapshot persists
-  `{schema_version, active_provider, default_model, groups,
+  `{schema_version, active_provider, default_model,
+  default_model_available, default_model_provider_has_key, groups,
   provider_models, fetched_at}` so a restart serves a complete first
   response and keeps per-provider last-good lists; legacy `{groups-only}`
   files still load.
+- **Default model availability (issue #44)**: `/api/models` carries
+  `default_model_available` (`true` / `false` / `null`). It is computed
+  from the real provider groups *before* the configured default is
+  injected into the picker, and is `null` when unknown (config-only
+  response, in-flight build, or a legacy disk snapshot). Matching is
+  scoped to the default's own provider (`model.provider` is authoritative;
+  the name-only comparison is a fallback for provider-less configs), so a
+  same-named model under another provider cannot mask a removed default.
+  An empty group list (live results were empty or every provider was
+  rejected) also stays `null` — except when the default's provider is a
+  catalog API-key provider without a key, which is a definitive failure. A companion field,
+  `default_model_provider_has_key` (`true` / `false` / `null`; `null` for
+  local/OAuth/unknown providers), lets the UI say the provider's API key
+  was removed rather than claiming the provider retired the model. An
+  unavailable configured default is still injected so the UI can display
+  it, and is marked `unavailable: true`; the backend never rewrites it to
+  another model — the UI only warns. When the provider group vanished with
+  the key, the composer keeps showing the configured value plus an
+  explanation instead of silently selecting a different model; an explicit
+  pick in the composer dismisses that warning, because the new selection
+  replaces the default for the conversation. The raw
+  SDK "provider set in config.yaml but no API key" error is translated in
+  both stream failure paths into the same Settings-oriented message.
+  New sessions created without an explicit model resolve through
+  `get_default_model_for_new_session()`: the effective default first (env
+  override `HERMES_MODEL` / `OPENAI_MODEL` / `LLM_MODEL` → config.yaml
+  `model.default` → built-in constant), then the first available catalog
+  model only when that is empty. Settings saves the control via
+  `POST /api/default-model`, which resolves the WebUI-only
+  `@provider:model` form back to `model.default` + `model.provider` in
+  config.yaml.
+- **Model availability of a conversation (issue #44 follow-up)**: the
+  catalog only reports the *configured default's* availability, so an
+  existing session that runs another model asks the backend through
+  `GET /api/models/availability?model=…`. The answer
+  (`{model, provider, available, provider_has_key}`) is computed from the
+  live provider groups, provider-scoped like the default-model check:
+  `available` is `true` / `false` / `null` (unknown — nothing to compare
+  against) and `provider_has_key` is `true` / `false` / `null` (the provider
+  does not authenticate with an API key). A missing key settles the verdict
+  even when the catalog has no groups. The composer keeps the session's own
+  model visible (marked unavailable) and explains why instead of silently
+  highlighting the next available model of another provider — an existing
+  session behaves like the welcome state, which warns about the configured
+  default. The query is repeated whenever the catalog content changes, so
+  deleting a provider's API key is reflected right away.
+- **Wording follows the conversation, not the model value**: a brand-new
+  conversation runs the configured default, so it talks about "the default
+  model"; an existing session runs the model the user picked for it and
+  talks about "the current model" — even when the two happen to be the same
+  model. The composer applies the rule from the session context (it knows
+  whether the conversation has a model of its own), and the backend applies
+  it from the session id (`_handle_chat_start` mints a new session for the
+  welcome-state first send, so it knows whether the conversation is new).
+  `streaming._missing_key_wording()` picks the matching label, message and
+  hint for the two stream error paths.
 - **SSRF guard** (`model_catalog._check_url_safe`): scheme allowlist
   (http/https) plus rejection of hostnames resolving to private IPs,
   with explicit escapes for known-local hosts (ollama/localhost/

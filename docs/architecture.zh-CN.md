@@ -173,12 +173,81 @@ Provider 的展示名、别名、基线模型列表、端点、认证头与刷�
 - **刷新触发**复用现有 `/api/models` 构建机制（不新增后台线程）：24h TTL、
   config.yaml 或 `model_catalog.json` mtime 变化、保存 key、启动预热。
   `refresh.mode=api` 的 provider 并发查询（`ThreadPoolExecutor`，≤6 worker）
-  并按 provider 超时。资格判定（有 key / OAuth）不变——目录只决定*展示什么
-  模型*，不决定*该 provider 是否有资格展示*。
+  并按 provider 超时。资格判定仍以 key/OAuth 为准：目录中声明 API-key 认证的
+  provider 在没有 key 时会被移除——active provider 也不例外，因此删除 key 会
+  连同该 provider 的模型一起消失，而不是回退到 JSON 基线。没有 API-key 要求
+  的 provider（本地端点、未知/自定义 provider）在 active 时保留；自定义
+  `model.base_url` 拉取仍会重新加入其 slug。
+- **Picker 的 provider 提示**：`/api/models` 会给每个模型 ID 加上其所属
+  provider 的前缀（`@provider:model`），含 `/` 的 ID 也不例外（OpenRouter 的
+  `deepseek/deepseek-v4-flash` 变成
+  `@openrouter:deepseek/deepseek-v4-flash`），active provider 自己的模型同样
+  带前缀。裸名或只有 slash 的 ID 并不指明路由：
+  `resolve_model_provider()` 会剥掉与 `model.provider` 相同的前缀，因此没有
+  该提示时，只要 active provider 恰好是 `deepseek`，OpenRouter 的选择就会被
+  静默路由到 DeepSeek 直连 API。提示只在第一个冒号处切分，模型部分保留其余
+  slash 与冒号（如 `@ollama1:qwen3-vl:235b`）；
+  `POST /api/default-model` 在写入 config.yaml 前会把提示解析回
+  `model.default` + `model.provider`。
+- **会话存的模型与 picker 条目的形态**：picker 按 id 字面比较，因此会话存的
+  模型必须与它对应的目录条目同形，否则弹出的 model selection 里不会有任何
+  勾选。目录中的每个 id 都是 `@provider:model`，而
+  `normalize_model_prefix()` 会把 config.yaml 里的裸名或带命名空间的值
+  （`deepseek-flash`、`anthropic/claude-opus-4.6`）映射到实际提供该模型的
+  provider 身份上，会话存的正是这个身份。更早创建的会话可能仍是目录已不再
+  列出的形态（裸名，或其 provider 已下架的模型）：前端用
+  `findCatalogModelId()` 把存的 id 解析回目录条目以便勾选，而显示路径以
+  WebUI 自己维护的身份（`model__webui`）为准。该提示只是内部路由信息，不会
+  出现在界面文案里。
 - **磁盘 envelope**：模型缓存快照持久化
-  `{schema_version, active_provider, default_model, groups,
-  provider_models, fetched_at}`，重启后首个响应字段完整，并保留每 provider
-  的上次成功列表；旧的 `{仅 groups}` 文件仍可加载。
+  `{schema_version, active_provider, default_model,
+  default_model_available, default_model_provider_has_key, groups,
+  provider_models, fetched_at}`，重启后首个响应字段完整，并保留每
+  provider 的上次成功列表；旧的 `{仅 groups}` 文件仍可加载。
+- **默认模型可用性（issue #44）**：`/api/models` 返回
+  `default_model_available`（`true` / `false` / `null`）。该值在把配置的
+  默认模型注入 picker *之前*，由真实 provider 分组计算；未知时返回
+  `null`（config-only 响应、构建中或旧磁盘快照）。匹配限定在默认模型
+  自己的 provider 内（以 `model.provider` 为准；仅无 provider 的配置才
+  回退到按模型名比较），因此其他 provider 下的同名模型不会掩盖默认模型
+  已被移除的事实。分组列表为空（实时结果为空或所有 provider 都被拒绝）
+  时同样保持 `null`——除非默认模型所属 provider 是目录中需要 API key 的
+  provider 且当前没有 key，这是确定的失败。
+  配套字段 `default_model_provider_has_key`（`true` / `false` / `null`；
+  本地/OAuth/未知 provider 为 `null`）让 UI 能提示“provider 的 API key
+  已被删除”，而不是误报“provider 不再提供该模型”。配置的默认模型不可用时
+  仍会注入以便 UI 展示，并标记 `unavailable: true`；后端绝不会把它改写成
+  其他模型——只由 UI 提示。当 provider 分组随 key 一起消失时，composer
+  仍显示配置值并给出说明，而不是静默选中另一个模型；用户在 composer
+  中显式选择其他模型后，该提示消失，因为该选择会替代默认值用于当前会话。
+  SDK 原始的
+  “provider set in config.yaml but no API key” 错误会在两条流式失败路径中
+  被翻译为同一段面向 Settings 的提示。未显式指定模型的新会话通过
+  `get_default_model_for_new_session()` 解析：优先有效默认值（环境变量
+  `HERMES_MODEL` / `OPENAI_MODEL` / `LLM_MODEL` → config.yaml
+  `model.default` → 内置常量），仅当其为空时才使用目录中第一个可用模型。
+  Settings 通过 `POST /api/default-model` 保存该控件，由后端把 WebUI 内部
+  的 `@provider:model` 形式还原为 config.yaml 的 `model.default` +
+  `model.provider`。
+- **会话所用模型的可用性（issue #44 后续）**：目录只报告*配置默认模型*的
+  可用性，因此运行其他模型的既有会话会通过
+  `GET /api/models/availability?model=…` 向后端询问。返回值
+  `{model, provider, available, provider_has_key}` 基于实时 provider 分组
+  计算，匹配规则与默认模型一致，限定在模型自己的 provider 内：
+  `available` 为 `true` / `false` / `null`（未知——没有可比较的分组），
+  `provider_has_key` 为 `true` / `false` / `null`（该 provider 不使用
+  API key 鉴权）。即使目录没有分组，缺失的 key 也足以确定结论。composer
+  会保留会话自身的模型（标记为已失效）并说明原因，而不是静默高亮另一个
+  provider 的下一个可用模型——既有会话与 welcome 状态行为一致，后者会提示
+  配置默认模型不可用。目录内容变化时会重新查询，因此删除 provider 的
+  API key 后能立即反映出来。
+- **文案按会话语境而非模型取值决定**：全新对话用的是配置的默认模型，因此
+  说的是“默认模型”；既有会话用的是用户为它选定的模型，因此说的是“当前
+  模型”——即使两者恰好是同一个模型。composer 根据会话上下文判断（它知道
+  该对话是否有自己的模型），后端根据 session id 判断（`_handle_chat_start`
+  为 welcome 状态的首条消息新建会话，因此知道这是不是新对话）。
+  `streaming._missing_key_wording()` 为两条流式失败路径挑出对应的
+  label、message 与 hint。
 - **SSRF 防护**（`model_catalog._check_url_safe`）：scheme 白名单
   （http/https）+ 拒绝解析到私网 IP 的主机名；已知本机主机
   （ollama/localhost/lmstudio）、目录 `endpoint.trust_local` 与用户声明的

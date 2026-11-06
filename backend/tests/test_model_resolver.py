@@ -142,6 +142,34 @@ def test_slash_prefix_non_default_still_routes_openrouter():
     assert provider == 'openrouter'
 
 
+def test_hinted_openrouter_slash_model_beats_active_vendor_prefix():
+    """Issue #44 regression: the OpenRouter group's ``deepseek/...`` id must
+    keep routing to OpenRouter even when the active provider slug equals the
+    vendor prefix (``deepseek``).  Without the hint the resolver strips the
+    prefix and silently switches to the DeepSeek direct API."""
+    model, provider, base_url = _resolve_with_config(
+        '@openrouter:deepseek/deepseek-v4-flash', provider='deepseek',
+    )
+    assert model == 'deepseek/deepseek-v4-flash'
+    assert provider == 'openrouter'
+    assert base_url is None
+
+
+def test_unhinted_slash_model_follows_active_provider():
+    """Characterises why the picker adds ``@provider:`` hints.
+
+    A bare slash id carries no provider information; with an active
+    ``deepseek`` provider the resolver treats the ``deepseek/`` segment as
+    a redundant provider prefix and routes to DeepSeek direct.  This is the
+    behaviour the hint prevents for non-active provider groups.
+    """
+    model, provider, base_url = _resolve_with_config(
+        'deepseek/deepseek-v4-flash', provider='deepseek',
+    )
+    assert model == 'deepseek-v4-flash'
+    assert provider == 'deepseek'
+
+
 def test_custom_provider_model_with_slash_routes_to_named_custom_provider():
     """Slash-containing custom endpoint model IDs must not be mistaken for OpenRouter models."""
     model, provider, base_url = _resolve_with_config(
