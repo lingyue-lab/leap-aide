@@ -76,21 +76,50 @@ def _stage_body(name: str) -> str:
 
 def _apt_install_args(text: str) -> str:
     """Flatten every ``apt-get install`` continuation block into one string."""
-    lines = text.splitlines()
     blocks: list[str] = []
-    i = 0
-    while i < len(lines):
-        if "apt-get install" not in lines[i]:
-            i += 1
-            continue
-        block = lines[i]
-        j = i
-        while block.rstrip().endswith("\\") and j + 1 < len(lines):
-            j += 1
-            block = block.rstrip()[:-1] + " " + lines[j].strip()
-        blocks.append(block)
-        i = j + 1
+    for logical in _logical_lines(text):
+        if "apt-get install" in logical:
+            blocks.append(logical)
     return " ".join(blocks)
+
+
+def _logical_lines(text: str) -> list[str]:
+    """Join shell continuation lines into logical lines.
+
+    A ``RUN`` that spans lines writes its package list on a *continuation*
+    line (``RUN apt-get purge -y --auto-remove \\`` /
+    ``        build-essential python3.12-dev xz-utils libatomic1 \\``), so a
+    scan of physical lines never sees a package name next to the verb.
+    Joining first is what lets the purge guard below actually fail.
+    """
+    merged: list[str] = []
+    buf = ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        buf = f"{buf} {stripped}" if buf else stripped
+        if buf.endswith("\\"):
+            buf = buf[:-1].rstrip()
+            continue
+        merged.append(buf)
+        buf = ""
+    if buf:
+        merged.append(buf)
+    return merged
+
+
+def _apt_removed_packages(text: str) -> set[str]:
+    """Package names passed to ``apt-get purge``/``remove``/``autoremove``."""
+    removed: set[str] = set()
+    for logical in _logical_lines(text):
+        for segment in logical.split("&&"):
+            match = re.search(r"apt-get\s+(?:purge|remove|autoremove)\b(.*)", segment)
+            if not match:
+                continue
+            for token in match.group(1).split():
+                if token.startswith("-"):
+                    continue
+                removed.add(token)
+    return removed
 
 
 def test_base_stage_installs_gh_package():
@@ -104,14 +133,18 @@ def test_base_stage_installs_gh_package():
 
 
 def test_runtime_stage_keeps_gh_through_the_apt_trim():
-    """The runtime trim must not purge `gh` along with the build chain."""
-    runtime = _stage_body("runtime")
-    for line in runtime.splitlines():
-        if "apt-get purge" in line or "apt-get remove" in line:
-            assert not re.search(r"(?:^|\s)gh(?:\s|$)", line), (
-                "the runtime stage must not remove `gh` — it is a runtime "
-                "dependency of the Hermes Agent SDK, not a build tool"
-            )
+    """The runtime trim must not purge `gh` along with the build chain.
+
+    Scans the *flattened* apt commands, not physical lines: the package
+    list lives on a continuation line, so a per-line scan would never see
+    `gh` next to the verb and could never fail.
+    """
+    removed = _apt_removed_packages(_stage_body("runtime"))
+    assert "gh" not in removed, (
+        "the runtime stage must not remove `gh` — it is a runtime "
+        "dependency of the Hermes Agent SDK, not a build tool; "
+        f"the trim removes: {sorted(removed)}"
+    )
 
 
 def test_runtime_stage_points_gh_config_dir_at_persistent_volume():
@@ -164,7 +197,7 @@ def test_base_stage_installs_gh_token_extension():
     — which runs as leap-aide — never sees it.
     """
     base = _stage_body("base")
-    assert "github.com/Link-/gh-token/releases/download" in base, (
+    assert "/Link-/gh-token/releases/download/" in base, (
         "the base stage must install the Link-/gh-token extension — it "
         "provides `gh token generate|revoke|installations` for GitHub App "
         "installation access tokens"
@@ -196,6 +229,39 @@ def test_gh_token_extension_covers_every_runtime_identity():
             f"the gh-token extension must be installed for {home} too — the "
             "container may run the server under that identity"
         )
+        # Each identity must also be smoke-tested, or the build can go green
+        # with an install that only one of them can actually dispatch.
+        # Each of these homes is named after its user (leap-aide, leap-aide-init,
+        # root), so the basename is the account to `su` into.
+        user = home.rsplit("/", 1)[-1]
+        assert f"su -s /bin/bash -l {user} -c 'gh token --version'" in base, (
+            f"the build must smoke-test `gh token --version` as {user} — "
+            "installing for an identity without proving dispatch works there "
+            "defeats the per-identity install"
+        )
+
+
+def test_gh_token_extension_download_is_mirrorable():
+    """The release download must be redirectable, like every other download.
+
+    github.com is often unreachable (not merely slow) from CN networks, and
+    --retry cannot rescue an unreachable host; a build arg is the only way
+    out, and every other external fetch in this Dockerfile has one.
+    """
+    base = _stage_body("base")
+    assert re.search(r"^ARG\s+BUILD_GH_TOKEN_DOWNLOAD_HOST=", base, re.MULTILINE), (
+        "the gh-token download must expose a BUILD_GH_TOKEN_DOWNLOAD_HOST "
+        "build arg, the same way BUILD_NPM_REGISTRY / "
+        "BUILD_PLAYWRIGHT_DOWNLOAD_HOST cover their downloads"
+    )
+    assert "${BUILD_GH_TOKEN_DOWNLOAD_HOST:-https://github.com}" in base, (
+        "the build arg must default to github.com so ordinary builds need no "
+        "configuration"
+    )
+    assert '"${_gh_token_host}/Link-/gh-token/releases/download/' in base, (
+        "the download URL must be built from the resolved host variable — a "
+        "hard-coded URL would make the build arg decorative"
+    )
 
 
 def test_gh_token_extension_version_is_pinned():

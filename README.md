@@ -110,6 +110,8 @@ export BUILD_APT_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/ubuntu"
 export BUILD_PIP_INDEX_URL="http://pypi.tuna.tsinghua.edu.cn/simple"
 export BUILD_NPM_REGISTRY="https://registry.npmmirror.com"
 export BUILD_PLAYWRIGHT_DOWNLOAD_HOST="https://registry.npmmirror.com/-/binary/playwright"
+# Base URL serving the gh-token release assets; defaults to https://github.com
+export BUILD_GH_TOKEN_DOWNLOAD_HOST="https://github.com"
 # Must end with slash
 export BUILD_ELECTRON_MIRROR="https://registry.npmmirror.com/-/binary/electron/"
 export BUILD_ELECTRON_BUILDER_BINARIES_MIRROR="https://registry.npmmirror.com/-/binary/electron-builder-binaries"

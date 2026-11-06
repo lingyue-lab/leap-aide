@@ -130,7 +130,8 @@ RUN if [ "A${BUILD_APT_PROXY:-}" != "A" ]; then \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
-# Match scripts/install.sh's IN_DOCKER dependency list (line 636-756):
+# Match scripts/install.sh's IN_DOCKER dependency list (grep for
+# `_sys_deps_to_install` — the block moves, so no line numbers here):
 #   - base: apt-utils locales sudo curl rsync openssh-client git gh
 #   - python: python3.12 python3.12-venv python3.12-dev
 #   - native build tools: libatomic1 xz-utils build-essential
@@ -275,11 +276,20 @@ RUN groupadd -g 1024 leap-aide \
 # unpinned "latest" would silently change the image contents between two
 # builds of the same commit. Bump GH_TOKEN_EXTENSION_VERSION to update.
 #
-# Retry: the asset comes from github.com — intermittently slow from CN
-# networks. curl's --retry/--retry-all-errors covers the transient
-# failures the same way the uv installer does.
+# The download base is a build arg like every other external download here
+# (BUILD_APT_MIRROR, BUILD_NPM_REGISTRY, BUILD_PLAYWRIGHT_DOWNLOAD_HOST, ...):
+# on CN networks github.com is often unreachable rather than merely slow, and
+# --retry cannot help with an unreachable host. Point
+# BUILD_GH_TOKEN_DOWNLOAD_HOST at a mirror that serves the same
+# /Link-/gh-token/releases/download/... paths. Default: github.com.
+#
+# Retry: even against github.com the asset is intermittently slow from CN
+# networks. curl's --retry/--retry-all-errors covers the transient failures
+# the same way the uv installer does.
 ARG GH_TOKEN_EXTENSION_VERSION=v2.0.10
+ARG BUILD_GH_TOKEN_DOWNLOAD_HOST=
 RUN set -e; \
+    _gh_token_host="${BUILD_GH_TOKEN_DOWNLOAD_HOST:-https://github.com}"; \
     case "$(dpkg --print-architecture)" in \
         amd64) _gh_token_asset="linux-amd64" ;; \
         arm64) _gh_token_asset="linux-arm64" ;; \
@@ -291,7 +301,7 @@ RUN set -e; \
     mkdir -p "$(dirname "$_gh_token_bin")"; \
     curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors \
         -o "$_gh_token_bin" \
-        "https://github.com/Link-/gh-token/releases/download/${GH_TOKEN_EXTENSION_VERSION}/${_gh_token_asset}"; \
+        "${_gh_token_host}/Link-/gh-token/releases/download/${GH_TOKEN_EXTENSION_VERSION}/${_gh_token_asset}"; \
     chmod 0755 "$_gh_token_bin"; \
     for _home in /home/leap-aide /home/leap-aide-init /root; do \
         _gh_token_dir="$_home/.local/share/gh/extensions/gh-token"; \
@@ -303,6 +313,7 @@ RUN set -e; \
         chmod 0644 "$_gh_token_dir/manifest.yml"; \
     done; \
     su -s /bin/bash -l leap-aide -c 'gh token --version'; \
+    su -s /bin/bash -l leap-aide-init -c 'gh token --version'; \
     su -s /bin/bash -l root -c 'gh token --version'
 
 USER root

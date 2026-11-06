@@ -620,9 +620,13 @@ ok "git $(git --version | sed 's/git version //')"
 # GitHub-related agent task fails with "gh: command not found".
 # Soft dependency on purpose: unlike git/curl, a package manager that
 # refuses gh must not abort the whole install — the SDK degrades, the rest
-# of the stack must not. The Dockerfile installs gh for container runs, so
-# this only fires on a host that lacks it.
-if ! command -v gh >/dev/null 2>&1; then
+# of the stack must not.
+# Host path only. In a container the IN_DOCKER block further down owns the
+# package list, and it must win: this block runs first and unconditionally,
+# so installing here would either make that entry unreachable (gh already
+# on PATH) or pay a second apt invocation. Gating keeps one owner per
+# environment.
+if [ "$IN_DOCKER" = false ] && ! command -v gh >/dev/null 2>&1; then
   warn "gh (GitHub CLI) not found — attempting to install..."
   if install_package gh; then
     ok "gh installed"
@@ -704,7 +708,8 @@ if [ "$IN_DOCKER" = true ]; then
   # `gh auth token`, so without it every GitHub-related agent task fails
   # with "gh: command not found". Ships in Ubuntu's universe component;
   # the Dockerfile installs it too, so this only fires for containers
-  # provisioned by install.sh alone.
+  # provisioned by install.sh alone. The host-path block above is gated on
+  # IN_DOCKER=false precisely so this entry is the one that runs here.
   if ! command -v gh >/dev/null 2>&1; then
     _sys_deps_to_install="${_sys_deps_to_install} gh"
   fi
