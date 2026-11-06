@@ -212,3 +212,110 @@ def test_xterm_cap_is_global(desktop):
     assert len(desktop.xterm_procs) == 3
     assert desktop.xterm_procs["tid0"].session_id == "sess0"
     desktop.stop()
+
+
+# ── fcitx5 profile seeding ──────────────────────────────────────────────────
+
+# fcitx5's own first-run profile: the group is named "Default" and holds
+# keyboard-us only. The group name is NOT an input method.
+PRISTINE_FCITX5_PROFILE = """\
+[Groups/0]
+# Group Name
+Name=Default
+# Layout
+Default Layout=us
+# Default Input Method
+DefaultIM=keyboard-us
+
+[Groups/0/Items/0]
+# Name
+Name=keyboard-us
+# Layout
+Layout=
+
+[GroupOrder]
+0=Default
+"""
+
+
+def _fcitx5_profile(tmp_path, text=None):
+    """Return the path of an fcitx5 profile inside a fake $HOME."""
+    home = tmp_path / "home"
+    profile = home / ".config" / "fcitx5" / "profile"
+    profile.parent.mkdir(parents=True, exist_ok=True)
+    if text is not None:
+        profile.write_text(text, encoding="utf-8")
+    return profile
+
+
+def test_profile_input_methods_ignores_group_name():
+    """The group's own Name= line is not an input method."""
+    from app.api.global_desktop import _fcitx5_profile_input_methods
+
+    assert _fcitx5_profile_input_methods(PRISTINE_FCITX5_PROFILE) == ["keyboard-us"]
+
+
+def test_ensure_fcitx5_profile_seeds_when_missing(monkeypatch, tmp_path):
+    """A fresh $HOME gets a keyboard-us + pinyin profile."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    GlobalDesktop._ensure_fcitx5_profile()
+
+    text = _fcitx5_profile(tmp_path).read_text(encoding="utf-8")
+    assert "Name=pinyin" in text
+    assert "DefaultIM=pinyin" in text
+
+
+def test_ensure_fcitx5_profile_upgrades_pristine_default(monkeypatch, tmp_path):
+    """fcitx5's own keyboard-only profile is upgraded to include pinyin.
+
+    The group-level "Name=Default" line used to be read as a custom
+    input method, so the seeding bailed out on every start where the
+    profile already existed — the k8s deployment keeps a persistent
+    $HOME, the local root run did not.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    profile = _fcitx5_profile(tmp_path, PRISTINE_FCITX5_PROFILE)
+
+    GlobalDesktop._ensure_fcitx5_profile()
+
+    text = profile.read_text(encoding="utf-8")
+    assert "Name=pinyin" in text
+    assert "DefaultIM=pinyin" in text
+
+
+def test_ensure_fcitx5_profile_keeps_custom_im(monkeypatch, tmp_path):
+    """A user profile with a custom input method is left untouched."""
+    custom = PRISTINE_FCITX5_PROFILE.replace("Name=keyboard-us", "Name=mozc")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    profile = _fcitx5_profile(tmp_path, custom)
+
+    GlobalDesktop._ensure_fcitx5_profile()
+
+    assert profile.read_text(encoding="utf-8") == custom
+
+
+def test_ensure_fcitx5_profile_keeps_existing_pinyin(monkeypatch, tmp_path):
+    """A profile that already lists pinyin is never rewritten."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    seeded = (
+        "[Groups/0]\n"
+        "Name=Default\n"
+        "Default Layout=us\n"
+        "DefaultIM=pinyin\n"
+        "\n"
+        "[Groups/0/Items/0]\n"
+        "Name=keyboard-us\n"
+        "Layout=\n"
+        "\n"
+        "[Groups/0/Items/1]\n"
+        "Name=pinyin\n"
+        "Layout=\n"
+        "\n"
+        "[GroupOrder]\n"
+        "0=Default\n"
+    )
+    profile = _fcitx5_profile(tmp_path, seeded)
+
+    GlobalDesktop._ensure_fcitx5_profile()
+
+    assert profile.read_text(encoding="utf-8") == seeded

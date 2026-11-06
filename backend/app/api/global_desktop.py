@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import signal
 import shutil
 import socket
@@ -166,6 +167,34 @@ def _wait_for_tcp_port(host: str, port: int, timeout: float = 10.0) -> bool:
     return False
 
 
+# -- fcitx5 profile helpers ----------------------------------------------------
+
+# Only these sections list input methods. The group header carries its own
+# "Name=" line ("Name=Default") which names the GROUP, not an IM.
+_FCITX5_ITEM_SECTION_RE = re.compile(r"^\[Groups/\d+/Items/\d+\]$")
+
+
+def _fcitx5_profile_input_methods(text: str) -> list[str]:
+    """Return the input-method names listed in an fcitx5 profile.
+
+    Reads the ``[Groups/N/Items/M]`` sections only.  The group header's
+    ``Name=`` line names the group, not an input method -- reading it as
+    one made fcitx5's pristine default profile (which carries
+    ``Name=Default``) look user-customized, so the pinyin seeding was
+    skipped on every start where the profile file already existed.
+    """
+    names: list[str] = []
+    in_item = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("[") and line.endswith("]"):
+            in_item = bool(_FCITX5_ITEM_SECTION_RE.match(line))
+            continue
+        if in_item and line.startswith("Name="):
+            names.append(line[len("Name="):].strip())
+    return names
+
+
 # -- GlobalDesktop -----------------------------------------------------------
 
 
@@ -275,6 +304,13 @@ class GlobalDesktop:
                     stderr=subprocess.DEVNULL,
                 )
                 time.sleep(2.0)  # let fcitx5 fully initialize
+
+                # The trigger key can only be set once fcitx5 owns
+                # org.fcitx.Fcitx5 on the session bus; a fixed sleep raced
+                # the daemon on slow nodes and left the trigger key at
+                # fcitx5's default (Control+space) — Shift+Space then
+                # toggled nothing. Wait for the name, then set the key.
+                self._wait_for_fcitx5_dbus(fcitx_env, timeout=15.0)
 
                 # Set trigger key via D-Bus (like the GUI config tool does)
                 self._configure_fcitx5_trigger_key(fcitx_env)
@@ -640,11 +676,18 @@ class GlobalDesktop:
         fcitx5's first-run default profile is keyboard-only; with no IM in
         the group, the configured trigger key (Shift+Space) toggles nothing
         observable. Seeds a keyboard-us + pinyin profile when the file is
-        missing, or when it only contains keyboard-* entries (the pristine
-        default). Any profile that already lists a non-keyboard IM is
-        user-owned and left untouched. Must run BEFORE fcitx5 starts —
+        missing, or when the group only holds keyboard-* entries (the
+        pristine default). Any profile that already lists a non-keyboard IM
+        is user-owned and left untouched. Must run BEFORE fcitx5 starts —
         the daemon saves its in-memory profile on exit and would clobber
         a file written while it runs.
+
+        The pristine default carries a group-level ``Name=Default`` line;
+        it is NOT an input method.  Treating it as one made the seeding
+        bail out on every start where the profile file already existed —
+        e.g. the k8s deployment, which runs the service as ``leap-aide``
+        with a persistent ``$HOME``, where fcitx5's own first-run profile
+        (keyboard-us only) was written once and then never upgraded.
         """
         profile = Path.home() / ".config" / "fcitx5" / "profile"
         try:
@@ -653,10 +696,12 @@ class GlobalDesktop:
             text = ""
         if "Name=pinyin" in text:
             return
-        for line in text.splitlines():
-            name = line.strip()
-            if name.startswith("Name=") and not name.startswith("Name=keyboard-"):
-                return  # user added a custom IM — do not touch
+        custom = [
+            name for name in _fcitx5_profile_input_methods(text)
+            if not name.startswith("keyboard-")
+        ]
+        if custom:
+            return  # user added a custom IM — do not touch
         try:
             profile.parent.mkdir(parents=True, exist_ok=True)
             profile.write_text(
@@ -682,11 +727,55 @@ class GlobalDesktop:
             logger.warning("fcitx5 profile seed failed: %s", exc)
 
     @staticmethod
+    def _wait_for_fcitx5_dbus(fcitx_env: dict, timeout: float = 15.0) -> bool:
+        """Block until fcitx5 owns org.fcitx.Fcitx5 on the session bus.
+
+        The trigger key can only be set once the daemon published its
+        D-Bus controller.  Polling for the name is race-free; a fixed
+        sleep was not (on a slow or CPU-throttled node the SetConfig
+        call landed before the daemon was up and the trigger key stayed
+        at fcitx5's default, Control+space).
+        """
+        script = (
+            "import dbus, dbus.mainloop.glib\n"
+            "dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)\n"
+            "bus = dbus.SessionBus()\n"
+            "try:\n"
+            "    bus.get_name_owner('org.fcitx.Fcitx5')\n"
+            "    print('ready')\n"
+            "except Exception:\n"
+            "    print('not-ready')\n"
+        )
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                # Use system python3 (venv lacks dbus-python)
+                result = subprocess.run(
+                    ["/usr/bin/python3", "-c", script],
+                    env=fcitx_env, timeout=5,
+                    capture_output=True,
+                )
+                if b"ready" in result.stdout:
+                    return True
+            except Exception as exc:  # noqa: BLE001 - best-effort probe
+                logger.debug("fcitx5 D-Bus probe failed: %s", exc)
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.5)
+        logger.warning(
+            "fcitx5 D-Bus controller not ready after %.1fs — the trigger "
+            "key stays at fcitx5's default (Control+space)",
+            timeout,
+        )
+        return False
+
+    @staticmethod
     def _configure_fcitx5_trigger_key(fcitx_env: dict) -> None:
         """Set fcitx5 trigger key via D-Bus (same as GUI config tool).
 
         Uses fcitx://config/global URI and SetConfig API to set
-        TriggerKeys to Shift+space.  Falls back silently on error.
+        TriggerKeys to Shift+space.  Retried a few times: the daemon may
+        still be registering its bus name when the first call lands.
         """
         script = (
             "import dbus, dbus.mainloop.glib\n"
@@ -703,19 +792,28 @@ class GlobalDesktop:
             "c.SetConfig('fcitx://config/global', cfg)\n"
             "c.Save()\n"
         )
-        try:
-            # Use system python3 (venv lacks dbus-python)
-            result = subprocess.run(
-                ["/usr/bin/python3", "-c", script],
-                env=fcitx_env, timeout=5,
-                capture_output=True,
-            )
-            if result.returncode != 0:
-                logger.warning("fcitx5 SetConfig failed: %s", result.stderr.decode().strip())
-            else:
-                logger.info("fcitx5 trigger key set to Shift+Space via D-Bus")
-        except Exception as e:
-            logger.warning("fcitx5 SetConfig exception: %s", e)
+        last_error = ""
+        for attempt in range(3):
+            try:
+                # Use system python3 (venv lacks dbus-python)
+                result = subprocess.run(
+                    ["/usr/bin/python3", "-c", script],
+                    env=fcitx_env, timeout=5,
+                    capture_output=True,
+                )
+                if result.returncode == 0:
+                    logger.info("fcitx5 trigger key set to Shift+Space via D-Bus")
+                    return
+                last_error = result.stderr.decode().strip()
+            except Exception as e:  # noqa: BLE001 - best-effort configuration
+                last_error = str(e)
+            if attempt < 2:
+                time.sleep(1.0)
+        logger.warning(
+            "fcitx5 SetConfig failed after 3 attempts: %s — the trigger "
+            "key stays at fcitx5's default (Control+space)",
+            last_error,
+        )
 
 
 # -- Module-level singleton + supervisor -----------------------------------------
