@@ -221,7 +221,7 @@ def _bare_model_id(model_id: str | None) -> str:
     return model
 
 
-def _resolve_compatible_session_model(model_id: str | None) -> tuple[str, bool]:
+def _resolve_compatible_session_model(model_id: str | None, catalog: dict | None = None) -> tuple[str, bool]:
     """Return (effective_model, was_normalized) for persisted session models.
 
     Sessions can outlive provider changes. When an older session still points at
@@ -233,8 +233,10 @@ def _resolve_compatible_session_model(model_id: str | None) -> tuple[str, bool]:
 
     Uses peek_available_models() — a blocking catalog build here would delay
     the /api/chat/start HTTP response before begin_stream even runs (issue #8).
+    Pass *catalog* to reuse an already fetched one.
     """
-    catalog = peek_available_models()
+    if catalog is None:
+        catalog = peek_available_models()
     default_model = str(catalog.get("default_model") or DEFAULT_MODEL or "").strip()
     model = str(model_id or "").strip()
     if not model:
@@ -791,6 +793,19 @@ def handle_get(handler, parsed) -> bool:
         # the request for the full 48-160s provider discovery.  The frontend
         # store polls until the real catalog lands.
         return j(handler, get_available_models(wait_seconds=_API_MODELS_WAIT_S))
+
+    if parsed.path == "/api/models/availability":
+        # Availability of an arbitrary model id.  The catalog only reports the
+        # configured default's availability; an existing session can run a
+        # different model, and the composer must not silently switch it to
+        # another one when its provider stops offering it (issue #44).
+        query = parse_qs(parsed.query)
+        requested_model = (query.get("model", [""])[0] or "").strip()
+        if not requested_model:
+            return j(handler, {"error": "model is required"}, status=400)
+        from app.api.config import get_model_availability
+
+        return j(handler, get_model_availability(requested_model))
 
     # ── Config file raw YAML (GET) ──
     if parsed.path == "/api/config/raw":
@@ -4211,6 +4226,13 @@ def _handle_chat_start(handler, body):
             profile=body.get("profile") or None,
             defer_notify=True,
         )
+        # A brand-new conversation runs the configured default, so a missing
+        # provider key is reported as "the default model" being unavailable.
+        # An existing session runs the model the user picked for it and is
+        # reported as "the current model" (issue #44 follow-up).
+        runs_configured_default = True
+    else:
+        runs_configured_default = False
 
     # Accept original_msg from frontend (set by dispatch for slash commands)
     _original_msg = body.get("original_msg")
@@ -4294,6 +4316,7 @@ def _handle_chat_start(handler, body):
     thr = threading.Thread(
         target=_run_agent_streaming,
         args=(s.session_id, msg, model, workspace, stream_id, attachments),
+        kwargs={"runs_configured_default": runs_configured_default},
         daemon=True,
     )
     thr.start()

@@ -12,6 +12,11 @@ was loaded via ``GET /api/session`` (#unreleased).
 
 The fix moves the warning check to ``original_model`` (the persisted value).
 
+Every stored model must be a routable ``@provider:model`` identity (issue #55),
+so any bare persisted name is legacy: the display normalizes it to the
+provider's identity and logs the warning, whether or not the name belongs to
+the active provider.
+
 Each test below calls the helper directly with a stub Session, then asserts on
 both ``caplog`` (warning behaviour) and the returned value (display correctness).
 
@@ -36,6 +41,31 @@ import pytest
 
 from app.api.models import Session as SessionModel
 from app.api.routes import _resolve_effective_session_model_for_display
+
+
+# A deterministic catalog: every id is the routable @provider:model identity
+# (issue #55).
+_CATALOG = {
+    "active_provider": "deepseek",
+    "default_model": "deepseek-flash",
+    "groups": [
+        {
+            "provider": "DeepSeek",
+            "provider_id": "deepseek",
+            "models": [
+                {"id": "@deepseek:deepseek-flash", "label": "DeepSeek Flash"},
+                {"id": "@deepseek:deepseek-v4-flash", "label": "DeepSeek V4 Flash"},
+            ],
+        },
+        {
+            "provider": "Xiaomi",
+            "provider_id": "xiaomi",
+            "models": [
+                {"id": "@xiaomi:mimo-v2.6-flash", "label": "MiMo V2.6 Flash"},
+            ],
+        },
+    ],
+}
 
 
 @pytest.fixture(autouse=True)
@@ -105,6 +135,18 @@ def _deepseek_configured(monkeypatch):
     )
 
 
+def _monkeypatch_catalog(monkeypatch) -> None:
+    """Serve ``_CATALOG`` to both the resolver and its normalization helper.
+
+    The display resolver reads the catalog through ``app.api.routes``, while
+    ``Session._normalize_model`` reaches it through ``app.api.config``.  Both
+    must see the same deterministic catalog, or the normalized result depends
+    on which provider keys the runner happens to export.
+    """
+    monkeypatch.setattr("app.api.routes.peek_available_models", lambda: _CATALOG)
+    monkeypatch.setattr("app.api.config.peek_available_models", lambda: _CATALOG)
+
+
 def _make_session(model: str, session_id: str = "s_test") -> SessionModel:
     """Build a Session-shaped stub with only the fields the resolver reads.
 
@@ -119,28 +161,25 @@ def _make_session(model: str, session_id: str = "s_test") -> SessionModel:
     return s
 
 
-def test_persisted_bare_model_triggers_warning_and_returns_normalized(caplog):
+def test_persisted_bare_model_triggers_warning_and_returns_normalized(caplog, monkeypatch):
     """Legacy bare persisted model should warn + return the @provider: form.
 
     Reproduces the original intent of the warning: a session whose stored
     ``session.model`` lacks an ``@provider:`` prefix cannot be routed uniquely
-    (e.g. ``deepseek-v4-flash`` exists on DeepSeek direct and OpenRouter).
-
-    The returned form is asserted EXACTLY (``@deepseek:deepseek-v4-flash``)
-    because ``_deepseek_configured`` pins the catalog to contain this model —
-    without that anchor the value depends on which provider keys the runner
-    exports, which is what made this test environment-dependent before.
+    (e.g. ``mimo-v2.6-flash`` exists on Xiaomi and on other providers).  The
+    name does not belong to the active provider, so the display normalizes it
+    to the ``@provider:`` form the picker lists it under.
     """
     caplog.set_level(logging.WARNING, logger="app.api.routes")
+    _monkeypatch_catalog(monkeypatch)
 
-    s = _make_session(model="deepseek-v4-flash", session_id="s_bare_legacy")
+    s = _make_session(model="mimo-v2.6-flash", session_id="s_bare_legacy")
 
     returned = _resolve_effective_session_model_for_display(s)
 
     # Display side: normalized to @provider:model so the frontend model
-    # selector matches. Exact value is safe because _deepseek_configured
-    # anchors the catalog with a deepseek group containing this model.
-    assert returned == "@deepseek:deepseek-v4-flash", (
+    # selector matches.
+    assert returned == "@xiaomi:mimo-v2.6-flash", (
         f"expected normalized form, got {returned!r}"
     )
 
@@ -154,7 +193,36 @@ def test_persisted_bare_model_triggers_warning_and_returns_normalized(caplog):
         f"{[r.getMessage() for r in warnings]}"
     )
     assert "s_bare_legacy" in warnings[0].getMessage()
-    assert "deepseek-v4-flash" in warnings[0].getMessage()
+    assert "mimo-v2.6-flash" in warnings[0].getMessage()
+
+
+def test_persisted_bare_model_of_active_provider_also_warns(caplog, monkeypatch):
+    """A bare model of the active provider is still a legacy stored value.
+
+    Since issue #55 the catalog lists every model as ``@provider:model``, so a
+    session that stores the bare name cannot be routed without guessing the
+    provider.  The display normalizes it to the active provider's identity and
+    warns, exactly like a bare name of any other provider.
+    """
+    caplog.set_level(logging.WARNING, logger="app.api.routes")
+    _monkeypatch_catalog(monkeypatch)
+
+    s = _make_session(model="deepseek-v4-flash", session_id="s_bare_active")
+
+    returned = _resolve_effective_session_model_for_display(s)
+
+    assert returned == "@deepseek:deepseek-v4-flash", (
+        f"unexpected display value {returned!r}"
+    )
+
+    warnings = [
+        r for r in caplog.records
+        if r.levelno == logging.WARNING and "has bare model name" in r.getMessage()
+    ]
+    assert len(warnings) == 1, (
+        f"expected exactly one 'bare model name' warning, got "
+        f"{[r.getMessage() for r in warnings]}"
+    )
 
 
 def test_persisted_at_prefixed_model_does_not_warn(caplog):

@@ -40,10 +40,38 @@ def test_user_message_does_not_leak_config_details():
     assert "hermes model" not in message
 
 
+def test_wording_follows_the_conversation_not_the_model_value():
+    """A new conversation talks about the default, an old one about its model.
+
+    An existing session runs the model the user picked for it — calling that
+    "the default model" is misleading even when it happens to be the same
+    model the default points at (issue #44 follow-up).
+    """
+    new_label, new_message, new_hint = streaming._missing_key_wording(True)
+    old_label, old_message, old_hint = streaming._missing_key_wording(False)
+
+    assert new_label == "Default model not available"
+    assert new_message.startswith("Default model is not valid")
+    assert "default model's provider" in new_hint
+
+    assert old_label == "Current model not available"
+    assert old_message.startswith("Current model is not valid")
+    assert "this model's provider" in old_hint
+    # Neither wording may leak the SDK's technical detail.
+    for text in (new_message, old_message, new_hint, old_hint):
+        assert "config.yaml" not in text
+        assert "environment variable" not in text
+        assert "hermes model" not in text
+
+
 def test_both_stream_error_paths_classify_missing_key():
     """Silent-failure and exception paths must both map the error."""
     src = inspect.getsource(streaming)
     assert src.count("_is_missing_key_error(") == 3, (
+        "expected the helper definition plus calls in the silent-failure "
+        "and exception handlers"
+    )
+    assert src.count("_missing_key_wording(") == 3, (
         "expected the helper definition plus calls in the silent-failure "
         "and exception handlers"
     )

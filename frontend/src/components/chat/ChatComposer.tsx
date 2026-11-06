@@ -13,11 +13,12 @@ import MultiSelection from '@/components/common/MultiSelection';
 import ContextUsageIndicator from '@/components/chat/ContextUsageIndicator';
 import { useModeShortcut } from '@/hooks/useModeShortcut';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
+import { useModelAvailability } from '@/hooks/useModelAvailability';
 import { gateProviders } from '@/utils/providersGate';
 import { useProvidersGateStore } from '@/stores/useProvidersGateStore';
 import { useModelsStore } from '@/stores/useModelsStore';
 import { markSessionSeen } from '@/utils/sessionSeen';
-import { sameModelId } from '@/utils/modelSelection';
+import { sameModelId, findCatalogModelId, stripProviderHint } from '@/utils/modelSelection';
 import SlashCommandDropdown from '@/components/chat/SlashCommandDropdown';
 import { useIsBusy } from '@/utils/sessionBusy';
 import { useWorkspaceDisplay } from '@/hooks/useWorkspaceDisplay';
@@ -239,15 +240,19 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
   const currentModelSupportsThinking = useMemo(() => {
     const sessionModelId = currentSession?.model ?? '';
     if (!sessionModelId || modelGroups.length === 0) return true; // default: enabled until models load
+    // The stored model may carry the `@provider:` hint while the catalog
+    // lists the active provider's ids bare — resolve to the catalog entry.
+    const catalogId = findCatalogModelId(modelGroups, sessionModelId, activeProvider);
+    if (!catalogId) return true; // unknown model: fail open
     for (const g of modelGroups) {
       for (const m of g.models) {
-        if (m.id === sessionModelId) {
+        if (m.id === catalogId) {
           return m.supportsExtendedThinking !== false;
         }
       }
     }
     return true; // unknown model: fail open
-  }, [currentSession?.model, modelGroups]);
+  }, [currentSession?.model, modelGroups, activeProvider]);
 
   const handleReasoningSelect = useCallback(async (effort: string | null) => {
     if (!currentSession?.session_id || !effort) return;
@@ -427,31 +432,60 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
   // taken when the placeholder was created (possibly before settings
   // loaded), not an explicit user choice — deriving the display from the
   // live configured default keeps it in step with what handleWelcomeSend
-  // actually sends (issue #44).
-  const resolvedModel = isPendingNewSession
-    ? settingsModel
-    : sessionModel || settingsCatalogModel;
-  const isConfiguredDefault = !!resolvedModel
-    && sameModelId(resolvedModel, configuredDefaultModel);
-  // A pick of the configured default itself (the injected unavailable entry,
-  // whose ID is exactly `default_model`) keeps the warning; any other pick —
-  // including the same trailing model name on a different provider — makes
-  // it obsolete, because that pick is the route that will be sent.
+  // actually sends (issue #44).  The session's stored identity is
+  // authoritative (issue #55) — never substitute another catalog entry for
+  // it here.
+  const conversationModel = isPendingNewSession
+    ? configuredDefaultModel
+    : (sessionModel || configuredDefaultModel);
+  // `sameModelId` normalizes the `@provider:` hint and the vendor namespace,
+  // so a stored identity matches the raw configured value.
+  const isConfiguredDefault = !!conversationModel
+    && sameModelId(conversationModel, configuredDefaultModel);
+  // Whether the warning talks about the *default* model or about the model
+  // this conversation runs.  The distinction is contextual, not by value: an
+  // existing session runs the model the user picked for it, so calling that
+  // "the default model" is misleading even when the two happen to be equal.
+  const conversationRunsConfiguredDefault = isPendingNewSession || !sessionModel;
+  // A pick of the configured default itself keeps the warning; any other
+  // pick — including the same trailing model name on a different provider —
+  // makes it obsolete, because that pick is the route that will be sent.
+  // The picker's id for the configured default is its catalog identity
+  // (`@provider:model`), which the backend also uses for the injected
+  // unavailable entry, so both spellings must count as "not another model".
   const userPickedOtherModel = !!selectedModelId
-    && selectedModelId !== configuredDefaultModel;
-  // Keep the configured default visible (and warn) when its provider stopped
-  // offering it or its API key was removed.  In the welcome state before the
-  // settings store loads, resolvedModel is empty — the catalog's
-  // default_model still identifies the configured value, so it must not be
-  // replaced by a different catalog entry (that looked like a broken picker).
-  const showUnavailable = defaultModelAvailable === false
-    && !!configuredDefaultModel
-    && (isConfiguredDefault || !resolvedModel)
+    && selectedModelId !== configuredDefaultModel
+    && selectedModelId !== configuredDefaultCatalogId;
+  // Availability of the conversation's own model.  The catalog reports the
+  // configured default's availability; a session that runs another model
+  // needs its own verdict, so the backend is asked directly (issue #44
+  // follow-up: after the provider's API key was removed the session used to
+  // fall back to the next available model without saying anything).
+  const sessionAvailability = useModelAvailability(
+    isPendingNewSession ? '' : sessionModel,
+  );
+  // The catalog's verdict applies to the configured default; the backend's
+  // verdict applies to the model the session runs.  `null` means unknown —
+  // only an explicit `false` marks a model as unusable.
+  const conversationAvailable = isPendingNewSession
+    ? defaultModelAvailable
+    : (sessionAvailability?.available
+        ?? (isConfiguredDefault ? defaultModelAvailable : null));
+  const conversationProviderHasKey = isPendingNewSession
+    ? defaultModelProviderHasKey
+    : (sessionAvailability?.provider_has_key
+        ?? (isConfiguredDefault ? defaultModelProviderHasKey : null));
+  // Keep the conversation's model visible (and warn) when its provider
+  // stopped offering it or its API key was removed.  The model is never
+  // replaced by another one — a conversation must not silently switch
+  // models (issue #44 follow-up).
+  const showUnavailable = conversationAvailable === false
+    && !!conversationModel
     && !userPickedOtherModel;
   // The provider group disappears together with a deleted key; the backend
   // reports that state explicitly so the footer can explain the empty picker.
   const showDefaultKeyMissing = showUnavailable
-    && defaultModelProviderHasKey === false;
+    && conversationProviderHasKey === false;
   // model__webui NULL (issue #55): the session has no model identity, and the
   // backend rejects chat start until the user picks one.  Show the
   // placeholder instead of impersonating the session with settings/default.
@@ -465,7 +499,7 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
   const effectiveModel = sessionModelInvalid
     ? ''
     : showUnavailable
-      ? configuredDefaultModel
+      ? conversationModel
       : !isPendingNewSession && sessionModel
         ? sessionModel
         // New conversation (or a session with no model): fall back to the
@@ -481,13 +515,22 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
                 ? defaultModelId
                 : firstCatalogModelId));
   const activeDisplayModelId = selectedModelId ?? effectiveModel;
+  // The id the picker must mark as selected.  A stored session model may be
+  // in a form the catalog does not list literally (a legacy bare name, or a
+  // value that predates the `@provider:model` convention); the picker
+  // compares ids literally, so resolve it to the catalog entry.  This also
+  // maps the unavailable configured default onto the entry injected for it.
+  const pickerModelId = useMemo(
+    () => findCatalogModelId(modelGroups, activeDisplayModelId, activeProvider) ?? activeDisplayModelId,
+    [modelGroups, activeDisplayModelId, activeProvider],
+  );
   // Show the bare model name: "@provider:model" keeps its full remainder
   // (which may itself be namespaced, e.g. "@nous:anthropic/claude-opus-4.6");
   // namespaced ids keep the historical last-segment label.
-  const displayModelBase = activeDisplayModelId
-    ? activeDisplayModelId.startsWith('@') && activeDisplayModelId.includes(':')
-      ? activeDisplayModelId.slice(1).split(':').slice(1).join(':')
-      : activeDisplayModelId.split('/').pop() ?? activeDisplayModelId
+  const displayModelBase = pickerModelId
+    ? pickerModelId.startsWith('@') && pickerModelId.includes(':')
+      ? stripProviderHint(pickerModelId)
+      : pickerModelId.split('/').pop() ?? pickerModelId
     : 'Model';
   const displayModel = showUnavailable
     ? `${displayModelBase} (${t('composer.model_unavailable')})`
@@ -876,13 +919,20 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
           </div>
         )}
 
-        {/* The configured default's provider has no API key, so the picker
-            shows few/no models and none of them is the configured default.
-            Explain why instead of leaving an apparently broken empty chip. */}
-        {showDefaultKeyMissing && (
+        {/* The model this conversation uses is no longer offered by its
+            provider — most often because the provider's API key was removed,
+            which makes the picker show few/no models.  Explain why instead of
+            leaving an apparently broken empty chip. */}
+        {showUnavailable && (
           <div className="composer-model-warning" role="status">
             <Icon name="warning" size={14} />
-            <span>{t('composer.default_model_key_missing')}</span>
+            <span>
+              {showDefaultKeyMissing
+                ? (conversationRunsConfiguredDefault
+                    ? t('composer.default_model_key_missing')
+                    : t('composer.current_model_key_missing'))
+                : t('composer.model_not_offered')}
+            </span>
           </div>
         )}
 
@@ -911,7 +961,7 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
 
             {/* Model */}
             <SingleSelection
-              value={activeDisplayModelId}
+              value={pickerModelId}
               trigger={
                 <Icon name="monitor" size={18} />
               }

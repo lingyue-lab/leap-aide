@@ -191,20 +191,30 @@ Key properties:
   falling back to its JSON baseline. Providers without an API-key
   requirement (local endpoints, unknown/custom providers) stay visible when
   active, and custom `model.base_url` fetches still re-add their slug.
-- **Picker provider hints**: `/api/models` prefixes every model ID from a
-  non-active provider group with `@provider:`, including slash-form IDs
+- **Picker provider hints**: `/api/models` prefixes every model ID with its
+  owning provider (`@provider:model`), including slash-form IDs
   (OpenRouter's `deepseek/deepseek-v4-flash` becomes
-  `@openrouter:deepseek/deepseek-v4-flash`). A bare slash ID is ambiguous:
+  `@openrouter:deepseek/deepseek-v4-flash`) and the active provider's own
+  models. A bare or slash-only ID does not name a route:
   `resolve_model_provider()` strips a prefix that matches `model.provider`,
   so without the hint an OpenRouter selection would silently route to the
-  DeepSeek direct API whenever `deepseek` is the active provider. Custom
-  providers (`custom:<name>`) are exempt because their hint itself contains
-  a colon, and keyless catalog endpoints (`ollama`, `lmstudio`, `meta-llama`
-  — `auth.type: none`) are exempt because their slash IDs are served by the
-  configured `model.base_url`, which the `@provider:` route would discard.
-  The active provider's IDs are left untouched (it is the default route),
-  and `POST /api/default-model` resolves the hint back to
-  `model.default` + `model.provider` before writing config.yaml.
+  DeepSeek direct API whenever `deepseek` is the active provider. The hint is
+  split at the first colon, so the model half keeps any further slashes and
+  colons (e.g. `@ollama1:qwen3-vl:235b`), and `POST /api/default-model`
+  resolves the hint back to `model.default` + `model.provider` before writing
+  config.yaml.
+- **Stored session model vs. picker entries**: the picker compares ids
+  literally, so a session model has to use the same form as the catalog entry
+  it refers to — otherwise the popover opens with nothing selected. Every
+  catalog id is `@provider:model`, and `normalize_model_prefix()` maps a bare
+  or namespaced config value (`deepseek-flash`, `anthropic/claude-opus-4.6`)
+  onto the identity of the provider that serves it, so that is what a session
+  stores. Sessions created earlier may carry a form the catalog no longer
+  lists (a bare name, or a model its provider stopped offering): the frontend
+  resolves the stored id to the catalog entry (`findCatalogModelId()`) for
+  selection, and the WebUI-owned identity (`model__webui`) is authoritative
+  on the display path. The hint is internal routing plumbing and never
+  appears in the UI text.
 - **Disk envelope**: the models cache snapshot persists
   `{schema_version, active_provider, default_model,
   default_model_available, default_model_provider_has_key, groups,
@@ -242,6 +252,31 @@ Key properties:
   `POST /api/default-model`, which resolves the WebUI-only
   `@provider:model` form back to `model.default` + `model.provider` in
   config.yaml.
+- **Model availability of a conversation (issue #44 follow-up)**: the
+  catalog only reports the *configured default's* availability, so an
+  existing session that runs another model asks the backend through
+  `GET /api/models/availability?model=…`. The answer
+  (`{model, provider, available, provider_has_key}`) is computed from the
+  live provider groups, provider-scoped like the default-model check:
+  `available` is `true` / `false` / `null` (unknown — nothing to compare
+  against) and `provider_has_key` is `true` / `false` / `null` (the provider
+  does not authenticate with an API key). A missing key settles the verdict
+  even when the catalog has no groups. The composer keeps the session's own
+  model visible (marked unavailable) and explains why instead of silently
+  highlighting the next available model of another provider — an existing
+  session behaves like the welcome state, which warns about the configured
+  default. The query is repeated whenever the catalog content changes, so
+  deleting a provider's API key is reflected right away.
+- **Wording follows the conversation, not the model value**: a brand-new
+  conversation runs the configured default, so it talks about "the default
+  model"; an existing session runs the model the user picked for it and
+  talks about "the current model" — even when the two happen to be the same
+  model. The composer applies the rule from the session context (it knows
+  whether the conversation has a model of its own), and the backend applies
+  it from the session id (`_handle_chat_start` mints a new session for the
+  welcome-state first send, so it knows whether the conversation is new).
+  `streaming._missing_key_wording()` picks the matching label, message and
+  hint for the two stream error paths.
 - **SSRF guard** (`model_catalog._check_url_safe`): scheme allowlist
   (http/https) plus rejection of hostnames resolving to private IPs,
   with explicit escapes for known-local hosts (ollama/localhost/

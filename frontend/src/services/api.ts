@@ -286,6 +286,17 @@ export const modelsService = {
   getModels: async (init?: RequestInit) => {
     return api<import('@/types').ModelsResponse>('/api/models', init);
   },
+  /**
+   * Availability of a single model id.  The catalog only reports the
+   * configured default's availability; a conversation that runs another
+   * model needs its own verdict so the UI can warn instead of silently
+   * switching to a different model.
+   */
+  getModelAvailability: async (model: string) => {
+    return api<import('@/types').ModelAvailability>(
+      `/api/models/availability?model=${encodeURIComponent(model)}`,
+    );
+  },
 };
 
 // Config file API 服务

@@ -325,6 +325,31 @@ export interface ModelGroup {
   models: Model[];
 }
 
+/**
+ * Availability of a single model id (GET /api/models/availability).
+ *
+ * The catalog only reports the configured default's availability, so an
+ * existing session asks the backend about the model its conversation
+ * actually uses — a conversation must never silently switch models when its
+ * provider stops offering them.
+ */
+export interface ModelAvailability {
+  model: string;
+  /** Provider that serves the model ("" when it cannot be determined). */
+  provider: string;
+  /**
+   * Whether the model's provider still offers it. `null` means unknown (no
+   * catalog to compare against) — only an explicit `false` is a failure.
+   */
+  available: boolean | null;
+  /**
+   * Whether the model's provider has a configured API key. `null` when
+   * unknown or when the provider does not authenticate with a key
+   * (local/OAuth). Only an explicit `false` means the key is missing.
+   */
+  provider_has_key: boolean | null;
+}
+
 export interface Model {
   id: string;
   label: string;

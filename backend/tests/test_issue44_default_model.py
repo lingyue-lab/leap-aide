@@ -6,6 +6,9 @@ Covers:
   - Injection of an unavailable configured default (marked, never rewritten)
   - ``get_default_model_for_new_session()`` precedence
   - ``new_session()`` using the configured default
+  - ``get_model_availability()``: availability of an arbitrary model id, so a
+    conversation that runs another model can warn instead of silently
+    switching to a different one (issue #44 follow-up)
 """
 from __future__ import annotations
 
@@ -129,11 +132,13 @@ def _build_with_default(monkeypatch, default_model: str) -> dict:
 def test_build_marks_removed_default_unavailable(monkeypatch):
     result = _build_with_default(monkeypatch, "ghost-model-9")
     assert result["default_model_available"] is False
+    # The injected entry is a routable identity, not the raw config value
+    # (issue #55: every catalog id is ``@provider:model``).
     injected = [
         m
         for g in result["groups"]
         for m in g["models"]
-        if m["id"] == "ghost-model-9"
+        if m["id"] == "@anthropic:ghost-model-9"
     ]
     assert injected, "configured default must stay visible in the picker"
     assert injected[0]["unavailable"] is True
@@ -269,7 +274,7 @@ def test_build_credential_pool_credential_keeps_default_available(monkeypatch):
         (g for g in result["groups"] if g.get("provider_id") == "gemini"), None
     )
     assert gemini is not None, result["groups"]
-    assert any(m["id"] == "gemini-2.5-pro" for m in gemini["models"])
+    assert any(m["id"] == "@gemini:gemini-2.5-pro" for m in gemini["models"])
     assert result["default_model_available"] is True
     # The field itself stays pool-blind; only the availability override was
     # wrong, so the UI must not turn it into a "key missing" warning.
@@ -288,12 +293,14 @@ def test_new_session_model_prefers_configured_default(monkeypatch):
     )
     monkeypatch.setattr(
         config,
-        "get_first_available_model",
-        lambda: pytest.fail("first-available must not be consulted"),
+        "get_first_catalog_model",
+        lambda: pytest.fail("first-catalog must not be consulted"),
     )
+    # The configured value is a config.yaml id; a session stores the routable
+    # identity (issue #55).
     assert (
         config.get_default_model_for_new_session()
-        == "anthropic/claude-opus-4.6"
+        == "@anthropic:claude-opus-4.6"
     )
 
 
@@ -301,11 +308,11 @@ def test_new_session_model_falls_back_when_unconfigured(monkeypatch):
     monkeypatch.setattr(config, "peek_available_models", lambda: {"default_model": ""})
     monkeypatch.setattr(config, "get_effective_default_model", lambda: "")
     monkeypatch.setattr(
-        config, "get_first_available_model", lambda: "deepseek/deepseek-v4-pro"
+        config, "get_first_catalog_model", lambda: "@deepseek:deepseek-v4-pro"
     )
     assert (
         config.get_default_model_for_new_session()
-        == "deepseek/deepseek-v4-pro"
+        == "@deepseek:deepseek-v4-pro"
     )
 
 
@@ -315,7 +322,7 @@ def test_new_session_model_survives_peek_failure(monkeypatch):
 
     monkeypatch.setattr(config, "peek_available_models", _boom)
     monkeypatch.setattr(config, "get_effective_default_model", lambda: "zai/glm-5.2")
-    assert config.get_default_model_for_new_session() == "zai/glm-5.2"
+    assert config.get_default_model_for_new_session() == "@zai:glm-5.2"
 
 
 # ── new_session() integration ────────────────────────────────────────────────
@@ -351,3 +358,98 @@ def test_new_session_explicit_model_wins(monkeypatch):
     )
     session = new_session(model="openai/gpt-5.4")
     assert session.model == "openai/gpt-5.4"
+
+
+# ── Availability of an arbitrary model (issue #44 follow-up) ────────────────
+
+
+def _catalog(monkeypatch, groups: list[dict], active_provider: str | None = "deepseek"):
+    """Serve a fixed catalog to get_model_availability()."""
+    monkeypatch.setattr(
+        config,
+        "peek_available_models",
+        lambda: {
+            "active_provider": active_provider,
+            "default_model": "deepseek-flash",
+            "default_model_available": None,
+            "default_model_provider_has_key": None,
+            "groups": groups,
+        },
+    )
+
+
+def test_model_availability_offered_by_own_provider(monkeypatch):
+    _catalog(
+        monkeypatch,
+        [{"provider_id": "deepseek", "models": [{"id": "deepseek-v4-flash"}]}],
+    )
+    monkeypatch.setattr(config, "_provider_key_status", lambda pid: True)
+    result = config.get_model_availability("deepseek-v4-flash")
+    assert result["provider"] == "deepseek"
+    assert result["available"] is True
+    assert result["provider_has_key"] is True
+
+
+def test_model_availability_reports_removed_provider_key(monkeypatch):
+    """The provider group vanished with the key: the model is unavailable and
+    the UI can say the key is missing instead of "the provider retired it"."""
+    _catalog(monkeypatch, [{"provider_id": "other", "models": [{"id": "other-m"}]}])
+    monkeypatch.setattr(config, "_provider_key_status", lambda pid: False)
+    result = config.get_model_availability("deepseek-v4-flash")
+    assert result["provider"] == "deepseek"
+    assert result["available"] is False
+    assert result["provider_has_key"] is False
+
+
+def test_model_availability_unknown_without_catalog(monkeypatch):
+    """No groups to compare against: unknown, not "unavailable"."""
+    _catalog(monkeypatch, [])
+    monkeypatch.setattr(config, "_provider_key_status", lambda pid: True)
+    result = config.get_model_availability("deepseek-v4-flash")
+    assert result["available"] is None
+
+
+def test_model_availability_missing_key_is_definitive(monkeypatch):
+    """Without groups a missing key still settles it: the provider cannot
+    serve anything (mirrors the catalog build's default-model rule)."""
+    _catalog(monkeypatch, [])
+    monkeypatch.setattr(config, "_provider_key_status", lambda pid: False)
+    result = config.get_model_availability("deepseek-v4-flash")
+    assert result["available"] is False
+    assert result["provider_has_key"] is False
+
+
+def test_model_availability_is_provider_scoped(monkeypatch):
+    """A same-named model under another provider must not count."""
+    _catalog(
+        monkeypatch,
+        [{"provider_id": "other", "models": [{"id": "deepseek-v4-flash"}]}],
+    )
+    monkeypatch.setattr(config, "_provider_key_status", lambda pid: True)
+    result = config.get_model_availability("deepseek-v4-flash")
+    assert result["available"] is False
+
+
+def test_model_availability_provider_hint(monkeypatch):
+    """An ``@provider:`` hint names the serving provider."""
+    _catalog(
+        monkeypatch,
+        [{"provider_id": "nous", "models": [{"id": "@nous:anthropic/claude-opus-4.6"}]}],
+    )
+    monkeypatch.setattr(config, "_provider_key_status", lambda pid: True)
+    result = config.get_model_availability("@nous:anthropic/claude-opus-4.6")
+    assert result["provider"] == "nous"
+    assert result["available"] is True
+
+
+def test_model_availability_cross_provider_namespace(monkeypatch):
+    """A slash id that does not name the active provider is served by
+    OpenRouter (the routing rule of resolve_model_provider())."""
+    _catalog(
+        monkeypatch,
+        [{"provider_id": "openrouter", "models": [{"id": "@openrouter:openai/gpt-5.4"}]}],
+    )
+    monkeypatch.setattr(config, "_provider_key_status", lambda pid: True)
+    result = config.get_model_availability("openai/gpt-5.4")
+    assert result["provider"] == "openrouter"
+    assert result["available"] is True

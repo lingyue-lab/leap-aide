@@ -898,6 +898,37 @@ _DEFAULT_MODEL_INVALID_HINT = (
     "The API key for the default model's provider is missing or was removed. "
     'Re-add the key in Settings → Model Providers, or choose another model.'
 )
+_CURRENT_MODEL_INVALID_MESSAGE = (
+    'Current model is not valid. Please pick another model or re-add the '
+    "provider's API key in Settings."
+)
+_CURRENT_MODEL_INVALID_HINT = (
+    "The API key for this model's provider is missing or was removed. "
+    'Re-add the key in Settings → Model Providers, or pick another model.'
+)
+
+
+def _missing_key_wording(runs_configured_default: bool) -> tuple[str, str, str]:
+    """Label, message and hint for a missing provider API key.
+
+    The wording follows the conversation, not the model value: a brand-new
+    conversation runs the configured default, so it talks about "the default
+    model"; an existing session runs the model the user picked for it, so it
+    talks about "the current model" — calling that "the default model" is
+    misleading even when the two happen to be the same model (issue #44
+    follow-up).
+    """
+    if runs_configured_default:
+        return (
+            'Default model not available',
+            _DEFAULT_MODEL_INVALID_MESSAGE,
+            _DEFAULT_MODEL_INVALID_HINT,
+        )
+    return (
+        'Current model not available',
+        _CURRENT_MODEL_INVALID_MESSAGE,
+        _CURRENT_MODEL_INVALID_HINT,
+    )
 
 
 def _is_missing_key_error(text) -> bool:
@@ -967,11 +998,16 @@ def _ensure_failed_user_message(s, msg_text) -> None:
         )
 
 
-def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, attachments=None, drain_message=False, *, ephemeral=False):
+def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, attachments=None, drain_message=False, *, ephemeral=False, runs_configured_default=False):
     """Run agent in background thread, writing SSE events to stream_manager.
 
     When ephemeral=True, session mutations are skipped — used by /btw to get
     a streaming answer without persisting to the parent session.
+
+    ``runs_configured_default`` marks a brand-new conversation (the welcome
+    state sends the configured default); an existing session runs the model
+    the user picked for it, so its messages talk about "the current model"
+    instead of "the default model" (issue #44 follow-up).
     """
     q = stream_manager.get_stream_by_id(stream_id)
     if q is None:
@@ -2533,12 +2569,12 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         )
                     )
                     if _is_missing_key:
-                        _err_label = 'Default model not available'
+                        _err_label, _err_str, _err_hint = _missing_key_wording(
+                            runs_configured_default
+                        )
                         _err_type = 'model_unavailable'
-                        _err_hint = _DEFAULT_MODEL_INVALID_HINT
                         # Replace the SDK's config.yaml/env-var detail with a
                         # user-facing message; diagnostics were printed above.
-                        _err_str = _DEFAULT_MODEL_INVALID_MESSAGE
                     elif _is_quota:
                         _err_label = 'Out of credits'
                         _err_type = 'quota_exhausted'
@@ -2881,13 +2917,12 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             or 'unknown model' in _exc_lower
         )
         if _exc_is_missing_key:
-            _exc_label, _exc_type, _exc_hint = (
-                'Default model not available', 'model_unavailable',
-                _DEFAULT_MODEL_INVALID_HINT,
+            _exc_label, err_str, _exc_hint = _missing_key_wording(
+                runs_configured_default
             )
+            _exc_type = 'model_unavailable'
             # Keep the provider/env-var detail in the server log (printed
             # above) and show a short, Settings-oriented message to the user.
-            err_str = _DEFAULT_MODEL_INVALID_MESSAGE
         elif _exc_is_quota:
             _exc_label, _exc_type, _exc_hint = (
                 'Out of credits', 'quota_exhausted',

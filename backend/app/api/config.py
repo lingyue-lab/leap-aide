@@ -1211,16 +1211,13 @@ def _compute_default_model_available(
     return any(_group_offers_target(group) for group in groups)
 
 
-def _default_model_provider_has_key(
-    default_model: str, active_provider: str | None
-) -> bool | None:
-    """Whether the default model's provider has a configured API key.
+def _provider_key_status(provider_id: str) -> bool | None:
+    """Whether *provider_id* has a configured API key.
 
     ``None`` when the provider is unknown or does not authenticate with an
     API key (local or OAuth providers), so the UI reports a missing key only
     where one is actually required.
     """
-    provider_id = _resolve_default_model_provider(default_model, active_provider)
     if not provider_id:
         return None
     rec = model_catalog.get_provider_record(provider_id)
@@ -1232,6 +1229,119 @@ def _default_model_provider_has_key(
         return bool(_provider_has_key(provider_id))
     except ImportError:
         return None
+
+
+def _default_model_provider_has_key(
+    default_model: str, active_provider: str | None
+) -> bool | None:
+    """Whether the default model's provider has a configured API key.
+
+    ``None`` when the provider is unknown or does not authenticate with an
+    API key (local or OAuth providers), so the UI reports a missing key only
+    where one is actually required.
+    """
+    provider_id = _resolve_default_model_provider(default_model, active_provider)
+    return _provider_key_status(provider_id)
+
+
+def _model_provider_for_availability(
+    model_id: str, active_provider: str | None
+) -> str:
+    """Provider whose group must offer *model_id* for it to be runnable.
+
+    Mirrors the routing rules of ``resolve_model_provider()``:
+
+    - ``@provider:model`` carries an explicit provider hint
+    - ``provider/model`` names a provider: the active one when the prefix
+      matches it, otherwise OpenRouter (which serves the cross-provider
+      namespaces)
+    - a bare model name belongs to the active provider
+
+    Returns ``""`` when the provider cannot be determined.
+    """
+    mid = str(model_id or "").strip()
+    if not mid:
+        return ""
+    if mid.startswith("@") and ":" in mid:
+        return _resolve_provider_alias(mid[1:].split(":", 1)[0])
+    if "/" in mid:
+        prefix = mid.split("/", 1)[0]
+        if active_provider and prefix == active_provider:
+            return active_provider
+        if model_catalog.get_provider_record(prefix) is not None:
+            # A cross-provider namespace is routed through OpenRouter.
+            return "openrouter"
+        return active_provider or ""
+    return active_provider or ""
+
+
+def _compute_model_available(
+    model_id: str, groups: list[dict], provider_id: str
+) -> bool | None:
+    """Whether *provider_id*'s group in *groups* offers *model_id*.
+
+    ``None`` means "unknown" — no model id, or no catalog groups to compare
+    against; callers must only act on an explicit ``False``.  The comparison
+    is provider-scoped: two providers can list the same trailing model name
+    (OpenRouter's ``deepseek/deepseek-v4-flash`` and DeepSeek's
+    ``deepseek-v4-flash``), and a name-only match would report a model as
+    available although it is served by a different backend.
+    """
+    mid = str(model_id or "").strip()
+    if not mid or not groups:
+        return None
+    target = _normalize_model_id_for_match(mid)
+    if not target:
+        return None
+
+    def _group_offers_target(group: dict) -> bool:
+        return any(
+            _normalize_model_id_for_match(model.get("id", "")) == target
+            for model in group.get("models", [])
+        )
+
+    if provider_id:
+        return any(
+            _group_offers_target(group)
+            for group in groups
+            if _resolve_provider_alias(
+                str(group.get("provider_id") or "")
+            ) == provider_id
+        )
+    return any(_group_offers_target(group) for group in groups)
+
+
+def get_model_availability(model_id: str) -> dict:
+    """Availability of an arbitrary model against the current catalog.
+
+    The catalog reports the availability of the *configured default* only
+    (``default_model_available``).  An existing session can run a different
+    model, so the composer asks the backend about the model its conversation
+    actually uses: a conversation must never silently switch models when the
+    provider stops offering it (issue #44 follow-up).
+
+    Returns ``{model, provider, available, provider_has_key}`` where
+    ``available`` is ``True`` / ``False`` / ``None`` (unknown — no catalog to
+    compare against) and ``provider_has_key`` is ``True`` / ``False`` /
+    ``None`` (the provider does not authenticate with an API key).
+    """
+    mid = str(model_id or "").strip()
+    catalog = peek_available_models()
+    groups = catalog.get("groups") or []
+    active_provider = catalog.get("active_provider")
+    provider_id = _model_provider_for_availability(mid, active_provider)
+    available = _compute_model_available(mid, groups, provider_id)
+    provider_has_key = _provider_key_status(provider_id)
+    if available is None and provider_has_key is False:
+        # The provider cannot serve anything without its key — a definitive
+        # failure even when the catalog has no groups to compare against.
+        available = False
+    return {
+        "model": mid,
+        "provider": provider_id,
+        "available": available,
+        "provider_has_key": provider_has_key,
+    }
 
 
 def _provider_requires_api_key(provider_id: str) -> bool:

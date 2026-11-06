@@ -4,6 +4,7 @@ response shape, default_model, no-duplicate-ids, unlisted-model preservation.
 """
 import json, pathlib, urllib.error, urllib.request, urllib.parse
 
+from tests._pytest_port import BASE
 from tests._test_helpers import get, post
 
 
@@ -97,3 +98,28 @@ def test_session_preserves_unlisted_model():
         assert d2['session']['model'] == custom_model
     finally:
         post("/api/session/delete", {'session_id': sid})
+
+
+# ── /api/models/availability endpoint ───────────────────────────────────────
+
+def test_model_availability_endpoint_returns_verdict():
+    """GET /api/models/availability?model=… answers for an arbitrary model.
+
+    The catalog only reports the configured default's availability; a
+    conversation that runs another model needs its own verdict so the UI can
+    warn instead of silently switching models.
+    """
+    d, status = get("/api/models/availability?model=openai%2Fgpt-5.4-mini")
+    assert status == 200
+    assert d['model'] == 'openai/gpt-5.4-mini'
+    assert 'provider' in d
+    assert d['available'] is None or isinstance(d['available'], bool)
+    assert d['provider_has_key'] is None or isinstance(d['provider_has_key'], bool)
+
+def test_model_availability_endpoint_requires_model():
+    """A missing model parameter is a client error."""
+    try:
+        urllib.request.urlopen(BASE + "/api/models/availability", timeout=10)
+        raise AssertionError("expected HTTP 400")
+    except urllib.error.HTTPError as e:
+        assert e.code == 400

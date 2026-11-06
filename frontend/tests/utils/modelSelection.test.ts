@@ -10,6 +10,9 @@ import {
   normalizeModelId,
   sameModelId,
   catalogHasModel,
+  stripProviderHint,
+  modelProviderHint,
+  findCatalogModelId,
 } from '@/utils/modelSelection';
 
 describe('normalizeModelId', () => {
@@ -69,5 +72,80 @@ describe('catalogHasModel', () => {
   it('returns false when absent or unset', () => {
     expect(catalogHasModel(['@openai:gpt-5.4'], 'claude-opus-4.6')).toBe(false);
     expect(catalogHasModel(['@openai:gpt-5.4'], '')).toBe(false);
+  });
+});
+
+describe('provider hint helpers', () => {
+  it('strips the hint', () => {
+    expect(stripProviderHint('@deepseek:deepseek-flash')).toBe('deepseek-flash');
+    expect(stripProviderHint('deepseek-flash')).toBe('deepseek-flash');
+    expect(stripProviderHint('@openrouter:deepseek/deepseek-v4-flash')).toBe(
+      'deepseek/deepseek-v4-flash',
+    );
+    expect(stripProviderHint('')).toBe('');
+  });
+
+  it('reads the hinted provider', () => {
+    expect(modelProviderHint('@deepseek:deepseek-flash')).toBe('deepseek');
+    expect(modelProviderHint('deepseek-flash')).toBe('');
+    expect(modelProviderHint('@openrouter:openai/gpt-5.4')).toBe('openrouter');
+  });
+});
+
+// The stored session model and the catalog ids can differ in form: the
+// catalog lists the active provider's ids bare while a stored model may carry
+// the WebUI-only provider hint.  The picker compares ids literally, so the
+// composer has to resolve the stored id to the catalog entry.
+describe('findCatalogModelId', () => {
+  const groups = [
+    {
+      provider_id: 'deepseek',
+      models: [{ id: 'deepseek-flash' }, { id: 'deepseek-v4-pro' }],
+    },
+    {
+      provider_id: 'xiaomi',
+      models: [{ id: '@xiaomi:mimo-v2.6-flash' }],
+    },
+  ];
+
+  it('returns an exact catalog id', () => {
+    expect(findCatalogModelId(groups, 'deepseek-flash', 'deepseek')).toBe(
+      'deepseek-flash',
+    );
+    expect(
+      findCatalogModelId(groups, '@xiaomi:mimo-v2.6-flash', 'deepseek'),
+    ).toBe('@xiaomi:mimo-v2.6-flash');
+  });
+
+  it('maps a hinted model onto the bare entry of its provider', () => {
+    expect(
+      findCatalogModelId(groups, '@deepseek:deepseek-flash', 'deepseek'),
+    ).toBe('deepseek-flash');
+  });
+
+  it('prefers the hinted provider over an equally named model elsewhere', () => {
+    const ambiguous = [
+      { provider_id: 'deepseek', models: [{ id: 'deepseek-flash' }] },
+      {
+        provider_id: 'other',
+        models: [{ id: '@other:deepseek-flash' }],
+      },
+    ];
+    expect(
+      findCatalogModelId(ambiguous, '@other:deepseek-flash', 'deepseek'),
+    ).toBe('@other:deepseek-flash');
+  });
+
+  it('falls back to the active provider for a bare model', () => {
+    const ambiguous = [
+      { provider_id: 'other', models: [{ id: '@other:flash' }] },
+      { provider_id: 'deepseek', models: [{ id: 'flash' }] },
+    ];
+    expect(findCatalogModelId(ambiguous, 'flash', 'deepseek')).toBe('flash');
+  });
+
+  it('returns null when the catalog does not offer the model', () => {
+    expect(findCatalogModelId(groups, 'missing-model', 'deepseek')).toBeNull();
+    expect(findCatalogModelId(groups, '', 'deepseek')).toBeNull();
   });
 });

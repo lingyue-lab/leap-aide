@@ -5,6 +5,11 @@
  * The footer must keep showing the configured value (marked unavailable)
  * instead of silently highlighting a different model, and the picker must
  * label such entries. When the default is available, no suffix is shown.
+ *
+ * Follow-up: an existing session that runs another model must get the same
+ * treatment — the composer asks the backend about that model
+ * (GET /api/models/availability) instead of falling back to the next
+ * available model without a word.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -17,6 +22,8 @@ import type { ModelsResponse } from '@/types';
 
 const h = vi.hoisted(() => ({
   catalog: { groups: [] } as any,
+  /** Availability verdict per model id; null → "unknown". */
+  availability: null as null | ((model: string) => any),
 }));
 
 vi.mock('@/services/api', async () => {
@@ -25,6 +32,13 @@ vi.mock('@/services/api', async () => {
     ...actual,
     modelsService: {
       getModels: vi.fn(() => Promise.resolve(h.catalog)),
+      getModelAvailability: vi.fn((model: string) =>
+        Promise.resolve(
+          h.availability
+            ? h.availability(model)
+            : { model, provider: '', available: null, provider_has_key: null },
+        ),
+      ),
     },
     personalityService: { getAll: vi.fn(() => Promise.resolve([])) },
   };
@@ -72,6 +86,7 @@ describe('ChatComposer — configured default availability', () => {
       lastErrorStatus: null,
     });
     h.catalog = { groups: [] };
+    h.availability = null;
     useModelsStore.getState().cancel();
     useModelsStore.setState({ data: null, status: 'idle', error: null, fetchedAt: null });
     useSettingsStore.setState({
@@ -267,6 +282,145 @@ describe('ChatComposer — configured default availability', () => {
     fireEvent.click(screen.getByText('DeepSeek V4 Flash (OpenRouter)'));
 
     await waitFor(() => expect(screen.queryByText(warningText)).toBeNull());
-    expect(screen.getByTitle('deepseek-v4-flash')).toBeInTheDocument();
+    // The trigger label strips the provider hint but keeps the model's own
+    // namespace (issue #55 display rule).
+    expect(screen.getByTitle('deepseek/deepseek-v4-flash')).toBeInTheDocument();
+  });
+
+  // ── Existing session whose own model became unrunnable ────────────────
+  //
+  // The catalog only reports the *configured default's* availability, so an
+  // existing session that runs another model must ask the backend about
+  // that model.  Before this, the composer silently highlighted the next
+  // available model of another provider — the conversation looked like it
+  // had switched models.
+
+  const sessionWithOwnModel = (model: string) => {
+    useSettingsStore.setState({ settings: null });
+    useSessionStore.setState({
+      sessions: [],
+      currentSessionId: 'sess-1',
+      currentSession: session(model),
+      pendingNewSession: null,
+    });
+  };
+
+  // The provider's key was removed: its group vanished from the catalog and
+  // the configured default (an alias of the session's model) is unavailable.
+  const catalogWithoutProvider = {
+    groups: [
+      {
+        provider: 'Tencent',
+        provider_id: 'tencent-tokenhub',
+        models: [{ id: 'hy4-preview', label: 'HY4 Preview' }],
+      },
+    ],
+    active_provider: 'deepseek',
+    default_model: 'deepseek-flash',
+    default_model_available: false,
+    default_model_provider_has_key: false,
+  };
+
+  it('keeps the session model and warns when its provider lost the API key', async () => {
+    h.catalog = catalogWithoutProvider;
+    h.availability = () => ({
+      model: 'deepseek-v4-flash',
+      provider: 'deepseek',
+      available: false,
+      provider_has_key: false,
+    });
+    sessionWithOwnModel('deepseek-v4-flash');
+
+    render(<ChatComposer onSend={() => {}} onCancel={() => {}} />);
+
+    // The session's own model stays visible (marked unavailable) — it is
+    // NOT replaced by the first model of another provider.
+    expect(
+      await screen.findByTitle('deepseek-v4-flash (unavailable)'),
+    ).toBeInTheDocument();
+    expect(screen.queryByTitle('hy4-preview')).toBeNull();
+    expect(
+      screen.getByText(
+        "Current model unavailable: its provider's API key is missing or was removed. Re-add it in Settings.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  // The wording follows the conversation's context, not the value: an old
+  // session runs the model the user picked for it, so it must never be
+  // called "the default model" — even when that model happens to be the
+  // configured default as well.
+  it('calls an old session model "current", not "default", even when it equals the default', async () => {
+    h.catalog = {
+      groups: [],
+      active_provider: 'deepseek',
+      default_model: 'deepseek-flash',
+      default_model_available: false,
+      default_model_provider_has_key: false,
+    };
+    h.availability = () => ({
+      model: 'deepseek-flash',
+      provider: 'deepseek',
+      available: false,
+      provider_has_key: false,
+    });
+    sessionWithOwnModel('deepseek-flash');
+
+    render(<ChatComposer onSend={() => {}} onCancel={() => {}} />);
+
+    expect(
+      await screen.findByTitle('deepseek-flash (unavailable)'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Current model unavailable: its provider's API key is missing or was removed. Re-add it in Settings.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "Default model unavailable: its provider's API key is missing or was removed. Re-add it in Settings.",
+      ),
+    ).toBeNull();
+  });
+
+  it('explains a retired model instead of claiming a missing key', async () => {
+    h.catalog = catalogWithoutProvider;
+    h.availability = () => ({
+      model: 'deepseek-v4-flash',
+      provider: 'deepseek',
+      available: false,
+      provider_has_key: true,
+    });
+    sessionWithOwnModel('deepseek-v4-flash');
+
+    render(<ChatComposer onSend={() => {}} onCancel={() => {}} />);
+
+    expect(
+      await screen.findByTitle('deepseek-v4-flash (unavailable)'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'This model is no longer offered by its provider. Pick another model to continue.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('stays quiet while the availability of the session model is unknown', async () => {
+    h.catalog = catalogWithoutProvider;
+    h.availability = () => ({
+      model: 'deepseek-v4-flash',
+      provider: 'deepseek',
+      available: null,
+      provider_has_key: null,
+    });
+    sessionWithOwnModel('deepseek-v4-flash');
+
+    render(<ChatComposer onSend={() => {}} onCancel={() => {}} />);
+
+    await waitFor(() =>
+      expect(screen.getByTitle('deepseek-v4-flash')).toBeInTheDocument(),
+    );
+    expect(screen.queryByTitle('deepseek-v4-flash (unavailable)')).toBeNull();
+    expect(screen.queryByRole('status')).toBeNull();
   });
 });
