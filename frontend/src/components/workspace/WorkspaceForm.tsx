@@ -12,6 +12,8 @@ interface WorkspaceFormProps {
 }
 
 const MENU_MAX_H = 280;
+const MENU_ID = 'workspace-path-suggestions';
+const optionId = (index: number) => `${MENU_ID}-option-${index}`;
 
 export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProps) {
   const { t } = useTranslation('common');
@@ -33,6 +35,13 @@ export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProp
   const suggestTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pathInputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  // Monotonic request id.  Only the response of the newest request may
+  // paint the menu, so a slow reply for an older prefix can never replace
+  // the results of the prefix the user is actually typing.
+  const requestIdRef = useRef(0);
+  // Latest path value.  Event handlers that outlive a render (focus) must
+  // not read a stale `addPath`.
+  const pathRef = useRef('');
 
   useEffect(() => {
     pathInputRef.current?.focus();
@@ -58,13 +67,22 @@ export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProp
   }, []);
 
   const fetchSuggestions = useCallback(async (prefix: string) => {
+    const requestId = ++requestIdRef.current;
     try {
       const res = await fetch(
         `/api/workspaces/suggest?prefix=${encodeURIComponent(prefix)}`,
         { credentials: 'include' },
       );
-      if (!res.ok) return;
+      // A newer request has been issued in the meantime — drop this reply.
+      if (requestId !== requestIdRef.current) return;
+      if (!res.ok) {
+        // A failed lookup must not leave the previous list on screen.
+        setSuggestions([]);
+        setMenuOpen(false);
+        return;
+      }
       const data = await res.json();
+      if (requestId !== requestIdRef.current) return;
       const list: string[] = data.suggestions || [];
       setSuggestions(list);
       setActiveSugIdx(-1);
@@ -75,12 +93,18 @@ export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProp
         setMenuOpen(false);
       }
     } catch {
-      /* silent */
+      if (requestId !== requestIdRef.current) return;
+      setSuggestions([]);
+      setMenuOpen(false);
     }
   }, [positionMenu]);
 
   const handlePathChange = (value: string) => {
     setAddPath(value);
+    pathRef.current = value;
+    // Invalidate every in-flight response: a stale reply must neither
+    // repaint the menu nor reopen it after the field was cleared.
+    requestIdRef.current++;
     if (suggestTimer.current) clearTimeout(suggestTimer.current);
     if (!value.trim()) {
       setSuggestions([]);
@@ -92,11 +116,17 @@ export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProp
 
   const handleSelectSuggestion = (path: string) => {
     const withSlash = path.endsWith('/') ? path : path + '/';
+    // Drop the pending debounce — it would re-query the previous prefix.
+    if (suggestTimer.current) {
+      clearTimeout(suggestTimer.current);
+      suggestTimer.current = null;
+    }
+    pathRef.current = withSlash;
     setAddPath(withSlash);
     setActiveSugIdx(-1);
     setMenuOpen(false);
-    fetchSuggestions(withSlash);
     pathInputRef.current?.focus();
+    fetchSuggestions(withSlash);
   };
 
   // Close on outside mousedown (input and menu excluded).
@@ -112,17 +142,31 @@ export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProp
     return () => document.removeEventListener('mousedown', onDown);
   }, [menuOpen]);
 
-  // Close on scroll/resize: a fixed menu would otherwise detach from the input.
+  // Close on scroll/resize: a fixed menu would otherwise detach from the
+  // input.  The menu scrolls itself (overflow-y: auto) — that must not close
+  // it, otherwise the items past the fold become unreachable.
   useEffect(() => {
     if (!menuOpen) return;
-    const close = () => setMenuOpen(false);
-    window.addEventListener('scroll', close, true);
-    window.addEventListener('resize', close);
+    const onScroll = (e: Event) => {
+      if (menuRef.current?.contains(e.target as Node)) return;
+      setMenuOpen(false);
+    };
+    const onResize = () => setMenuOpen(false);
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onResize);
     return () => {
-      window.removeEventListener('scroll', close, true);
-      window.removeEventListener('resize', close);
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onResize);
     };
   }, [menuOpen]);
+
+  // Keep the highlighted option visible: the menu is capped at MENU_MAX_H,
+  // so arrow-key navigation can move the highlight past the visible rows.
+  useEffect(() => {
+    if (activeSugIdx < 0) return;
+    const opt = menuRef.current?.children[activeSugIdx] as HTMLElement | undefined;
+    opt?.scrollIntoView?.({ block: 'nearest' });
+  }, [activeSugIdx]);
 
   const handlePathKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (!menuOpen || suggestions.length === 0) {
@@ -145,11 +189,17 @@ export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProp
         handleSubmit();
       }
     } else if (e.key === 'Tab') {
-      e.preventDefault();
-      if (activeSugIdx >= 0 && suggestions[activeSugIdx]) {
-        handleSelectSuggestion(suggestions[activeSugIdx]);
-      } else if (suggestions.length === 1) {
-        handleSelectSuggestion(suggestions[0]);
+      const target =
+        activeSugIdx >= 0
+          ? suggestions[activeSugIdx]
+          : suggestions.length === 1
+            ? suggestions[0]
+            : null;
+      // Only swallow Tab when a suggestion is actually accepted — otherwise
+      // Tab must move the focus out of the field instead of trapping it.
+      if (target) {
+        e.preventDefault();
+        handleSelectSuggestion(target);
       }
     } else if (e.key === 'Escape') {
       setMenuOpen(false);
@@ -163,6 +213,9 @@ export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProp
       return;
     }
     setMenuOpen(false);
+    // A suggest response that is still in flight must not reopen the menu
+    // while the form is being submitted.
+    requestIdRef.current++;
     setSubmitting(true);
     setError('');
     try {
@@ -175,10 +228,13 @@ export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProp
     }
   };
 
+  const listOpen = menuOpen && suggestions.length > 0;
+
   const menu =
-    menuOpen && suggestions.length > 0 && typeof document !== 'undefined'
+    listOpen && typeof document !== 'undefined'
       ? createPortal(
           <div
+            id={MENU_ID}
             ref={menuRef}
             role="listbox"
             aria-label={t('workspaces.form.suggestions_title')}
@@ -188,6 +244,7 @@ export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProp
             {suggestions.map((s, i) => (
               <button
                 key={s}
+                id={optionId(i)}
                 type="button"
                 role="option"
                 aria-selected={i === activeSugIdx}
@@ -230,11 +287,21 @@ export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProp
           <TextField
             ref={pathInputRef}
             type="text"
+            role="combobox"
+            aria-expanded={listOpen}
+            aria-controls={MENU_ID}
+            aria-autocomplete="list"
+            aria-activedescendant={
+              activeSugIdx >= 0 ? optionId(activeSugIdx) : undefined
+            }
             placeholder={t('workspaces.form.path_placeholder')}
             value={addPath}
             onChange={(e) => handlePathChange(e.target.value)}
             onKeyDown={handlePathKeyDown}
-            onFocus={() => { if (addPath.trim()) fetchSuggestions(addPath); }}
+            onFocus={() => {
+              const current = pathRef.current;
+              if (current.trim()) fetchSuggestions(current);
+            }}
           />
         </FormField>
 
