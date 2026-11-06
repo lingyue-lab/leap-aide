@@ -227,3 +227,78 @@ describe('WorkspaceForm — directory autocomplete menu', () => {
     });
   });
 });
+
+/**
+ * Dismissing the menu must stick.  A queued debounce timer or an in-flight
+ * response would otherwise reopen it a moment later, which makes Escape and
+ * click-outside feel broken.
+ */
+describe('WorkspaceForm — dismissing the suggestion menu', () => {
+  async function flush(ms = 400) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+    });
+  }
+
+  it('Escape during the debounce window keeps the menu closed', async () => {
+    mockSuggest({ '/a': ['/a/stale'] });
+
+    const input = renderForm();
+    fireEvent.change(input, { target: { value: '/a' } });
+    // The debounce is still pending, so no menu exists yet.
+    fireEvent.keyDown(input, { key: 'Escape' });
+    await flush();
+
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
+  it('Escape while a request is in flight keeps the menu closed', async () => {
+    const api = mockManualSuggest();
+
+    const input = renderForm();
+    fireEvent.change(input, { target: { value: '/a' } });
+    await waitForRequest('/a');
+    fireEvent.keyDown(input, { key: 'Escape' });
+    api.resolve(0, ['/a/stale']);
+    await flush(100);
+
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
+  it('an outside click while a request is in flight keeps it closed', async () => {
+    const api = mockManualSuggest();
+
+    const input = renderForm();
+    fireEvent.change(input, { target: { value: '/a' } });
+    await waitForRequest('/a');
+    api.resolve(0, ['/a/first']);
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument());
+
+    fireEvent.change(input, { target: { value: '/ab' } });
+    await waitForRequest('/ab');
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByRole('listbox')).toBeNull();
+
+    api.resolve(1, ['/ab/late']);
+    await flush(100);
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
+  it('a resize while a request is in flight keeps it closed', async () => {
+    const api = mockManualSuggest();
+
+    const input = renderForm();
+    fireEvent.change(input, { target: { value: '/a' } });
+    await waitForRequest('/a');
+    api.resolve(0, ['/a/first']);
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument());
+
+    fireEvent.change(input, { target: { value: '/ab' } });
+    await waitForRequest('/ab');
+    fireEvent(window, new Event('resize'));
+    api.resolve(1, ['/ab/late']);
+    await flush(100);
+
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+});

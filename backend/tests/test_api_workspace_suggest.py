@@ -168,3 +168,18 @@ class TestSuggestionsAreAddable:
     def test_empty_prefix_returns_nothing(self):
         assert list_workspace_suggestions("") == []
         assert list_workspace_suggestions("   ") == []
+
+    def test_symlink_to_filesystem_root_is_not_suggested(self, tmp_path):
+        """``/`` is listable as a *parent*, but it is not addable — a symlink
+        pointing at it inside a listed directory must stay filtered."""
+        (tmp_path / "real").mkdir()
+        try:
+            (tmp_path / "rootlink").symlink_to("/")
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks are not available on this platform")
+
+        result = list_workspace_suggestions(str(tmp_path) + "/")
+
+        assert _dirs(result) == _dirs([tmp_path / "real"])
+        with pytest.raises(ValueError):
+            validate_workspace_to_add("/")

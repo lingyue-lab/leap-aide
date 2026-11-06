@@ -66,6 +66,18 @@ export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProp
     });
   }, []);
 
+  // Close the menu and cancel everything that could reopen it.  A queued
+  // debounce timer or an in-flight response would otherwise pop the menu
+  // back open after the user dismissed it.
+  const closeMenu = useCallback(() => {
+    if (suggestTimer.current) {
+      clearTimeout(suggestTimer.current);
+      suggestTimer.current = null;
+    }
+    requestIdRef.current++;
+    setMenuOpen(false);
+  }, []);
+
   const fetchSuggestions = useCallback(async (prefix: string) => {
     const requestId = ++requestIdRef.current;
     try {
@@ -102,29 +114,26 @@ export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProp
   const handlePathChange = (value: string) => {
     setAddPath(value);
     pathRef.current = value;
-    // Invalidate every in-flight response: a stale reply must neither
-    // repaint the menu nor reopen it after the field was cleared.
-    requestIdRef.current++;
-    if (suggestTimer.current) clearTimeout(suggestTimer.current);
     if (!value.trim()) {
       setSuggestions([]);
-      setMenuOpen(false);
+      closeMenu();
       return;
     }
+    // Invalidate every in-flight response: a stale reply must neither
+    // repaint the menu nor reopen it for a prefix that is no longer typed.
+    requestIdRef.current++;
+    if (suggestTimer.current) clearTimeout(suggestTimer.current);
     suggestTimer.current = setTimeout(() => fetchSuggestions(value), 200);
   };
 
   const handleSelectSuggestion = (path: string) => {
     const withSlash = path.endsWith('/') ? path : path + '/';
-    // Drop the pending debounce — it would re-query the previous prefix.
-    if (suggestTimer.current) {
-      clearTimeout(suggestTimer.current);
-      suggestTimer.current = null;
-    }
     pathRef.current = withSlash;
     setAddPath(withSlash);
     setActiveSugIdx(-1);
-    setMenuOpen(false);
+    // Drops the pending debounce and any in-flight response first; the
+    // lookup for the completed path below then becomes the newest request.
+    closeMenu();
     pathInputRef.current?.focus();
     fetchSuggestions(withSlash);
   };
@@ -136,11 +145,11 @@ export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProp
       const target = e.target as Node;
       if (menuRef.current?.contains(target)) return;
       if (pathInputRef.current?.contains(target)) return;
-      setMenuOpen(false);
+      closeMenu();
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
-  }, [menuOpen]);
+  }, [menuOpen, closeMenu]);
 
   // Close on scroll/resize: a fixed menu would otherwise detach from the
   // input.  The menu scrolls itself (overflow-y: auto) — that must not close
@@ -149,16 +158,16 @@ export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProp
     if (!menuOpen) return;
     const onScroll = (e: Event) => {
       if (menuRef.current?.contains(e.target as Node)) return;
-      setMenuOpen(false);
+      closeMenu();
     };
-    const onResize = () => setMenuOpen(false);
+    const onResize = () => closeMenu();
     window.addEventListener('scroll', onScroll, true);
     window.addEventListener('resize', onResize);
     return () => {
       window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('resize', onResize);
     };
-  }, [menuOpen]);
+  }, [menuOpen, closeMenu]);
 
   // Keep the highlighted option visible: the menu is capped at MENU_MAX_H,
   // so arrow-key navigation can move the highlight past the visible rows.
@@ -171,7 +180,7 @@ export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProp
   const handlePathKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (!menuOpen || suggestions.length === 0) {
       if (e.key === 'Enter') { e.preventDefault(); handleSubmit(); }
-      if (e.key === 'Escape') setMenuOpen(false);
+      if (e.key === 'Escape') closeMenu();
       return;
     }
     if (e.key === 'ArrowDown') {
@@ -185,7 +194,6 @@ export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProp
       if (activeSugIdx >= 0 && suggestions[activeSugIdx]) {
         handleSelectSuggestion(suggestions[activeSugIdx]);
       } else {
-        setMenuOpen(false);
         handleSubmit();
       }
     } else if (e.key === 'Tab') {
@@ -202,7 +210,7 @@ export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProp
         handleSelectSuggestion(target);
       }
     } else if (e.key === 'Escape') {
-      setMenuOpen(false);
+      closeMenu();
     }
   };
 
@@ -212,10 +220,9 @@ export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProp
       setError(t('workspaces.form.error_path_required'));
       return;
     }
-    setMenuOpen(false);
-    // A suggest response that is still in flight must not reopen the menu
-    // while the form is being submitted.
-    requestIdRef.current++;
+    // Cancel the queue and any in-flight suggest response — neither may
+    // reopen the menu while the form is being submitted.
+    closeMenu();
     setSubmitting(true);
     setError('');
     try {
