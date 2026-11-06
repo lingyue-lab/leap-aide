@@ -130,8 +130,8 @@ RUN if [ "A${BUILD_APT_PROXY:-}" != "A" ]; then \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
-# Match scripts/install.sh's IN_DOCKER dependency list (line 526-609):
-#   - base: apt-utils locales sudo curl rsync openssh-client
+# Match scripts/install.sh's IN_DOCKER dependency list (line 636-756):
+#   - base: apt-utils locales sudo curl rsync openssh-client git gh
 #   - python: python3.12 python3.12-venv python3.12-dev
 #   - native build tools: libatomic1 xz-utils build-essential
 #   - X11/VNC observation: xvfb x11vnc openbox wmctrl xterm
@@ -147,9 +147,20 @@ RUN if [ "A${BUILD_APT_PROXY:-}" != "A" ]; then \
 # `git` is needed by scripts/npm_warmup.sh (which clones hermes-agent via
 # SSH BEFORE install.sh runs). Without it pre-installed here, warmup
 # silently skips and install.sh ends up doing the slow work uncached.
+#
+# `gh` (GitHub CLI) is not optional decoration — the Hermes Agent SDK shells
+# out to it: cli.py runs `gh pr list` to detect merged PRs, and
+# tools/skills_hub.py runs `gh auth token` to authenticate against the
+# skills hub. Both die with "gh: command not found" in the image, which
+# blocks every GitHub-related agent task (PR/issue triage, repo queries).
+# It ships in Ubuntu's `universe` component, which the sources file above
+# already enables, so it rides along with BUILD_APT_MIRROR and needs no
+# extra apt repo, keyring or pinned tarball — the same reason every other
+# tool here comes from apt. Version floor: gh 2.45 (noble-updates), which
+# covers the pr/issue/repo/api/run command surface the SDK relies on.
 RUN apt-get update -y --fix-missing --no-install-recommends \
     && apt-get install -y --no-install-recommends \
-        apt-utils locales sudo curl rsync openssh-client git \
+        apt-utils locales sudo curl rsync openssh-client git gh \
         python3.12 python3.12-venv python3.12-dev \
         libatomic1 xz-utils build-essential \
         xvfb x11vnc openbox wmctrl xterm \
@@ -216,6 +227,83 @@ RUN groupadd -g 1024 leap-aide \
     && useradd -u 1025 -d /home/leap-aide-init -g leap-aide-init -s /bin/bash -m leap-aide-init \
     && usermod -G users leap-aide-init \
     && adduser leap-aide-init sudo
+
+# ── gh extension: gh-token ─────────────────────────────────────────────────
+# `gh token generate|revoke|installations` mints short-lived GitHub App
+# installation access tokens for REST/GraphQL calls — the App-scoped GitHub
+# work a PAT cannot express (the token expires an hour after creation and
+# carries only the App's configured permissions).
+#
+# Installed by hand, NOT via `gh extension install`: gh's root command runs
+# an auth check that exits 4 ("run gh auth login") for every command when
+# no token is present — `gh extension install` and `gh extension list`
+# included — and the image build has no GitHub credentials. The layout
+# below is the one gh's own binary-extension installer produces:
+#
+#     <data dir>/extensions/gh-token/gh-token      the executable
+#     <data dir>/extensions/gh-token/manifest.yml  owner/name/host/tag/path
+#
+# gh then dispatches `gh token …` to that executable. Extension dispatch
+# is NOT behind the auth check, so `gh token --version` works in the
+# unauthenticated image (it is the smoke test below) — while the built-in
+# commands (`gh pr`, `gh issue`, `gh api`, …) still need a login.
+#
+# Landed in EVERY runtime identity's data dir ON PURPOSE: gh keeps
+# extensions in the *invoking user's* data dir (~/.local/share/gh/extensions),
+# and which user that is depends on how the container was started — the
+# server and the WebUI terminal run as `leap-aide`, the entrypoint's first
+# phase runs as `leap-aide-init`, and root mode (WANTED_UID=0, the
+# rootless-podman default) runs the whole server as root. An extension
+# installed for one identity is invisible to the others. (gh resolves the
+# data dir from XDG_DATA_HOME or HOME — GH_DATA_DIR is not a thing.)
+#
+# The release publishes one asset per GOOS-GOARCH pair, named exactly
+# `linux-amd64`, `linux-arm64`, ... — the naming gh's binary-extension
+# lookup expects. dpkg --print-architecture picks the right one, so the
+# multi-arch build (amd64 + arm64) needs no arch switch here.
+#
+# The binary is downloaded ONCE and hard-linked into each identity's
+# extension dir: gh's own layout requires the executable to live at
+# <extensions>/<name>/<name>, and a hard link satisfies that without
+# paying for three copies of a ~10 MB Go binary.
+#
+# The manifest is 0644 instead of gh's 0600: gh writes it 0600 because it
+# installs into a single user's home, but here several identities read it
+# and it holds nothing secret (owner/name/host/tag/path).
+#
+# Pinned to a release tag, like the hermes-agent commit pin above: an
+# unpinned "latest" would silently change the image contents between two
+# builds of the same commit. Bump GH_TOKEN_EXTENSION_VERSION to update.
+#
+# Retry: the asset comes from github.com — intermittently slow from CN
+# networks. curl's --retry/--retry-all-errors covers the transient
+# failures the same way the uv installer does.
+ARG GH_TOKEN_EXTENSION_VERSION=v2.0.10
+RUN set -e; \
+    case "$(dpkg --print-architecture)" in \
+        amd64) _gh_token_asset="linux-amd64" ;; \
+        arm64) _gh_token_asset="linux-arm64" ;; \
+        i386)  _gh_token_asset="linux-386" ;; \
+        armhf) _gh_token_asset="linux-arm" ;; \
+        *) echo "ERROR: no gh-token release asset for $(dpkg --print-architecture)"; exit 1 ;; \
+    esac; \
+    _gh_token_bin=/usr/local/share/gh-extensions/gh-token; \
+    mkdir -p "$(dirname "$_gh_token_bin")"; \
+    curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors \
+        -o "$_gh_token_bin" \
+        "https://github.com/Link-/gh-token/releases/download/${GH_TOKEN_EXTENSION_VERSION}/${_gh_token_asset}"; \
+    chmod 0755 "$_gh_token_bin"; \
+    for _home in /home/leap-aide /home/leap-aide-init /root; do \
+        _gh_token_dir="$_home/.local/share/gh/extensions/gh-token"; \
+        mkdir -p "$_gh_token_dir"; \
+        ln -f "$_gh_token_bin" "$_gh_token_dir/gh-token"; \
+        printf 'owner: Link-\nname: gh-token\nhost: github.com\ntag: %s\nispinned: true\npath: %s\n' \
+            "${GH_TOKEN_EXTENSION_VERSION}" "$_gh_token_dir/gh-token" \
+            > "$_gh_token_dir/manifest.yml"; \
+        chmod 0644 "$_gh_token_dir/manifest.yml"; \
+    done; \
+    su -s /bin/bash -l leap-aide -c 'gh token --version'; \
+    su -s /bin/bash -l root -c 'gh token --version'
 
 USER root
 
@@ -768,6 +856,17 @@ ENV npm_config_registry= \
 # HERMES_HOME is NOT preserved: the testing stage points it at the build-time
 # seed dir. Runtime re-points it at the state dir (the compose volume).
 ENV HERMES_HOME=/home/leap-aide/.hermes
+
+# gh keeps its auth state (hosts.yml / config.yml) under $GH_CONFIG_DIR,
+# which defaults to ~/.config/gh — a path that is NOT part of the compose
+# volume, so `gh auth login` would be lost on every container recreation.
+# Point it inside the persistent ~/.hermes volume instead: the login
+# survives image rebuilds, and the Hermes SDK's `gh auth token` probe
+# (same container, same `leap-aide` user, inherits this ENV) reads exactly
+# those credentials. gh creates the directory on demand, so nothing has to
+# pre-create it — the bind mount simply shadows the image copy, and the
+# entrypoint chowns /home/leap-aide recursively on every boot.
+ENV GH_CONFIG_DIR=/home/leap-aide/.hermes/gh
 
 # Immutable-image seal for lazy runtime installs (issue #8): the agent venv is
 # root-owned while the server runs as leap-aide-init, so a lazy `uv pip install`

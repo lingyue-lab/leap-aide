@@ -44,6 +44,11 @@ services:
       - HERMES_DISABLE_LAZY_INSTALLS=1
       - HERMES_WEBUI_PASSWORD=lingyue-lab
       - HERMES_WEBUI_DEFAULT_WORKSPACE=/workspaces
+      # GitHub CLI token for the `gh` binary shipped in the image. Empty =
+      # the agent falls back to the credentials written by `gh auth login`
+      # inside the container (kept in the ~/.hermes volume via
+      # GH_CONFIG_DIR). Export GH_TOKEN on the host to pass one in.
+      - GH_TOKEN=${GH_TOKEN:-}
       - HTTP_PROXY=
       - HTTPS_PROXY=
       - NO_PROXY=

@@ -91,6 +91,8 @@ The current configuration mounts `~/.hermes` to `/home/leap-aide/.hermes` and `~
 
 On startup the container aligns the ownership of both directories with `WANTED_UID`/`WANTED_GID`, so Workspace file creation and saving also work when the host directories were previously owned by another user. `scripts/ctl.sh start-docker` uses the invoking user's IDs automatically; with plain `docker compose up`, set `WANTED_UID=$(id -u) WANTED_GID=$(id -g)` if the host user is not 1000:1000.
 
+The image ships the GitHub CLI (`gh`) together with the `gh token` extension, so the agent can run `gh pr`, `gh issue` and `gh api` commands directly, and mint short-lived GitHub App installation access tokens with `gh token generate --app-id <id> --key <private-key.pem> --installation-id <id>`. Authenticate once from the container terminal with `gh auth login`; the credentials are stored under `GH_CONFIG_DIR=/home/leap-aide/.hermes/gh`, inside the persistent `~/.hermes` volume, so they survive container restarts and image rebuilds. Alternatively, export `GH_TOKEN` before `docker compose up` to pass a token in through the environment.
+
 See `docker-compose.yml` for more detailed configuration; change the published port and the system configuration as needed. All system configuration is done through environment variables.
 
 Building the Docker image:
