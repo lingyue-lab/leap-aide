@@ -452,16 +452,19 @@ def _suggestable_path(path: Path, raw: str | None = None) -> bool:
     Mirrors ``validate_workspace_to_add``: the user's home directory is
     always addable, even when it lives under a blocked system root
     (systemd-homed puts ``$HOME`` under ``/var/home`` on Fedora/RHEL), so
-    the menu must not withhold it there.  The filesystem root itself is
-    allowed as well, so that "/" can list the top level.
+    the menu must not withhold it there.
+
+    The filesystem root is deliberately *not* exempt here —
+    ``validate_workspace_to_add`` rejects it, so a symlink to "/" inside a
+    listed directory must not be suggested as "/".  The caller exempts "/"
+    explicitly for the directory being listed, so that "/" can still list
+    the top level.
     """
     try:
         home = Path.home().resolve()
     except Exception:
         home = Path("/")
     if home != Path("/") and _is_within(path, home):
-        return True
-    if path == Path("/"):
         return True
     return not _is_blocked_workspace_path(path, raw)
 
@@ -532,7 +535,11 @@ def list_workspace_suggestions(prefix: str = "", limit: int = 12) -> list[str]:
 
     # Never enumerate inside a blocked system root (e.g. /etc, /usr), but do
     # allow the filesystem root itself so "/" can list top-level directories.
-    if not _suggestable_path(parent_resolved, str(parent_resolved)):
+    # That exemption is parent-only: a child that resolves to "/" (a symlink)
+    # is not addable and must stay filtered by the child check below.
+    if parent_resolved != Path("/") and not _suggestable_path(
+        parent_resolved, str(parent_resolved)
+    ):
         return []
 
     leaf_lower = leaf.lower()
