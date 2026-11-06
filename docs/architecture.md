@@ -1,3 +1,7 @@
+---
+title: LeapAide Architecture Guide
+---
+
 <div align="center">
 
 **English** | [中文](architecture.zh-CN.md)

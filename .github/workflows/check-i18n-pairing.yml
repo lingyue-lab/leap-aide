@@ -1,12 +1,15 @@
 name: check-i18n-pairing
 
-# Bilingual pair co-change gate (issue #9): when a PR touches one language
-# file of a tracked bilingual pair (*.i18n.yaml under the repo), BOTH
-# language files must change together. This closes the "edit one side, then
-# --write the hashes" bypass path. The hash-record verify mode runs
-# separately inside the testing image (backend/tests/test_session_browser_skill.py);
-# this workflow only enforces the git co-change rule, which needs a checkout
-# with history (in-image tests have no .git).
+# Bilingual pair gate (issue #9, extended to docs/ and the repo root in
+# issue #32): when a PR touches one language file of a tracked bilingual
+# pair (*.i18n.yaml under the repo), BOTH language files must change
+# together. This closes the "edit one side, then --write the hashes"
+# bypass path.
+#
+# This workflow also runs the hash-record verify and the tree-completeness
+# check, so a one-sided edit, a missing Chinese companion, or a missing
+# record fails the PR here — the co-change rule needs a checkout with
+# history (in-image tests have no .git), the other two do not.
 
 on:
   workflow_dispatch:
@@ -14,12 +17,21 @@ on:
     # Base-branch filter: PRs targeting main.
     branches: [main]
     paths:
+      - 'docs/**'
       - 'skills/**'
+      # Root-level bilingual files (README/AGENTS/CONTRIBUTING/CHANGELOG and
+      # their .zh-CN.md twins). A pattern without a slash matches the
+      # repository root only.
+      - '*.md'
+      - '*.i18n.yaml'
       - 'backend/scripts/check_translation_pairing.py'
+      - 'backend/tests/test_docs_i18n_pairing.py'
+      - 'backend/tests/test_browser_desktop_skill.py'
+      - '.github/workflows/check-i18n-pairing.yml'
 
 jobs:
   cochange:
-    name: Bilingual pair co-change gate
+    name: Bilingual pair gate
     runs-on: ubuntu-latest
     steps:
       # fetch-depth: 0 so the PR base sha is present for `base...HEAD`.
@@ -27,22 +39,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Every pair that has a record must still match its documents.
+      - name: Verify all pairing records
+        run: python3 backend/scripts/check_translation_pairing.py --check-all
+
+      # No document may be missing its Chinese companion or its record.
+      - name: Check tree completeness
+        run: |
+          python3 backend/scripts/check_translation_pairing.py --check-tree docs
+          python3 backend/scripts/check_translation_pairing.py --check-tree . --depth 1
+
       - name: Check bilingual co-change (PRs)
         if: github.event_name == 'pull_request'
         run: >-
           python3 backend/scripts/check_translation_pairing.py
           --check-cochange ${{ github.event.pull_request.base.sha }}
-
-      # Manual runs verify every tracked pair's hash record end-to-end.
-      - name: Verify all pairing records (manual dispatch)
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          set -e
-          found=0
-          for rec in $(git ls-files '*.i18n.yaml'); do
-            found=1
-            python3 backend/scripts/check_translation_pairing.py "${rec%.i18n.yaml}.md"
-          done
-          if [ "$found" = "0" ]; then
-            echo "No tracked bilingual pairs (*.i18n.yaml) found."
-          fi

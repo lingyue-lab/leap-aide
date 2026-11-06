@@ -1,3 +1,7 @@
+---
+title: Contributing to LeapAide
+---
+
 <div align="center">
 
 **English** | [中文](CONTRIBUTING.zh-CN.md)
@@ -71,6 +75,29 @@ Besides the git commit log, if the change is user-visible, attaching a screensho
 If your change alters behavior, architecture, testing, installation, or user-facing workflows, update the relevant docs in the same PR.
 
 **Every doc exists as a bilingual pair** (`docs/foo.md` + `docs/foo.zh-CN.md`). A content change must update both language versions in the same PR — a PR that edits only one language is incomplete.
+
+This is enforced mechanically, not just by convention. Each bilingual pair carries a
+consistency record (`docs/foo.i18n.yaml`) holding one `sha256-16` digest per section
+for both languages, and `backend/scripts/check_translation_pairing.py` checks it.
+CI runs that check on every pull request that touches a bilingual pair: it reports
+a failure when a pull request changes one language without the other, or adds a
+document without its Chinese companion or its record. `main` is not
+branch-protected yet, so the check reports rather than blocks the merge.
+
+Adding a document:
+
+1. Create `docs/foo.md` and `docs/foo.zh-CN.md`, each starting with a YAML
+   frontmatter block and the language switcher.
+2. Mirror the heading structure exactly — same levels, same order.
+3. Keep fenced code blocks byte-identical across the pair — including the
+   comments inside them, which stay in English on both sides.
+4. Run `python3 backend/scripts/check_translation_pairing.py --write docs/foo.md`
+   to create the record, and commit all three files.
+
+A deliberate one-sided edit — a typo fix with no Chinese counterpart — is declared
+with a `waiver:` stanza in the pair's record (`side`, `reason`, `expires`). The
+waiver is honoured by the co-change gate only, it shows up in the pull-request
+diff, and it expires on its own so it cannot silently weaken the gate.
 
 Common files:
 

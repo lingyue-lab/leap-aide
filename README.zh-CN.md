@@ -1,3 +1,7 @@
+---
+title: LeapAide
+---
+
 <div align="center">
 
 [English](README.md) | **中文**
@@ -71,12 +75,14 @@ LeapAide 整体 Web App 架构方案追求精简，UI 方案也追求符合使�
 Web App 启动运行：
 
 ```bash
-# 用宿主机当前执行脚本的UID、GID启动服务，一般用于rootless执行脚本的场景（普通账户非特权模式执行脚本）
+# Run the service as the invoking user's UID/GID — for rootless execution
+# (a normal, unprivileged account running the script)
 bash scripts/ctl.sh start-docker <image>
-# 指定UID、GID启动服务，一般用于rootful执行脚本的场景（sudo或者root账户执行脚本）。
+# Run the service as the given UID/GID — for rootful execution (sudo or the
+# root account running the script)
 WANTED_UID=1000 WANTED_GID=1000 bash scripts/ctl.sh start-docker <image>
 # compose down
-bash scripts/ctl.sh stop-docker      
+bash scripts/ctl.sh stop-docker
 ```
 
 Docker 容器启动成功后，用户直接访问 [http://localhost:8787](http://localhost:8787) 即可使用系统。默认登录密码为 `lingyue-lab`。

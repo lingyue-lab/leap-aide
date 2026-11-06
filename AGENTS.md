@@ -1,3 +1,7 @@
+---
+title: LeapAide Developer Guide
+---
+
 <div align="center">
 
 **English** | [中文](AGENTS.zh-CN.md)
@@ -50,6 +54,7 @@ See [docs/architecture.md](docs/architecture.md).
 - Frontend: TypeScript strict mode. State management uses Zustand stores; styling follows the Google Material 3 frontend specification.
 - Never use raw `confirm()`/`prompt()` — use `showConfirmDialog()`/`showPromptDialog()`.
 - Path-traversal protection: always use `safe_resolve(root, requested)` for file operations.
+- Bilingual pairs are enforced by `backend/scripts/check_translation_pairing.py` — run `--check-all`, `--check-tree docs` and `--check-tree . --depth 1` before pushing; every new doc needs a `.zh-CN.md` companion and an `.i18n.yaml` record.
 
 ---
 

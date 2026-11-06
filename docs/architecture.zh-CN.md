@@ -1,3 +1,7 @@
+---
+title: LeapAide 架构指南
+---
+
 <div align="center">
 
 [English](architecture.md) | **中文**
@@ -14,19 +18,19 @@ LeapAide 后端为 Python 标准库实现，直接以 Python import 方式调用
 
 ```
 Browser (React 18 + TS + Vite + Zustand + Tailwind, M3)
-   │  fetch /api/*          REST 表面（routes.py 中约 130 条路由）
-   │  /api/ws/events        单条 WebSocket：token / tool / approval / done
-   │  /api/ws/terminal      终端 WebSocket 通道
-   │  /api/ws/vnc[/<port>]  VNC WebSocket 通道（observer 面板）
-   │  GET …/stream/replay   SSE 回放，用于会话过程中刷新重连
+   │  fetch /api/*          REST surface (~130 routes in routes.py)
+   │  /api/ws/events        single WebSocket: token / tool / approval / done
+   │  /api/ws/terminal      terminal WebSocket channel
+   │  /api/ws/vnc[/<port>]  VNC WebSocket channel (observer panel)
+   │  GET …/stream/replay   SSE replay, used to reconnect mid-session on refresh
    ▼
-backend/app/server.py       薄 HTTP 壳：TLS、QuietHTTPServer、WS upgrade 分发
-backend/app/api/            路由 + 领域模块（纯 Python 标准库）
-   ▼ （Python import，而非 HTTP）
-hermes-agent SDK            AIAgent.run_conversation()、tools、gateway
+backend/app/server.py       thin HTTP shell: TLS, QuietHTTPServer, WS upgrade dispatch
+backend/app/api/            route + domain modules (Python stdlib only)
+   ▼ (Python import, not HTTP)
+hermes-agent SDK            AIAgent.run_conversation(), tools, gateway
    ▼
-~/.hermes/                  agent 状态（config、memory、skills、state.db）
-~/.hermes/webui/            webui 状态（会话 JSON、settings、工作区）
+~/.hermes/                  agent state (config, memory, skills, state.db)
+~/.hermes/webui/            webui state (sessions JSON, settings, workspaces)
 ```
 
 关键原则：

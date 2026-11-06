@@ -41,9 +41,12 @@ backend/app/api/_version.py
 Thumbs.db
 
 # Local reference clones — never committed
-# (project docs themselves are tracked: docs/*.md and docs/images/)
+# (project docs themselves are tracked: docs/*.md, docs/*.i18n.yaml and
+# docs/images/ — the *.i18n.yaml files are the bilingual-pair consistency
+# records read by backend/scripts/check_translation_pairing.py)
 docs/*
 !docs/*.md
+!docs/*.i18n.yaml
 !docs/images/
 !docs/images/**
 

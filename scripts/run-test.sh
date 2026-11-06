@@ -596,7 +596,7 @@ domain_targets() {
     model)     echo "backend/tests/test_provider_management.py backend/tests/test_credential_pool_providers.py backend/tests/test_model_resolver.py backend/tests/test_model_identity_unified.py backend/tests/test_byok_model_dropdown.py backend/tests/test_provider_mismatch.py backend/tests/test_minimax_provider.py backend/tests/test_custom_provider_display_name.py backend/tests/test_issue1106_custom_providers_models.py backend/tests/test_issue55_model_webui.py" ;;
     workspace) echo "backend/tests/test_workspace_*.py backend/tests/test_default_workspace_fallback.py backend/tests/test_workspace_blocked_roots_macos.py backend/tests/test_issue7_default_workspace.py" ;;
     cron)      echo "backend/tests/test_cron_*.py" ;;
-    i18n)      echo "backend/tests/test_chinese_locale.py" ;;
+    i18n)      echo "backend/tests/test_chinese_locale.py backend/tests/test_docs_i18n_pairing.py backend/tests/test_browser_desktop_skill.py" ;;
     ui)        echo "backend/tests/test_pwa_manifest_csp.py" ;;
     auth)      echo "backend/tests/test_auth_*.py" ;;
     all)
