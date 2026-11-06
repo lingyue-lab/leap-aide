@@ -614,6 +614,31 @@ if ! command -v git >/dev/null 2>&1; then
 fi
 ok "git $(git --version | sed 's/git version //')"
 
+# gh (GitHub CLI) — the Hermes Agent SDK shells out to it: cli.py runs
+# `gh pr list` to detect merged pull requests, and tools/skills_hub.py runs
+# `gh auth token` to authenticate against the skills hub. Without it every
+# GitHub-related agent task fails with "gh: command not found".
+# Soft dependency on purpose: unlike git/curl, a package manager that
+# refuses gh must not abort the whole install — the SDK degrades, the rest
+# of the stack must not.
+# Host path only. In a container the IN_DOCKER block further down owns the
+# package list, and it must win: this block runs first and unconditionally,
+# so installing here would either make that entry unreachable (gh already
+# on PATH) or pay a second apt invocation. Gating keeps one owner per
+# environment.
+if [ "$IN_DOCKER" = false ] && ! command -v gh >/dev/null 2>&1; then
+  warn "gh (GitHub CLI) not found — attempting to install..."
+  if install_package gh; then
+    ok "gh installed"
+    hash -r 2>/dev/null || true
+  else
+    warn "gh could not be installed automatically — GitHub tasks (gh pr / gh issue / gh api) will fail. Install it manually."
+  fi
+fi
+if command -v gh >/dev/null 2>&1; then
+  ok "gh $(gh --version | head -1 | awk '{print $3}')"
+fi
+
 # curl — hermes-agent installer requires curl specifically (not wget)
 if ! command -v curl >/dev/null 2>&1; then
   warn "curl not found — attempting to install..."
@@ -678,6 +703,15 @@ if [ "$IN_DOCKER" = true ]; then
   # already present).
   if ! command -v git >/dev/null 2>&1; then
     _sys_deps_to_install="${_sys_deps_to_install} git"
+  fi
+  # gh (GitHub CLI) — the Hermes Agent SDK shells out to `gh pr list` and
+  # `gh auth token`, so without it every GitHub-related agent task fails
+  # with "gh: command not found". Ships in Ubuntu's universe component;
+  # the Dockerfile installs it too, so this only fires for containers
+  # provisioned by install.sh alone. The host-path block above is gated on
+  # IN_DOCKER=false precisely so this entry is the one that runs here.
+  if ! command -v gh >/dev/null 2>&1; then
+    _sys_deps_to_install="${_sys_deps_to_install} gh"
   fi
   # VNC observation dependencies (Xvfb, x11vnc, openbox, wmctrl)
   if ! command -v Xvfb >/dev/null 2>&1; then

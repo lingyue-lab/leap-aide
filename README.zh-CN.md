@@ -91,6 +91,8 @@ Docker 容器启动成功后，用户直接访问 [http://localhost:8787](http:/
 
 容器启动时会把这两个目录的所有者对齐到 `WANTED_UID`/`WANTED_GID`，因此即使宿主机目录此前属于其他用户，Workspace 的文件创建与保存也能正常工作。`scripts/ctl.sh start-docker` 会自动使用执行者的 UID/GID；直接使用 `docker compose up` 时，若宿主机用户不是 1000:1000，请设置 `WANTED_UID=$(id -u) WANTED_GID=$(id -g)`。
 
+镜像内置 GitHub CLI(`gh`)以及 `gh token` 扩展，Agent 可以直接执行 `gh pr`、`gh issue`、`gh api` 等命令，也可以用 `gh token generate --app-id <id> --key <private-key.pem> --installation-id <id>` 签发短期有效的 GitHub App installation access token。在容器终端里执行一次 `gh auth login` 即可完成认证；凭据保存在 `GH_CONFIG_DIR=/home/leap-aide/.hermes/gh`，即持久化的 `~/.hermes` 卷内，因此容器重启、镜像重建后依然有效。也可以在 `docker compose up` 之前导出 `GH_TOKEN`，通过环境变量传入令牌。
+
 更多详细配置见 `docker-compose.yml`，用户可根据需要更改发布端口以及更改系统配置。系统的配置全部通过环境变量进行。
 
 构建 Docker 镜像：
@@ -108,6 +110,8 @@ export BUILD_APT_MIRROR="http://mirrors.tuna.tsinghua.edu.cn/ubuntu"
 export BUILD_PIP_INDEX_URL="http://pypi.tuna.tsinghua.edu.cn/simple"
 export BUILD_NPM_REGISTRY="https://registry.npmmirror.com"
 export BUILD_PLAYWRIGHT_DOWNLOAD_HOST="https://registry.npmmirror.com/-/binary/playwright"
+# Base URL serving the gh-token release assets; defaults to https://github.com
+export BUILD_GH_TOKEN_DOWNLOAD_HOST="https://github.com"
 # Must end with slash
 export BUILD_ELECTRON_MIRROR="https://registry.npmmirror.com/-/binary/electron/"
 export BUILD_ELECTRON_BUILDER_BINARIES_MIRROR="https://registry.npmmirror.com/-/binary/electron-builder-binaries"
