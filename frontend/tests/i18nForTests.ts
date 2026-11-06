@@ -43,6 +43,25 @@ void i18n
           },
           no_matching_commands: 'No matching commands',
           ok: 'OK',
+          add: 'Add',
+          cancel: 'Cancel',
+          adding: 'Adding…',
+          workspaces: {
+            new_workspace: 'New Workspace',
+            form: {
+              path_label: 'Workspace Path',
+              path_hint: '(absolute path to a directory)',
+              path_helper:
+                'Start typing to see directory suggestions below. Click a suggestion (or use ↑↓ and Tab/Enter) to complete the path.',
+              path_placeholder: '/home/user/my-project',
+              name_label: 'Display Name',
+              name_hint: '(optional — defaults to folder name)',
+              name_placeholder: 'e.g. My Project',
+              suggestions_title: 'Directory suggestions',
+              error_path_required: 'Path is required',
+              error_add_failed: 'Failed to add workspace',
+            },
+          },
           sessions: {
             subagent: 'Subagent',
             actions: 'Actions',
