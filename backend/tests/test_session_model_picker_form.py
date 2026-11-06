@@ -105,8 +105,11 @@ def _isolate(tmp_path, monkeypatch):
 def test_new_session_stores_the_picker_form(monkeypatch):
     """The persisted model must be a catalog id, so the picker can mark it."""
     monkeypatch.setattr(config, "peek_available_models", lambda: CATALOG)
+    # new_session() reads the name imported into models, not config's
+    # attribute; patching config alone would leave the environment's real
+    # default in play.
     monkeypatch.setattr(
-        config, "get_default_model_for_new_session", lambda: "deepseek-flash"
+        models, "get_default_model_for_new_session", lambda: "deepseek-flash"
     )
 
     session = models.new_session()
