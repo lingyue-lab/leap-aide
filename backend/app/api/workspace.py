@@ -446,29 +446,24 @@ def _is_within(path: Path, root: Path) -> bool:
         return False
 
 
-def _trusted_workspace_roots() -> list[Path]:
-    roots: list[Path] = []
+def _suggestable_path(path: Path, raw: str | None = None) -> bool:
+    """Return True when *path* may be offered as a workspace suggestion.
 
-    def add(candidate: str | Path | None) -> None:
-        if candidate in (None, ""):
-            return
-        try:
-            p = Path(candidate).expanduser().resolve()
-        except Exception:
-            return
-        if not p.exists() or not p.is_dir():
-            return
-        if _is_blocked_workspace_path(p, candidate):
-            return
-        if p not in roots:
-            roots.append(p)
-
-    add(Path.home())
-    add(_BOOT_DEFAULT_WORKSPACE)
-    for w in load_workspaces():
-        add(w.get("path"))
-    roots.sort(key=lambda p: len(str(p)))
-    return roots
+    Mirrors ``validate_workspace_to_add``: the user's home directory is
+    always addable, even when it lives under a blocked system root
+    (systemd-homed puts ``$HOME`` under ``/var/home`` on Fedora/RHEL), so
+    the menu must not withhold it there.  The filesystem root itself is
+    allowed as well, so that "/" can list the top level.
+    """
+    try:
+        home = Path.home().resolve()
+    except Exception:
+        home = Path("/")
+    if home != Path("/") and _is_within(path, home):
+        return True
+    if path == Path("/"):
+        return True
+    return not _is_blocked_workspace_path(path, raw)
 
 
 def list_workspace_suggestions(prefix: str = "", limit: int = 12) -> list[str]:
@@ -511,7 +506,15 @@ def list_workspace_suggestions(prefix: str = "", limit: int = 12) -> list[str]:
     else:
         idx = raw.rfind("/")
         if idx == -1:
-            parent = Path.home()
+            # A bare word ("proj") is resolved exactly the way
+            # validate_workspace_to_add resolves it — relative to the
+            # process cwd, not $HOME.  One resolution rule on both ends is
+            # what keeps "what the menu offers" and "what Add accepts" the
+            # same set.
+            try:
+                parent = Path.cwd()
+            except OSError:
+                return []
             leaf = raw
         else:
             try:
@@ -529,9 +532,7 @@ def list_workspace_suggestions(prefix: str = "", limit: int = 12) -> list[str]:
 
     # Never enumerate inside a blocked system root (e.g. /etc, /usr), but do
     # allow the filesystem root itself so "/" can list top-level directories.
-    if str(parent_resolved) != "/" and _is_blocked_workspace_path(
-        parent_resolved, str(parent_resolved)
-    ):
+    if not _suggestable_path(parent_resolved, str(parent_resolved)):
         return []
 
     leaf_lower = leaf.lower()
@@ -554,7 +555,7 @@ def list_workspace_suggestions(prefix: str = "", limit: int = 12) -> list[str]:
         except OSError:
             resolved = child
         # Match Add: a blocked system path is not addable, so do not suggest it.
-        if _is_blocked_workspace_path(resolved, str(child)):
+        if not _suggestable_path(resolved, str(child)):
             continue
         suggestions.append(str(resolved))
         if len(suggestions) >= limit:
