@@ -2,9 +2,10 @@ version: "3.8"
 
 services:
   leap-aide:
-    # Site-specific registry stays out of git — override via env, e.g.
+    # The released runtime image. Point at a different registry or tag via
+    # the environment, e.g.
     #   LEAP_AIDE_IMAGE=<registry>/<image>:<tag> docker compose up
-    image: ${LEAP_AIDE_IMAGE:-leap-aide-runtime:0.1.2}
+    image: ${LEAP_AIDE_IMAGE:-ghcr.io/lingyue-lab/leap-aide-runtime:0.1.0}
     ports:
       - "8787:8787"
     volumes:

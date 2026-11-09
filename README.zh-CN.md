@@ -72,15 +72,17 @@ LeapAide 整体 Web App 架构方案追求精简，UI 方案也追求符合使�
 
 ### Docker 方式(推荐) ###
 
+发布的镜像是 `ghcr.io/lingyue-lab/leap-aide-runtime:0.1.0`，仅提供 `linux/amd64` —— arm64 主机需要模拟执行。
+
 Web App 启动运行：
 
 ```bash
 # Run the service as the invoking user's UID/GID — for rootless execution
 # (a normal, unprivileged account running the script)
-bash scripts/ctl.sh start-docker <image>
+bash scripts/ctl.sh start-docker ghcr.io/lingyue-lab/leap-aide-runtime:0.1.0
 # Run the service as the given UID/GID — for rootful execution (sudo or the
 # root account running the script)
-WANTED_UID=1000 WANTED_GID=1000 bash scripts/ctl.sh start-docker <image>
+WANTED_UID=1000 WANTED_GID=1000 bash scripts/ctl.sh start-docker ghcr.io/lingyue-lab/leap-aide-runtime:0.1.0
 # compose down
 bash scripts/ctl.sh stop-docker
 ```

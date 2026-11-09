@@ -72,15 +72,17 @@ As everyone knows, production IT systems depend on a great deal of infrastructur
 
 ### Docker (recommended) ###
 
+The released image is `ghcr.io/lingyue-lab/leap-aide-runtime:0.1.0`, published for `linux/amd64` only — arm64 hosts need emulation.
+
 To start and run the web app:
 
 ```bash
 # Run the service as the invoking user's UID/GID — for rootless execution
 # (a normal, unprivileged account running the script)
-bash scripts/ctl.sh start-docker <image>
+bash scripts/ctl.sh start-docker ghcr.io/lingyue-lab/leap-aide-runtime:0.1.0
 # Run the service as the given UID/GID — for rootful execution (sudo or the
 # root account running the script)
-WANTED_UID=1000 WANTED_GID=1000 bash scripts/ctl.sh start-docker <image>
+WANTED_UID=1000 WANTED_GID=1000 bash scripts/ctl.sh start-docker ghcr.io/lingyue-lab/leap-aide-runtime:0.1.0
 # compose down
 bash scripts/ctl.sh stop-docker
 ```
