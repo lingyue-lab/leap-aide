@@ -1,5 +1,5 @@
 # Bilingual-pair consistency record for README.md / README.zh-CN.md.
-# Per heading-slug section: sha256-16 of prose outside code blocks.
+# Per heading-slug path: sha256-16 of prose outside code blocks.
 # Editing EITHER side requires aligning the OTHER side first, then
 # re-recording:
 #   python3 backend/scripts/check_translation_pairing.py --write README.md
@@ -9,45 +9,45 @@
 /leapaide-your-agent-for-the-next-leap:
   en: 7aad98fcf24b2a4b
   zh: 30da2bdb9b07decc
-/why-leapaide:
+/leapaide-your-agent-for-the-next-leap/why-leapaide:
   en: f5fc4dccd01b9891
   zh: 5689a42254719b7f
-/features:
+/leapaide-your-agent-for-the-next-leap/features:
   en: e3b0c44298fc1c14
   zh: e3b0c44298fc1c14
-/chat:
+/leapaide-your-agent-for-the-next-leap/features/chat:
   en: f0a317f404f27272
   zh: 502d264543e2346e
-/sessions:
+/leapaide-your-agent-for-the-next-leap/features/sessions:
   en: ae5b25af4ad5b829
   zh: 6ffff9037a96dd82
-/scheduled-tasks:
+/leapaide-your-agent-for-the-next-leap/features/scheduled-tasks:
   en: 174cd637eeca4b2e
   zh: b05a193b549be39a
-/other:
+/leapaide-your-agent-for-the-next-leap/features/other:
   en: b1e9024ea93e88ef
   zh: 08f9d1e5bce25b60
-/quick-start:
+/leapaide-your-agent-for-the-next-leap/quick-start:
   en: e3b0c44298fc1c14
   zh: e3b0c44298fc1c14
-/docker-recommended:
+/leapaide-your-agent-for-the-next-leap/quick-start/docker-recommended:
   en: 3c09b2b91ce576be
   zh: ba5ac1eef3bc0867
-/host:
+/leapaide-your-agent-for-the-next-leap/quick-start/host:
   en: 63c479d50b545312
   zh: 7b143b2bba7c2387
-/testing:
+/leapaide-your-agent-for-the-next-leap/testing:
   en: 0da2ee66e8a3abd3
   zh: e5023570886f51a1
-/architecture:
+/leapaide-your-agent-for-the-next-leap/architecture:
   en: 8405bcc5ca0c6a75
   zh: 7011e57df3663486
-/contributing:
+/leapaide-your-agent-for-the-next-leap/contributing:
   en: ee5947f198dd5f29
   zh: 14f2833fecb3f0dd
-/acknowledgements:
+/leapaide-your-agent-for-the-next-leap/acknowledgements:
   en: 271510d26515103a
   zh: 07487b0d2c4de839
-/license:
+/leapaide-your-agent-for-the-next-leap/license:
   en: 919882cb74aad4d0
   zh: 919882cb74aad4d0

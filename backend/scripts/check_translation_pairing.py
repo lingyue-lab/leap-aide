@@ -183,17 +183,28 @@ def section_keys_and_digests(preamble: str, sections):
     """Ordered keys and per-section prose digests for one side.
 
     Returns (keys, digests) where digests[i] is the digest for keys[i].
-    Keys come from this side's heading slugs — for the Chinese side they
-    are informational only; pairing across languages is positional
-    (structure signature must match). Raises ValueError on duplicate slugs.
+    A key is the heading's slug *path* — "/changelog",
+    "/changelog/unreleased", "/changelog/010-2026-11-09/added" — so a
+    document may repeat a heading title under different parents. The
+    changelog needs exactly that: every release section carries its own
+    "Added" / "Changed" / "Fixed", and a flat slug collided on the second
+    release. For the Chinese side the keys are informational only; pairing
+    across languages is positional (structure signature must match).
+    Raises ValueError on duplicate paths.
     """
     keys = ["/"]
     digests = [prose_digest(preamble)]
     seen = {"/"}
+    ancestors = []  # (level, slug) of the enclosing headings
     for sec in sections:
-        key = "/" + slugify(sec["title"])
+        level = sec["level"]
+        while ancestors and ancestors[-1][0] >= level:
+            ancestors.pop()
+        slug = slugify(sec["title"])
+        ancestors.append((level, slug))
+        key = "/" + "/".join(s for _, s in ancestors)
         if key in seen:
-            raise ValueError(f"duplicate heading slug: {key} "
+            raise ValueError(f"duplicate heading path: {key} "
                              f"(from title {sec['title']!r})")
         seen.add(key)
         keys.append(key)
@@ -426,7 +437,7 @@ def write_record(anchor: Path):
     lines = [
         f"# Bilingual-pair consistency record for {anchor.name} / "
         f"{zh.name}.",
-        "# Per heading-slug section: sha256-16 of prose outside code blocks.",
+        "# Per heading-slug path: sha256-16 of prose outside code blocks.",
         "# Editing EITHER side requires aligning the OTHER side first, then",
         "# re-recording:",
         f"#   python3 backend/scripts/check_translation_pairing.py --write "

@@ -1,5 +1,5 @@
 # Bilingual-pair consistency record for CHANGELOG.md / CHANGELOG.zh-CN.md.
-# Per heading-slug section: sha256-16 of prose outside code blocks.
+# Per heading-slug path: sha256-16 of prose outside code blocks.
 # Editing EITHER side requires aligning the OTHER side first, then
 # re-recording:
 #   python3 backend/scripts/check_translation_pairing.py --write CHANGELOG.md
@@ -9,21 +9,21 @@
 /changelog:
   en: 20a2a727564f853a
   zh: 3862c1550f156ca0
-/unreleased:
+/changelog/unreleased:
   en: e3b0c44298fc1c14
   zh: e3b0c44298fc1c14
-/010-2026-11-09:
+/changelog/010-2026-11-09:
   en: 25dd23e4a9abfff8
   zh: b79e6464fdc9837c
-/added:
+/changelog/010-2026-11-09/added:
   en: 5d2de3045c4db4e2
   zh: d65e7fb11da5ad30
-/changed:
+/changelog/010-2026-11-09/changed:
   en: f8932ea65d69edba
   zh: c786610a234b5287
-/fixed:
+/changelog/010-2026-11-09/fixed:
   en: aef2e17bce0a3b51
   zh: 3198a7a1dadfcf53
-/docker:
+/changelog/010-2026-11-09/docker:
   en: de4b78d260984f1c
   zh: bb85787ec293dc58

@@ -1,5 +1,5 @@
 # Bilingual-pair consistency record for AGENTS.md / AGENTS.zh-CN.md.
-# Per heading-slug section: sha256-16 of prose outside code blocks.
+# Per heading-slug path: sha256-16 of prose outside code blocks.
 # Editing EITHER side requires aligning the OTHER side first, then
 # re-recording:
 #   python3 backend/scripts/check_translation_pairing.py --write AGENTS.md
@@ -9,24 +9,24 @@
 /developer-guide:
   en: cb3f91d54eee30e5
   zh: cb3f91d54eee30e5
-/project-overview:
+/developer-guide/project-overview:
   en: cd3c487cf4d2ef8e
   zh: 51282c0abedb0120
-/build-development-commands:
+/developer-guide/build-development-commands:
   en: cb3f91d54eee30e5
   zh: cb3f91d54eee30e5
-/architecture:
+/developer-guide/architecture:
   en: 8405bcc5ca0c6a75
   zh: 7011e57df3663486
-/docs:
+/developer-guide/docs:
   en: 14cf32eb9d7e5fe2
   zh: 5e604437ada7fcb0
-/coding-standards:
+/developer-guide/coding-standards:
   en: 8f713555eb0f25d5
   zh: 42ff54d5797b5b83
-/commit-conventions:
+/developer-guide/commit-conventions:
   en: 74e6863e2205c5f3
   zh: 9741cb080e5bd7cd
-/misc:
+/developer-guide/misc:
   en: 42c331ec5ac55595
   zh: 6a27926cadb4c1d6
