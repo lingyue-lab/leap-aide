@@ -9,6 +9,7 @@ body:
         Thanks for the suggestion! Before submitting, please consider:
 
         - **Search [existing issues](https://github.com/lingyue-lab/leap-aide/issues)** — someone may have already proposed this.
+        - **Tell us how you would verify it** — describing how the feature should be checked helps us agree on what "done" means.
 
   - type: textarea
     id: problem
@@ -23,6 +24,18 @@ body:
     attributes:
       label: Proposed Solution
       description: How do you think this should work? Describe what you want to do.
+    validations:
+      required: true
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: How to Verify
+      description: How would you verify this works? Describe the steps and the result you expect once this lands.
+      placeholder: |
+        1. Go to the chat panel and select the model "..."
+        2. Do "..."
+        3. Expected: the composer footer shows "..."
     validations:
       required: true
 
