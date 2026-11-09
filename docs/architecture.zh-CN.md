@@ -53,6 +53,7 @@ hermes-agent SDK            AIAgent.run_conversation(), tools, gateway
 | 工作区 | `api/workspace.py` | 文件操作、工作区注册、git 检测、信任级别 |
 | 认证与身份 | `api/auth.py`、`api/profiles.py` | 可选口令门 + 签名 cookie；profile 状态 |
 | 面板 | `api/terminal.py`、`api/vnc.py`、`api/observer.py`、`api/cli_viewer.py` | 终端 PTY 通道；VNC 通道；observer 界面；CLI 会话列表 |
+| 浏览器桌面 | `api/global_desktop.py`、`api/browser_receptionist.py`、`api/browser_desktop.py`、`api/cdp_pipe.py`、`compat/browser_cdp.py`、`compat/browser_session.py`、`compat/desktop_guard.py` | 共享 X/Chrome 桌面生命周期；CDP 接待员（唯一的 CDP 入口）；SDK 侧 CDP/会话补丁；终端级桌面边界守卫 |
 | 业务 | `api/slash_commands.py`、`api/clarify.py`、`api/metering.py`、`api/providers.py`、`api/commands.py`、`api/background.py`、`api/updates.py` | 斜杠命令分发；clarify 对话；用量计量；provider/模型门控；命令注册表暴露；后台 goal；更新检查 |
 
 外部依赖：仅 pyyaml（以及 Hermes Agent SDK 及其自身依赖，由 Hermes Agent SDK venv 提供）。
@@ -74,7 +75,129 @@ hermes-agent SDK            AIAgent.run_conversation(), tools, gateway
 | Profile | `/api/profiles*` | Profile CRUD 与切换 |
 | 认证 | `/api/auth*`、`/login` | 口令门、会话检查 |
 | 运维 | `/api/settings*`、`/api/git-info`、`/api/updates*`、`/api/insights*` | 设置、git 徽章、更新检查、用量 insights |
-| 面板 | `/api/cron*`、`/api/skills*`、`/api/memory*`、`/api/terminal*`、`/api/vnc*`、`/api/observer*`、`/api/cli*` | 任务/cron、技能、记忆、终端、VNC、observer、CLI 会话桥 |
+| 面板 | `/api/cron*`、`/api/skills*`、`/api/memory*`、`/api/terminal*`、`/api/vnc*`、`/api/observer*`、`/api/cli*`、`/api/browser-desktop` | 任务/cron、技能、记忆、终端、VNC、observer、CLI 会话桥、共享浏览器桌面状态 |
+
+---
+
+## 浏览器桌面
+
+当前提供了一个全局共享的浏览器桌面，通过 `x-browser-desktop skill` 来操作。主要目的是可视化浏览器操作，另外，用户也可以操作这个桌面，用来保存登录信息，避免 Agent 网页任务被打断。
+
+整个桌面实例只跑 **一个** Chrome（issue #37）：所有聊天会话共用它——桌面面板显示的是同一个"公共客厅"，而不是每个会话各开一个浏览器。Chrome 的 CDP 控制端点在网络上不可达：它以 `--remote-debugging-pipe` 启动，CDP 帧通过继承的文件描述符传递（Chrome 读 fd 3、写 fd 4），不占任何 TCP 端口。因此 `ps`、`ss` 里看不到任何可连接的 Chrome 直连 CDP 入口。
+
+**接待员**（`api/browser_receptionist.py`）就是持有这根管道的进程，它作为代理提供整个实例唯一的 CDP 入口：它是一个跑在 `127.0.0.1:6900` 上的 HTTP + WebSocket 服务。客户端从不直接和 Chrome 对话，而是和接待员对话，由接待员决定哪些东西能到 Chrome、哪些东西能回到客户端。共享一个 Chrome 之所以安全，靠的就是这一层。
+
+### 相关模块
+
+| 模块 | 职责 |
+|---|---|
+| `api/global_desktop.py` | 管理 X 栈（Xvfb + openbox + x11vnc + fcitx5），拉起接待员与 Chrome，监督它们的健康，发布 `browser_desktop.json` |
+| `api/browser_receptionist.py` | CDP 代理：发现类端点、WebSocket 端点、归属表、命令转发 |
+| `api/cdp_pipe.py` | 以 `--remote-debugging-pipe` 拉起 Chrome，读写以 NUL 分隔的 JSON 帧 |
+| `api/browser_desktop.py` | `GET /api/browser-desktop`——侧边栏面板轮询的状态 |
+| `compat/browser_cdp.py` | 运行时补丁：把 Hermes SDK 指向 `<receptionist>/json/version?sid=<session_id>` |
+| `compat/browser_session.py` | 让 SDK 的浏览器会话在共享 Chrome 里拿到属于自己的标签页 |
+| `compat/desktop_guard.py` | 终端级守卫：裸 CDP、VNC 端点不允许被 shell 命令触及 |
+
+状态文件 `$HERMES_WEBUI_STATE_DIR/browser_desktop.json` 是各 wrapper 与 SDK 补丁的唯一事实来源：里面写着 `receptionist_url` 和一个 `status`（`active` / `degraded`）。使用该地址前必须先看 status——SDK 劫持 Patch 把非 `active` 一律当作"没有配置浏览器桌面"，浏览器工具于是退回到本地 headless。
+
+```text
+   client
+     │  GET /json/version?sid=<session_id>
+     ▼
+   receptionist -- fd 3 / fd 4 --> Chrome
+     │  webSocketDebuggerUrl: ws://127.0.0.1:6900/devtools/browser/global?sid=<session_id>
+     ▼
+   client -- CDP frames (filtered by tab owner) --> receptionist -- fd 3 / fd 4 --> Chrome
+```
+
+### 多会话并发，靠标签页隔离
+
+会话拿到的不是自己的 Chrome 实例，而是自己的 **标签页**，归属关系由接待员维护。每个客户端都要用 `?sid=<session_id>`（或 `X-LeapAide-Session` 头）声明自己属于哪个会话。接待员维护三张表：
+
+| 表 | 映射 |
+|---|---|
+| `_tabs` | `targetId` → 归属的连接 |
+| `_cdp_sessions` | CDP `sessionId` → 归属的连接 |
+| `_conns` / `_sessions` | 在线连接，按连接 id 与按 sid 分别索引 |
+
+隔离在四个地方生效：
+
+- **发现被过滤。** `Target.getTargets` 由接待员自己作答——它在内部问 Chrome，然后只返回本连接拥有的标签页。`/json/list` 只返回请求方 sid 的标签页。别的会话的标签页根本不会出现在回答里。
+- **操作被拦截。** `Target.closeTarget`、`Target.activateTarget`、`Target.attachToTarget` 若 `targetId` 不属于调用方，一律拒绝并返回 `target not owned by this connection`；`sessionId` 属于别的连接时同样拒绝。
+- **事件被丢弃。** `Target.attachedToTarget`、`Target.targetDestroyed` 以及任何带外来 `sessionId` 的消息都不会送达 CDP socket。
+- **标签页有上限且随连接回收。** 一个连接最多拥有 10 个标签页（`MAX_TARGETS_PER_CONN`），并且连接断开时标签页随之关闭。
+
+因此两个会话可以在同一个 Chrome 里同时干活：共享的是窗口和实例，不是标签页。
+
+### CDP WebSocket 从哪来
+
+Chrome 不会直接暴露任何 CDP 调试地址，而是由接待员提供 CDP WebSocket：
+
+1. 客户端向接待员发 `GET /json/version?sid=<session_id>`。没有 sid 的请求会得到 `400`，并在响应体里写明要求的 URL 形状。
+2. 接待员返回
+   `webSocketDebuggerUrl: ws://127.0.0.1:6900/devtools/browser/global?sid=<session_id>`。
+   sid 被嵌进 URL，于是下游工具重连时身份不丢，不必在每一次通信时都重新声明自己的身份。
+3. 客户端打开这个 WebSocket。接待员接受连接、登记一条连接记录（id、sid、对端地址），开始读帧。
+
+接受这一步有几点特别：
+
+- **不会替你建标签页。** 连接建立时标签页集合为空，由客户端自己创建（`Target.createTarget`，或当该 sid 已有连接时用 `GET /json/new`）——新建的连接不会碰到任何自己没要求过的东西。
+- **没有页面级的 socket。** `GET /devtools/page/<targetId>` 对非归属方返回 `403`，即使归属也返回 `501`（"use the browser WS endpoint"）。所有流量都走那一条浏览器级 socket。
+- **socket 带心跳**（30 秒），客户端消失了能被及时发现，而不是一直挂着。
+
+### CDP 命令如何转发
+
+接待员的主要职责是代理转发：命令的 `method` 与 `params` 原样到达 Chrome。但在转发之外的会有一系列动作。
+
+**转发之前先做检查。**
+
+| 命令 | 拒绝时的报错 |
+|---|---|
+| 任何带 `sessionId` 的命令 | `sessionId not owned by this connection` |
+| 超过 10 个标签页上限后的 `Target.createTarget` | `target cap reached` |
+| 对外来标签页执行 `Target.closeTarget` / `Target.activateTarget` / `Target.attachToTarget` | `target not owned by this connection` |
+| Chrome 不在时的任何命令 | `browser unavailable` |
+
+**id 会被改写。** 每个客户端请求 id 在写入 Chrome 管道前被换成接待员的全局 id（一个从 `-1` 开始的计数器），回程时再换回客户端原本的 id。这样两个客户端可以用相同的 id 编号而不冲突，每条响应也都能对上发起它的连接。接待员自己发出的命令使用另一段互不重叠的 id 区间，从 `INT32_MIN` 开始——Chrome 的管道解析器只接受 int32 范围的 id。
+
+**待处理项带标签，因此能读懂回包。** 每个在途请求，接待员都记下归属连接、原始 id，以及一个种类：
+
+| 种类 | 回包告诉接待员的事 |
+|---|---|
+| `client-create` | `Target.createTarget` 成功 → 新标签页归这条连接所有 |
+| `client-attach` | `Target.attachToTarget` 成功 → 新的 CDP `sessionId` 归这条连接所有 |
+| `client-close` | `Target.closeTarget` 成功 → 忘掉这个标签页（管道模式下 Chrome 关闭标签页不会发 `targetDestroyed`） |
+| `client` / `internal` | 原样透传 |
+
+客户端 `Target.getTargets` 的发送请求和结果返回都会被过滤：接待员自己发一条内部的 `Target.getTargets`，把结果过滤成调用方自己的标签页，再返回。
+
+`sessionId` 属于别的连接的响应会被丢弃；与标签页无关的浏览器级事件广播给所有人，标签页级事件只发给归属方。
+
+### WebSocket 如何关闭
+
+关闭不只是收个 socket，而是一条清理路径。客户端 socket 结束（close 帧、错误、连接掉线）时，接待员对该连接执行同一套收尾流程：
+
+1. 标记连接已关闭，之后不再有消息路由给它；
+2. 把它拥有的**每一个标签页**逐个用内部的 `Target.closeTarget` 关掉，并忘掉这些 tab id——掉线的连接不会在共享桌面上留下残余标签页；
+3. 清掉绑定在该连接上的 CDP session id；
+4. 清掉该连接仍在等待中的请求，晚到的回包不会投递给已经死掉的 socket；
+5. 从各张表里移除该连接，并关闭 WebSocket。
+
+另有两个回收机制补上"正常关闭"覆盖不到的情况：
+
+- **回合结束清扫。** 一个聊天回合结束时，后端调用 `close_session_tabs(session_id)`，关掉该 sid 下仍然挂着、且已经空闲（宽限 30 秒）的连接——这正是为了收拾进程崩溃、来不及关 socket 的浏览器工具。该行为由 `observer_tab_cleanup` 设置控制（默认 `session`）。
+- **Chrome 死亡与整体关停。** Chrome 退出时，接待员清空各张表并带退避地重新拉起 Chrome。接待员自身关停时，先丢掉所有连接，再通过管道终止 Chrome。
+
+### 端口、文件与环境变量
+
+| 名称 | 取值 |
+|---|---|
+| 接待员 HTTP/WS | `127.0.0.1:6900`（`HERMES_RECEPTIONIST_PORT`） |
+| 桌面 VNC / 显示号 | `5900`（`HERMES_GLOBAL_VNC_PORT`）、显示号 `:99`（`HERMES_GLOBAL_DISPLAY`） |
+| Chrome CDP | 无——只有父子管道 |
+| 状态文件 | `$HERMES_WEBUI_STATE_DIR/browser_desktop.json` |
+| 总开关 | `HERMES_GLOBAL_DESKTOP=0`——不起桌面，浏览器工具退回本地 headless |
 
 ---
 

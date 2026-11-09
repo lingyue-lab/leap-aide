@@ -53,6 +53,7 @@ Key principles:
 | Workspace | `api/workspace.py` | File ops, workspace registry, git detection, trust levels |
 | Auth & identity | `api/auth.py`, `api/profiles.py` | Optional password gate + signed cookies; profile state |
 | Panels | `api/terminal.py`, `api/vnc.py`, `api/observer.py`, `api/cli_viewer.py` | Terminal PTY channel; VNC channel; observer surface; CLI session listing |
+| Browser desktop | `api/global_desktop.py`, `api/browser_receptionist.py`, `api/browser_desktop.py`, `api/cdp_pipe.py`, `compat/browser_cdp.py`, `compat/browser_session.py`, `compat/desktop_guard.py` | Shared X/Chrome desktop lifecycle; the CDP receptionist (the only CDP surface); SDK-side CDP/session patches; terminal-level desktop guard |
 | Business | `api/slash_commands.py`, `api/clarify.py`, `api/metering.py`, `api/providers.py`, `api/commands.py`, `api/background.py`, `api/updates.py` | Slash-command dispatch; clarify dialogs; usage metering; provider/model gate; command registry exposure; background goals; update check |
 
 External dependencies: `pyyaml` only (plus the Hermes Agent SDK and its own deps, supplied by the Hermes Agent SDK venv).
@@ -74,7 +75,203 @@ External dependencies: `pyyaml` only (plus the Hermes Agent SDK and its own deps
 | Profile | `/api/profiles*` | Profile CRUD and switching |
 | Auth | `/api/auth*`, `/login` | Password gate, session check |
 | Ops | `/api/settings*`, `/api/git-info`, `/api/updates*`, `/api/insights*` | Settings, git badge, update check, usage insights |
-| Panels | `/api/cron*`, `/api/skills*`, `/api/memory*`, `/api/terminal*`, `/api/vnc*`, `/api/observer*`, `/api/cli*` | Tasks/cron, skills, memory, terminal, VNC, observer, CLI session bridge |
+| Panels | `/api/cron*`, `/api/skills*`, `/api/memory*`, `/api/terminal*`, `/api/vnc*`, `/api/observer*`, `/api/cli*`, `/api/browser-desktop` | Tasks/cron, skills, memory, terminal, VNC, observer, CLI session bridge, shared browser-desktop status |
+
+---
+
+## Browser desktop
+
+A global shared browser desktop is provided, operated through the
+`x-browser-desktop skill`. The main purpose is to make browser operations
+visible; on top of that, the user can operate the desktop themselves — to
+store login information, so that the Agent's web tasks are not interrupted.
+
+The desktop instance runs **one** Chrome (issue #37): every chat session
+shares it — the desktop panel shows the same "living room", not a private
+browser per conversation. Chrome's CDP control endpoint is unreachable on
+the network: it is started with `--remote-debugging-pipe`, so CDP frames
+travel over an inherited file descriptor (Chrome reads fd 3, writes fd 4)
+instead of a TCP port. Therefore `ps` and `ss` show no connectable
+direct-to-Chrome CDP entry.
+
+The **receptionist** (`api/browser_receptionist.py`) is the process that
+holds that pipe, and it acts as the proxy providing the only CDP entry in
+the whole instance: an HTTP + WebSocket server on `127.0.0.1:6900`. Clients
+never talk to Chrome directly — they talk to the receptionist, and the
+receptionist decides what reaches Chrome and what reaches the client. That
+is what makes sharing one Chrome safe.
+
+### The pieces
+
+| Module | Role |
+|---|---|
+| `api/global_desktop.py` | Owns the X stack (Xvfb + openbox + x11vnc + fcitx5), starts the receptionist and Chrome, supervises them, publishes `browser_desktop.json` |
+| `api/browser_receptionist.py` | The CDP proxy: discovery endpoints, the WebSocket endpoint, the ownership tables, command forwarding |
+| `api/cdp_pipe.py` | Spawns Chrome over `--remote-debugging-pipe`; reads and writes NUL-delimited JSON frames |
+| `api/browser_desktop.py` | `GET /api/browser-desktop` — the status the sidebar panel polls |
+| `compat/browser_cdp.py` | Runtime patch: points the Hermes SDK at `<receptionist>/json/version?sid=<session_id>` |
+| `compat/browser_session.py` | Gives the SDK's browser session a tab of its own inside the shared Chrome |
+| `compat/desktop_guard.py` | Terminal-level guard: raw CDP and VNC endpoints stay out of reach of shell commands |
+
+The state file `$HERMES_WEBUI_STATE_DIR/browser_desktop.json` is the single
+source of truth for the wrappers and the SDK patch: it carries the
+`receptionist_url` and a `status` (`active` / `degraded`). Check the status
+before using that address — the SDK hijack patch treats anything but
+`active` as "no browser desktop configured", and browser tools then fall
+back to local headless.
+
+```text
+   client
+     │  GET /json/version?sid=<session_id>
+     ▼
+   receptionist -- fd 3 / fd 4 --> Chrome
+     │  webSocketDebuggerUrl: ws://127.0.0.1:6900/devtools/browser/global?sid=<session_id>
+     ▼
+   client -- CDP frames (filtered by tab owner) --> receptionist -- fd 3 / fd 4 --> Chrome
+```
+
+### Concurrent sessions, isolated by tab
+
+A session does not get its own Chrome instance — it gets its own **tab**,
+and the receptionist owns the mapping. Every client has to declare which
+session it belongs to with `?sid=<session_id>` (or the `X-LeapAide-Session`
+header). The receptionist keeps three tables:
+
+| Table | Maps |
+|---|---|
+| `_tabs` | `targetId` → owning connection |
+| `_cdp_sessions` | CDP `sessionId` → owning connection |
+| `_conns` / `_sessions` | live connections, by connection id and by sid |
+
+Isolation takes effect in four places:
+
+- **Discovery is filtered.** `Target.getTargets` is answered by the
+  receptionist itself — it asks Chrome internally and returns only the tabs
+  this connection owns. `/json/list` returns only the tabs of the
+  requesting sid. Another session's tab simply does not appear in the
+  answer.
+- **Acting is gated.** `Target.closeTarget`, `Target.activateTarget` and
+  `Target.attachToTarget` are refused with `target not owned by this
+  connection` unless the `targetId` belongs to the caller. A `sessionId`
+  owned by another connection is refused the same way.
+- **Events are dropped.** `Target.attachedToTarget`, `Target.targetDestroyed`
+  and any message carrying a foreign `sessionId` never reach the CDP
+  socket.
+- **Tabs are capped and reaped.** A connection may own at most 10 tabs
+  (`MAX_TARGETS_PER_CONN`), and its tabs die with the connection.
+
+Two sessions can therefore work in the same Chrome at the same time: they
+share the window and the instance, not the tab.
+
+### Where the CDP WebSocket comes from
+
+Chrome does not expose any CDP debugging address directly — the
+receptionist provides the CDP WebSocket:
+
+1. The client calls `GET /json/version?sid=<session_id>` on the
+   receptionist. A request without a sid is answered with `400`, and the
+   response body spells out the required URL shape.
+2. The receptionist answers with
+   `webSocketDebuggerUrl: ws://127.0.0.1:6900/devtools/browser/global?sid=<session_id>`.
+   The sid is embedded in the URL, so a downstream tool keeps its identity
+   when it reconnects — it does not have to re-declare who it is on every
+   communication.
+3. The client opens that WebSocket. The receptionist accepts the
+   connection, registers a connection record (id, sid, peer address) and
+   starts reading frames.
+
+What is special about the accept step:
+
+- **No tab is created for you.** The tab set is empty when the connection
+  is established; the client creates its own (`Target.createTarget`, or
+  `GET /json/new` when the sid already has a connection) — a new connection
+  touches nothing it did not ask for.
+- **There is no page-scoped socket.** `GET /devtools/page/<targetId>`
+  answers `403` unless the requesting sid owns that tab, and `501`
+  ("use the browser WS endpoint") otherwise. All traffic goes through the
+  one browser-level socket.
+- **The socket has a heartbeat** (30 s), so a client that vanished is
+  noticed in time instead of lingering.
+
+### How CDP commands are forwarded
+
+The receptionist's main job is proxying and forwarding: the `method` and
+`params` of a command reach Chrome unchanged. But around the forwarding
+there is a series of further actions.
+
+**Before forwarding, the command is checked.**
+
+| Command | Refused with |
+|---|---|
+| any command carrying a `sessionId` | `sessionId not owned by this connection` |
+| `Target.createTarget` beyond the 10-tab cap | `target cap reached` |
+| `Target.closeTarget` / `Target.activateTarget` / `Target.attachToTarget` on a foreign tab | `target not owned by this connection` |
+| anything, while Chrome is down | `browser unavailable` |
+
+**The id is rewritten.** Each client request id is swapped for the
+receptionist's global id (a counter starting at `-1`) before it goes into
+Chrome's pipe, and on the way back it is swapped for the client's original
+id. Two clients can then use the same id numbers without colliding, and
+every response can be matched to the connection that asked for it. The
+receptionist's own commands use a disjoint id range starting at
+`INT32_MIN` — Chrome's pipe parser only accepts ids in the int32 range.
+
+**The pending entry is tagged, so the answer can be interpreted.** For
+every in-flight request the receptionist records the owning connection, the
+original id, and a kind:
+
+| Kind | What the response tells it |
+|---|---|
+| `client-create` | a `Target.createTarget` succeeded → the new tab now belongs to this connection |
+| `client-attach` | a `Target.attachToTarget` succeeded → the new CDP `sessionId` now belongs to this connection |
+| `client-close` | a `Target.closeTarget` succeeded → forget the tab (Chrome sends no `targetDestroyed` for a close in pipe mode) |
+| `client` / `internal` | plain pass-through |
+
+Both the request and the result of a client `Target.getTargets` are
+filtered: the receptionist issues its own internal `Target.getTargets`,
+filters the result down to the caller's own tabs, and returns that.
+
+A response whose `sessionId` belongs to another connection is dropped;
+browser-level events that are unrelated to a tab are broadcast to everyone,
+tab-level events go only to the owner.
+
+### How the WebSocket is closed
+
+A close is not just collecting a socket — it is a cleanup path. When the
+client's socket ends (close frame, error, dropped connection), the
+receptionist runs the same teardown routine for that connection:
+
+1. mark the connection closed, so nothing else is routed to it;
+2. close **every tab it owns**, one by one, with an internal
+   `Target.closeTarget`, and forget those tab ids — a dropped connection
+   leaves no tab behind on the shared desktop;
+3. drop the CDP session ids bound to the connection;
+4. drop the connection's still-pending requests, so a late answer is not
+   delivered to a dead socket;
+5. remove the connection from the tables and close the WebSocket.
+
+Two extra reapers cover what a clean close does not reach:
+
+- **Turn-end sweep.** When a chat turn ends, the backend calls
+  `close_session_tabs(session_id)`, which closes the connections of that
+  sid that are still attached and already idle (a 30 s grace window) —
+  this is exactly what catches a browser tool whose process crashed before
+  it could close its socket. The behaviour is controlled by the
+  `observer_tab_cleanup` setting (default `session`).
+- **Chrome death and shutdown.** When Chrome exits, the receptionist
+  clears its tables and respawns Chrome with backoff. When the receptionist
+  itself shuts down, it drops all connections first, then terminates Chrome
+  over the pipe.
+
+### Ports, files and environment
+
+| Name | Value |
+|---|---|
+| Receptionist HTTP/WS | `127.0.0.1:6900` (`HERMES_RECEPTIONIST_PORT`) |
+| Desktop VNC / display | `5900` (`HERMES_GLOBAL_VNC_PORT`), display `:99` (`HERMES_GLOBAL_DISPLAY`) |
+| Chrome CDP | none — parent-child pipe only |
+| State file | `$HERMES_WEBUI_STATE_DIR/browser_desktop.json` |
+| Kill switch | `HERMES_GLOBAL_DESKTOP=0` — no desktop; browser tools fall back to local headless |
 
 ---
 
