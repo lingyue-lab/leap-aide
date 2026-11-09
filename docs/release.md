@@ -71,8 +71,18 @@ through review only — never push to it, and never to `upstream`, directly.
 
 ```bash
 git tag -a v0.2.0 -m "LeapAide v0.2.0"
-git push origin v0.2.0
+git push upstream v0.2.0
 ```
+
+The tag goes to the repository that hosts the release — `upstream` in this
+checkout, where `origin` is your fork. A tag pushed to a fork publishes the
+image under the fork's registry namespace
+(`ghcr.io/<fork-owner>/leap-aide-runtime`) and creates the release page on
+the fork, while the changelog advertises
+`ghcr.io/lingyue-lab/leap-aide-runtime`.
+
+The tag points at a commit that is already merged, so it never introduces
+unreviewed code: the pull request remains the only way into `main`.
 
 The tag message becomes the release title, so keep it in the form
 "LeapAide v0.2.0". A lightweight tag gets the same title anyway.

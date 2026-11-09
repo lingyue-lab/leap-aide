@@ -63,8 +63,16 @@ python3 backend/scripts/check_translation_pairing.py --write CHANGELOG.md
 
 ```bash
 git tag -a v0.2.0 -m "LeapAide v0.2.0"
-git push origin v0.2.0
+git push upstream v0.2.0
 ```
+
+标签要推到承载发布的那个仓库——本 checkout 中是 `upstream`，其中 `origin` 是你的
+fork。标签推到 fork 会把镜像发布到 fork 的镜像仓库命名空间
+（`ghcr.io/<fork-owner>/leap-aide-runtime`），并在 fork 上创建发布页，而更新日志里
+对外承诺的是 `ghcr.io/lingyue-lab/leap-aide-runtime`。
+
+标签指向的提交已经合入，因此它不会引入未经评审的代码：PR 仍然是进入 `main` 的唯一
+途径。
 
 标签消息会成为发布标题，因此保持 "LeapAide v0.2.0" 这种形式。轻量标签同样会得到这个
 标题。

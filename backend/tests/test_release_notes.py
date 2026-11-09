@@ -80,6 +80,39 @@ class TestExtraction:
         known = module.available_versions(_read(CHANGELOG))
         assert VERSION in known, known
 
+    def test_a_heading_inside_a_code_fence_is_not_a_heading(self):
+        """A fenced block is opaque to the section splitter.
+
+        The release-process doc quotes a block that contains "## [0.2.0]",
+        so a changelog entry that documents the release flow would embed
+        it. Reading that line as a heading ended the section early and
+        dropped the rest of the entry without a word of complaint.
+        """
+        module = _load_module()
+        text = (
+            "## [0.2.0] - 2026-12-01\n"
+            "\n"
+            "Second release.\n"
+            "\n"
+            "### Added\n"
+            "\n"
+            "- The flow changed:\n"
+            "\n"
+            "```\n"
+            "## [Unreleased]\n"
+            "\n"
+            "## [0.2.0] - 2026-12-01\n"
+            "```\n"
+            "\n"
+            "- The tag is pushed next.\n"
+        )
+        sections = module.parse_sections(text)
+        assert [key for key, _ in sections] == ["0.2.0"], sections
+        body = module.find_section(text, "0.2.0")
+        assert body is not None
+        assert "- The tag is pushed next." in body, body
+        assert body.count("```") == 2, body
+
 
 class TestRendering:
 
@@ -99,6 +132,13 @@ class TestRendering:
 
         A switcher that scrolls nowhere is worse than no switcher: the reader
         clicks "中文" and the page does not move.
+
+        The check is on the source, and that is the boundary it proves: on
+        the rendered page GitHub prefixes the element id ("x" ->
+        "user-content-x") but leaves the link's fragment alone, and its
+        frontend resolves the fragment by retrying it with that prefix.
+        So the source-level id and the fragment have to be the same string
+        for the retry to land on the element.
         """
         import re
         module = _load_module()

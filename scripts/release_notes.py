@@ -37,11 +37,18 @@ from pathlib import Path
 # square brackets: "## [0.1.0] - 2026-11-09".
 SECTION_HEADING_RE = re.compile(r"^##\s+(?P<title>.+?)\s*$")
 BRACKETED_RE = re.compile(r"^\[(?P<version>[^\]]+)\]")
+# A fenced code block. Its contents are not markup: a "## " line inside a
+# fence is code, not a heading, and must not end the section it sits in.
+FENCE_OPEN_RE = re.compile(r"^(`{3,}|~{3,})")
 
-# Anchor ids for the language switcher. GitHub rewrites ids it renders
-# ("user-content-" prefix) and rewrites the matching fragments, so the
-# switcher links follow. The prefix keeps them clear of the ids GitHub
-# generates for the headings inside the release body.
+# Anchor ids for the language switcher. GitHub renders an element id with a
+# "user-content-" prefix ("leap-aide-release-notes-en" becomes
+# "user-content-leap-aide-release-notes-en") and leaves the fragment of a
+# link alone. The switch therefore relies on GitHub's own fallback: on
+# click, the frontend retries the fragment with the prefix
+# ("#x" -> "#user-content-x") and scrolls to the element when it finds it.
+# The prefix here keeps these ids clear of the ids GitHub generates for the
+# headings inside the release body.
 EN_ANCHOR = "leap-aide-release-notes-en"
 ZH_ANCHOR = "leap-aide-release-notes-zh"
 
@@ -61,6 +68,15 @@ def repo_root(explicit: str | None = None) -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _is_closing_fence(line: str, open_marker: str) -> bool:
+    """True when the line closes the fence opened with `open_marker`."""
+    stripped = line.strip()
+    if not stripped:
+        return False
+    return (set(stripped) == {open_marker[0]}
+            and len(stripped) >= len(open_marker))
+
+
 def parse_sections(text: str) -> list[tuple[str, str]]:
     """Split a changelog into (version_key, body) pairs.
 
@@ -70,12 +86,31 @@ def parse_sections(text: str) -> list[tuple[str, str]]:
     between the heading and the next level-2 heading, with the surrounding
     blank lines stripped. The preamble above the first section (frontmatter,
     language switcher) is not part of any section.
+
+    Fenced code blocks are opaque: a "## " line inside one is code, not a
+    heading. The release-process doc quotes exactly such a block, so a
+    changelog entry about it would otherwise end the section mid-way and
+    silently drop the rest of the entry.
     """
     sections: list[tuple[str, str]] = []
     key: str | None = None
     body: list[str] = []
+    in_fence = False
+    fence_marker = ""
 
     for line in text.split("\n"):
+        if in_fence:
+            body.append(line)
+            if _is_closing_fence(line, fence_marker):
+                in_fence = False
+            continue
+        fence = FENCE_OPEN_RE.match(line)
+        if fence:
+            in_fence = True
+            fence_marker = fence.group(1)
+            if key is not None:
+                body.append(line)
+            continue
         heading = SECTION_HEADING_RE.match(line)
         if heading:
             if key is not None:
