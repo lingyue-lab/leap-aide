@@ -19,20 +19,20 @@
   en: 0ff0e742e7ffa42a
   zh: 12b30339b544c65b
 /browser-desktop:
-  en: 5d5af90997a67863
-  zh: 6c6221119ebe355a
+  en: eccf95704b78e933
+  zh: 68c91886fe23e72d
 /the-pieces:
   en: 5e2a8a4a729cce0c
   zh: aed4fe50d6cd3d47
 /concurrent-sessions-isolated-by-tab:
-  en: 359e11562ddbf8b0
-  zh: c93a7fbbc80ad63f
+  en: 093240139659bfc5
+  zh: 48ee6d1617d25e9d
 /where-the-cdp-websocket-comes-from:
   en: 1767642b8ebc62c3
   zh: 0001ad55cf1978fc
 /how-cdp-commands-are-forwarded:
-  en: 8a8867001ba44d26
-  zh: 7a7c2d2a42f61811
+  en: f53bd16215d1dbcc
+  zh: 3058bde1fad86d42
 /how-the-websocket-is-closed:
   en: 1e06191d38d83b20
   zh: dc9bc24037eba983

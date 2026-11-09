@@ -81,11 +81,11 @@ hermes-agent SDK            AIAgent.run_conversation(), tools, gateway
 
 ## 浏览器桌面
 
-当前提供了一个全局共享的浏览器桌面，通过 `x-browser-desktop skill` 来操作。主要目的是可视化浏览器操作，另外，用户也可以操作这个桌面，用来保存登录信息，避免 Agent 网页任务被打断。
+当前提供了一个全局共享的浏览器桌面，通过 `x-browser-desktop` skill 来操作。主要目的是可视化浏览器操作，另外，用户也可以操作这个桌面，用来保存登录信息，避免 Agent 网页任务被打断。
 
 整个桌面实例只跑 **一个** Chrome（issue #37）：所有聊天会话共用它——桌面面板显示的是同一个"公共客厅"，而不是每个会话各开一个浏览器。Chrome 的 CDP 控制端点在网络上不可达：它以 `--remote-debugging-pipe` 启动，CDP 帧通过继承的文件描述符传递（Chrome 读 fd 3、写 fd 4），不占任何 TCP 端口。因此 `ps`、`ss` 里看不到任何可连接的 Chrome 直连 CDP 入口。
 
-**接待员**（`api/browser_receptionist.py`）就是持有这根管道的进程，它作为代理提供整个实例唯一的 CDP 入口：它是一个跑在 `127.0.0.1:6900` 上的 HTTP + WebSocket 服务。客户端从不直接和 Chrome 对话，而是和接待员对话，由接待员决定哪些东西能到 Chrome、哪些东西能回到客户端。共享一个 Chrome 之所以安全，靠的就是这一层。
+**接待员**（`api/browser_receptionist.py`）就是持有这根管道的组件——后端进程内一条独立线程，跑着自己的事件循环——它作为代理提供整个实例唯一的 CDP 入口：它是一个跑在 `127.0.0.1:6900` 上的 HTTP + WebSocket 服务。客户端从不直接和 Chrome 对话，而是和接待员对话，由接待员决定哪些东西能到 Chrome、哪些东西能回到客户端。共享一个 Chrome 之所以安全，靠的就是这一层。
 
 ### 相关模块
 
@@ -125,7 +125,7 @@ hermes-agent SDK            AIAgent.run_conversation(), tools, gateway
 
 - **发现被过滤。** `Target.getTargets` 由接待员自己作答——它在内部问 Chrome，然后只返回本连接拥有的标签页。`/json/list` 只返回请求方 sid 的标签页。别的会话的标签页根本不会出现在回答里。
 - **操作被拦截。** `Target.closeTarget`、`Target.activateTarget`、`Target.attachToTarget` 若 `targetId` 不属于调用方，一律拒绝并返回 `target not owned by this connection`；`sessionId` 属于别的连接时同样拒绝。
-- **事件被丢弃。** `Target.attachedToTarget`、`Target.targetDestroyed` 以及任何带外来 `sessionId` 的消息都不会送达 CDP socket。
+- **事件被丢弃。** `Target.attachedToTarget` 与 `Target.targetDestroyed` 只投递给该标签页归属的连接；关于外来标签页的事件一律丢弃。带外来 `sessionId` 的消息同样被丢弃。
 - **标签页有上限且随连接回收。** 一个连接最多拥有 10 个标签页（`MAX_TARGETS_PER_CONN`），并且连接断开时标签页随之关闭。
 
 因此两个会话可以在同一个 Chrome 里同时干活：共享的是窗口和实例，不是标签页。
@@ -155,9 +155,11 @@ Chrome 不会直接暴露任何 CDP 调试地址，而是由接待员提供 CDP 
 | 命令 | 拒绝时的报错 |
 |---|---|
 | 任何带 `sessionId` 的命令 | `sessionId not owned by this connection` |
-| 超过 10 个标签页上限后的 `Target.createTarget` | `target cap reached` |
+| 超过 10 个标签页上限后的 `Target.createTarget` | `target cap reached (10)` |
 | 对外来标签页执行 `Target.closeTarget` / `Target.activateTarget` / `Target.attachToTarget` | `target not owned by this connection` |
 | Chrome 不在时的任何命令 | `browser unavailable` |
+
+这些拒绝都以 CDP 错误帧返回，code 为 `-32000`，message 前缀是 `receptionist: `。
 
 **id 会被改写。** 每个客户端请求 id 在写入 Chrome 管道前被换成接待员的全局 id（一个从 `-1` 开始的计数器），回程时再换回客户端原本的 id。这样两个客户端可以用相同的 id 编号而不冲突，每条响应也都能对上发起它的连接。接待员自己发出的命令使用另一段互不重叠的 id 区间，从 `INT32_MIN` 开始——Chrome 的管道解析器只接受 int32 范围的 id。
 
@@ -170,7 +172,7 @@ Chrome 不会直接暴露任何 CDP 调试地址，而是由接待员提供 CDP 
 | `client-close` | `Target.closeTarget` 成功 → 忘掉这个标签页（管道模式下 Chrome 关闭标签页不会发 `targetDestroyed`） |
 | `client` / `internal` | 原样透传 |
 
-客户端 `Target.getTargets` 的发送请求和结果返回都会被过滤：接待员自己发一条内部的 `Target.getTargets`，把结果过滤成调用方自己的标签页，再返回。
+客户端 `Target.getTargets` 的请求会被拦下，而不是转发：接待员自己发一条内部的 `Target.getTargets`，客户端那条请求根本不会进管道。只有结果会被过滤——过滤成调用方自己的标签页再返回。
 
 `sessionId` 属于别的连接的响应会被丢弃；与标签页无关的浏览器级事件广播给所有人，标签页级事件只发给归属方。
 

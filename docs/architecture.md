@@ -82,7 +82,7 @@ External dependencies: `pyyaml` only (plus the Hermes Agent SDK and its own deps
 ## Browser desktop
 
 A global shared browser desktop is provided, operated through the
-`x-browser-desktop skill`. The main purpose is to make browser operations
+`x-browser-desktop` skill. The main purpose is to make browser operations
 visible; on top of that, the user can operate the desktop themselves — to
 store login information, so that the Agent's web tasks are not interrupted.
 
@@ -94,12 +94,13 @@ travel over an inherited file descriptor (Chrome reads fd 3, writes fd 4)
 instead of a TCP port. Therefore `ps` and `ss` show no connectable
 direct-to-Chrome CDP entry.
 
-The **receptionist** (`api/browser_receptionist.py`) is the process that
-holds that pipe, and it acts as the proxy providing the only CDP entry in
-the whole instance: an HTTP + WebSocket server on `127.0.0.1:6900`. Clients
-never talk to Chrome directly — they talk to the receptionist, and the
-receptionist decides what reaches Chrome and what reaches the client. That
-is what makes sharing one Chrome safe.
+The **receptionist** (`api/browser_receptionist.py`) is the component that
+holds that pipe — a dedicated thread inside the backend process, running
+its own event loop — and it acts as the proxy providing the only CDP entry
+in the whole instance: an HTTP + WebSocket server on `127.0.0.1:6900`.
+Clients never talk to Chrome directly — they talk to the receptionist, and
+the receptionist decides what reaches Chrome and what reaches the client.
+That is what makes sharing one Chrome safe.
 
 ### The pieces
 
@@ -154,9 +155,10 @@ Isolation takes effect in four places:
   `Target.attachToTarget` are refused with `target not owned by this
   connection` unless the `targetId` belongs to the caller. A `sessionId`
   owned by another connection is refused the same way.
-- **Events are dropped.** `Target.attachedToTarget`, `Target.targetDestroyed`
-  and any message carrying a foreign `sessionId` never reach the CDP
-  socket.
+- **Events are dropped.** `Target.attachedToTarget` and
+  `Target.targetDestroyed` are delivered only to the connection the tab
+  belongs to; events about a foreign tab are discarded. A message carrying
+  a foreign `sessionId` is dropped as well.
 - **Tabs are capped and reaped.** A connection may own at most 10 tabs
   (`MAX_TARGETS_PER_CONN`), and its tabs die with the connection.
 
@@ -204,9 +206,12 @@ there is a series of further actions.
 | Command | Refused with |
 |---|---|
 | any command carrying a `sessionId` | `sessionId not owned by this connection` |
-| `Target.createTarget` beyond the 10-tab cap | `target cap reached` |
+| `Target.createTarget` beyond the 10-tab cap | `target cap reached (10)` |
 | `Target.closeTarget` / `Target.activateTarget` / `Target.attachToTarget` on a foreign tab | `target not owned by this connection` |
 | anything, while Chrome is down | `browser unavailable` |
+
+Every one of them arrives as a CDP error frame with code `-32000` and the
+message prefixed by `receptionist: `.
 
 **The id is rewritten.** Each client request id is swapped for the
 receptionist's global id (a counter starting at `-1`) before it goes into
@@ -227,9 +232,10 @@ original id, and a kind:
 | `client-close` | a `Target.closeTarget` succeeded → forget the tab (Chrome sends no `targetDestroyed` for a close in pipe mode) |
 | `client` / `internal` | plain pass-through |
 
-Both the request and the result of a client `Target.getTargets` are
-filtered: the receptionist issues its own internal `Target.getTargets`,
-filters the result down to the caller's own tabs, and returns that.
+The request is intercepted, not forwarded: the receptionist issues its own
+internal `Target.getTargets` and never puts the client's request into the
+pipe. Only the result is filtered — it is trimmed down to the caller's own
+tabs before it goes back.
 
 A response whose `sessionId` belongs to another connection is dropped;
 browser-level events that are unrelated to a tab are broadcast to everyone,
