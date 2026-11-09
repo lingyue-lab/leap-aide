@@ -232,6 +232,9 @@ jobs:
         run: printf '%s' "$GHCR_TOKEN" | buildah login --username "${{ github.actor }}" --password-stdin ghcr.io
 
       - name: Build testing image (buildah)
+        # `id` so the suites below can tell "the build failed" from "the
+        # backend suite failed" — see the frontend suite's guard.
+        id: build
         env:
           HERMES_AGENT_COMMIT: ${{ steps.pin.outputs.commit }}
           # Point the buildah store at the host bind mount (ext4). The job
@@ -309,7 +312,21 @@ jobs:
           #   proxies reach the build only via BUILD_* -> --build-arg.
           # --ignorefile is deliberately NOT passed: the repo-root .dockerignore
           #   is the single context filter for every stage.
-          "${ba[@]}" bud \
+          #
+          # The build is retried. Every layer that fetches from a mirror can
+          # fail on a mirror outage, and one such failure costs the whole
+          # build: the npm mirror behind BUILD_NPM_REGISTRY answers 5xx for
+          # minutes at a time when its backend is unhappy (a 500 with
+          # "Table 'npmmirrordb.team_packages' doesn't exist", then a 502
+          # for the same tarball), and npm's own fetch-retries only cover
+          # ~10 minutes of that. The lockfile pins the tarball URLs to the
+          # mirror, so there is no second host to fall back to.
+          #
+          # `--layers` keeps the finished layers in the buildah store, so a
+          # retry re-runs only the layer that failed — the retry costs the
+          # failing layer, not the half hour of work before it.
+          attempt=1
+          until "${ba[@]}" bud \
             --target testing \
             --layers --jobs 0 \
             --network=host \
@@ -335,7 +352,15 @@ jobs:
             --build-arg "BUILD_NPM_WARMUP=${BUILD_NPM_WARMUP:-0}" \
             "${secrets[@]}" \
             --tag "$ref" \
-            -f Dockerfile .
+            -f Dockerfile . ; do
+            attempt=$((attempt + 1))
+            if [ "$attempt" -gt 3 ]; then
+              echo "::error::the testing image build failed 3 times — giving up"
+              exit 1
+            fi
+            echo "::warning::build attempt $((attempt - 1)) failed — retrying in 5 minutes"
+            sleep 300
+          done
 
       # Its own step (was: its own command inside the build step) so a failed
       # push fails the job visibly, before run-tests-on-pulled-image is
@@ -422,8 +447,13 @@ jobs:
       # multi-hour backend failure should not also deny the much shorter
       # frontend signal, but a cancelled run need not start another container.
       # The job still ends red either way.
+      #
+      # `steps.build.outcome` is the other half: there is no image to run
+      # when the build failed, so the suite would fail on "manifest unknown"
+      # and the job would report a *test* failure for a *build* failure.
+      # Skipping keeps the red step the one that actually explains it.
       - name: Run frontend suite (run-test.sh frontend full, in place)
-        if: ${{ steps.access.outputs.in_place == 'true' && !cancelled() }}
+        if: ${{ steps.access.outputs.in_place == 'true' && steps.build.outcome == 'success' && !cancelled() }}
         env:
           BUILDAH_ROOT: ${{ runner.temp }}/buildah-store
           BUILDAH_RUNROOT: ${{ runner.temp }}/buildah-runroot
@@ -489,6 +519,9 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Pull the image pushed by this run
+        # `id` so the frontend suite below can tell "the pull failed" from
+        # "the backend suite failed" — see that step's guard.
+        id: pull
         env:
           IMAGE_REF: ${{ needs.build-push-or-test-in-place.outputs.image }}:${{ needs.build-push-or-test-in-place.outputs.tag }}
         run: |
@@ -552,8 +585,12 @@ jobs:
       # !cancelled(), not always(): a multi-hour backend failure should not
       # also deny the much shorter frontend signal, but a cancelled run need
       # not start another container. The job still ends red either way.
+      #
+      # `steps.pull.outcome` is the other half: without an image there is
+      # nothing to run, so the suite would fail on a missing manifest and
+      # the job would report a *test* failure for a *pull* failure.
       - name: Run frontend suite (run-test.sh frontend full)
-        if: ${{ !cancelled() }}
+        if: ${{ steps.pull.outcome == 'success' && !cancelled() }}
         env:
           IMAGE_REF: ${{ needs.build-push-or-test-in-place.outputs.image }}:${{ needs.build-push-or-test-in-place.outputs.tag }}
           FRONTEND_RESULTS: ${{ runner.temp }}/results/frontend
