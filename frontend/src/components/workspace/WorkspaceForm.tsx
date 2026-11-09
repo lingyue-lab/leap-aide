@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 import FormPage, { FormActions } from '@/components/common/FormPage';
@@ -10,6 +11,10 @@ interface WorkspaceFormProps {
   onCancel: () => void;
 }
 
+const MENU_MAX_H = 280;
+const MENU_ID = 'workspace-path-suggestions';
+const optionId = (index: number) => `${MENU_ID}-option-${index}`;
+
 export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProps) {
   const { t } = useTranslation('common');
   const { addWorkspace } = useWorkspaceStore();
@@ -19,70 +24,163 @@ export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProp
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  // path suggestions
+  // Directory autocomplete: an M3 menu anchored under the path input.
+  // Rendered through a portal with position:fixed so the form's scroll
+  // container (FormPage/CustomScrollbar, overflow:hidden/auto) cannot clip it
+  // (issue #22). The menu only opens when there is something to show.
   const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [activeSugIdx, setActiveSugIdx] = useState(-1);
+  const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
   const suggestTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pathInputRef = useRef<HTMLInputElement>(null);
-  const suggestionsRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  // Monotonic request id.  Only the response of the newest request may
+  // paint the menu, so a slow reply for an older prefix can never replace
+  // the results of the prefix the user is actually typing.
+  const requestIdRef = useRef(0);
+  // Latest path value.  Event handlers that outlive a render (focus) must
+  // not read a stale `addPath`.
+  const pathRef = useRef('');
 
   useEffect(() => {
     pathInputRef.current?.focus();
   }, []);
 
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (
-        suggestionsRef.current && !suggestionsRef.current.contains(e.target as Node) &&
-        pathInputRef.current && !pathInputRef.current.contains(e.target as Node)
-      ) {
-        setSuggestionsOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+  const positionMenu = useCallback(() => {
+    const el = pathInputRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const gap = 4;
+    const spaceBelow = window.innerHeight - r.bottom - gap - 8;
+    const spaceAbove = r.top - gap - 8;
+    const openUp = spaceBelow < Math.min(MENU_MAX_H, 160) && spaceAbove > spaceBelow;
+    setMenuStyle({
+      position: 'fixed',
+      left: r.left,
+      width: r.width,
+      top: openUp ? undefined : r.bottom + gap,
+      bottom: openUp ? window.innerHeight - r.top + gap : undefined,
+      maxHeight: Math.max(120, Math.min(MENU_MAX_H, openUp ? spaceAbove : spaceBelow)),
+      zIndex: 1000,
+    });
+  }, []);
+
+  // Close the menu and cancel everything that could reopen it.  A queued
+  // debounce timer or an in-flight response would otherwise pop the menu
+  // back open after the user dismissed it.
+  const closeMenu = useCallback(() => {
+    if (suggestTimer.current) {
+      clearTimeout(suggestTimer.current);
+      suggestTimer.current = null;
+    }
+    requestIdRef.current++;
+    setMenuOpen(false);
   }, []);
 
   const fetchSuggestions = useCallback(async (prefix: string) => {
+    const requestId = ++requestIdRef.current;
     try {
       const res = await fetch(
         `/api/workspaces/suggest?prefix=${encodeURIComponent(prefix)}`,
-        { credentials: 'include' }
+        { credentials: 'include' },
       );
-      if (!res.ok) return;
+      // A newer request has been issued in the meantime — drop this reply.
+      if (requestId !== requestIdRef.current) return;
+      if (!res.ok) {
+        // A failed lookup must not leave the previous list on screen.
+        setSuggestions([]);
+        setMenuOpen(false);
+        return;
+      }
       const data = await res.json();
-      setSuggestions(data.suggestions || []);
-      setSuggestionsOpen((data.suggestions || []).length > 0);
+      if (requestId !== requestIdRef.current) return;
+      const list: string[] = data.suggestions || [];
+      setSuggestions(list);
       setActiveSugIdx(-1);
+      if (list.length > 0) {
+        positionMenu();
+        setMenuOpen(true);
+      } else {
+        setMenuOpen(false);
+      }
     } catch {
-      /* silent */
+      if (requestId !== requestIdRef.current) return;
+      setSuggestions([]);
+      setMenuOpen(false);
     }
-  }, []);
+  }, [positionMenu]);
 
   const handlePathChange = (value: string) => {
     setAddPath(value);
-    if (suggestTimer.current) clearTimeout(suggestTimer.current);
+    pathRef.current = value;
     if (!value.trim()) {
       setSuggestions([]);
-      setSuggestionsOpen(false);
+      closeMenu();
       return;
     }
+    // Invalidate every in-flight response: a stale reply must neither
+    // repaint the menu nor reopen it for a prefix that is no longer typed.
+    requestIdRef.current++;
+    if (suggestTimer.current) clearTimeout(suggestTimer.current);
     suggestTimer.current = setTimeout(() => fetchSuggestions(value), 200);
   };
 
   const handleSelectSuggestion = (path: string) => {
     const withSlash = path.endsWith('/') ? path : path + '/';
+    pathRef.current = withSlash;
     setAddPath(withSlash);
-    setSuggestionsOpen(false);
     setActiveSugIdx(-1);
-    fetchSuggestions(withSlash);
+    // Drops the pending debounce and any in-flight response first; the
+    // lookup for the completed path below then becomes the newest request.
+    closeMenu();
     pathInputRef.current?.focus();
+    fetchSuggestions(withSlash);
   };
 
+  // Close on outside mousedown (input and menu excluded).
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (menuRef.current?.contains(target)) return;
+      if (pathInputRef.current?.contains(target)) return;
+      closeMenu();
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [menuOpen, closeMenu]);
+
+  // Close on scroll/resize: a fixed menu would otherwise detach from the
+  // input.  The menu scrolls itself (overflow-y: auto) — that must not close
+  // it, otherwise the items past the fold become unreachable.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onScroll = (e: Event) => {
+      if (menuRef.current?.contains(e.target as Node)) return;
+      closeMenu();
+    };
+    const onResize = () => closeMenu();
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [menuOpen, closeMenu]);
+
+  // Keep the highlighted option visible: the menu is capped at MENU_MAX_H,
+  // so arrow-key navigation can move the highlight past the visible rows.
+  useEffect(() => {
+    if (activeSugIdx < 0) return;
+    const opt = menuRef.current?.children[activeSugIdx] as HTMLElement | undefined;
+    opt?.scrollIntoView?.({ block: 'nearest' });
+  }, [activeSugIdx]);
+
   const handlePathKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (!suggestionsOpen || suggestions.length === 0) {
+    if (!menuOpen || suggestions.length === 0) {
       if (e.key === 'Enter') { e.preventDefault(); handleSubmit(); }
+      if (e.key === 'Escape') closeMenu();
       return;
     }
     if (e.key === 'ArrowDown') {
@@ -96,121 +194,139 @@ export default function WorkspaceForm({ onSuccess, onCancel }: WorkspaceFormProp
       if (activeSugIdx >= 0 && suggestions[activeSugIdx]) {
         handleSelectSuggestion(suggestions[activeSugIdx]);
       } else {
-        setSuggestionsOpen(false);
         handleSubmit();
       }
-    } else if (e.key === 'Escape') {
-      setSuggestionsOpen(false);
     } else if (e.key === 'Tab') {
-      e.preventDefault();
-      if (activeSugIdx >= 0 && suggestions[activeSugIdx]) {
-        handleSelectSuggestion(suggestions[activeSugIdx]);
-      } else if (suggestions.length === 1) {
-        handleSelectSuggestion(suggestions[0]);
+      const target =
+        activeSugIdx >= 0
+          ? suggestions[activeSugIdx]
+          : suggestions.length === 1
+            ? suggestions[0]
+            : null;
+      // Only swallow Tab when a suggestion is actually accepted — otherwise
+      // Tab must move the focus out of the field instead of trapping it.
+      if (target) {
+        e.preventDefault();
+        handleSelectSuggestion(target);
       }
+    } else if (e.key === 'Escape') {
+      closeMenu();
     }
   };
 
   const handleSubmit = async () => {
     const path = addPath.trim();
     if (!path) {
-      setError('Path is required');
+      setError(t('workspaces.form.error_path_required'));
       return;
     }
-    setSuggestionsOpen(false);
+    // Cancel the queue and any in-flight suggest response — neither may
+    // reopen the menu while the form is being submitted.
+    closeMenu();
     setSubmitting(true);
     setError('');
     try {
       await addWorkspace(path, addName.trim() || undefined);
       onSuccess();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add workspace');
+      setError(err instanceof Error ? err.message : t('workspaces.form.error_add_failed'));
     } finally {
       setSubmitting(false);
     }
   };
 
-  return (
-    <FormPage
-      title={t('workspaces.new_workspace')}
-      error={error}
-      actions={
-        <FormActions
-          onSubmit={handleSubmit}
-          onCancel={onCancel}
-          busy={submitting}
-          submitDisabled={!addPath.trim()}
-        />
-      }
-    >
+  const listOpen = menuOpen && suggestions.length > 0;
 
-        {/* Path field */}
-        <FormField
-          label="Workspace Path"
-          hint="(absolute path to a directory)"
-          helper="Start typing to see directory suggestions. Use ↑↓ to navigate, Tab or Enter to select."
-        >
-          <div className="relative">
-            <TextField
-              ref={pathInputRef}
-              type="text"
-              placeholder="/home/user/my-project"
-              value={addPath}
-              onChange={(e) => handlePathChange(e.target.value)}
-              onKeyDown={handlePathKeyDown}
-              onFocus={() => addPath.trim() && suggestions.length > 0 && setSuggestionsOpen(true)}
-            />
-            {suggestionsOpen && suggestions.length > 0 && (
-              <div
-                ref={suggestionsRef}
-                className="absolute left-0 right-0 top-full mt-1 z-50 rounded-lg border border-[var(--border)] bg-[var(--sidebar-bg,#1e1e1e)] shadow-xl overflow-hidden"
-                style={{ maxHeight: 220, overflowY: 'auto' }}
+  const menu =
+    listOpen && typeof document !== 'undefined'
+      ? createPortal(
+          <div
+            id={MENU_ID}
+            ref={menuRef}
+            role="listbox"
+            aria-label={t('workspaces.form.suggestions_title')}
+            style={menuStyle}
+            className="rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-xl overflow-y-auto py-1"
+          >
+            {suggestions.map((s, i) => (
+              <button
+                key={s}
+                id={optionId(i)}
+                type="button"
+                role="option"
+                aria-selected={i === activeSugIdx}
+                onMouseDown={(e) => { e.preventDefault(); handleSelectSuggestion(s); }}
+                className={`w-full text-left px-3 py-2 text-sm truncate flex items-center gap-2 ${
+                  i === activeSugIdx
+                    ? 'bg-[var(--hover-bg)] text-[var(--text)]'
+                    : 'text-[var(--muted)] hover:bg-[var(--hover-bg)] hover:text-[var(--text)]'
+                }`}
               >
-                {suggestions.map((s, i) => (
-                  <button
-                    key={s}
-                    className={`w-full text-left px-3 py-1.5 text-xs truncate transition-colors flex items-center gap-2 ${
-                      i === activeSugIdx
-                        ? 'bg-[var(--hover-bg)] text-[var(--text)]'
-                        : 'text-[var(--muted)] hover:bg-[var(--hover-bg)] hover:text-[var(--text)]'
-                    }`}
-                    onMouseDown={(e) => { e.preventDefault(); handleSelectSuggestion(s); }}
-                  >
-                    <Icon name="folder_open" size={14} className="flex-shrink-0 opacity-60" />
-                    {s}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+                <Icon name="folder_open" size={16} className="flex-shrink-0 opacity-60" />
+                <span className="truncate">{s}</span>
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )
+      : null;
+
+  return (
+    <>
+      <FormPage
+        title={t('workspaces.new_workspace')}
+        error={error}
+        actions={
+          <FormActions
+            onSubmit={handleSubmit}
+            onCancel={onCancel}
+            busy={submitting}
+            submitDisabled={!addPath.trim()}
+          />
+        }
+      >
+        {/* Path field — the suggestion menu is anchored to this input */}
+        <FormField
+          label={t('workspaces.form.path_label')}
+          hint={t('workspaces.form.path_hint')}
+          helper={t('workspaces.form.path_helper')}
+        >
+          <TextField
+            ref={pathInputRef}
+            type="text"
+            role="combobox"
+            aria-expanded={listOpen}
+            aria-controls={MENU_ID}
+            aria-autocomplete="list"
+            aria-activedescendant={
+              activeSugIdx >= 0 ? optionId(activeSugIdx) : undefined
+            }
+            placeholder={t('workspaces.form.path_placeholder')}
+            value={addPath}
+            onChange={(e) => handlePathChange(e.target.value)}
+            onKeyDown={handlePathKeyDown}
+            onFocus={() => {
+              const current = pathRef.current;
+              if (current.trim()) fetchSuggestions(current);
+            }}
+          />
         </FormField>
 
         {/* Display name field */}
-        <FormField label="Display Name" hint="(optional — defaults to folder name)">
+        <FormField
+          label={t('workspaces.form.name_label')}
+          hint={t('workspaces.form.name_hint')}
+        >
           <TextField
             type="text"
-            placeholder={addPath ? addPath.split('/').filter(Boolean).pop() || '' : 'e.g. My Project'}
+            placeholder={addPath ? addPath.split('/').filter(Boolean).pop() || '' : t('workspaces.form.name_placeholder')}
             value={addName}
             onChange={(e) => setAddName(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
           />
         </FormField>
-
-        {/* Preview */}
-        {addPath.trim() && (
-          <div className="rounded-lg border border-[var(--border2)] bg-[var(--hover-bg)] p-4">
-            <div className="text-xs font-medium text-[var(--muted)] mb-3 uppercase tracking-wider">Preview</div>
-            <div className="flex items-center gap-3">
-              <Icon name="folder_open" size={23} className="text-[var(--accent)] flex-shrink-0" />
-              <div className="min-w-0">
-                <div className="text-sm font-medium truncate">
-                  {addName.trim() || addPath.trim().split('/').filter(Boolean).pop() || addPath.trim()}
-                </div>
-                <div className="text-xs text-[var(--muted)] truncate mt-0.5">{addPath.trim()}</div>
-              </div>
-            </div>
-          </div>
-        )}
-    </FormPage>
+      </FormPage>
+      {menu}
+    </>
   );
 }

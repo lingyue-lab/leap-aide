@@ -359,7 +359,19 @@
     "ahead": "{{count}} 个领先",
     "behind": "{{count}} 个落后",
     "working_tree_clean": "工作区干净",
-    "recent_commits": "最近提交"
+    "recent_commits": "最近提交",
+    "form": {
+      "path_label": "工作区路径",
+      "path_hint": "（目录的绝对路径）",
+      "path_helper": "开始输入即可在下方看到目录建议。点击建议（或用 ↑↓ 和 Tab/Enter）补全路径。",
+      "path_placeholder": "/home/user/my-project",
+      "name_label": "显示名称",
+      "name_hint": "（可选 — 默认为文件夹名）",
+      "name_placeholder": "例如：我的项目",
+      "suggestions_title": "目录建议",
+      "error_path_required": "请输入路径",
+      "error_add_failed": "添加工作区失败"
+    }
   },
   "todos": {
     "title": "待办事项",
