@@ -162,6 +162,12 @@ bash ./scripts/ctl.sh status
 
 ---
 
+## 发布
+
+参见 [docs/release.zh-CN.md](docs/release.zh-CN.md)。
+
+---
+
 ## 参与贡献
 
 参见 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md)。

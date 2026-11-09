@@ -43,6 +43,10 @@ If you want to adjust the architecture, reshape workflows, add heavyweight UI fe
 
 ## What We Expect in Every PR
 
+### Every change goes through a pull request
+
+Push a branch and open a pull request — never commit straight to `main`, and never push to `upstream` directly. There are no exceptions, including for maintainers.
+
 ### Logically related fixes go in the same PR
 
 Keep each PR focused. A small cluster of related fixes is fine. A bug fix plus a CSS cleanup plus a refactor plus a docs rewrite is not.
