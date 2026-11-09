@@ -20,19 +20,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.0] - 2026-11-09
 
 First public release. LeapAide is a self-hosted web interface for the Hermes
-Agent framework: a chat front end with an isolated browser desktop per
-session, a workspace file browser, scheduled tasks, and one-click access to
-the mainstream LLM providers.
+Agent framework: a chat front end with a shared, observable browser desktop,
+a workspace file browser, scheduled tasks, and one-click access to the
+mainstream LLM providers.
 
 ### Added
 
 - **Streaming chat over WebSocket** — tool calls and reasoning traces render
   inline as they arrive; the composer carries model, reasoning effort,
   personality, skills and workspace pickers.
-- **Isolated browser desktop per session** — pinning a session gives it a
-  dedicated Chrome instance and an observer window, so you can log in to a
-  site by hand (SMS code, mobile app) and watch the agent work; concurrent
-  sessions stay isolated through per-connection tab ownership.
+- **Shared, observable browser desktop** — one always-on Chrome desktop backs
+  every session, and the observer window shows it live so you can watch the
+  agent work and log in to a site by hand (SMS code, mobile app) instead of
+  burning tokens on login attempts. Concurrent sessions stay isolated: each
+  one owns its own tabs, and the receptionist refuses to let a session touch
+  another one's.
 - **Unified model identities** — every model is identified as
   `@provider:model`, so the same model reached through two providers is never
   confused for one another.
