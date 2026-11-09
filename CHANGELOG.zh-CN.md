@@ -17,12 +17,6 @@ title: 更新日志
 
 ## [Unreleased]
 
-### Added
-
-- **由更新日志生成双语发布说明** —— GitHub Release 页面由 CI 任务从 `CHANGELOG.md`
-  与 `CHANGELOG.zh-CN.md` 的 `## [x.y.z]` 小节渲染而成，发布页与更新日志因此不会漂移。
-  正文带有可点击切换的语言头部。
-
 ## [0.1.0] - 2026-11-09
 
 首个公开发布版。聊天前端配一套共享且可观察的浏览器桌面，另有工作区文件浏览、定时任务，
@@ -47,6 +41,9 @@ title: 更新日志
   直接执行 `gh pr`、`gh issue`、`gh api`。
 - **桌面端拼音输入** —— fcitx5 输入法 profile 会预置 `keyboard-us` 与 `pinyin`，
   `Shift+Space` 即可切换到中文。
+- **由更新日志生成双语发布说明** —— GitHub Release 页面由 CI 任务从 `CHANGELOG.md`
+  与 `CHANGELOG.zh-CN.md` 的 `## [x.y.z]` 小节渲染而成，发布页与更新日志因此不会漂移。
+  正文带有可点击切换的语言头部。
 
 ### Changed
 

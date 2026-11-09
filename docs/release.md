@@ -36,7 +36,7 @@ publishes the release body itself.
 
 ---
 
-## Cutting a Release
+## Creating a Release
 
 ### 1. Write the changelog entry
 
@@ -55,6 +55,12 @@ becomes:
 ```
 ## [0.2.0] - 2026-12-01
 ```
+
+If a section for that version already exists, move the pending entries into it
+instead of renaming the anchor: the changelog carries one section per version.
+Two sections with the same heading break the pairing gate — the record keys
+sections by heading path, so a repeated path is a hard error — and the
+renderer, which takes the first match, would publish only half of the release.
 
 Then re-record the consistency digests:
 

@@ -17,13 +17,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- **Bilingual release notes from the changelog** — the GitHub Release page is
-  rendered from the `## [x.y.z]` section of `CHANGELOG.md` and
-  `CHANGELOG.zh-CN.md` by a CI job, so the release page and the changelog
-  cannot drift apart. The body carries a click-to-switch language header.
-
 ## [0.1.0] - 2026-11-09
 
 First public release. A chat front end with a shared, observable browser
@@ -56,6 +49,10 @@ the mainstream LLM providers.
   directly.
 - **Pinyin input in the desktop** — the fcitx5 input profile is seeded with
   `keyboard-us` and `pinyin`, so `Shift+Space` switches to Chinese.
+- **Bilingual release notes from the changelog** — the GitHub Release page is
+  rendered from the `## [x.y.z]` section of `CHANGELOG.md` and
+  `CHANGELOG.zh-CN.md` by a CI job, so the release page and the changelog
+  cannot drift apart. The body carries a click-to-switch language header.
 
 ### Changed
 

@@ -12,15 +12,12 @@
 /changelog/unreleased:
   en: e3b0c44298fc1c14
   zh: e3b0c44298fc1c14
-/changelog/unreleased/added:
-  en: 0586c050c6eaa042
-  zh: 2111f833feb3342d
 /changelog/010-2026-11-09:
   en: 4e231d85d1005d3b
   zh: f5b61224294cf509
 /changelog/010-2026-11-09/added:
-  en: 5d2de3045c4db4e2
-  zh: d65e7fb11da5ad30
+  en: d0b7c568472b7975
+  zh: 51f4375b04b12586
 /changelog/010-2026-11-09/changed:
   en: f8932ea65d69edba
   zh: c786610a234b5287
