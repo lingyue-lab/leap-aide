@@ -60,50 +60,16 @@ See [docs/architecture.md](docs/architecture.md).
 ---
 
 ## Commit Conventions
-Do not create git commits proactively unless the user asks.
-
-Every change goes through a pull request — never push directly to `main`, and never to `upstream`. Push the branch to `origin` (your fork) and open a PR against `main` on `upstream`. There are no exceptions.
-
-Creating a code commit goes through the following steps.
-
-Step 1: Read and understand the code changes
-Decide which files need to be committed and stage them with `git add`. If you are unsure which files to `git add`, clarify with the user.
-After `git add`, run `git diff --staged` and fully understand the main changes across all staged files — what was changed and why.
-
-Step 2: Read the commit convention template
-Read the `.github/commit-template.txt` file in the repo root and understand the conventions it defines:
-
-- Type (feat, fix, docs, etc.)
-- Subject format (imperative mood, lowercase first letter, at most 72 characters, no trailing period)
-- Body is required (must include Why, How, Impact)
-- Footer conventions (Closes, BREAKING CHANGE, Co-Authored-By, etc.)
-- If .github/commit-template.txt does not exist, print an error and abort.
-
-Step 3: Generate a commit message that follows the conventions
-Based on the change diff from Step 1 and the template conventions from Step 2, generate a git commit message that strictly satisfies the requirements.
-Requirements:
-
-- Language: English
-- Example commit log:
-```
-feat(auth): add password reset functionality
-
-Currently users cannot reset their password when they forget it,
-leading to account lockouts and increased support tickets.
-
-Implement a complete password reset flow:
-
-Add forgot password endpoint that sends reset link via email
-
-Create password reset form with token validation
-
-Add email notification service with rate limiting
-
-Closes #234
-Co-Authored-By: Jane Doe jane@example.com
-```
-
-Step 4: Run `git commit` with the generated message
+- Do not create git commits proactively unless the user asks.
+- Every change goes through a pull request — never push directly to `main`, and never to `upstream`. Push the branch to `origin` (your fork) and open a PR against `main` on `upstream`. There are no exceptions.
+- Pull requests are merged with squash and merge: the squashed commit message must reflect every commit in the pull request. The merge dialog's `Commit title` holds the subject, and its `Commit message` field must not repeat it.
+- A pull request does not have to be linked to an issue.
+- The commit log must follow `.github/commit-template.txt`.
+- The commit log must be written in English.
+- Creating a commit goes through these steps:
+  1. Read and understand the code changes — stage them with `git add` (ask the user which files belong when unsure), then run `git diff --staged` and understand what changed across all staged files and why.
+  2. Read `.github/commit-template.txt` in the repo root and follow the conventions it defines: type (feat, fix, docs, etc.); subject format (imperative mood, lowercase first letter, at most 72 characters, no trailing period); body (required — must include Why, How, Impact); footer conventions (Closes, BREAKING CHANGE, Co-Authored-By, etc.).
+  3. Run `git commit` with the generated message.
 
 ---
 
