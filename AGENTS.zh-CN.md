@@ -60,50 +60,17 @@ bash scripts/build.sh
 ---
 
 ## 代码提交规范
-不要主动创建 git commit，除非用户要求。
 
-所有改动都必须经过 PR——不要直接推送到 `main`，也不要直接推送到 `upstream`。把分支推送到 `origin`（你的 fork），再向 `upstream` 的 `main` 发起 PR。没有例外。
-
-代码 commit 创建分为以下几个步骤
-
-步骤 1：读取并理解代码变更
-判断哪些文件需要被提交，使用 `git add` 添加这些变更文件，如果不确定哪些文件需要 `git add`，向用户 Clarify。
-完成 `git add` 后，然后执行`git diff --staged`，充分理解全部变更文件的主要变更内容，做了哪些改动。
-
-步骤 2：读取提交规范模板
-读取项目根目录下的 `.github/commit-template.txt`文件内容，理解其中定义的规范：
-
-- Type 类型（feat、fix、docs 等）
-- Subject 格式要求（祈使语气、首字母小写、不超过 72 字符、不加句号）
-- Body 必填（必须包含 Why、How、Impact 三部分）
-- Footer 规范（Closes、BREAKING CHANGE、Co-Authored-By 等）
-- 如果.github/commit-template.txt文件不存在，则输出错误并终止。
-
-步骤 3：生成符合规范的提交信息
-基于步骤 1 获取的变更 Diff 内容和步骤 2的模板规范，生成一条严格符合要求的 git 提交信息。
-生成要求：
-
-- 语言：英文
-- commit log示例：
-```
-feat(auth): add password reset functionality
-
-Currently users cannot reset their password when they forget it,
-leading to account lockouts and increased support tickets.
-
-Implement a complete password reset flow:
-
-Add forgot password endpoint that sends reset link via email
-
-Create password reset form with token validation
-
-Add email notification service with rate limiting
-
-Closes #234
-Co-Authored-By: Jane Doe jane@example.com
-```
-
-步骤 4：使用生成的提交信息执行 `git commit`
+- 不要主动创建 git commit，除非用户要求。
+- 所有改动都必须经过 PR——不要直接推送到 `main`，也不要直接推送到 `upstream`。把分支推送到 `origin`（你的 fork），再向 `upstream` 的 `main` 发起 PR。没有例外。
+- Pull Request 合并采用 `squash and merge` 模式：合并后的 commit message 必须准确反映该 Pull Request 中的全部 commit；合并对话框的 `Commit title` 写 subject，`Commit message` 字段中不得重复 subject。
+- Pull Request 可以不关联 Issue。
+- git commit log 必须遵守 `.github/commit-template.txt` 模板要求。
+- git commit log 必须使用英文。
+- 代码 commit 创建分为以下几个步骤：
+  1. 读取并理解代码变更：使用 `git add` 添加变更文件（不确定哪些文件需要 `git add` 时向用户 Clarify），然后执行 `git diff --staged`，充分理解全部变更文件的主要变更内容，做了哪些改动。
+  2. 读取项目根目录下的 `.github/commit-template.txt` 并遵守其中定义的规范：Type 类型（feat、fix、docs 等）；Subject 格式（祈使语气、首字母小写、不超过 72 字符、不加句号）；Body 必填（必须包含 Why、How、Impact 三部分）；Footer 规范（Closes、BREAKING CHANGE、Co-Authored-By 等）。
+  3. 使用生成的提交信息执行 `git commit`。
 
 ---
 
