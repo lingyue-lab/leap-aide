@@ -162,6 +162,12 @@ See [docs/architecture.md](docs/architecture.md).
 
 ---
 
+## Releases
+
+See [docs/release.md](docs/release.md).
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).

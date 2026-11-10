@@ -45,6 +45,7 @@ See [docs/architecture.md](docs/architecture.md).
 | Architecture + ADRs | [docs/architecture.md](docs/architecture.md) | [docs/architecture.zh-CN.md](docs/architecture.zh-CN.md) |
 | Testing guide | [docs/testing.md](docs/testing.md) | [docs/testing.zh-CN.md](docs/testing.zh-CN.md) |
 | Roadmap | [docs/roadmap.md](docs/roadmap.md) | [docs/roadmap.zh-CN.md](docs/roadmap.zh-CN.md) |
+| Release process | [docs/release.md](docs/release.md) | [docs/release.zh-CN.md](docs/release.zh-CN.md) |
 
 ---
 
@@ -60,6 +61,8 @@ See [docs/architecture.md](docs/architecture.md).
 
 ## Commit Conventions
 Do not create git commits proactively unless the user asks.
+
+Every change goes through a pull request — never push directly to `main`, and never to `upstream`. Push the branch to `origin` (your fork) and open a PR against `main` on `upstream`. There are no exceptions.
 
 Creating a code commit goes through the following steps.
 

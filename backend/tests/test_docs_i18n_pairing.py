@@ -28,6 +28,7 @@ PAIRS = [
     (DOCS_DIR / "architecture.md", DOCS_DIR / "architecture.zh-CN.md"),
     (DOCS_DIR / "roadmap.md", DOCS_DIR / "roadmap.zh-CN.md"),
     (DOCS_DIR / "testing.md", DOCS_DIR / "testing.zh-CN.md"),
+    (DOCS_DIR / "release.md", DOCS_DIR / "release.zh-CN.md"),
     (REPO_ROOT / "README.md", REPO_ROOT / "README.zh-CN.md"),
     (REPO_ROOT / "AGENTS.md", REPO_ROOT / "AGENTS.zh-CN.md"),
     (REPO_ROOT / "CONTRIBUTING.md", REPO_ROOT / "CONTRIBUTING.zh-CN.md"),
@@ -256,6 +257,50 @@ def test_detects_new_doc_without_chinese(tmp_path):
     assert proc.returncode != 0, "incomplete document was not detected"
     assert "missing Chinese companion" in proc.stderr, proc.stderr
     assert "missing consistency record" in proc.stderr, proc.stderr
+
+
+# ── repeated section titles ─────────────────────────────────────────────
+
+def test_repeated_section_titles_are_kept_apart(tmp_path):
+    """Two sections may carry the same title under different parents.
+
+    A changelog gives every release its own "Added" / "Changed" / "Fixed",
+    so the second release repeats the titles of the first. The record keys
+    are heading paths, not bare slugs — with flat slugs the second release
+    collided and the gate died on a duplicate-slug error, which is exactly
+    what a release cut would hit.
+    """
+    anchor = tmp_path / "CHANGELOG.md"
+    companion = tmp_path / "CHANGELOG.zh-CN.md"
+    anchor.write_text(
+        "---\ntitle: Changelog\n---\n\n"
+        '<div align="center">\n\n**English** | [中文](CHANGELOG.zh-CN.md)\n\n'
+        "</div>\n\n"
+        "# Changelog\n\n"
+        "## [0.1.0] - 2026-01-01\n\nFirst release.\n\n"
+        "### Added\n\n- One.\n\n### Fixed\n\n- Two.\n\n"
+        "## [0.2.0] - 2026-02-01\n\nSecond release.\n\n"
+        "### Added\n\n- Three.\n\n### Fixed\n\n- Four.\n",
+        encoding="utf-8")
+    companion.write_text(
+        "---\ntitle: 更新日志\n---\n\n"
+        '<div align="center">\n\n[English](CHANGELOG.md) | **中文**\n\n'
+        "</div>\n\n"
+        "# 更新日志\n\n"
+        "## [0.1.0] - 2026-01-01\n\n第一次发布。\n\n"
+        "### Added\n\n- 一。\n\n### Fixed\n\n- 二。\n\n"
+        "## [0.2.0] - 2026-02-01\n\n第二次发布。\n\n"
+        "### Added\n\n- 三。\n\n### Fixed\n\n- 四。\n",
+        encoding="utf-8")
+
+    write = _run_in(tmp_path, "--write", "CHANGELOG.md")
+    assert write.returncode == 0, write.stderr
+    verify = _run_in(tmp_path, "CHANGELOG.md")
+    assert verify.returncode == 0, verify.stderr
+
+    record = (tmp_path / "CHANGELOG.i18n.yaml").read_text(encoding="utf-8")
+    assert "010-2026-01-01/added" in record, record
+    assert "020-2026-02-01/added" in record, record
 
 
 # ── the waiver escape hatch ─────────────────────────────────────────────

@@ -1,5 +1,5 @@
 # Bilingual-pair consistency record for roadmap.md / roadmap.zh-CN.md.
-# Per heading-slug section: sha256-16 of prose outside code blocks.
+# Per heading-slug path: sha256-16 of prose outside code blocks.
 # Editing EITHER side requires aligning the OTHER side first, then
 # re-recording:
 #   python3 backend/scripts/check_translation_pairing.py --write docs/roadmap.md
@@ -9,15 +9,15 @@
 /leapaide-roadmap:
   en: f8b217052b7a9576
   zh: b94ec040d075f4c0
-/sprint-history:
+/leapaide-roadmap/sprint-history:
   en: e3b0c44298fc1c14
   zh: e3b0c44298fc1c14
-/v010:
+/leapaide-roadmap/sprint-history/v010:
   en: b5f6b77554ca28fc
   zh: 1579ec7e6c1e5ccb
-/v020:
+/leapaide-roadmap/sprint-history/v020:
   en: 7d9ebe0d8a397d51
   zh: 1c2b919b1081df97
-/v030:
+/leapaide-roadmap/sprint-history/v030:
   en: 2bcd19e774cc3f65
   zh: c3ea70ce31eb20a3

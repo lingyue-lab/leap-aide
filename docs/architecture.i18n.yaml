@@ -1,5 +1,5 @@
 # Bilingual-pair consistency record for architecture.md / architecture.zh-CN.md.
-# Per heading-slug section: sha256-16 of prose outside code blocks.
+# Per heading-slug path: sha256-16 of prose outside code blocks.
 # Editing EITHER side requires aligning the OTHER side first, then
 # re-recording:
 #   python3 backend/scripts/check_translation_pairing.py --write docs/architecture.md
@@ -9,57 +9,57 @@
 /leapaide-architecture-guide:
   en: 079f223be61b768f
   zh: 6e2869798941972e
-/system-overview:
+/leapaide-architecture-guide/system-overview:
   en: 4301fa2f9b6da454
   zh: 26a9881517ecff53
-/backend:
+/leapaide-architecture-guide/backend:
   en: 8f603e40f94278aa
   zh: 4d33d0a2ae9a9e57
-/api:
+/leapaide-architecture-guide/api:
   en: 0ff0e742e7ffa42a
   zh: 12b30339b544c65b
-/browser-desktop:
+/leapaide-architecture-guide/browser-desktop:
   en: eccf95704b78e933
   zh: 68c91886fe23e72d
-/the-pieces:
+/leapaide-architecture-guide/browser-desktop/the-pieces:
   en: 5e2a8a4a729cce0c
   zh: aed4fe50d6cd3d47
-/concurrent-sessions-isolated-by-tab:
+/leapaide-architecture-guide/browser-desktop/concurrent-sessions-isolated-by-tab:
   en: 093240139659bfc5
   zh: 48ee6d1617d25e9d
-/where-the-cdp-websocket-comes-from:
+/leapaide-architecture-guide/browser-desktop/where-the-cdp-websocket-comes-from:
   en: 1767642b8ebc62c3
   zh: 0001ad55cf1978fc
-/how-cdp-commands-are-forwarded:
+/leapaide-architecture-guide/browser-desktop/how-cdp-commands-are-forwarded:
   en: f53bd16215d1dbcc
   zh: 3058bde1fad86d42
-/how-the-websocket-is-closed:
+/leapaide-architecture-guide/browser-desktop/how-the-websocket-is-closed:
   en: 1e06191d38d83b20
   zh: dc9bc24037eba983
-/ports-files-and-environment:
+/leapaide-architecture-guide/browser-desktop/ports-files-and-environment:
   en: f44b52bf62ff3640
   zh: 8e5630e657c0e932
-/frontend-frontendsrc:
+/leapaide-architecture-guide/frontend-frontendsrc:
   en: 34acb110b74598a2
   zh: ce53e01ded400886
-/data-flow-full-chat-path:
+/leapaide-architecture-guide/data-flow-full-chat-path:
   en: c8181b582a88ecd4
   zh: 612d55b160a25da9
-/database:
+/leapaide-architecture-guide/database:
   en: 90638c14485bcdc9
   zh: 4e446332be87d702
-/configuration:
+/leapaide-architecture-guide/configuration:
   en: f67e0ca8ab2f8c0e
   zh: 17e201925016f490
-/model-catalog-refresh:
+/leapaide-architecture-guide/model-catalog-refresh:
   en: e6bec758ccbf976c
   zh: d32dc8b017fd4ad5
-/model-identity-providermodel:
+/leapaide-architecture-guide/model-identity-providermodel:
   en: c28b826917f9146d
   zh: 4dd17336e00feb87
-/architecture-decision-records-adr:
+/leapaide-architecture-guide/architecture-decision-records-adr:
   en: 32e7c9eb31529388
   zh: 8576cef337afced8
-/adr-001-example:
+/leapaide-architecture-guide/architecture-decision-records-adr/adr-001-example:
   en: f0c1cb4e934b88c8
   zh: c06e01c75a52c04a

@@ -45,6 +45,7 @@ bash scripts/build.sh
 | 架构 + ADR | [docs/architecture.md](docs/architecture.md) | [docs/architecture.zh-CN.md](docs/architecture.zh-CN.md) |
 | 测试指南 | [docs/testing.md](docs/testing.md) | [docs/testing.zh-CN.md](docs/testing.zh-CN.md) |
 | 路线图 | [docs/roadmap.md](docs/roadmap.md) | [docs/roadmap.zh-CN.md](docs/roadmap.zh-CN.md) |
+| 发布流程 | [docs/release.md](docs/release.md) | [docs/release.zh-CN.md](docs/release.zh-CN.md) |
 
 ---
 
@@ -60,6 +61,8 @@ bash scripts/build.sh
 
 ## 代码提交规范
 不要主动创建 git commit，除非用户要求。
+
+所有改动都必须经过 PR——不要直接推送到 `main`，也不要直接推送到 `upstream`。把分支推送到 `origin`（你的 fork），再向 `upstream` 的 `main` 发起 PR。没有例外。
 
 代码 commit 创建分为以下几个步骤
 

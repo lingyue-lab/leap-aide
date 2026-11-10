@@ -1,0 +1,38 @@
+# Bilingual-pair consistency record for release.md / release.zh-CN.md.
+# Per heading-slug path: sha256-16 of prose outside code blocks.
+# Editing EITHER side requires aligning the OTHER side first, then
+# re-recording:
+#   python3 backend/scripts/check_translation_pairing.py --write docs/release.md
+/:
+  en: 68ea78385e291252
+  zh: 78d7e44ffb92bea3
+/leapaide-release-process:
+  en: deabc7aa14991d05
+  zh: fdb3df49d5af151b
+/leapaide-release-process/one-source-of-truth:
+  en: 30bc5dda66f9843f
+  zh: cb3766983e039037
+/leapaide-release-process/creating-a-release:
+  en: e3b0c44298fc1c14
+  zh: e3b0c44298fc1c14
+/leapaide-release-process/creating-a-release/1-write-the-changelog-entry:
+  en: 9dfe6dae3c5a55f5
+  zh: aa52e446a31f26d2
+/leapaide-release-process/creating-a-release/2-merge-through-a-pull-request:
+  en: 74708d44cb799f46
+  zh: 4593cd9add9be0a8
+/leapaide-release-process/creating-a-release/3-tag-the-release:
+  en: dc27110b2043c520
+  zh: b3c47f068d4a9222
+/leapaide-release-process/creating-a-release/4-the-release-page-appears:
+  en: 69eaeb8642007594
+  zh: 75dc13a3ecdb0c69
+/leapaide-release-process/previewing-the-release-notes:
+  en: a61c5b20bf1b27e0
+  zh: 07bbe85a889e33ec
+/leapaide-release-process/what-the-release-job-does-not-do:
+  en: e3a4427ff730cb11
+  zh: 85d4349374356a1a
+/leapaide-release-process/troubleshooting:
+  en: 40420f5136f15842
+  zh: b3323cf2191a37c5

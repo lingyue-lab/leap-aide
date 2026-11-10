@@ -111,3 +111,94 @@ jobs:
           "${ba[@]}" tag "${image}:${version}" "${image}:latest"
           "${ba[@]}" push "${image}:${version}"
           "${ba[@]}" push "${image}:latest"
+
+  # The GitHub Release page is a mirror of the changelog, never a second
+  # source of truth: the body is rendered from the `## [x.y.z]` section of
+  # CHANGELOG.md / CHANGELOG.zh-CN.md by scripts/release_notes.py.
+  #
+  # GitHub's own "Generate release notes" is deliberately not used. It lists
+  # merged pull requests — a pull-request-level, English-only view — while
+  # the changelog is a user-level, bilingual one. Two hand-maintained
+  # descriptions of the same release drift; one derived from the other
+  # cannot.
+  #
+  # `needs:` the image job, so the release page only appears once the
+  # runtime image for that tag is in the registry.
+  publish-release:
+    name: Publish the GitHub release
+    needs: release-runtime-image
+    runs-on: ubuntu-latest
+    permissions:
+      # Creating and editing a release needs write access to the repository
+      # contents; the image job only needed read.
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history + tags: the renderer looks up the previous tag to
+          # build the "Full Changelog" compare link, and the tag message
+          # becomes the release title.
+          fetch-depth: 0
+
+      - name: Render the bilingual release body from the changelog
+        id: render
+        env:
+          REPO_URL: https://github.com/${{ github.repository }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # Same grammar as the image job, so both agree on what a usable
+          # release tag is. This job re-derives the version rather than
+          # consuming the image job's output: the two jobs do not share
+          # state, and a tag that the image job rejected must not produce a
+          # release page either.
+          if ! [[ "$version" =~ ^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$ ]]; then
+            echo "::error::ref '${GITHUB_REF_NAME}' is not a usable release tag — expected e.g. v0.1.0"
+            exit 1
+          fi
+          python3 scripts/release_notes.py \
+            --version "$version" \
+            --repo-url "$REPO_URL" \
+            --out "$RUNNER_TEMP/release-notes.md"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.render.outputs.version }}
+          NOTES: ${{ runner.temp }}/release-notes.md
+        run: |
+          # An annotated tag carries the release title in its message; a
+          # lightweight tag carries a commit subject instead, which is not a
+          # title. Fall back to the bare version in that case.
+          title=""
+          if [ "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME" 2>/dev/null)" = "tag" ]; then
+            title="$(git for-each-ref --format='%(contents:subject)' "refs/tags/$GITHUB_REF_NAME")"
+          fi
+          if [ -z "$title" ]; then
+            title="LeapAide v$VERSION"
+          fi
+
+          # Pre-release versions (v0.2.0-rc1) are marked as such, so they
+          # do not take the "Latest" badge away from the stable release.
+          prerelease_flag=""
+          if [[ "$VERSION" =~ (alpha|beta|rc) ]]; then
+            prerelease_flag="--prerelease"
+          fi
+
+          # An existing release is overwritten rather than skipped: the
+          # changelog is the source of truth, so a hand-edited body is
+          # drift and has to be corrected.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" \
+              --title "$title" \
+              --notes-file "$NOTES" \
+              $prerelease_flag
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "$title" \
+              --notes-file "$NOTES" \
+              --verify-tag \
+              $prerelease_flag
+          fi
+
