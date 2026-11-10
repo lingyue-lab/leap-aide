@@ -19,22 +19,22 @@
   en: 0ff0e742e7ffa42a
   zh: 12b30339b544c65b
 /leapaide-architecture-guide/browser-desktop:
-  en: eccf95704b78e933
+  en: 00f2b3fbe75b918a
   zh: 68c91886fe23e72d
 /leapaide-architecture-guide/browser-desktop/the-pieces:
-  en: 5e2a8a4a729cce0c
+  en: 952040b2dd50a458
   zh: aed4fe50d6cd3d47
 /leapaide-architecture-guide/browser-desktop/concurrent-sessions-isolated-by-tab:
-  en: 093240139659bfc5
+  en: dc9ed49d3c67aa27
   zh: 48ee6d1617d25e9d
 /leapaide-architecture-guide/browser-desktop/where-the-cdp-websocket-comes-from:
-  en: 1767642b8ebc62c3
-  zh: 0001ad55cf1978fc
+  en: 108788e44ee1bdb6
+  zh: e23c9f9cf2be0720
 /leapaide-architecture-guide/browser-desktop/how-cdp-commands-are-forwarded:
-  en: f53bd16215d1dbcc
+  en: 18aded62e7a1057b
   zh: 3058bde1fad86d42
 /leapaide-architecture-guide/browser-desktop/how-the-websocket-is-closed:
-  en: 1e06191d38d83b20
+  en: 1ce3194257c6d5e1
   zh: dc9bc24037eba983
 /leapaide-architecture-guide/browser-desktop/ports-files-and-environment:
   en: f44b52bf62ff3640
@@ -52,11 +52,11 @@
   en: f67e0ca8ab2f8c0e
   zh: 17e201925016f490
 /leapaide-architecture-guide/model-catalog-refresh:
-  en: e6bec758ccbf976c
-  zh: d32dc8b017fd4ad5
+  en: 46576e71186bd1cc
+  zh: bf1c26b4f87036b0
 /leapaide-architecture-guide/model-identity-providermodel:
-  en: c28b826917f9146d
-  zh: 4dd17336e00feb87
+  en: 42b5ae50aa631d51
+  zh: 553bcb68f3cc6311
 /leapaide-architecture-guide/architecture-decision-records-adr:
   en: 32e7c9eb31529388
   zh: 8576cef337afced8

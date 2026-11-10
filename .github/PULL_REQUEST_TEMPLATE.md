@@ -1,8 +1,7 @@
 <!--
 Thanks for contributing to LeapAide!
 
-Please fill out the sections below. See CONTRIBUTING.md for PR guidelines
-and .github/commit-template.txt for the expected description style.
+Please fill out the sections below. See CONTRIBUTING.md for PR guidelines and .github/commit-template.txt for the expected description style.
 -->
 
 ## Why
@@ -26,8 +25,7 @@ and .github/commit-template.txt for the expected description style.
 
 ## How to Test
 
-<!-- How did you verify this change? e.g. "npm test + manual check of the
-chat panel per docs/testing.md". PRs must be verified locally before review. -->
+<!-- How did you verify this change? e.g. "npm test + manual check of the chat panel per docs/testing.md". PRs must be verified locally before review. -->
 
 ## Screenshots / Recording
 
@@ -35,16 +33,14 @@ chat panel per docs/testing.md". PRs must be verified locally before review. -->
 
 ## Risks & Follow-ups
 
-<!-- Breaking changes, migration notes, performance risks, or follow-up
-work you deliberately deferred. Delete this section if none. -->
+<!-- Breaking changes, migration notes, performance risks, or follow-up work you deliberately deferred. Delete this section if none. -->
 
 ## Checklist
 
 - [ ] The PR is focused — one bug fix or one tightly scoped improvement
 - [ ] Local tests pass (see [docs/testing.md](../docs/testing.md))
 - [ ] User-visible changes include a screenshot or short recording above
-- [ ] Behavior/architecture/testing changes are reflected in both doc
-      languages (`*.md` and `*.zh-CN.md`) in this PR
+- [ ] Behavior/architecture/testing changes are reflected in both doc languages (`*.md` and `*.zh-CN.md`) in this PR
 - [ ] New dependencies or infrastructure are justified in the description
 
 <!--

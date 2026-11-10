@@ -55,9 +55,7 @@ Keep each PR focused. A small cluster of related fixes is fine. A bug fix plus a
 
 Complete all tests locally before every PR; see [docs/testing.md](docs/testing.md) for how.
 
-CI re-runs the same suites automatically on every push to a ready PR targeting `main`,
-and again on every push to `main` itself. That check reports the result but is not yet
-required to merge.
+CI re-runs the same suites automatically on every push to a ready PR targeting `main`, and again on every push to `main` itself. That check reports the result but is not yet required to merge.
 
 ### Clear PR description
 
@@ -80,28 +78,16 @@ If your change alters behavior, architecture, testing, installation, or user-fac
 
 **Every doc exists as a bilingual pair** (`docs/foo.md` + `docs/foo.zh-CN.md`). A content change must update both language versions in the same PR — a PR that edits only one language is incomplete.
 
-This is enforced mechanically, not just by convention. Each bilingual pair carries a
-consistency record (`docs/foo.i18n.yaml`) holding one `sha256-16` digest per section
-for both languages, and `backend/scripts/check_translation_pairing.py` checks it.
-CI runs that check on every pull request that touches a bilingual pair: it reports
-a failure when a pull request changes one language without the other, or adds a
-document without its Chinese companion or its record. `main` is not
-branch-protected yet, so the check reports rather than blocks the merge.
+This is enforced mechanically, not just by convention. Each bilingual pair carries a consistency record (`docs/foo.i18n.yaml`) holding one `sha256-16` digest per section for both languages, and `backend/scripts/check_translation_pairing.py` checks it. CI runs that check on every pull request that touches a bilingual pair: it reports a failure when a pull request changes one language without the other, or adds a document without its Chinese companion or its record. `main` is not branch-protected yet, so the check reports rather than blocks the merge.
 
 Adding a document:
 
-1. Create `docs/foo.md` and `docs/foo.zh-CN.md`, each starting with a YAML
-   frontmatter block and the language switcher.
+1. Create `docs/foo.md` and `docs/foo.zh-CN.md`, each starting with a YAML frontmatter block and the language switcher.
 2. Mirror the heading structure exactly — same levels, same order.
-3. Keep fenced code blocks byte-identical across the pair — including the
-   comments inside them, which stay in English on both sides.
-4. Run `python3 backend/scripts/check_translation_pairing.py --write docs/foo.md`
-   to create the record, and commit all three files.
+3. Keep fenced code blocks byte-identical across the pair — including the comments inside them, which stay in English on both sides.
+4. Run `python3 backend/scripts/check_translation_pairing.py --write docs/foo.md` to create the record, and commit all three files.
 
-A deliberate one-sided edit — a typo fix with no Chinese counterpart — is declared
-with a `waiver:` stanza in the pair's record (`side`, `reason`, `expires`). The
-waiver is honoured by the co-change gate only, it shows up in the pull-request
-diff, and it expires on its own so it cannot silently weaken the gate.
+A deliberate one-sided edit — a typo fix with no Chinese counterpart — is declared with a `waiver:` stanza in the pair's record (`side`, `reason`, `expires`). The waiver is honoured by the co-change gate only, it shows up in the pull-request diff, and it expires on its own so it cannot silently weaken the gate.
 
 Common files:
 
@@ -126,3 +112,9 @@ LeapAide is deliberately:
 - Server logic belongs in `backend/app/api/`; keep `server.py` thin.
 - Frontend behavior belongs in the existing Zustand stores and components under `frontend/src/`.
 - Prefer extending existing patterns over introducing parallel abstractions.
+
+### Write markdown unwrapped
+
+Markdown in this repository is written one line per paragraph, one line per list item, one line per table row. Do not hard-wrap prose at a fixed column.
+
+Markdown is read rendered — on the repository page, in a pull request, in the release notes — and every reader wraps it to their own width. A hard-wrapped source breaks the text at the author's column instead of the reader's, and it splits a single edited sentence across two diff hunks. Code blocks, tables and the language switcher are unaffected; only prose is unwrapped.

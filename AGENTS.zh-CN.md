@@ -56,6 +56,7 @@ bash scripts/build.sh
 - 禁止使用原生 `confirm()`/`prompt()` — 使用 `showConfirmDialog()`/`showPromptDialog()`。
 - 路径穿越防护：文件操作始终使用 `safe_resolve(root, requested)`。
 - 双语配对由 `backend/scripts/check_translation_pairing.py` 强制 —— 推送前跑 `--check-all`、`--check-tree docs` 与 `--check-tree . --depth 1`；每篇新增文档都要带上 `.zh-CN.md` 配套文件和 `.i18n.yaml` 记录。
+- Markdown 一律不折行：一个段落一行，一个列表项一行，表格一行一行。散文是渲染后阅读的，源码不该按固定列宽断行。
 
 ---
 
