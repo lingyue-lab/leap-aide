@@ -135,9 +135,7 @@ hermes-agent SDK            AIAgent.run_conversation(), tools, gateway
 Chrome 不会直接暴露任何 CDP 调试地址，而是由接待员提供 CDP WebSocket：
 
 1. 客户端向接待员发 `GET /json/version?sid=<session_id>`。没有 sid 的请求会得到 `400`，并在响应体里写明要求的 URL 形状。
-2. 接待员返回
-   `webSocketDebuggerUrl: ws://127.0.0.1:6900/devtools/browser/global?sid=<session_id>`。
-   sid 被嵌进 URL，于是下游工具重连时身份不丢，不必在每一次通信时都重新声明自己的身份。
+2. 接待员返回 `webSocketDebuggerUrl: ws://127.0.0.1:6900/devtools/browser/global?sid=<session_id>`。sid 被嵌进 URL，于是下游工具重连时身份不丢，不必在每一次通信时都重新声明自己的身份。
 3. 客户端打开这个 WebSocket。接待员接受连接、登记一条连接记录（id、sid、对端地址），开始读帧。
 
 接受这一步有几点特别：
@@ -264,155 +262,35 @@ Chrome 不会直接暴露任何 CDP 调试地址，而是由接待员提供 CDP 
 
 ## 模型目录与刷新
 
-Provider 的展示名、别名、基线模型列表、端点、认证头与刷新策略统一存放在
-单个 JSON 文件 `backend/app/api/data/model_catalog.json`（schema v1），
-由 `api/model_catalog.py` 加载并校验。曾镜像这些数据的 Python 表
-（`_PROVIDER_MODELS`、`_FALLBACK_MODELS`、`_PROVIDER_DISPLAY`、
-`_PROVIDER_ALIASES`、`_OPENAI_COMPAT_ENDPOINTS`）已删除——JSON 文件是
-*某个 provider 提供哪些模型* 的唯一真相源。
+Provider 的展示名、别名、基线模型列表、端点、认证头与刷新策略统一存放在单个 JSON 文件 `backend/app/api/data/model_catalog.json`（schema v1），由 `api/model_catalog.py` 加载并校验。曾镜像这些数据的 Python 表（`_PROVIDER_MODELS`、`_FALLBACK_MODELS`、`_PROVIDER_DISPLAY`、`_PROVIDER_ALIASES`、`_OPENAI_COMPAT_ENDPOINTS`）已删除——JSON 文件是 *某个 provider 提供哪些模型* 的唯一真相源。
 
 要点：
 
-- **每 provider 记录**：`display_name`、`is_custom`、`aliases[]`、
-  `auth{type,env_var(s),header}`（Anthropic 用 `x-api-key`，其余 Bearer）、
-  `endpoint{base_url,models_path,trust_local}`、
-  `refresh{mode: api|none, membership: replace|curated, timeout_s}`、
-  `default_model`，以及人工维护的 `models[]` 初始列表（模型 id 以选择器使用的
-  `@provider:model` 形态存放；少数 provider 保留裸 id —— gemini、minimax、
-  openrouter，如 `MiniMax-M2.7`、`openai/gpt-5.4-mini` —— 在组装选择器时补上
-  `@provider:` 前缀，因此用户看到的 id 一律是 `@provider:model`）。对
-  `refresh.mode=none` 的 provider 它是唯一来源；对 `refresh.mode=api` 的
-  provider 它只是首启种子——一旦实时查询成功即被 API 结果整体取代）。
-- **自定义端点**：`is_custom`（默认 `false`）标记端点是用户自己的
-  OpenAI 兼容服务器、而非厂商 API 的 provider——随包目录里是 `ollama` 与
-  `lmstudio`。这类 provider 不需要 API key，且用户为它配置的 `base_url`
-  在切换默认模型时会保留（切到厂商 provider 仍然会清掉）。这个标记是数据，
-  不是硬编码的 slug 列表：`model_catalog.is_custom_provider()`。
-- **单一确定合并规则**（`resolve_provider_models`）：config.yaml 中显式的
-  `providers.<id>.models` 永远最优先且不参与查询。`membership=replace`
-  时实时查询成功的结果是唯一事实来源——成员与顺序以 API 为准，JSON 基线
-  仅为 API 仍在列出的 id 贡献展示标签（API 不再列出的模型消失，API 新增
-  的模型立即出现）；`membership=curated` 时取基线与实时 id 的交集。查询
-  失败或返回空列表时保留上次成功列表（内存或磁盘 envelope）或基线，绝不
-  清空分组。旧的“先试 agent、再试硬编码端点表、最后静态表”多级兜底已删除。
-- **刷新触发**复用现有 `/api/models` 构建机制（不新增后台线程）：24h TTL、
-  config.yaml 或 `model_catalog.json` mtime 变化、保存 key、启动预热。
-  `refresh.mode=api` 的 provider 并发查询（`ThreadPoolExecutor`，≤6 worker）
-  并按 provider 超时。资格判定仍以 key/OAuth 为准：目录中声明 API-key 认证的
-  provider 在没有 key 时会被移除——active provider 也不例外，因此删除 key 会
-  连同该 provider 的模型一起消失，而不是回退到 JSON 基线。没有 API-key 要求
-  的 provider（本地端点、未知/自定义 provider）在 active 时保留；自定义
-  `model.base_url` 拉取仍会重新加入其 slug。
-- **Picker 的 provider 提示**：`/api/models` 会给每个模型 ID 加上其所属
-  provider 的前缀（`@provider:model`），含 `/` 的 ID 也不例外（OpenRouter 的
-  `deepseek/deepseek-v4-flash` 变成
-  `@openrouter:deepseek/deepseek-v4-flash`），active provider 自己的模型同样
-  带前缀。裸名或只有 slash 的 ID 并不指明路由：
-  `resolve_model_provider()` 会剥掉与 `model.provider` 相同的前缀，因此没有
-  该提示时，只要 active provider 恰好是 `deepseek`，OpenRouter 的选择就会被
-  静默路由到 DeepSeek 直连 API。提示只在第一个冒号处切分，模型部分保留其余
-  slash 与冒号（如 `@ollama1:qwen3-vl:235b`）；
-  `POST /api/default-model` 在写入 config.yaml 前会把提示解析回
-  `model.default` + `model.provider`。
-- **会话存的模型与 picker 条目的形态**：picker 按 id 字面比较，因此会话存的
-  模型必须与它对应的目录条目同形，否则弹出的 model selection 里不会有任何
-  勾选。目录中的每个 id 都是 `@provider:model`，而
-  `normalize_model_prefix()` 会把 config.yaml 里的裸名或带命名空间的值
-  （`deepseek-flash`、`anthropic/claude-opus-4.6`）映射到实际提供该模型的
-  provider 身份上，会话存的正是这个身份。更早创建的会话可能仍是目录已不再
-  列出的形态（裸名，或其 provider 已下架的模型）：前端用
-  `findCatalogModelId()` 把存的 id 解析回目录条目以便勾选，而显示路径以
-  WebUI 自己维护的身份（`model__webui`）为准。该提示只是内部路由信息，不会
-  出现在界面文案里。
-- **磁盘 envelope**：模型缓存快照持久化
-  `{schema_version, active_provider, default_model,
-  default_model_available, default_model_provider_has_key, groups,
-  provider_models, fetched_at}`，重启后首个响应字段完整，并保留每
-  provider 的上次成功列表；旧的 `{仅 groups}` 文件仍可加载。
-- **默认模型可用性（issue #44）**：`/api/models` 返回
-  `default_model_available`（`true` / `false` / `null`）。该值在把配置的
-  默认模型注入 picker *之前*，由真实 provider 分组计算；未知时返回
-  `null`（config-only 响应、构建中或旧磁盘快照）。匹配限定在默认模型
-  自己的 provider 内（以 `model.provider` 为准；仅无 provider 的配置才
-  回退到按模型名比较），因此其他 provider 下的同名模型不会掩盖默认模型
-  已被移除的事实。分组列表为空（实时结果为空或所有 provider 都被拒绝）
-  时同样保持 `null`——除非默认模型所属 provider 是目录中需要 API key 的
-  provider 且当前没有 key，这是确定的失败。
-  配套字段 `default_model_provider_has_key`（`true` / `false` / `null`；
-  本地/OAuth/未知 provider 为 `null`）让 UI 能提示“provider 的 API key
-  已被删除”，而不是误报“provider 不再提供该模型”。配置的默认模型不可用时
-  仍会注入以便 UI 展示，并标记 `unavailable: true`；后端绝不会把它改写成
-  其他模型——只由 UI 提示。当 provider 分组随 key 一起消失时，composer
-  仍显示配置值并给出说明，而不是静默选中另一个模型；用户在 composer
-  中显式选择其他模型后，该提示消失，因为该选择会替代默认值用于当前会话。
-  SDK 原始的
-  “provider set in config.yaml but no API key” 错误会在两条流式失败路径中
-  被翻译为同一段面向 Settings 的提示。未显式指定模型的新会话通过
-  `get_default_model_for_new_session()` 解析：优先有效默认值（环境变量
-  `HERMES_MODEL` / `OPENAI_MODEL` / `LLM_MODEL` → config.yaml
-  `model.default` → 内置常量），仅当其为空时才使用目录中第一个可用模型。
-  Settings 通过 `POST /api/default-model` 保存该控件，由后端把 WebUI 内部
-  的 `@provider:model` 形式还原为 config.yaml 的 `model.default` +
-  `model.provider`。
-- **会话所用模型的可用性（issue #44 后续）**：目录只报告*配置默认模型*的
-  可用性，因此运行其他模型的既有会话会通过
-  `GET /api/models/availability?model=…` 向后端询问。返回值
-  `{model, provider, available, provider_has_key}` 基于实时 provider 分组
-  计算，匹配规则与默认模型一致，限定在模型自己的 provider 内：
-  `available` 为 `true` / `false` / `null`（未知——没有可比较的分组），
-  `provider_has_key` 为 `true` / `false` / `null`（该 provider 不使用
-  API key 鉴权）。即使目录没有分组，缺失的 key 也足以确定结论。composer
-  会保留会话自身的模型（标记为已失效）并说明原因，而不是静默高亮另一个
-  provider 的下一个可用模型——既有会话与 welcome 状态行为一致，后者会提示
-  配置默认模型不可用。目录内容变化时会重新查询，因此删除 provider 的
-  API key 后能立即反映出来。
-- **文案按会话语境而非模型取值决定**：全新对话用的是配置的默认模型，因此
-  说的是“默认模型”；既有会话用的是用户为它选定的模型，因此说的是“当前
-  模型”——即使两者恰好是同一个模型。composer 根据会话上下文判断（它知道
-  该对话是否有自己的模型），后端根据 session id 判断（`_handle_chat_start`
-  为 welcome 状态的首条消息新建会话，因此知道这是不是新对话）。
-  `streaming._missing_key_wording()` 为两条流式失败路径挑出对应的
-  label、message 与 hint。
-- **SSRF 防护**（`model_catalog._check_url_safe`）：scheme 白名单
-  （http/https）+ 拒绝解析到私网 IP 的主机名；已知本机主机
-  （ollama/localhost/lmstudio）、目录 `endpoint.trust_local` 与用户声明的
-  `custom_providers` 主机名可豁免。
-- **Z.ai 端点修复**：目录使用 `https://api.z.ai/api/paas/v4`
-  （旧硬编码 `api.z.ai/v1` 已 404）。同时新增已验证的火山方舟 provider
-  （`ark`，`ARK_API_KEY`）。
-- **维护脚本**：`scripts/sync_models.py` 从 OpenRouter 公开
-  `/api/v1/models` 端点拉取并生成基线草稿（`--map-labels` 保留已有 id 的
-  策展标签）。脚本只输出 JSON 片段供人工审核，绝不直接写目录文件，也不在
-  CI 中运行。
+- **每 provider 记录**：`display_name`、`is_custom`、`aliases[]`、`auth{type,env_var(s),header}`（Anthropic 用 `x-api-key`，其余 Bearer）、`endpoint{base_url,models_path,trust_local}`、`refresh{mode: api|none, membership: replace|curated, timeout_s}`、`default_model`，以及人工维护的 `models[]` 初始列表（模型 id 以选择器使用的 `@provider:model` 形态存放；少数 provider 保留裸 id —— gemini、minimax、openrouter，如 `MiniMax-M2.7`、`openai/gpt-5.4-mini` —— 在组装选择器时补上 `@provider:` 前缀，因此用户看到的 id 一律是 `@provider:model`）。对 `refresh.mode=none` 的 provider 它是唯一来源；对 `refresh.mode=api` 的 provider 它只是首启种子——一旦实时查询成功即被 API 结果整体取代）。
+- **自定义端点**：`is_custom`（默认 `false`）标记端点是用户自己的 OpenAI 兼容服务器、而非厂商 API 的 provider——随包目录里是 `ollama` 与 `lmstudio`。这类 provider 不需要 API key，且用户为它配置的 `base_url` 在切换默认模型时会保留（切到厂商 provider 仍然会清掉）。这个标记是数据，不是硬编码的 slug 列表：`model_catalog.is_custom_provider()`。
+- **单一确定合并规则**（`resolve_provider_models`）：config.yaml 中显式的 `providers.<id>.models` 永远最优先且不参与查询。`membership=replace` 时实时查询成功的结果是唯一事实来源——成员与顺序以 API 为准，JSON 基线仅为 API 仍在列出的 id 贡献展示标签（API 不再列出的模型消失，API 新增的模型立即出现）；`membership=curated` 时取基线与实时 id 的交集。查询失败或返回空列表时保留上次成功列表（内存或磁盘 envelope）或基线，绝不清空分组。旧的“先试 agent、再试硬编码端点表、最后静态表”多级兜底已删除。
+- **刷新触发**复用现有 `/api/models` 构建机制（不新增后台线程）：24h TTL、config.yaml 或 `model_catalog.json` mtime 变化、保存 key、启动预热。`refresh.mode=api` 的 provider 并发查询（`ThreadPoolExecutor`，≤6 worker）并按 provider 超时。资格判定仍以 key/OAuth 为准：目录中声明 API-key 认证的 provider 在没有 key 时会被移除——active provider 也不例外，因此删除 key 会连同该 provider 的模型一起消失，而不是回退到 JSON 基线。没有 API-key 要求的 provider（本地端点、未知/自定义 provider）在 active 时保留；自定义 `model.base_url` 拉取仍会重新加入其 slug。
+- **Picker 的 provider 提示**：`/api/models` 会给每个模型 ID 加上其所属 provider 的前缀（`@provider:model`），含 `/` 的 ID 也不例外（OpenRouter 的 `deepseek/deepseek-v4-flash` 变成 `@openrouter:deepseek/deepseek-v4-flash`），active provider 自己的模型同样带前缀。裸名或只有 slash 的 ID 并不指明路由：`resolve_model_provider()` 会剥掉与 `model.provider` 相同的前缀，因此没有该提示时，只要 active provider 恰好是 `deepseek`，OpenRouter 的选择就会被静默路由到 DeepSeek 直连 API。提示只在第一个冒号处切分，模型部分保留其余 slash 与冒号（如 `@ollama1:qwen3-vl:235b`）；`POST /api/default-model` 在写入 config.yaml 前会把提示解析回 `model.default` + `model.provider`。
+- **会话存的模型与 picker 条目的形态**：picker 按 id 字面比较，因此会话存的模型必须与它对应的目录条目同形，否则弹出的 model selection 里不会有任何勾选。目录中的每个 id 都是 `@provider:model`，而 `normalize_model_prefix()` 会把 config.yaml 里的裸名或带命名空间的值（`deepseek-flash`、`anthropic/claude-opus-4.6`）映射到实际提供该模型的 provider 身份上，会话存的正是这个身份。更早创建的会话可能仍是目录已不再列出的形态（裸名，或其 provider 已下架的模型）：前端用 `findCatalogModelId()` 把存的 id 解析回目录条目以便勾选，而显示路径以 WebUI 自己维护的身份（`model__webui`）为准。该提示只是内部路由信息，不会出现在界面文案里。
+- **磁盘 envelope**：模型缓存快照持久化 `{schema_version, active_provider, default_model, default_model_available, default_model_provider_has_key, groups, provider_models, fetched_at}`，重启后首个响应字段完整，并保留每 provider 的上次成功列表；旧的 `{仅 groups}` 文件仍可加载。
+- **默认模型可用性（issue #44）**：`/api/models` 返回 `default_model_available`（`true` / `false` / `null`）。该值在把配置的默认模型注入 picker *之前*，由真实 provider 分组计算；未知时返回 `null`（config-only 响应、构建中或旧磁盘快照）。匹配限定在默认模型自己的 provider 内（以 `model.provider` 为准；仅无 provider 的配置才回退到按模型名比较），因此其他 provider 下的同名模型不会掩盖默认模型已被移除的事实。分组列表为空（实时结果为空或所有 provider 都被拒绝）时同样保持 `null`——除非默认模型所属 provider 是目录中需要 API key 的 provider 且当前没有 key，这是确定的失败。配套字段 `default_model_provider_has_key`（`true` / `false` / `null`；本地/OAuth/未知 provider 为 `null`）让 UI 能提示“provider 的 API key 已被删除”，而不是误报“provider 不再提供该模型”。配置的默认模型不可用时仍会注入以便 UI 展示，并标记 `unavailable: true`；后端绝不会把它改写成其他模型——只由 UI 提示。当 provider 分组随 key 一起消失时，composer 仍显示配置值并给出说明，而不是静默选中另一个模型；用户在 composer 中显式选择其他模型后，该提示消失，因为该选择会替代默认值用于当前会话。SDK 原始的 “provider set in config.yaml but no API key” 错误会在两条流式失败路径中被翻译为同一段面向 Settings 的提示。未显式指定模型的新会话通过 `get_default_model_for_new_session()` 解析：优先有效默认值（环境变量 `HERMES_MODEL` / `OPENAI_MODEL` / `LLM_MODEL` → config.yaml `model.default` → 内置常量），仅当其为空时才使用目录中第一个可用模型。Settings 通过 `POST /api/default-model` 保存该控件，由后端把 WebUI 内部的 `@provider:model` 形式还原为 config.yaml 的 `model.default` + `model.provider`。
+- **会话所用模型的可用性（issue #44 后续）**：目录只报告*配置默认模型*的可用性，因此运行其他模型的既有会话会通过 `GET /api/models/availability?model=…` 向后端询问。返回值 `{model, provider, available, provider_has_key}` 基于实时 provider 分组计算，匹配规则与默认模型一致，限定在模型自己的 provider 内：`available` 为 `true` / `false` / `null`（未知——没有可比较的分组），`provider_has_key` 为 `true` / `false` / `null`（该 provider 不使用 API key 鉴权）。即使目录没有分组，缺失的 key 也足以确定结论。composer 会保留会话自身的模型（标记为已失效）并说明原因，而不是静默高亮另一个 provider 的下一个可用模型——既有会话与 welcome 状态行为一致，后者会提示配置默认模型不可用。目录内容变化时会重新查询，因此删除 provider 的 API key 后能立即反映出来。
+- **文案按会话语境而非模型取值决定**：全新对话用的是配置的默认模型，因此说的是“默认模型”；既有会话用的是用户为它选定的模型，因此说的是“当前模型”——即使两者恰好是同一个模型。composer 根据会话上下文判断（它知道该对话是否有自己的模型），后端根据 session id 判断（`_handle_chat_start` 为 welcome 状态的首条消息新建会话，因此知道这是不是新对话）。`streaming._missing_key_wording()` 为两条流式失败路径挑出对应的 label、message 与 hint。
+- **SSRF 防护**（`model_catalog._check_url_safe`）：scheme 白名单（http/https）+ 拒绝解析到私网 IP 的主机名；已知本机主机（ollama/localhost/lmstudio）、目录 `endpoint.trust_local` 与用户声明的 `custom_providers` 主机名可豁免。
+- **Z.ai 端点修复**：目录使用 `https://api.z.ai/api/paas/v4` （旧硬编码 `api.z.ai/v1` 已 404）。同时新增已验证的火山方舟 provider （`ark`，`ARK_API_KEY`）。
+- **维护脚本**：`scripts/sync_models.py` 从 OpenRouter 公开 `/api/v1/models` 端点拉取并生成基线草稿（`--map-labels` 保留已有 id 的策展标签）。脚本只输出 JSON 片段供人工审核，绝不直接写目录文件，也不在 CI 中运行。
 
 ---
 
 ## 模型身份（`@provider:model`）
 
-WebUI 展示的每个模型都以 `@provider:model` 标识。provider 段按**第一个**
-冒号切分，因此网关命名空间（`@openrouter:anthropic/claude-opus-4.6`）与
-Ollama tag（`@ollama1:qwen3-vl:235b`）都能原样保留。
+WebUI 展示的每个模型都以 `@provider:model` 标识。provider 段按**第一个** 冒号切分，因此网关命名空间（`@openrouter:anthropic/claude-opus-4.6`）与 Ollama tag（`@ollama1:qwen3-vl:235b`）都能原样保留。
 
-- **存放位置**：身份存在 WebUI 自有的 `model__webui` 列里。SDK 自有的
-  `model` 列只保存裸模型 id——SDK 永远看不到 `@provider:` 前缀。
-- **唯一可路由形态**：裸 id、带命名空间的 `provider/model` 值或 `unknown`
-  都没有 provider 提示，无法路由，因此一律拒绝
-  （`Session._is_valid_model_identity`），而不是落到 config.yaml 的默认
-  端点。已废弃的 `@custom:<name>:model` 形式同样被拒绝——具名自定义
-  provider 用名称 slug 标识（`@ollama1:model`）。
-- **具名自定义 provider**：WebUI slug（名称小写、空格折叠为短横、`@ : /`
-  替换为短横）是存放与展示形态；交给 SDK 的则是 SDK 自己的
-  `custom:<slug>`（`config.sdk_custom_provider_id`）——SDK 依据该前缀
-  决定是否应用 `extra_body`、绕过内置 provider 遮蔽，且只接受自己的别名
-  集合。
-- **自定义端点**分两类。config.yaml 里声明的*具名* provider（`custom_providers:`）
-  用名称 slug 标识，交给 SDK 的是 `custom:<slug>`。*目录里的*自定义端点
-  （`is_custom`：`ollama`、`lmstudio`，以及合成的 `local` slug）保留目录
-  slug——SDK 认识这些名字——不需要 API key，且切换默认模型时保留用户为它
-  配置的 `base_url`。
-- **冷启动**：聊天开始路径会等待启动期目录构建（有界等待，由
-  `HERMES_WEBUI_COLD_START_WAIT_S` 控制）再决定是否拒绝本轮，因此冷启动
-  后的第一条消息不会以 "Session model is invalid" 收场。
+- **存放位置**：身份存在 WebUI 自有的 `model__webui` 列里。SDK 自有的 `model` 列只保存裸模型 id——SDK 永远看不到 `@provider:` 前缀。
+- **唯一可路由形态**：裸 id、带命名空间的 `provider/model` 值或 `unknown` 都没有 provider 提示，无法路由，因此一律拒绝（`Session._is_valid_model_identity`），而不是落到 config.yaml 的默认端点。已废弃的 `@custom:<name>:model` 形式同样被拒绝——具名自定义 provider 用名称 slug 标识（`@ollama1:model`）。
+- **具名自定义 provider**：WebUI slug（名称小写、空格折叠为短横、`@ : /` 替换为短横）是存放与展示形态；交给 SDK 的则是 SDK 自己的 `custom:<slug>`（`config.sdk_custom_provider_id`）——SDK 依据该前缀决定是否应用 `extra_body`、绕过内置 provider 遮蔽，且只接受自己的别名集合。
+- **自定义端点**分两类。config.yaml 里声明的*具名* provider（`custom_providers:`）用名称 slug 标识，交给 SDK 的是 `custom:<slug>`。*目录里的*自定义端点（`is_custom`：`ollama`、`lmstudio`，以及合成的 `local` slug）保留目录 slug——SDK 认识这些名字——不需要 API key，且切换默认模型时保留用户为它配置的 `base_url`。
+- **冷启动**：聊天开始路径会等待启动期目录构建（有界等待，由 `HERMES_WEBUI_COLD_START_WAIT_S` 控制）再决定是否拒绝本轮，因此冷启动后的第一条消息不会以 "Session model is invalid" 收场。
 
 ---
 

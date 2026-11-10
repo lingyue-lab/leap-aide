@@ -29,17 +29,11 @@ All unit tests are driven by `./scripts/run-test.sh` from the repo root:
 | `./scripts/run-test.sh setup` | — | Install all test dependencies (Python + frontend) | — |
 | `./scripts/run-test.sh clean` | — | Clean up stale test state and occupied ports | — |
 
-L2 domains (DOMAIN): `session` | `model` | `workspace` | `cron` | `i18n` | `ui`
-`streaming` | `auth` | `all`.
+L2 domains (DOMAIN): `session` | `model` | `workspace` | `cron` | `i18n` | `ui` `streaming` | `auth` | `all`.
 
-CI runs the same suites inside the testing image built from the repo `Dockerfile`
-(`.github/workflows/run-tests-in-testing-image.yml`): `backend full`, then
-`frontend full`.
+CI runs the same suites inside the testing image built from the repo `Dockerfile` (`.github/workflows/run-tests-in-testing-image.yml`): `backend full`, then `frontend full`.
 
-Every push to a ready PR targeting `main` runs them automatically, and so does
-every push to `main` itself. Draft PRs are skipped, and a PR with a merge
-conflict gets no run at all. This check is not yet required to merge — it
-reports, it does not block.
+Every push to a ready PR targeting `main` runs them automatically, and so does every push to `main` itself. Draft PRs are skipped, and a PR with a merge conflict gets no run at all. This check is not yet required to merge — it reports, it does not block.
 
 Useful environment overrides:
 
@@ -81,22 +75,17 @@ What the gate enforces:
 - Both files open with a YAML frontmatter block at byte 0.
 - Both files carry a language switcher in their first 20 lines.
 - Both files have the same heading structure (same levels, in the same order).
-- Fenced code blocks are byte-identical across the pair — code blocks carry
-  facts (ports, paths, schemas) and must never drift. Comments inside a fence
-  stay in English in both files, so that the byte comparison holds.
+- Fenced code blocks are byte-identical across the pair — code blocks carry facts (ports, paths, schemas) and must never drift. Comments inside a fence stay in English in both files, so that the byte comparison holds.
 - Every section's prose digest matches the record.
 
 Adding a new document:
 
-1. Create `docs/foo.md` and `docs/foo.zh-CN.md`, each starting with the frontmatter
-   block and the language switcher.
+1. Create `docs/foo.md` and `docs/foo.zh-CN.md`, each starting with the frontmatter block and the language switcher.
 2. Mirror the heading structure exactly — same levels, same order.
-3. Keep fenced code blocks byte-identical across the pair — including the
-   comments inside them, which stay in English on both sides.
+3. Keep fenced code blocks byte-identical across the pair — including the comments inside them, which stay in English on both sides.
 4. Run `--write docs/foo.md` to create the record, and commit all three files.
 
-A deliberate one-sided edit (a typo fix with no Chinese counterpart) is declared
-with a `waiver:` stanza in the pair's record:
+A deliberate one-sided edit (a typo fix with no Chinese counterpart) is declared with a `waiver:` stanza in the pair's record:
 
 ```yaml
 waiver:
@@ -105,13 +94,9 @@ waiver:
   expires: "2026-12-31"
 ```
 
-The waiver is honoured by the co-change gate only — the digests still have to
-match, so `--write` is still required. It shows up in the pull-request diff, and
-it expires, so it cannot silently weaken the gate.
+The waiver is honoured by the co-change gate only — the digests still have to match, so `--write` is still required. It shows up in the pull-request diff, and it expires, so it cannot silently weaken the gate.
 
-CI runs `--check-all`, `--check-tree docs`, `--check-tree . --depth 1`, and the
-git co-change gate on every pull request that touches a bilingual pair. The gate
-reports rather than blocks the merge — `main` is not branch-protected yet.
+CI runs `--check-all`, `--check-tree docs`, `--check-tree . --depth 1`, and the git co-change gate on every pull request that touches a bilingual pair. The gate reports rather than blocks the merge — `main` is not branch-protected yet.
 
 ---
 

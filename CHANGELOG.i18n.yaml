@@ -7,23 +7,26 @@
   en: 8d41915f0bf29a41
   zh: 88e3673b3985dd8e
 /changelog:
-  en: 20a2a727564f853a
-  zh: 3862c1550f156ca0
+  en: 3ac6d336e3fdae6b
+  zh: cd83ab834185d579
 /changelog/unreleased:
   en: e3b0c44298fc1c14
   zh: e3b0c44298fc1c14
+/changelog/unreleased/changed:
+  en: 61e93723cf7acdda
+  zh: 65d2ca9bc70c840f
 /changelog/010-2026-11-09:
-  en: 4e231d85d1005d3b
-  zh: f5b61224294cf509
+  en: 8325a72e1fc5e4af
+  zh: 567e222b54ade4eb
 /changelog/010-2026-11-09/added:
-  en: d0b7c568472b7975
-  zh: 51f4375b04b12586
+  en: 8210f58e40649740
+  zh: 622e09bfc4431e8f
 /changelog/010-2026-11-09/changed:
-  en: f8932ea65d69edba
-  zh: c786610a234b5287
+  en: 9977cb358fbe2c3f
+  zh: ce4603f48d7ad755
 /changelog/010-2026-11-09/fixed:
-  en: aef2e17bce0a3b51
-  zh: 3198a7a1dadfcf53
+  en: 9fb46f736670b634
+  zh: d71912c495ec5e01
 /changelog/010-2026-11-09/docker:
-  en: de4b78d260984f1c
-  zh: bb85787ec293dc58
+  en: 7097855197a27dce
+  zh: ee3eb27cc4e18ada

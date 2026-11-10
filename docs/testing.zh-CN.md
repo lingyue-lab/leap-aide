@@ -29,16 +29,11 @@ title: LeapAide 测试指南
 | `./scripts/run-test.sh setup` | — | 安装全部测试依赖（Python + 前端） | — |
 | `./scripts/run-test.sh clean` | — | 清理陈旧测试状态与端口占用 | — |
 
-L2 域（DOMAIN）：`session` | `model` | `workspace` | `cron` | `i18n` | `ui` |
-`streaming` | `auth` | `all`。
+L2 域（DOMAIN）：`session` | `model` | `workspace` | `cron` | `i18n` | `ui` | `streaming` | `auth` | `all`。
 
-CI 会在由仓库 `Dockerfile` 构建出的 testing 镜像里跑同样的套件
-（`.github/workflows/run-tests-in-testing-image.yml`）：先 `backend full`，再
-`frontend full`。
+CI 会在由仓库 `Dockerfile` 构建出的 testing 镜像里跑同样的套件（`.github/workflows/run-tests-in-testing-image.yml`）：先 `backend full`，再 `frontend full`。
 
-每次向目标为 `main` 的 ready PR 推送、以及每次向 `main` 本身的推送，都会自动运行；
-草稿 PR 会跳过，存在合并冲突的 PR 则完全不会运行。该检查目前还不是合并的必需项——
-它只报告结果，不阻塞合并。
+每次向目标为 `main` 的 ready PR 推送、以及每次向 `main` 本身的推送，都会自动运行；草稿 PR 会跳过，存在合并冲突的 PR 则完全不会运行。该检查目前还不是合并的必需项—— 它只报告结果，不阻塞合并。
 
 常用环境变量覆盖：
 
@@ -90,8 +85,7 @@ python3 backend/scripts/check_translation_pairing.py --write docs/architecture.m
 3. 围栏代码块在两侧保持逐字节相同 —— 围栏里的注释在中文版也保持英文。
 4. 执行 `--write docs/foo.md` 生成记录，三个文件一起提交。
 
-有意为之的单边修改（例如某个 typo 没有对应的中文改动），在该配对的记录里用
-`waiver:` 段落声明：
+有意为之的单边修改（例如某个 typo 没有对应的中文改动），在该配对的记录里用 `waiver:` 段落声明：
 
 ```yaml
 waiver:
@@ -100,12 +94,9 @@ waiver:
   expires: "2026-12-31"
 ```
 
-豁免只对 co-change 门禁生效 —— 摘要仍然必须对得上，所以 `--write` 依然要跑。
-豁免会出现在 PR 的 diff 里，而且会过期，因此不会悄悄削弱门禁。
+豁免只对 co-change 门禁生效 —— 摘要仍然必须对得上，所以 `--write` 依然要跑。豁免会出现在 PR 的 diff 里，而且会过期，因此不会悄悄削弱门禁。
 
-CI 在每个触及双语配对的 PR 上运行 `--check-all`、`--check-tree docs`、
-`--check-tree . --depth 1` 以及 git co-change 门禁。门禁只报错、不阻塞合并 ——
-`main` 目前还没开分支保护。
+CI 在每个触及双语配对的 PR 上运行 `--check-all`、`--check-tree docs`、`--check-tree . --depth 1` 以及 git co-change 门禁。门禁只报错、不阻塞合并 —— `main` 目前还没开分支保护。
 
 ---
 

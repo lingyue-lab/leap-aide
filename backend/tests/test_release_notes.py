@@ -13,6 +13,7 @@ Filesystem-only — no server required.
 
 import importlib.util
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -114,6 +115,82 @@ class TestExtraction:
         assert body.count("```") == 2, body
 
 
+class TestUnwrapping:
+
+    """The body is normalized before it reaches the page.
+
+    GitHub renders a release body with hard breaks on: every newline in
+    the body becomes a line break. A body that kept the changelog's
+    wrapping therefore shows up as a narrow ribbon of short lines inside
+    a column twice as wide, with an empty gutter beside them. These tests
+    pin the normalization down, because it fails quietly — a body that
+    stayed wrapped still renders, it just renders narrow.
+    """
+
+    def _unwrap(self, text):
+        module = _load_module()
+        return module.unwrap_flow(text)
+
+    def test_a_wrapped_paragraph_becomes_one_line(self):
+        out = self._unwrap("A chat front end with a shared, observable\n"
+                           "browser desktop.\n")
+        assert out.strip() == ("A chat front end with a shared, observable "
+                               "browser desktop.")
+
+    def test_a_list_item_absorbs_its_continuation_lines(self):
+        out = self._unwrap("- **Shared desktop** — one always-on Chrome\n"
+                           "  backs every session.\n")
+        assert out.strip() == ("- **Shared desktop** — one always-on Chrome "
+                               "backs every session.")
+
+    def test_a_code_block_is_left_alone(self):
+        block = "```bash\npodman pull ghcr.io/lingyue-lab/leap-aide-runtime:0.1.0\n```"
+        out = self._unwrap(f"Pull the image:\n\n{block}\n")
+        assert block in out, out
+
+    def test_a_table_is_left_alone(self):
+        table = "| Symptom | Cause |\n|---|---|\n| A | B |"
+        out = self._unwrap(f"Some prose.\n\n{table}\n")
+        assert table in out, out
+
+    def test_a_heading_keeps_its_own_line(self):
+        out = self._unwrap("## Commit Conventions\n- Do not create commits.\n")
+        assert out.split("\n")[0] == "## Commit Conventions"
+        assert out.split("\n")[1] == "- Do not create commits."
+
+    def test_an_intentional_hard_break_is_kept(self):
+        out = self._unwrap("First line.  \nSecond line.\n")
+        assert out.strip().count("\n") == 1, out
+        assert out.strip().split("\n")[0].endswith("  "), out
+
+    def test_chinese_lines_are_joined_without_a_space(self):
+        """Chinese has no word spaces; a joined line must not gain one."""
+        out = self._unwrap("定时任务，\n以及对主流 LLM 提供商的一键接入。\n")
+        assert out.strip() == "定时任务，以及对主流 LLM 提供商的一键接入。", out
+
+    def test_no_prose_is_hard_wrapped_in_the_rendered_body(self):
+        """The whole changelog section, rendered: no line continues one.
+
+        This is the property the reader sees. A paragraph is one line, a
+        list item is one line, and nothing is left waiting on a next
+        line to make sense.
+        """
+        module = _load_module()
+        en = module.find_section(_read(CHANGELOG), VERSION)
+        zh = module.find_section(_read(CHANGELOG_ZH), VERSION)
+        body = module.render_bilingual(en, zh)
+        starts_block = re.compile(r"^(#{1,6}\s|[-*+]\s|\d+[.)]\s|<|\||```)")
+        previous = ""
+        for line in _prose_lines(body):
+            if (previous.strip() and line.strip()
+                    and not starts_block.match(line)
+                    and not starts_block.match(previous)):
+                raise AssertionError(
+                    f"a prose line continues the one before it, so the page "
+                    f"breaks there:\n  {previous}\n  {line}")
+            previous = line
+
+
 class TestRendering:
 
     def _render(self, **kwargs):
@@ -140,7 +217,6 @@ class TestRendering:
         So the source-level id and the fragment have to be the same string
         for the retry to land on the element.
         """
-        import re
         module = _load_module()
         body = self._render()
         links = re.findall(r"\]\(#([^)]+)\)", body)
@@ -151,6 +227,21 @@ class TestRendering:
                 f"anchor — the link goes nowhere")
         assert module.EN_ANCHOR in links
         assert module.ZH_ANCHOR in links
+
+    def test_the_language_label_is_a_heading(self):
+        """The label must look like a section title, not a caption.
+
+        A <summary> renders in the body font size, so the language entry
+        reads as a caption above the notes. An <h2> inside the summary
+        takes the same size and rule as the "##" headings of the notes
+        themselves — GitHub renders it through its own heading markup.
+        """
+        module = _load_module()
+        body = self._render()
+        assert (f'<summary><a id="{module.EN_ANCHOR}"></a><h2>English</h2>'
+                f'</summary>') in body, body[:600]
+        assert (f'<summary><a id="{module.ZH_ANCHOR}"></a><h2>中文</h2>'
+                f'</summary>') in body, body[:600]
 
     def test_the_code_block_is_copied_verbatim(self):
         """Fenced code carries non-translatable facts and must not drift."""
@@ -243,6 +334,20 @@ class TestWorkflowWiring:
         workflow = self._workflow()
         assert "contents: write" in workflow, (
             "creating a release needs contents: write")
+
+
+def _prose_lines(body: str) -> list[str]:
+    """The lines of a body with the fenced code regions removed."""
+    lines = []
+    in_fence = False
+    for line in body.split("\n"):
+        if re.match(r"^(`{3,}|~{3,})", line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        lines.append(line)
+    return lines
 
 
 def _code_blocks(text: str) -> list[str]:

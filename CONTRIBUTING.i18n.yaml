@@ -28,14 +28,14 @@
   en: b0be5402589c6719
   zh: da77bead3bbc1d5f
 /contributing-to-leapaide/what-we-expect-in-every-pr/local-verification:
-  en: d0a123c6b3c1807d
+  en: cb7b2a05fb52df3b
   zh: 77ff125cff3dbc65
 /contributing-to-leapaide/what-we-expect-in-every-pr/clear-pr-description:
   en: 5f0fd24e36288857
   zh: 8c459ab347ba2ca5
 /contributing-to-leapaide/what-we-expect-in-every-pr/keep-docs-consistent:
-  en: 201a91c167ece11e
-  zh: 492ae0c79974d70e
+  en: dd593b6291d836ea
+  zh: 6b478d378f09b1a1
 /contributing-to-leapaide/project-specific-guidelines:
   en: e3b0c44298fc1c14
   zh: e3b0c44298fc1c14
@@ -45,3 +45,6 @@
 /contributing-to-leapaide/project-specific-guidelines/match-the-existing-shape-of-the-codebase:
   en: 6226f3d2544cd567
   zh: 1a195c367d631dbb
+/contributing-to-leapaide/project-specific-guidelines/write-markdown-unwrapped:
+  en: 5824e90f0fa82216
+  zh: 40de6d9bc79460cc

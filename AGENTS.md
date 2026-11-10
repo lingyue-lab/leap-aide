@@ -56,6 +56,7 @@ See [docs/architecture.md](docs/architecture.md).
 - Never use raw `confirm()`/`prompt()` — use `showConfirmDialog()`/`showPromptDialog()`.
 - Path-traversal protection: always use `safe_resolve(root, requested)` for file operations.
 - Bilingual pairs are enforced by `backend/scripts/check_translation_pairing.py` — run `--check-all`, `--check-tree docs` and `--check-tree . --depth 1` before pushing; every new doc needs a `.zh-CN.md` companion and an `.i18n.yaml` record.
+- Markdown is written unwrapped: one line per paragraph, one line per list item, one line per table row. Prose is read rendered, so the source must not break lines at a fixed column.
 
 ---
 
