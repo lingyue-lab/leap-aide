@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "tester report",
+  "description": "What the tester ran and what came out. The supervisor reads this to decide whether the test phase passed.",
+  "type": "object",
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "Two or three sentences: what was run and the overall outcome."
+    },
+    "command": {
+      "type": "string",
+      "description": "The command that ran the test suite, e.g. `python3 -m pytest backend/tests`."
+    },
+    "cases": {
+      "type": "array",
+      "description": "One entry per test case that was executed.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string", "description": "Test name or short description."},
+          "passed": {"type": "boolean"},
+          "expected": {"type": "string", "description": "What the test should have produced."},
+          "actual": {"type": "string", "description": "What it actually produced."}
+        },
+        "required": ["name", "passed"]
+      }
+    },
+    "passed": {
+      "type": "boolean",
+      "description": "True only when every case passed and the suite exited zero."
+    },
+    "failures": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "One entry per failing case, with the reason. Empty when everything passed."
+    },
+    "regressions": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Pre-existing failures that are not caused by this change. May be empty."
+    },
+    "issue_comment_url": {
+      "type": "string",
+      "description": "URL of the comment the tester left on the issue or the pull request."
+    },
+    "blocked": {
+      "type": "boolean",
+      "description": "True when the tester could not run the suite at all (missing dependency, no test command)."
+    },
+    "blocker_reason": {
+      "type": "string",
+      "description": "Why the tester is blocked. Only meaningful when blocked is true."
+    }
+  },
+  "required": ["summary", "cases", "passed"]
+}

@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "planner report",
+  "description": "What the planner worked out for the issue. The supervisor reads this to decide whether the plan is good enough to hand to the implementer.",
+  "type": "object",
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "Two or three sentences: what the issue asks for and the approach taken."
+    },
+    "steps": {
+      "type": "array",
+      "description": "The implementation steps, in order.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": {"type": "string", "description": "Short imperative name of the step."},
+          "detail": {"type": "string", "description": "What to change and why."},
+          "files": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Repository-relative paths this step touches. Empty when unknown."
+          }
+        },
+        "required": ["title"]
+      }
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Concrete, checkable statements that decide whether the issue is fixed."
+    },
+    "risks": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Things that could go wrong and how the plan handles them. May be empty."
+    },
+    "issue_comment_url": {
+      "type": "string",
+      "description": "URL of the comment the planner left on the issue with this plan."
+    },
+    "blocked": {
+      "type": "boolean",
+      "description": "True when the planner could not produce a usable plan (missing access, unclear requirement)."
+    },
+    "blocker_reason": {
+      "type": "string",
+      "description": "Why the planner is blocked. Only meaningful when blocked is true."
+    }
+  },
+  "required": ["summary", "steps", "acceptance_criteria"]
+}

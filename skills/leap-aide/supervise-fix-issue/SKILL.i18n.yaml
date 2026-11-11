@@ -1,0 +1,59 @@
+# Bilingual-pair consistency record for SKILL.md / SKILL.zh-CN.md.
+# Per heading-slug path: sha256-16 of prose outside code blocks.
+# Editing EITHER side requires aligning the OTHER side first, then
+# re-recording:
+#   python3 backend/scripts/check_translation_pairing.py --write skills/leap-aide/supervise-fix-issue/SKILL.md
+/:
+  en: fb59a7ff86238ade
+  zh: bc283b0172f74856
+/supervise-fix-issue-skill:
+  en: 87da0c8d372da2a9
+  zh: e50abd8caaebdc09
+/supervise-fix-issue-skill/when-to-use:
+  en: 8487de1ffc80c187
+  zh: f886b27d264b5dbc
+/supervise-fix-issue-skill/prerequisites:
+  en: 2c61763dc01d2947
+  zh: 8b9bc2298a46a071
+/supervise-fix-issue-skill/prerequisites/the-workspace:
+  en: c96d372796cb29fd
+  zh: e71f04f97591c866
+/supervise-fix-issue-skill/prerequisites/the-credentials:
+  en: 14ff4865d3e2d6cd
+  zh: a0bd55c7f0b4b62d
+/supervise-fix-issue-skill/procedure:
+  en: e3b0c44298fc1c14
+  zh: e3b0c44298fc1c14
+/supervise-fix-issue-skill/procedure/step-0-preflight:
+  en: 4b281c5c752dde1d
+  zh: dd0685f5610acc63
+/supervise-fix-issue-skill/procedure/step-1-read-the-issue:
+  en: a2342e53f1c1e876
+  zh: fae1bbee562db7de
+/supervise-fix-issue-skill/procedure/step-2-arm-the-standing-goal:
+  en: 6d538a91fbe0eed4
+  zh: 4a893f74f7675637
+/supervise-fix-issue-skill/procedure/step-3-run-the-loop:
+  en: 7327e1afbffa25ed
+  zh: a489cad6b77da35d
+/supervise-fix-issue-skill/procedure/step-3-run-the-loop/delegating-a-phase:
+  en: 64176e17ddad6d60
+  zh: a9b9158a58b7bba8
+/supervise-fix-issue-skill/procedure/step-3-run-the-loop/the-four-phases:
+  en: 78ca96744694d5a5
+  zh: eef54695f01a99be
+/supervise-fix-issue-skill/procedure/step-3-run-the-loop/deciding-the-outcome:
+  en: 0c690ef3b107b402
+  zh: 13e8698f4cd550a0
+/supervise-fix-issue-skill/procedure/step-3-run-the-loop/retrying-a-failed-phase:
+  en: fcd17daf0fff9ec1
+  zh: de1550f921d081fd
+/supervise-fix-issue-skill/procedure/step-4-close-out:
+  en: 35cdc1eeeda8bf43
+  zh: a9723fc4357bc4bf
+/supervise-fix-issue-skill/rules:
+  en: 45144091f959fc10
+  zh: 4a389b186fce94fc
+/supervise-fix-issue-skill/pitfalls:
+  en: bc34db076402f216
+  zh: 7e17d57416313fd1
