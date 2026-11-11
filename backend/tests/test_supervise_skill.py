@@ -29,7 +29,8 @@ SCRIPTS_DIR = SKILL_DIR / "scripts"
 SCHEMAS_DIR = SKILL_DIR / "schemas"
 CHECKER = REPO_ROOT / "backend" / "scripts" / "check_translation_pairing.py"
 
-SCRIPTS = ("gh_roles.py", "preflight.py", "supervise_state.py", "arm_goal.py")
+SCRIPTS = ("gh_roles.py", "preflight.py", "supervise_state.py", "arm_goal.py",
+           "review_package.py", "brief.py")
 
 # phase -> (schema file, fields the schema must require)
 SCHEMA_FILES = {
@@ -176,6 +177,15 @@ def test_chinese_companion_mirrors_frontmatter_and_switcher():
     SKILL_MD,
     REFERENCES_DIR / "github-skill-map.md",
     REFERENCES_DIR / "role-tokens.md",
+    REFERENCES_DIR / "fix-loop.md",
+    REFERENCES_DIR / "handling-reports.md",
+    REFERENCES_DIR / "resuming.md",
+    REFERENCES_DIR / "model-tiers.md",
+    SKILL_DIR / "prompts" / "planner.md",
+    SKILL_DIR / "prompts" / "implementer.md",
+    SKILL_DIR / "prompts" / "tester.md",
+    SKILL_DIR / "prompts" / "reviewer.md",
+    SKILL_DIR / "prompts" / "re-reviewer.md",
 ])
 def test_bilingual_pairing_gate_passes(anchor):
     """check_translation_pairing.py verify mode exits 0 for the pair."""
@@ -599,3 +609,282 @@ def test_skill_states_the_loop_rules():
     for rule in ("fix/issue-", "refs #", "LGTM"):
         assert rule in raw, f"the skill must state the `{rule}` rule"
     assert "approve" in raw, "the skill must tie the LGTM to an approve verdict"
+
+
+# ── the dispatch prompts ────────────────────────────────────────────────
+
+PROMPTS_DIR = SKILL_DIR / "prompts"
+PROMPTS = ("planner", "implementer", "tester", "reviewer", "re-reviewer")
+
+
+def test_every_prompt_has_a_bilingual_pair():
+    """Each dispatch template ships with its Chinese companion and record."""
+    for name in PROMPTS:
+        for suffix in (".md", ".zh-CN.md", ".i18n.yaml"):
+            path = PROMPTS_DIR / f"{name}{suffix}"
+            assert path.is_file(), f"missing {path}"
+
+
+def test_every_prompt_is_linked_from_the_skill():
+    """The skill points at the template rather than restating it."""
+    raw = SKILL_MD.read_text(encoding="utf-8")
+    for name in PROMPTS:
+        assert f"prompts/{name}.md" in raw, (
+            f"the skill must reference prompts/{name}.md")
+
+
+@pytest.mark.parametrize("name", PROMPTS)
+def test_prompt_dispatch_block_is_complete(name):
+    """Every template carries the fields a delegation needs."""
+    text = (PROMPTS_DIR / f"{name}.md").read_text(encoding="utf-8")
+    for fragment in (
+        "Subagent (general-purpose):",
+        'role: "leaf"',
+        "model:",
+        "output_schema:",
+        "prompt: |",
+        "You do not dispatch subagents",
+        "gh_roles.py",
+        "[REPORT_CONTRACT]",
+        "references/model-tiers.md",
+    ):
+        assert fragment in text, f"{name}.md must contain {fragment!r}"
+
+
+@pytest.mark.parametrize("name", PROMPTS)
+def test_prompt_child_body_is_byte_identical_across_the_pair(name):
+    """The fenced dispatch block is non-translatable and must not drift."""
+    import re as _re
+    en = (PROMPTS_DIR / f"{name}.md").read_text(encoding="utf-8")
+    zh = (PROMPTS_DIR / f"{name}.zh-CN.md").read_text(encoding="utf-8")
+    fence = _re.compile(r"```\n(.*?)\n```", _re.S)
+    a = fence.search(en)
+    b = fence.search(zh)
+    assert a and b, f"{name}: both sides need one fenced dispatch block"
+    assert a.group(1) == b.group(1), (
+        f"{name}: the fenced dispatch block must be byte-identical")
+
+
+def test_the_reviewer_template_calibrates_the_verdict():
+    """Severity maps mechanically onto the binary verdict."""
+    text = (PROMPTS_DIR / "reviewer.md").read_text(encoding="utf-8")
+    assert "blocker" in text and "major" in text
+    assert "request_changes" in text and "approve" in text
+    assert "cannot_verify" in text, (
+        "the reviewer must have somewhere to put an unsettled requirement")
+    assert "Do not trust the report" in text
+    assert "Read-Only" in text.replace("read-only", "Read-Only") or \
+        "read-only" in text
+
+
+def test_the_rereviewer_verdicts_each_finding():
+    """The scoped re-review returns per-finding verdicts, not a fresh review."""
+    text = (PROMPTS_DIR / "re-reviewer.md").read_text(encoding="utf-8")
+    assert "ADDRESSED" in text and "NOT ADDRESSED" in text
+    assert "Out-of-scope" in text or "out-of-scope" in text
+    assert "Attempted" in text, "the template must refuse 'attempted' as fixed"
+
+
+# ── the references ──────────────────────────────────────────────────────
+
+NEW_REFERENCES = ("fix-loop", "handling-reports", "resuming", "model-tiers")
+
+
+@pytest.mark.parametrize("name", NEW_REFERENCES)
+def test_reference_ships_a_pair_and_a_record(name):
+    for suffix in (".md", ".zh-CN.md", ".i18n.yaml"):
+        path = REFERENCES_DIR / f"{name}{suffix}"
+        assert path.is_file(), f"missing {path}"
+
+
+@pytest.mark.parametrize("name", NEW_REFERENCES)
+def test_skill_links_to_each_new_reference(name):
+    en = SKILL_MD.read_text(encoding="utf-8")
+    zh = SKILL_ZH.read_text(encoding="utf-8")
+    assert f"references/{name}.md" in en, (
+        f"SKILL.md must link to references/{name}.md")
+    assert f"references/{name}.zh-CN.md" in zh, (
+        f"SKILL.zh-CN.md must link to references/{name}.zh-CN.md")
+
+
+def test_the_fix_loop_reference_documents_the_round_cap_and_the_breaker():
+    """The loop's bounds and its adjudication are written down."""
+    text = (REFERENCES_DIR / "fix-loop.md").read_text(encoding="utf-8")
+    for fragment in ("max_attempts", "Breaker adjudication", "Ruling",
+                     "cannot_verify", "deferred", "LGTM"):
+        assert fragment in text, f"fix-loop.md must mention {fragment}"
+
+
+def test_the_ruling_ledger_requires_a_reason(tmp_path):
+    """A ruling without a --why is a guess, and the script refuses it."""
+    proc = _run("supervise_state.py", "init", "--workspace", str(tmp_path),
+                "--issue", "https://github.com/o/r/issues/1")
+    assert proc.returncode == 0, proc.stderr
+    bad = _run("supervise_state.py", "rule", "--workspace", str(tmp_path),
+               "--what", "x")
+    assert bad.returncode == 1, bad.stdout
+    assert "guess" in bad.stderr or "guess" in bad.stdout
+    good = _run("supervise_state.py", "rule", "--workspace", str(tmp_path),
+                "--what", "kept the 4 phases", "--why", "issue #57 says so",
+                "--cost", "a fifth would stall")
+    assert good.returncode == 0, good.stderr
+    payload = json.loads(good.stdout[good.stdout.index("{"):])
+    assert len(payload["rulings"]) == 1
+    assert payload["summary"].startswith("Rulings I made:")
+    assert "kept the 4 phases" in payload["summary"]
+    listed = _run("supervise_state.py", "rule", "--list",
+                  "--workspace", str(tmp_path))
+    assert json.loads(listed.stdout[listed.stdout.index("{"):])["rulings"]
+
+
+def test_the_handling_reports_reference_covers_the_three_reports():
+    text = (REFERENCES_DIR / "handling-reports.md").read_text(encoding="utf-8")
+    for code in ("DONE_WITH_CONCERNS", "BLOCKED", "NEEDS_CONTEXT"):
+        assert code in text, f"handling-reports.md must document {code}"
+
+
+def test_the_resuming_reference_names_the_state_file():
+    text = (REFERENCES_DIR / "resuming.md").read_text(encoding="utf-8")
+    assert "state.json" in text
+    assert "supervise_state.py" in text
+    assert "Never rewrite the plan from memory" in text
+
+
+def test_the_model_tiers_reference_documents_the_per_role_tiers():
+    text = (REFERENCES_DIR / "model-tiers.md").read_text(encoding="utf-8")
+    for fragment in ("delegate_task", "model_catalog", "compat",
+                     "one `model` per call", "review"):
+        assert fragment in text, f"model-tiers.md must mention {fragment}"
+
+
+# ── review_package.py ───────────────────────────────────────────────────
+
+def _make_repo(tmp_path):
+    """A throwaway repository with one commit on a fix branch."""
+    if shutil.which("git") is None:
+        pytest.skip("git is not available")
+    def git(*args):
+        return subprocess.run(
+            ["git", "-C", str(tmp_path), *args],
+            capture_output=True, text=True, check=True)
+    git("init", "-q")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "test")
+    (tmp_path / "a.txt").write_text("one\n", encoding="utf-8")
+    git("add", "a.txt")
+    git("commit", "-q", "-m", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    git("checkout", "-q", "-b", "fix/issue-1")
+    (tmp_path / "a.txt").write_text("one\ntwo\n", encoding="utf-8")
+    (tmp_path / "b.txt").write_text("new\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "fix the thing")
+    head = git("rev-parse", "HEAD").stdout.strip()
+    return base, head
+
+
+def test_review_package_writes_one_readable_file(tmp_path):
+    if shutil.which("git") is None:
+        pytest.skip("git is not available")
+    base, head = _make_repo(tmp_path)
+    proc = _run("review_package.py", "--workspace", str(tmp_path),
+                "--base", base, "--head", head)
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    out = Path(payload["path"])
+    assert out.is_file()
+    assert out.is_relative_to(tmp_path), "the package must stay in the workspace"
+    body = out.read_text(encoding="utf-8")
+    for section in ("# Review package", "## Commits", "## Stat", "## Diff"):
+        assert section in body, f"the package must carry {section}"
+    assert "fix the thing" in body
+    assert "b.txt" in body
+    assert payload["commits"] == 1
+    assert payload["files_changed"] == 2
+
+
+def test_review_package_refuses_a_path_outside_the_workspace(tmp_path):
+    if shutil.which("git") is None:
+        pytest.skip("git is not available")
+    base, head = _make_repo(tmp_path)
+    proc = _run("review_package.py", "--workspace", str(tmp_path),
+                "--base", base, "--head", head,
+                "--out", "../escape.md")
+    assert proc.returncode == 1, proc.stdout
+    assert "escapes" in (proc.stderr + proc.stdout)
+    assert not (tmp_path.parent / "escape.md").exists()
+
+
+def test_review_package_refuses_an_empty_range(tmp_path):
+    if shutil.which("git") is None:
+        pytest.skip("git is not available")
+    base, _head = _make_repo(tmp_path)
+    proc = _run("review_package.py", "--workspace", str(tmp_path),
+                "--base", base, "--head", base)
+    assert proc.returncode == 1, proc.stdout
+    assert "no commits" in (proc.stderr + proc.stdout)
+
+
+def test_review_package_refuses_a_non_sha(tmp_path):
+    proc = _run("review_package.py", "--workspace", str(tmp_path),
+                "--base", "HEAD", "--head", "also-not-a-sha")
+    assert proc.returncode == 1
+    assert "SHA" in (proc.stderr + proc.stdout)
+
+
+# ── brief.py ────────────────────────────────────────────────────────────
+
+def test_brief_renders_the_state_as_a_file(tmp_path):
+    _run("supervise_state.py", "init", "--workspace", str(tmp_path),
+         "--issue", "https://github.com/OWNER/NAME/issues/57")
+    _run("supervise_state.py", "rule", "--workspace", str(tmp_path),
+         "--what", "kept the 4 phases", "--why", "issue #57 names them")
+    _run("supervise_state.py", "set-branch", "--workspace", str(tmp_path),
+         "--name", "fix/issue-57")
+    proc = _run("brief.py", "--workspace", str(tmp_path))
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    out = Path(payload["path"])
+    assert out.is_file()
+    assert out.is_relative_to(tmp_path), "the brief must stay in the workspace"
+    body = out.read_text(encoding="utf-8")
+    assert "# Closing brief" in body
+    assert "issues/57" in body
+    assert "fix/issue-57" in body
+    assert "## Rulings I made" in body
+    assert "kept the 4 phases" in body
+    assert "## Attempts" in body
+    assert payload["rulings"] == 1
+
+
+def test_brief_refuses_a_path_outside_the_workspace(tmp_path):
+    _run("supervise_state.py", "init", "--workspace", str(tmp_path),
+         "--issue", "https://github.com/OWNER/NAME/issues/57")
+    proc = _run("brief.py", "--workspace", str(tmp_path),
+                "--out", "../escape-brief.md")
+    assert proc.returncode == 1, proc.stdout
+    assert "escapes" in (proc.stderr + proc.stdout)
+    assert not (tmp_path.parent / "escape-brief.md").exists()
+
+
+def test_brief_requires_a_state_file(tmp_path):
+    proc = _run("brief.py", "--workspace", str(tmp_path))
+    assert proc.returncode == 1
+    assert "init" in (proc.stderr + proc.stdout)
+
+
+# ── the reviewer schema's cannot_verify channel ─────────────────────────
+
+def test_the_reviewer_schema_carries_a_cannot_verify_channel():
+    """An unsettled requirement has somewhere to go, and it is not `findings`."""
+    schema = json.loads(
+        (SCHEMAS_DIR / "reviewer.schema.json").read_text(encoding="utf-8"))
+    props = schema["properties"]
+    assert "cannot_verify" in props, (
+        "the reviewer schema must allow a cannot_verify list")
+    assert props["cannot_verify"]["type"] == "array"
+    assert "requirement" in props["cannot_verify"]["items"]["properties"]
+    # It stays optional: a clean review must not be forced to invent one.
+    assert "cannot_verify" not in schema.get("required", [])
+    # The verdict stays binary regardless.
+    assert props["verdict"]["enum"] == ["approve", "request_changes"]

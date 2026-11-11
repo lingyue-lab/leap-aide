@@ -1,0 +1,26 @@
+# Bilingual-pair consistency record for resuming.md / resuming.zh-CN.md.
+# Per heading-slug path: sha256-16 of prose outside code blocks.
+# Editing EITHER side requires aligning the OTHER side first, then
+# re-recording:
+#   python3 backend/scripts/check_translation_pairing.py --write skills/leap-aide/supervise-fix-issue/references/resuming.md
+/:
+  en: e47273f75e3fe83d
+  zh: dcf1acb6652f0c1f
+/resuming-the-loop:
+  en: 818485cfaf3e9caa
+  zh: a868eaac1f57d781
+/resuming-the-loop/the-recovery-read:
+  en: 07898b108c144e88
+  zh: e4cd7dbc39ae2588
+/resuming-the-loop/what-to-reconstruct:
+  en: 792d034248bfb2fe
+  zh: b3a61dee8fe0e3d1
+/resuming-the-loop/what-not-to-reconstruct:
+  en: 74a8be6ec9b816c5
+  zh: 7e585dd83e100d22
+/resuming-the-loop/resuming-mid-round:
+  en: 92376bf51d65817a
+  zh: 82bd3ec72d1e8eaa
+/resuming-the-loop/when-the-state-file-is-gone:
+  en: 78cd5f2f535ae8a8
+  zh: 25d1159320648069

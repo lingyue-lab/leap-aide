@@ -30,6 +30,12 @@ Commands
     supervise_state.py fail --phase PHASE --note TEXT
         Record that PHASE failed; the loop re-runs the phase.
 
+    supervise_state.py rule --what TEXT --why TEXT [--cost TEXT] [--phase PHASE]
+        Record one ruling the supervisor made while driving the loop.
+
+    supervise_state.py rule --list
+        Print the ruling ledger as a "Rulings I made" block.
+
     supervise_state.py set-pr --number N [--url URL]
     supervise_state.py set-branch --name NAME
     supervise_state.py finish
@@ -79,6 +85,7 @@ def empty_state(issue: str, repo: str | None, issue_number: int | None,
         "pr": None,
         "status": "running",
         "history": [],
+        "rulings": [],
         "updated_at": time.time(),
     }
 
@@ -236,6 +243,54 @@ def cmd_reset(args: argparse.Namespace) -> int:
     return 0
 
 
+def _ruling_line(index: int, ruling: dict[str, Any]) -> str:
+    """Render one ledger entry as `Ruling: <what> — <why> — <cost if wrong>`."""
+    what = str(ruling.get("what") or "").strip()
+    why = str(ruling.get("why") or "").strip()
+    cost = str(ruling.get("cost") or "").strip()
+    parts = [what, why]
+    if cost:
+        parts.append(cost)
+    return f"{index}. Ruling: " + " — ".join(parts)
+
+
+def _ruling_summary(rulings: list[dict[str, Any]]) -> str:
+    """Render the whole ledger as the supervisor's `Rulings I made` block."""
+    if not rulings:
+        return "Rulings I made: none."
+    lines = ["Rulings I made:"]
+    lines.extend(_ruling_line(i, r) for i, r in enumerate(rulings, 1))
+    return "\n".join(lines)
+
+
+def cmd_rule(args: argparse.Namespace) -> int:
+    workspace, state = _require_state(args)
+    rulings = state.setdefault("rulings", [])
+    added: dict[str, Any] | None = None
+    if args.what is not None and not args.list_only:
+        if not (args.what or "").strip():
+            return _die("--what must be non-empty")
+        if not (args.why or "").strip():
+            return _die("--why is required: a ruling without a reason is a guess")
+        ruling = {
+            "what": args.what,
+            "why": args.why or "",
+            "cost": args.cost or "",
+            "phase": args.phase or state.get("phase"),
+            "at": time.time(),
+        }
+        rulings.append(ruling)
+        record(state, "rule", what=ruling["what"], phase=ruling["phase"])
+        save_state(workspace, state)
+        added = ruling
+    print(json.dumps({
+        "rulings": rulings,
+        "summary": _ruling_summary(rulings),
+        "added": added,
+    }, indent=2, ensure_ascii=False))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="supervise_state.py",
@@ -277,6 +332,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_fail.add_argument("--phase", required=True, choices=PHASES)
     p_fail.add_argument("--note", default="")
     p_fail.set_defaults(func=cmd_fail)
+
+    p_rule = sub.add_parser(
+        "rule",
+        help="record or list the rulings the supervisor made",
+    )
+    add_common(p_rule)
+    p_rule.add_argument("--what", default=None,
+                        help="the decision taken (omit to list the ledger)")
+    p_rule.add_argument("--why", default=None,
+                        help="why this decision and not another")
+    p_rule.add_argument("--cost", default="",
+                        help="what it costs if this decision was wrong")
+    p_rule.add_argument("--phase", default=None, choices=PHASES,
+                        help="phase the ruling belongs to (defaults to the current one)")
+    p_rule.add_argument("--list", action="store_true", dest="list_only",
+                        help="print the ledger without recording anything")
+    p_rule.set_defaults(func=cmd_rule)
 
     p_pr = sub.add_parser("set-pr", help="record the pull request number")
     add_common(p_pr)

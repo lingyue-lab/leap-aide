@@ -1,0 +1,11 @@
+# Bilingual-pair consistency record for planner.md / planner.zh-CN.md.
+# Per heading-slug path: sha256-16 of prose outside code blocks.
+# Editing EITHER side requires aligning the OTHER side first, then
+# re-recording:
+#   python3 backend/scripts/check_translation_pairing.py --write skills/leap-aide/supervise-fix-issue/prompts/planner.md
+/:
+  en: 591c2a928a7501b1
+  zh: 27a1ed4a77be5946
+/planner-dispatch-template:
+  en: deeab93575fd2e4b
+  zh: cf89260d29968ff6

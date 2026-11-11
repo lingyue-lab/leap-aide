@@ -48,9 +48,15 @@
 /leapaide-architecture-guide/supervised-development-loops:
   en: 59f9a9ceea2f16d5
   zh: edf65c256d4c439f
+/leapaide-architecture-guide/supervised-development-loops/structure:
+  en: ec5985a9f5271d25
+  zh: aae2cc9cea07c70b
+/leapaide-architecture-guide/supervised-development-loops/model-routing:
+  en: 87ccb1a3135054d0
+  zh: 791e011d947c9c72
 /leapaide-architecture-guide/supervised-development-loops/how-this-compares:
-  en: f9100e0f92611bd6
-  zh: d12dcc3c4f8e6571
+  en: 6a9b3b24fb2ec841
+  zh: b465a34246292dc0
 /leapaide-architecture-guide/database:
   en: 90638c14485bcdc9
   zh: 4e446332be87d702
@@ -72,3 +78,6 @@
 /leapaide-architecture-guide/architecture-decision-records-adr/adr-002-the-supervised-development-loop-is-a-skill:
   en: 95cab54c65234010
   zh: c0d416e345627212
+/leapaide-architecture-guide/architecture-decision-records-adr/adr-003-the-loop-is-structured-on-subagent-driven-development:
+  en: a836da50c4937b31
+  zh: bdfdd1453f153d4a

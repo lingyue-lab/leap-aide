@@ -65,3 +65,41 @@ def test_the_roadmap_carries_the_loop_and_the_open_gaps():
         "the roadmap must list the supervised development flow")
     assert "Goal-driven child sessions" in text, (
         "the roadmap must record that a goal cannot drive a child session yet")
+
+
+def test_the_architecture_guide_records_adr_003():
+    """The SDD-based restructuring is recorded as a decision with its trade-offs."""
+    text = _text(ARCHITECTURE)
+    assert "### ADR-003:" in text, (
+        "the subagent-driven-development restructuring needs an ADR")
+    adr = text.split("### ADR-003:", 1)[1]
+    for fragment in ("Decision", "Rationale", "Status", "subagent-driven-development"):
+        assert fragment in adr, f"ADR-003 must carry {fragment!r}"
+    for divergence in ("four fixed phases", "five named roles",
+                       "machine-validated JSON schemas"):
+        assert divergence in adr, (
+            f"ADR-003 must record the deliberate divergence: {divergence}")
+
+
+def test_the_architecture_guide_documents_per_phase_model_routing():
+    """The compat shim that carries `model` is described, not just shipped."""
+    text = _text(ARCHITECTURE)
+    assert "delegate_model" in text, (
+        "the guide must name the per-child model shim")
+    assert "one model per `delegate_task` call" in text, (
+        "the guide must state the shim's granularity")
+    assert "load_config_readonly" in text, (
+        "the guide must explain why the shim copies the config")
+    assert "Rulings, not stalls" in text, (
+        "the guide must document the ruling ledger")
+    assert "bounded fix loop" in text, (
+        "the guide must document the fix-round cap")
+
+
+def test_the_roadmap_tracks_the_sdk_side_model_parameter():
+    """The shim is a workaround; the SDK-native parameter is tracked."""
+    text = _text(ROADMAP)
+    assert "Per-phase model routing" in text, (
+        "the roadmap must list per-phase model routing")
+    assert "SDK-native `model` parameter" in text, (
+        "the roadmap must track the SDK-side follow-up")

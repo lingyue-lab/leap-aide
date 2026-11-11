@@ -1,6 +1,6 @@
 ---
 name: supervise-fix-issue
-description: Drive a GitHub issue to a reviewed pull request.
+description: Use when a GitHub issue must be fixed end to end.
 version: 1.0.0
 author: LeapAide
 license: MIT
@@ -31,6 +31,14 @@ The user starts the loop with a slash command:
 
 The issue URL is the seed of the whole loop. Everything else — the plan, the branch, the pull request, the review — is derived from it.
 
+## Why this loop is a skill
+
+A workflow engine would give the loop an enforced graph, per-role profiles and a resume that does not depend on anyone reading a file. It would also give the project a second runtime to maintain, a DSL to learn, and a scheduler that has to agree with the Hermes Agent SDK about what a session is.
+
+This loop keeps the SDK as the only runtime. The phases are ordinary `delegate_task` calls, the state is a JSON file in the workspace, and the record of what happened is the issue's own comment thread. What that costs is written down in [ADR-003](../../../docs/architecture.md): no enforced DAG, no per-role profile isolation, no cross-session resume. The compensations are a ruling ledger, a bounded fix loop and a resuming procedure — all three are sections below.
+
+The core principle: **you supervise decisions, not text.** You read what a phase decided, you verify the decision against the repository, and you record your own decision when you take one. A phase's report is a claim, never a conclusion.
+
 ## When to Use
 
 Use this skill when the user asks for an issue to be fixed end to end: planned, implemented, tested, reviewed, and submitted as a pull request.
@@ -40,6 +48,26 @@ Do not use it for:
 - A single question about the repository — answer it directly.
 - A change that is already fully specified and needs no planning — do it yourself.
 - Work that is not tracked on GitHub — the loop has no channel to run on.
+
+## Rulings, not stalls
+
+Most of what looks like a stall is a decision you have not taken yet. When the loop stops making progress, take one of four stops and no more:
+
+1. A question only the user can answer.
+2. A decision only the user can make.
+3. A credential the loop does not have.
+4. An environment that will not run the tests.
+
+Anything else — a scope question, a design preference, a file that grew past its intent — is a ruling you can take yourself. Record it before you act on it:
+
+```bash
+python3 "${HERMES_SKILL_DIR}/scripts/supervise_state.py" rule \
+  --what "kept the 4 fixed phases" \
+  --why "issue #57 names them" \
+  --cost "a fifth phase would stall the loop"
+```
+
+`--why` is mandatory; a ruling without a reason is a guess. Read the ledger back with `rule --list` and paste the `Rulings I made` block into your closing comment, so the human reviewer can audit every decision the loop took on their behalf. The full discipline — the round cap, breaker adjudication, deferred minors and what ends the loop — is in [The fix loop](references/fix-loop.md).
 
 ## Prerequisites
 
@@ -61,6 +89,14 @@ Each role authenticates separately, so the comments a phase leaves are attributa
 Read them only through the wrapper script. Never open the config file, never paste a token into a message, never write a token into a file that is not under `.leap-aide/`.
 
 What each role needs permission for, how a personal access token differs from a GitHub App installation, and how to rotate a credential are written down in [Role tokens](references/role-tokens.md).
+
+## Model selection
+
+Each phase runs on a model chosen for the work that phase does — the plan and the implementation take a capable one, the test run takes a cheap one, the review takes the most capable one, because the review is the seat that decides whether the loop ships.
+
+The dispatch templates in `prompts/` each carry a `model` field. Fill it with an id the deployment actually has, and check the id against the catalog first; an id that is not there does not fail, it silently runs on the session's model and the tiering does nothing. Per-role tiers, how `delegate_task` applies one model per call, and what to do when the deployment has no per-child routing are in [Model tiers](references/model-tiers.md).
+
+Leave `model` out only when the session already runs the tier you would have picked.
 
 ## Procedure
 
@@ -128,6 +164,16 @@ Each phase is one `delegate_task` call. Delegations from a top-level session alw
 
 #### Delegating a phase
 
+Read the phase's dispatch template from `prompts/` and fill every placeholder before you dispatch. The template is a file, not something you reconstruct from memory — a compacted context paraphrases the contracts, and a paraphrased contract is a contract the child will not follow.
+
+```
+prompts/planner.md          prompts/planner.zh-CN.md
+prompts/implementer.md      prompts/implementer.zh-CN.md
+prompts/tester.md           prompts/tester.zh-CN.md
+prompts/reviewer.md         prompts/reviewer.zh-CN.md
+prompts/re-reviewer.md      prompts/re-reviewer.zh-CN.md
+```
+
 Always pass `role="leaf"`. A leaf child has no `delegate_task` tool at all, so the tree stays one level deep and a sub-session can never spawn a sub-sub-session.
 
 Read the phase's schema and pass it as `output_schema`, so the report is machine-checked and a malformed report is retried once by the SDK before it reaches you:
@@ -142,9 +188,10 @@ Then delegate:
 ```
 delegate_task(
   goal="<one self-contained sentence: what this phase must produce>",
-  context="<everything the child needs — see below>",
+  context="<the filled dispatch template, verbatim>",
   role="leaf",
-  output_schema=<the contents of the phase schema file>
+  output_schema=<the contents of the phase schema file>,
+  model="<the tier's model id, when routing is available>"
 )
 ```
 
@@ -191,7 +238,23 @@ python3 "${HERMES_SKILL_DIR}/scripts/supervise_state.py" set-pr --number <PR> --
 
 **Test.** The tester runs the project's own test command — read it from the repository's documentation rather than guessing — and reports every case with its expected and actual result. The tester must distinguish a failure caused by this change from a pre-existing failure, and say which is which; a red suite that was already red is not a failed phase.
 
-**Review.** The reviewer reads the whole diff against the default branch and posts the findings on the pull request. **An LGTM is posted only when the reviewer's verdict is `approve`.** A `request_changes` verdict sends the loop back to Implement with the findings as the new context.
+**Review.** The reviewer reads the diff against the default branch and posts the findings on the pull request. **An LGTM is posted only when the reviewer's verdict is `approve`.** The severity calibration that decides the verdict — `blocker` and `major` mean `request_changes`, `minor` and `nit` do not, and an unresolved `cannot_verify` means `request_changes` — is part of the reviewer's dispatch template. A `request_changes` verdict starts a fix round.
+
+#### Fix rounds
+
+A review that requests changes is not a failed review. It starts a fix round:
+
+1. Count the review's round: `supervise_state.py attempt --phase review`.
+2. Hand the implementer the findings verbatim, as a new dispatch, and let it push onto the same branch.
+3. Build the fix diff package so the re-reviewer reads one file instead of re-deriving the range:
+
+```bash
+python3 "${HERMES_SKILL_DIR}/scripts/review_package.py" --base <FIX_BASE> --head <HEAD>
+```
+
+4. Dispatch `prompts/re-reviewer.md` with the plan, the findings and the printed diff path. The re-reviewer verdicts every finding `ADDRESSED` or `NOT ADDRESSED` and reports anything the fix itself broke.
+
+Every open finding, every deferred minor and every `cannot_verify` you resolved yourself becomes a ruling. Do not let a finding disappear because the context that held it was compacted away.
 
 #### Deciding the outcome
 
@@ -218,6 +281,8 @@ A phase passed when its JSON says so, its comment is on GitHub and — for the c
 python3 "${HERMES_SKILL_DIR}/scripts/supervise_state.py" advance --phase <PHASE>
 ```
 
+A report that comes back `DONE_WITH_CONCERNS`, `BLOCKED` or `NEEDS_CONTEXT` is not a pass and not a schema failure. What each one means and what you do about it is in [Handling reports](references/handling-reports.md).
+
 #### Retrying a failed phase
 
 Count the attempt before dispatching, and check the count it returns:
@@ -228,7 +293,7 @@ python3 "${HERMES_SKILL_DIR}/scripts/supervise_state.py" attempt --phase <PHASE>
 
 When the attempt count is below the maximum (three by default), re-dispatch the **same** phase with the failure as context — the previous report, the failing output, and what has to change. Say explicitly in the `context` what the previous attempt got wrong and what the child must do differently. A retry that repeats the same context repeats the same failure.
 
-When the maximum is reached, stop the loop. Do not dispatch again. Clear the goal and report to the user: which phase failed, what each attempt produced, and what a human needs to decide. A loop that keeps retrying a phase that cannot succeed burns tokens without converging.
+When the maximum is reached, do not simply hand the issue back. Adjudicate first: read every finding still open, decide whether the rest is another fix round, a question for the user, or an environment limit, and record the decision as a ruling. Only then report to the user — which phase failed, what each attempt produced, what you ruled, and what a human still needs to decide. The full adjudication procedure is in [The fix loop](references/fix-loop.md).
 
 A failed phase goes back to the phase that owns the failure:
 
@@ -237,7 +302,7 @@ A failed phase goes back to the phase that owns the failure:
 | The plan does not cover the issue | Plan |
 | The build fails, the acceptance criteria are not met | Implement |
 | The test suite fails because of the change | Implement |
-| The review requests changes | Implement |
+| The review requests changes | Implement (fix round) |
 | The reviewer cannot read the diff, or a credential is missing | blocked — report to the user |
 
 ### Step 4 — Close out
@@ -264,9 +329,25 @@ Then:
    python3 "${HERMES_SKILL_DIR}/scripts/supervise_state.py" finish
    ```
 
-3. Summarise for the user: the plan, the files changed, the test result, the review verdict and the pull request URL.
+3. Summarise for the user: the plan, the files changed, the test result, the review verdict, the rulings you took, and the pull request URL. Hand the artifacts over as files rather than as chat prose — `scripts/brief.py` writes the closing brief for you:
+
+   ```bash
+   python3 "${HERMES_SKILL_DIR}/scripts/brief.py" --out <PATH>
+   ```
 
 4. Ask whether to squash-and-merge the pull request. Do not merge on your own — merging is the user's call.
+
+## Resuming after a compaction
+
+The conversation is not the state. A compaction, a restart or a crashed sub-session loses the discussion; the loop loses nothing, because its state lives in `<workspace>/.leap-aide/supervise/state.json`.
+
+Before you do anything else on a resumed run, read it:
+
+```bash
+python3 "${HERMES_SKILL_DIR}/scripts/supervise_state.py" show
+```
+
+Then read the issue's comments: the state file says what the loop decided, the comments say what the children actually reported. Reconstruct the plan, the open findings and the diff range from those two sources — never from memory — and paste `rule --list` into your next comment so the decisions the previous context took survive the compaction too. The full recovery procedure, including what not to reconstruct, is in [Resuming the loop](references/resuming.md).
 
 ## Rules
 
@@ -275,7 +356,21 @@ Then:
 - **Only an approve verdict produces an LGTM.** Never write LGTM on the user's behalf and never let a phase that did not approve produce one.
 - **The issue and the pull request are the channel.** Every phase leaves a comment. A phase that does not comment has not reported.
 - **Credentials never enter the context.** Use `gh_roles.py run --role <ROLE> -- <command>`. Never read the config file, never echo a token, never paste one into a message or a commit.
-- **The loop is bounded.** Three attempts per phase. When they are used up, hand the problem back to the user.
+- **The loop is bounded.** Three attempts per phase. When they are used up, adjudicate, record a ruling, and hand the problem back to the user.
+- **Dispatch from the file, not from memory.** Read `prompts/<phase>.md` and fill it. A paraphrased contract is a contract the child will not follow.
+- **Every decision is recorded.** A ruling without a `--why` is a guess; the script refuses to store one.
+
+## Common rationalizations
+
+| Rationalization | What it actually costs |
+|---|---|
+| "The report looks right, I'll skip checking the comment." | A phase that did not post its comment did not finish its job. The JSON is the child's opinion of its own work. |
+| "I'll just fix this small thing myself." | You are now the implementer, and the reviewer will grade your own edit with your own context. Dispatch it. |
+| "The reviewer said minor, so it's fine to drop." | Deferred minors accumulate. Record each one as a ruling with a `--cost` so the closing summary lists it. |
+| "I'll re-run the phase, I can't remember whether it passed." | The state file is authoritative. Re-running a passed phase burns an attempt and rewrites the record. |
+| "I'll retry with the same context, it was probably a fluke." | The same context produces the same failure. Say what was wrong and what must change. |
+| "The model is expensive, I'll leave `model` unset." | The tiering does nothing and the review seat runs on whatever the session runs on. Decide the tier on purpose. |
+| "I'll merge it, the user asked for the issue fixed." | Merging is the user's call. External completion is what makes the approval mean something. |
 
 ## Pitfalls
 
@@ -284,4 +379,6 @@ Then:
 - **Waiting for the report in the same turn**: the dispatch returns immediately. End the turn; the report arrives as a new message.
 - **Retrying with the same context**: the child will produce the same failure. Say what was wrong and what must change.
 - **Reading the credential file directly**: the token lands in the conversation. Use the wrapper.
+- **Reconstructing the plan after a compaction**: a paraphrase silently changes the requirements the reviewer grades against. Copy it from the issue.
+- **Dispatching from memory**: read `prompts/<phase>.md`. The template carries contracts the conversation no longer holds.
 - **Merging the pull request without asking**: squash-and-merge is the user's decision.

@@ -14,8 +14,9 @@ __all__ = ["env_override_ctx", "install"]
 
 def install() -> None:
     """Install all SDK compatibility patches (idempotent, thread-safe)."""
-    from app.compat import browser_cdp, browser_session, desktop_guard
+    from app.compat import browser_cdp, browser_session, delegate_model, desktop_guard
 
     browser_cdp.install()
     browser_session.install()
     desktop_guard.install()
+    delegate_model.install()
