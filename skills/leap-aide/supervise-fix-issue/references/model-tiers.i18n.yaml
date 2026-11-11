@@ -1,0 +1,26 @@
+# Bilingual-pair consistency record for model-tiers.md / model-tiers.zh-CN.md.
+# Per heading-slug path: sha256-16 of prose outside code blocks.
+# Editing EITHER side requires aligning the OTHER side first, then
+# re-recording:
+#   python3 backend/scripts/check_translation_pairing.py --write skills/leap-aide/supervise-fix-issue/references/model-tiers.md
+/:
+  en: ada5a2b1dddcb865
+  zh: be1516eb4055d558
+/model-tiers:
+  en: 5bcb664d4c2da82b
+  zh: 99308193f2a84d29
+/model-tiers/the-tiers:
+  en: 9dfee0a879154f85
+  zh: 86f5d3f1c87b5861
+/model-tiers/passing-a-model-to-a-phase:
+  en: a512fad821958708
+  zh: 15db283a902ddaf3
+/model-tiers/checking-a-model-id-exists:
+  en: 451c50928051adcb
+  zh: 997207e3bdfe9cce
+/model-tiers/when-routing-is-not-available:
+  en: d7db3dc68a4e7a87
+  zh: 58f8759059f4c611
+/model-tiers/what-this-does-not-change:
+  en: 220bbf7b3fba2fd7
+  zh: 04eb6ce54abffa4d

@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "reviewer report",
+  "description": "The review verdict. Only an `approve` verdict may lead to an LGTM on the pull request.",
+  "type": "object",
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "Two or three sentences: the overall quality of the change and why it is (not) ready."
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["approve", "request_changes"],
+      "description": "approve only when the change is correct, tested and free of blocking findings."
+    },
+    "findings": {
+      "type": "array",
+      "description": "Review findings. Empty when the change is clean.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": ["blocker", "major", "minor", "nit"]
+          },
+          "file": {"type": "string", "description": "Repository-relative path."},
+          "line": {"type": "integer", "description": "Line number, when known."},
+          "summary": {"type": "string", "description": "What is wrong."},
+          "fix": {"type": "string", "description": "What the change should do instead."}
+        },
+        "required": ["severity", "summary"]
+      }
+    },
+    "cannot_verify": {
+      "type": "array",
+      "description": "Requirements the reviewer could not settle from this diff alone. Never empty out of convenience: an unresolved entry means the verdict must be request_changes.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "requirement": {"type": "string", "description": "What could not be verified."},
+          "why": {"type": "string", "description": "Why the diff alone does not settle it."},
+          "checked": {"type": "string", "description": "What the reviewer did look at, or 'nothing'."}
+        },
+        "required": ["requirement", "why"]
+      }
+    },
+    "lgtm": {
+      "type": "boolean",
+      "description": "True only when the reviewer posted an LGTM comment on the pull request."
+    },
+    "pull_request": {
+      "type": "integer",
+      "description": "Number of the pull request that was reviewed."
+    },
+    "issue_comment_url": {
+      "type": "string",
+      "description": "URL of the comment the reviewer left on the pull request."
+    },
+    "blocked": {
+      "type": "boolean",
+      "description": "True when the reviewer could not review the change at all."
+    },
+    "blocker_reason": {
+      "type": "string",
+      "description": "Why the reviewer is blocked. Only meaningful when blocked is true."
+    }
+  },
+  "required": ["summary", "verdict", "findings"]
+}

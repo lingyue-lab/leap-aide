@@ -1,0 +1,47 @@
+# Bilingual-pair consistency record for github-skill-map.md / github-skill-map.zh-CN.md.
+# Per heading-slug path: sha256-16 of prose outside code blocks.
+# Editing EITHER side requires aligning the OTHER side first, then
+# re-recording:
+#   python3 backend/scripts/check_translation_pairing.py --write skills/leap-aide/supervise-fix-issue/references/github-skill-map.md
+/:
+  en: 41090b7604db2132
+  zh: 1c1de08ce7c7c5a0
+/github-skill-map:
+  en: 08d781087ad792d2
+  zh: 57e66acde45acafc
+/github-skill-map/the-bundled-skills:
+  en: b33ad82854385512
+  zh: 53183087e4d55261
+/github-skill-map/the-reuse-decisions:
+  en: 9b0a3f9ff205969e
+  zh: a38e7e3cdbf64854
+/github-skill-map/what-the-loop-borrows:
+  en: e3b0c44298fc1c14
+  zh: e3b0c44298fc1c14
+/github-skill-map/what-the-loop-borrows/github-auth:
+  en: 6de893bdf4eaad5e
+  zh: bdeec2f3b208d8d7
+/github-skill-map/what-the-loop-borrows/github-issues:
+  en: c7fd910d26edb19b
+  zh: 95933455e4762afc
+/github-skill-map/what-the-loop-borrows/github-pr-workflow:
+  en: ca0429ad9931697a
+  zh: 700c0f4c36e2905d
+/github-skill-map/what-the-loop-borrows/github-code-review:
+  en: 87f71d14ba74ca51
+  zh: 721a448ddb01d70a
+/github-skill-map/the-environment-contract:
+  en: adbe1b5363bc2834
+  zh: 5d652cb3871e773d
+/github-skill-map/what-the-loop-does-not-borrow:
+  en: e3b0c44298fc1c14
+  zh: e3b0c44298fc1c14
+/github-skill-map/what-the-loop-does-not-borrow/github-issue-to-pr:
+  en: 37b7a6610defa5a5
+  zh: eb4e23482dd32332
+/github-skill-map/what-the-loop-does-not-borrow/github-repo-management:
+  en: 6869731cc32f03d8
+  zh: 03fd3655f35afe61
+/github-skill-map/what-the-loop-does-not-borrow/codebase-inspection:
+  en: 625dd243404f226a
+  zh: 2a00ea479ca4233d

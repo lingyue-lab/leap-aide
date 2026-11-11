@@ -1,0 +1,11 @@
+# Bilingual-pair consistency record for re-reviewer.md / re-reviewer.zh-CN.md.
+# Per heading-slug path: sha256-16 of prose outside code blocks.
+# Editing EITHER side requires aligning the OTHER side first, then
+# re-recording:
+#   python3 backend/scripts/check_translation_pairing.py --write skills/leap-aide/supervise-fix-issue/prompts/re-reviewer.md
+/:
+  en: c8a80a46227205bd
+  zh: 200ce7e85fcbb017
+/re-reviewer-dispatch-template:
+  en: aadab7aee6c7743c
+  zh: 37a84bdea2119c0c

@@ -1,0 +1,32 @@
+# Bilingual-pair consistency record for role-tokens.md / role-tokens.zh-CN.md.
+# Per heading-slug path: sha256-16 of prose outside code blocks.
+# Editing EITHER side requires aligning the OTHER side first, then
+# re-recording:
+#   python3 backend/scripts/check_translation_pairing.py --write skills/leap-aide/supervise-fix-issue/references/role-tokens.md
+/:
+  en: 78dd85c8daac20d0
+  zh: 1db63a5fc248a64a
+/role-tokens:
+  en: cea689c12e520395
+  zh: 3101bf48065c9992
+/role-tokens/the-five-roles:
+  en: 6a1f212fbeb7b232
+  zh: 81cc44583fdccff3
+/role-tokens/the-config-file:
+  en: 108727fbe1863875
+  zh: 8ed145ae69e1474d
+/role-tokens/personal-access-tokens:
+  en: 5a3615b86d9a6263
+  zh: 1cedaa7cb8cf4084
+/role-tokens/github-app-installations:
+  en: fb20deda4201c3a4
+  zh: a53c7a90b8b968af
+/role-tokens/how-a-credential-reaches-github:
+  en: 475683cac527ffa3
+  zh: ad9374f9d659c93e
+/role-tokens/rotation:
+  en: 8b10bd9133d4ab4b
+  zh: 01a41d08f0969b95
+/role-tokens/rules:
+  en: 6bd1bbf385ddcdb8
+  zh: 04d7dcf4fe71b3ee

@@ -27,6 +27,7 @@ on:
       - 'backend/scripts/check_translation_pairing.py'
       - 'backend/tests/test_docs_i18n_pairing.py'
       - 'backend/tests/test_browser_desktop_skill.py'
+      - 'backend/tests/test_supervise_skill.py'
       - '.github/workflows/check-i18n-pairing.yml'
 
 jobs:
@@ -47,6 +48,7 @@ jobs:
       - name: Check tree completeness
         run: |
           python3 backend/scripts/check_translation_pairing.py --check-tree docs
+          python3 backend/scripts/check_translation_pairing.py --check-tree skills
           python3 backend/scripts/check_translation_pairing.py --check-tree . --depth 1
 
       - name: Check bilingual co-change (PRs)

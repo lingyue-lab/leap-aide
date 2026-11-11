@@ -20,6 +20,13 @@ from app.api.stream_manager import stream_manager
 
 logger = logging.getLogger(__name__)
 
+# How many conversations the sidebar lists. The SDK's list_sessions_rich()
+# defaults to 20, which truncates the list once a supervised development run
+# has created many sessions — the user then cannot find the conversation they
+# are looking at. Issue #57 asks for the same headroom on the delegate
+# children, which are listed per parent and are not affected by this window.
+_SESSION_LIST_LIMIT = 250
+
 # ---------------------------------------------------------------------------
 # Stale temp-file cleanup
 # ---------------------------------------------------------------------------
@@ -416,7 +423,12 @@ class Session:
         that are managed by the streaming/threading infrastructure.
         All holders of this Session reference automatically see the updated data.
         """
-        self.title = other.title
+        # A delegate child is titled from its goal in memory (the SDK never
+        # titles subagent sessions). The state.db row may still carry no
+        # title, so an empty source title must not wipe the name the sidebar
+        # is already showing.
+        if getattr(other, 'title', None):
+            self.title = other.title
         self.workspace = getattr(other, 'workspace', None)
         self.model = other.model
         self.model_invalid = bool(getattr(other, 'model_invalid', False))
@@ -1340,7 +1352,14 @@ def all_sessions():
 def _all_sessions_from_db(db, active_session_ids):
     """Build session list from state.db."""
     try:
-        rows = db.list_sessions_rich(source='webui', order_by_last_active=True)
+        # The SDK's list_sessions_rich() defaults to limit=20, which silently
+        # truncates the sidebar once a supervised run has created many
+        # sessions. The delegate children carry their own limit (they are
+        # listed per parent), so this window only has to cover the
+        # conversations themselves — 250 keeps a long supervise loop's
+        # history visible without loading the whole database.
+        rows = db.list_sessions_rich(source='webui', order_by_last_active=True,
+                                     limit=_SESSION_LIST_LIMIT)
     except Exception:
         return None
     if not rows:
@@ -1561,6 +1580,105 @@ def _all_sessions_from_json(active_session_ids):
             s['profile'] = 'default'
     result = _append_archived_sessions(result)
     return result
+
+
+# ── delegate child titles ─────────────────────────────────────────────────────
+#
+# The SDK never titles a delegate child: subagent sessions are hidden from
+# every picker, so the SDK skips its auto-titler for them (see
+# ``_UNTITLED_PLATFORMS`` in the SDK's agent/turn_context.py). The WebUI does
+# list them in the sidebar, and a sidebar full of unnamed children is
+# unreadable, so the WebUI derives the name from the goal it dispatched.
+
+# The SDK's SessionDB.MAX_TITLE_LENGTH is 100. 80 leaves room for the
+# uniqueness suffix appended when another session already holds the title.
+CHILD_TITLE_MAX_LEN = 80
+
+
+def derive_child_title(goal: str, max_len: int = CHILD_TITLE_MAX_LEN) -> str:
+    """Derive a short, human-readable title from a delegation goal.
+
+    The first line of the goal, clipped. Falls back to a generic name for an
+    empty goal.
+    """
+    text = str(goal or '').strip()
+    if not text:
+        return 'Subagent task'
+    first = text.splitlines()[0].strip()
+    if len(first) > max_len:
+        first = first[:max_len].rstrip() + '...'
+    return first or 'Subagent task'
+
+
+def _authoritative_title(db, session_id: str) -> str:
+    """Read the title state.db holds for a session, if any."""
+    getter = getattr(db, 'get_session_title', None)
+    if getter is None:
+        return ''
+    try:
+        return str(getter(session_id) or '')
+    except Exception:
+        return ''
+
+
+def persist_child_title(session, session_id: str = None) -> bool:
+    """Persist a delegate child's derived title to state.db.
+
+    Idempotent: the title is remembered on the session as ``_delegate_title``
+    and written again until it lands. The child's row is created by the SDK
+    inside the child thread, so at ``subagent.start`` time it may not exist
+    yet — the write is retried once the child has finished.
+
+    Session titles are unique in state.db, so a title another session already
+    holds is retried with a short suffix. A failure to persist never breaks
+    the delegation — the title stays in memory and the sidebar shows it.
+    """
+    title = getattr(session, '_delegate_title', None)
+    if not title:
+        return False
+    db = _get_session_db()
+    if db is None:
+        return False
+    sid = session_id or getattr(session, 'session_id', '')
+    candidates = [title, f"{title} ({sid[:8]})" if sid else title]
+    for candidate in candidates:
+        try:
+            setter = getattr(db, 'set_auto_title', None)
+            if setter is not None:
+                written = setter(sid, candidate,
+                                 source=db.TITLE_SOURCE_DERIVED)
+            else:
+                # Older SDK: set_session_title records "user" provenance.
+                written = db.set_session_title(sid, candidate)
+        except ValueError:
+            # The title is taken by another session — try the unique variant.
+            continue
+        except Exception:
+            logger.debug('child title write failed for %s', sid, exc_info=True)
+            return False
+        if written:
+            session.title = candidate
+            return True
+        # The row does not exist yet, or a higher-authority title already
+        # holds it. Either way this write cannot land.
+        break
+    # A title the user typed outranks the derived one — keep it.
+    authoritative = _authoritative_title(db, sid)
+    if authoritative:
+        session.title = authoritative
+    return False
+
+
+def set_child_title(session, session_id: str, goal: str) -> str:
+    """Title a delegate child from its goal and remember it on the session.
+
+    Returns the title the session now carries.
+    """
+    title = derive_child_title(goal)
+    session.title = title
+    session._delegate_title = title
+    persist_child_title(session, session_id)
+    return session.title
 
 
 def _get_all_delegate_children_map(db) -> dict[str, list[dict]]:

@@ -1,0 +1,77 @@
+# Bilingual-pair consistency record for SKILL.md / SKILL.zh-CN.md.
+# Per heading-slug path: sha256-16 of prose outside code blocks.
+# Editing EITHER side requires aligning the OTHER side first, then
+# re-recording:
+#   python3 backend/scripts/check_translation_pairing.py --write skills/leap-aide/supervise-fix-issue/SKILL.md
+/:
+  en: fb59a7ff86238ade
+  zh: bc283b0172f74856
+/supervise-fix-issue-skill:
+  en: 87da0c8d372da2a9
+  zh: e50abd8caaebdc09
+/supervise-fix-issue-skill/why-this-loop-is-a-skill:
+  en: 95935e1acd649406
+  zh: 3bb09919214c3aed
+/supervise-fix-issue-skill/when-to-use:
+  en: 8487de1ffc80c187
+  zh: 1e7446b7a07541f4
+/supervise-fix-issue-skill/rulings-not-stalls:
+  en: 1eb7ba2236412bbc
+  zh: 332fc7fc7c11cd19
+/supervise-fix-issue-skill/prerequisites:
+  en: 2c61763dc01d2947
+  zh: 06c2447c056a1fb1
+/supervise-fix-issue-skill/prerequisites/the-workspace:
+  en: c96d372796cb29fd
+  zh: 1a417e0a84a6c45a
+/supervise-fix-issue-skill/prerequisites/the-credentials:
+  en: 262bf9a74c163e45
+  zh: a6c4147360201af9
+/supervise-fix-issue-skill/model-selection:
+  en: 8dec2543f0f4211a
+  zh: 763e9c9abd0a4009
+/supervise-fix-issue-skill/procedure:
+  en: e3b0c44298fc1c14
+  zh: e3b0c44298fc1c14
+/supervise-fix-issue-skill/procedure/step-0-preflight:
+  en: 4b281c5c752dde1d
+  zh: 287f1d68c436a1a1
+/supervise-fix-issue-skill/procedure/step-1-read-the-issue:
+  en: a2342e53f1c1e876
+  zh: f22e70f652d18708
+/supervise-fix-issue-skill/procedure/step-2-arm-the-standing-goal:
+  en: 6d538a91fbe0eed4
+  zh: bc67ee1da2f5de1a
+/supervise-fix-issue-skill/procedure/step-3-run-the-loop:
+  en: 7327e1afbffa25ed
+  zh: a741d00f8464ee36
+/supervise-fix-issue-skill/procedure/step-3-run-the-loop/delegating-a-phase:
+  en: f33f2ffbb65cb088
+  zh: 52f4de3da4fb3a99
+/supervise-fix-issue-skill/procedure/step-3-run-the-loop/the-four-phases:
+  en: ca3cccdd4c942997
+  zh: 6aeedb6d0ca9c1fc
+/supervise-fix-issue-skill/procedure/step-3-run-the-loop/fix-rounds:
+  en: 5e762fa15add3b4f
+  zh: b4d2df111860c118
+/supervise-fix-issue-skill/procedure/step-3-run-the-loop/deciding-the-outcome:
+  en: e32e309b209afe2e
+  zh: 44aef1eccd8cac76
+/supervise-fix-issue-skill/procedure/step-3-run-the-loop/retrying-a-failed-phase:
+  en: aee4d56c394037d2
+  zh: 61301110b6e2a0dd
+/supervise-fix-issue-skill/procedure/step-4-close-out:
+  en: 4e97988969c12f5b
+  zh: dc210498b62db8a9
+/supervise-fix-issue-skill/resuming-after-a-compaction:
+  en: f6e5e6d3d8b842c9
+  zh: 599a7e3ae548932d
+/supervise-fix-issue-skill/rules:
+  en: c729d4214e943d40
+  zh: 2a8864cd05bd4f9d
+/supervise-fix-issue-skill/common-rationalizations:
+  en: b20c9c741e20dc63
+  zh: 80a8f1c5b9014ac9
+/supervise-fix-issue-skill/pitfalls:
+  en: 1a676a64732fe526
+  zh: 2743c2e5dbf8bc97

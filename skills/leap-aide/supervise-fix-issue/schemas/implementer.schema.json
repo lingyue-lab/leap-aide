@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "implementer report",
+  "description": "What the implementer changed on the branch. The supervisor reads this to decide whether the code phase passed.",
+  "type": "object",
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "Two or three sentences: what was implemented and why."
+    },
+    "branch": {
+      "type": "string",
+      "description": "The branch the work landed on, e.g. fix/issue-57."
+    },
+    "changed_files": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Repository-relative paths that were modified."
+    },
+    "commits": {
+      "type": "array",
+      "description": "The commits pushed for this phase, newest last.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "sha": {"type": "string", "description": "Short commit hash."},
+          "message": {"type": "string", "description": "Commit subject line."}
+        },
+        "required": ["message"]
+      }
+    },
+    "deviations": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Where the implementation departed from the plan, and why. Empty when it followed the plan."
+    },
+    "pull_request": {
+      "type": "integer",
+      "description": "Number of the pull request opened or updated, when there is one."
+    },
+    "issue_comment_url": {
+      "type": "string",
+      "description": "URL of the comment the implementer left on the issue."
+    },
+    "blocked": {
+      "type": "boolean",
+      "description": "True when the implementer could not finish (missing access, unresolvable build failure)."
+    },
+    "blocker_reason": {
+      "type": "string",
+      "description": "Why the implementer is blocked. Only meaningful when blocked is true."
+    }
+  },
+  "required": ["summary", "branch", "changed_files"]
+}

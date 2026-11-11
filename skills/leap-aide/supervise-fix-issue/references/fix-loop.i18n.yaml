@@ -1,0 +1,29 @@
+# Bilingual-pair consistency record for fix-loop.md / fix-loop.zh-CN.md.
+# Per heading-slug path: sha256-16 of prose outside code blocks.
+# Editing EITHER side requires aligning the OTHER side first, then
+# re-recording:
+#   python3 backend/scripts/check_translation_pairing.py --write skills/leap-aide/supervise-fix-issue/references/fix-loop.md
+/:
+  en: 434976b19fb0c575
+  zh: f19a4cfa75e56977
+/the-fix-loop:
+  en: c2fe349f45adf915
+  zh: c180f33c8241a247
+/the-fix-loop/the-round-cap:
+  en: 7ed9199c2a717dc4
+  zh: a5114cd9195c1da6
+/the-fix-loop/breaker-adjudication:
+  en: 385afc0935c3b102
+  zh: 2d478255982e647f
+/the-fix-loop/rulings-not-stalls:
+  en: ebaf3d83caccc401
+  zh: 59633f7a4e7d4271
+/the-fix-loop/cannot-verify:
+  en: 570f448313e4dec9
+  zh: e8bfee87bba52ef1
+/the-fix-loop/deferred-minors:
+  en: aa92646278c92744
+  zh: fb69d276802b64e6
+/the-fix-loop/what-ends-the-loop:
+  en: 1a59d3e920604cf4
+  zh: db0e937950d60c36

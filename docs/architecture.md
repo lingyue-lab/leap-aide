@@ -224,6 +224,73 @@ Two extra reapers cover what a clean close does not reach:
 
 ---
 
+## Supervised development loops
+
+A supervised development run takes a GitHub issue to a reviewed pull request without stopping until the pull request carries an LGTM. LeapAide runs it as a **skill** — `skills/leap-aide/supervise-fix-issue/` — not as a new service and not as a workflow engine.
+
+The loop has four phases, and each phase is one `delegate_task` call to a sub-session with `role="leaf"`:
+
+| Phase | Role | Produces |
+|---|---|---|
+| Plan | `planner` | The implementation plan, posted on the issue. |
+| Implement | `implementer` | The change on `fix/issue-<N>`, committed, pushed and opened as a pull request. |
+| Test | `tester` | The test run and its outcome. |
+| Review | `reviewer` | The verdict, posted on the pull request. |
+
+Three properties hold the loop together:
+
+- **The issue and the pull request are the channel.** Every phase leaves a comment, so the development history outlives the session that produced it, and a human can read the whole run without the logs.
+- **The loop state is a file.** `supervise_state.py` keeps the phase, the attempt counts, the branch and the pull request number in `<workspace>/.leap-aide/supervise/state.json`, written atomically. The SDK's standing goal is the heartbeat that keeps the session alive between phases — it is not the driver, because the SDK judges goal continuation at the end of the top-level turn, and a delegate child has no turn of its own to judge.
+- **Each role has its own credential.** The five roles authenticate separately, so a comment says which phase wrote it. The credential is injected as an environment variable and never enters the model's context.
+
+### Structure
+
+The loop's body is a set of documents, not a control flow in code:
+
+| Piece | What it holds |
+|---|---|
+| `SKILL.md` | The procedure, the rules, the rationalizations to refuse. |
+| `prompts/<phase>.md` | The dispatch template for each phase, filled and handed to `delegate_task` as `context`. The child prompt is byte-identical across the language pair; only the surrounding instructions are translated. |
+| `schemas/<phase>.schema.json` | The machine-checkable report each phase must return. |
+| `references/` | The discipline behind the loop: the fix loop, report handling, resuming, and model tiers. |
+| `scripts/` | Preflight, credential wrapper, state file, standing goal, review package, closing brief. |
+| `.leap-aide/supervise/state.json` | The phase, the attempt counts, the branch, the pull request and the ruling ledger. |
+
+Two disciplines make a document-driven loop survivable:
+
+- **Rulings, not stalls.** Any decision that is not one of four stops — a question only the user can answer, a decision only the user can make, a credential the loop lacks, an environment that will not run the tests — is a ruling the supervisor takes and records with `supervise_state.py rule --what ... --why ...`. `--why` is mandatory; a ruling without a reason is a guess. The ledger is read back at close-out so a human can audit every decision the loop took on their behalf.
+- **A bounded fix loop.** A review that requests changes starts a fix round rather than a restart: the findings are handed to the implementer verbatim, and a scoped re-reviewer verdicts each finding `ADDRESSED` or `NOT ADDRESSED` against the fix diff, which `review_package.py` writes to one file so the reviewer never re-derives the range. Each phase is capped at `max_attempts` (three by default); on exhaustion the supervisor adjudicates rather than simply handing back.
+
+### Model routing
+
+`delegate_task` in the SDK selects its model from the process-wide `delegation.model` block: the tool schema exposes no `model` property and the registry handler whitelists the arguments it forwards, so a top-level `model` would be dropped before selection ever sees it. The loop needs a different model per phase — a cheap one for the mechanical test run, a capable one for the review that decides whether the loop ships.
+
+Rather than modify the SDK, LeapAide installs a runtime shim in `backend/app/compat/delegate_model.py`, following the same pattern as `browser_cdp` and `desktop_guard`: it injects a `model` property into the tool's dynamic schema overrides, captures the value into a `ContextVar` before the whitelist drops it, and overlays it onto a **copy** of the delegation config at credential-resolution time — a copy, because the SDK documents that mutating the dict returned by `load_config_readonly` corrupts the process-wide cache for every later caller.
+
+The semantics are deliberately narrow: **one model per `delegate_task` call, applied to every child in it**, which is exactly the granularity of a phase, since a phase is one dispatch. When no `model` is passed the original code path runs untouched, so a deployment without the shim behaves exactly as the SDK does. When the shim is absent, the field is silently ignored and the tiering does nothing — which is why the skill requires the model id to be checked against the catalog before dispatch.
+
+### How this compares
+
+The shape is not new — it is the orchestrator-worker pattern — and the differences matter for what it costs to maintain:
+
+| Approach | Where the plan lives | What fences a phase | What it costs to keep |
+|---|---|---|---|
+| **Orchestrator-worker** (LangGraph, AutoGen) | A graph or a class in the host program. | The host program's own state machine. | A runtime, a state store and a graph definition to version and debug. |
+| **Supervisor** (LangGraph) | A supervisor node that routes to workers. | The supervisor's routing code. | The same runtime, plus a routing policy written as code. |
+| **GroupChat** (AutoGen) | A shared conversation every agent reads. | The conversation itself. | A transcript that grows and gets expensive to replay. |
+| **Ralph loop** | A single prompt, re-injected into one agent on every iteration. | The loop counter. | Almost nothing — which is the point, and also its limit. |
+| **This loop** (a skill) | A markdown body, plus JSON schemas and a state file. | The skill's rules, plus the SDK's `output_schema` validation. | Nothing to deploy: the skill ships with the product and is read, not executed. |
+
+The trade-off is deliberate. A skill-driven loop is **lighter** than a workflow engine — no new dependency, no new service, no graph to draw; the whole loop is a document an operator can read and change. What it gives up is **strictness**:
+
+- **No enforced DAG.** The phase order is a rule the supervisor follows, not a structure the runtime rejects. A wrong transition is possible, and the state file records it after the fact rather than preventing it.
+- **No per-role profile isolation.** Per-child model routing now gives each phase its own model (see *Model routing* above), but every role still shares the session's profile, provider configuration, budget and tool set. A programmatic loop can give each worker its own provider, budget and tool set outright; a skill reaches only the model, and only through a compat shim.
+- **No cross-session resume.** The state file records where the run was, and the standing goal keeps the session alive while it runs, but a run that outlives its session has to be picked up from the recorded state by hand. `references/resuming.md` makes that hand-pickup a written procedure rather than an improvisation; it does not make it automatic.
+
+Those three gaps are roadmap items, not accidents: they are the places where a programmatic loop would earn its dependency.
+
+---
+
 ## Database
 
 - Both LeapAide and the Hermes Agent SDK use state.db; the default path is `${HERMES_HOME}/state.db`.
@@ -302,3 +369,14 @@ Each entry records one historical decision and its current status.
 - **Decision:** TBD
 - **Rationale:** TBD
 - **Status:** TBD
+
+### ADR-002: The supervised development loop is a skill
+- **Decision:** The supervised development loop ships as a skill (`skills/leap-aide/supervise-fix-issue/`), not as a workflow engine, a service, or a change to the Hermes Agent SDK.
+- **Rationale:** The loop is a policy, not a runtime. As a skill it costs nothing to ship and nothing to run: it is read, not executed, so there is no dependency to pin, no graph to draw and no second process to operate. Its gaps are known and accepted for now — no enforced DAG, no per-role profile isolation, no cross-session resume — and they are tracked on the roadmap as the places where a programmatic loop would earn its dependency.
+- **Status:** Accepted (2026-11-11)
+
+### ADR-003: The loop is structured on subagent-driven-development
+- **Decision:** The supervise loop's body is restructured around the shape of [obra/superpowers](https://github.com/obra/superpowers) `subagent-driven-development` — per-phase dispatch templates in `prompts/`, a bounded fix loop with a scoped re-review, a ruling ledger, and explicit contracts about what a child may and may not do — while keeping LeapAide's own requirements: GitHub as the channel, five per-role credentials, `preflight.py`, the standing goal as heartbeat, machine-checked `output_schema` reports, and LGTM as an external completion the loop never writes itself.
+- **Rationale:** A loop driven only by prose in a skill body depends on the supervisor's context surviving intact; it does not, and the failure mode is a paraphrased contract that the child then follows. Moving the child-facing text into files that are read and filled at dispatch time, and the loop's discipline into references that can be audited after a compaction, makes the loop's behaviour a property of the repository rather than of one conversation. Borrowing a structure that tens of thousands of users already run also means the shapes — `DONE_WITH_CONCERNS`/`BLOCKED`/`NEEDS_CONTEXT`, `ADDRESSED`/`NOT ADDRESSED`, the Common Rationalizations table, "you do not dispatch subagents" — are proven rather than invented here.
+- **Deliberate divergences:** four fixed phases rather than N arbitrary tasks; five named roles rather than one reusable identity; `state.json` plus GitHub comments as dual state rather than a single ledger; machine-validated JSON schemas rather than prose reports; per-role model tiers rather than per-task complexity selection; and a three-attempt cap that ends in an adjudicated hand-back rather than superpowers' five-round breaker.
+- **Status:** Accepted (2026-11-11)

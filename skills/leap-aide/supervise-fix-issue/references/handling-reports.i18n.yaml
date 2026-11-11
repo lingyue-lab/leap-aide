@@ -1,0 +1,23 @@
+# Bilingual-pair consistency record for handling-reports.md / handling-reports.zh-CN.md.
+# Per heading-slug path: sha256-16 of prose outside code blocks.
+# Editing EITHER side requires aligning the OTHER side first, then
+# re-recording:
+#   python3 backend/scripts/check_translation_pairing.py --write skills/leap-aide/supervise-fix-issue/references/handling-reports.md
+/:
+  en: 68ea773197bcd3d8
+  zh: 9bd8ff3244c18426
+/handling-reports:
+  en: 820880542689f83f
+  zh: b2798fe982903f91
+/handling-reports/done-with-concerns:
+  en: fa44fac97b4fca62
+  zh: 9f26639baf27bf1a
+/handling-reports/blocked:
+  en: 79575b7b70fc0ced
+  zh: 35e11b2273c7d0df
+/handling-reports/needs-context:
+  en: fa846c6598eeba77
+  zh: 29a0ce9a9dc5b26a
+/handling-reports/reporting-the-reports:
+  en: 0483233284608432
+  zh: 9d5863ee09e97338
