@@ -58,7 +58,7 @@ Each role authenticates separately, so the comments a phase leaves are attributa
 <workspace>/.leap-aide/.gitignore                     (ignores the whole tree)
 ```
 
-Read them only through the wrapper script. Never `cat` the config, never paste a token into a message, never write a token into a file that is not under `.leap-aide/`.
+Read them only through the wrapper script. Never open the config file, never paste a token into a message, never write a token into a file that is not under `.leap-aide/`.
 
 What each role needs permission for, how a personal access token differs from a GitHub App installation, and how to rotate a credential are written down in [Role tokens](references/role-tokens.md).
 

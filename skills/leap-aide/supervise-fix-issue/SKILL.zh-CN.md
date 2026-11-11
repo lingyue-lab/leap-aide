@@ -58,7 +58,7 @@ issue 的 URL 是整个循环的种子。其余一切——方案、分支、PR�
 <workspace>/.leap-aide/.gitignore                     (ignores the whole tree)
 ```
 
-只通过包装脚本读取它们。绝不 `cat` 该配置，绝不把 token 贴进消息，绝不把 token 写进 `.leap-aide/` 之外的文件。
+只通过包装脚本读取它们。绝不打开该配置文件，绝不把 token 贴进消息，绝不把 token 写进 `.leap-aide/` 之外的文件。
 
 各角色分别需要什么权限、个人访问令牌与 GitHub App 安装有何不同、以及怎样轮换凭据，都写在 [角色令牌](references/role-tokens.zh-CN.md) 里。
 
