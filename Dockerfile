@@ -8,8 +8,7 @@
 #                         drives the command. Provides pytest + Node +
 #                         frontend deps + scripts/run-test.sh +
 #                         scripts/build.sh.
-#   * runtime (default) — production image, trimmed FROM testing to drop
-#                         dev/test artifacts. ENTRYPOINT=[/leap-aide-entrypoint.sh].
+#   * runtime (default) — production image. ENTRYPOINT=[/leap-aide-entrypoint.sh].
 #
 # Build contexts:
 #   docker buildx build --target runtime -t leap-aide:runtime -f Dockerfile .
@@ -24,6 +23,37 @@
 # GHA builds (build-cicd-builder-image.yml still uses it). buildah (Step 7 of the
 # plan) is used by CI for the testing and runtime targets, so we cross-validate
 # Dockerfile portability.
+#
+# ── Stage graph (issue #40 — shrink the published runtime image) ─────────────
+#
+#   ubuntu:24.04
+#    └─ base        runtime OS only: uv, gh + the gh-token extension, the
+#    │              leap-aide users, locales, ffmpeg, the Chromium shared
+#    │              libraries, X11/fcitx/fonts. NO build chain, NO node.
+#       ├─ toolchain  base + build-essential/python3.12-dev/xz-utils/libatomic1
+#       │             + Node.js 22 (NodeSource). Build-time only.
+#       │   └─ app      toolchain + COPY . /app + version badge + backend deps
+#       │       ├─ sdk      app + the hermes-agent SDK (install.sh --deps-only)
+#       │       │          + the prune below + the /usr/local/bin wrappers
+#       │       │   └─ testing  sdk + backend/tests + pytest + frontend deps
+#       │       └─ frontend app + frontend deps + vite build → /app/static
+#       └─ runtime    base + COPY --from=app /app
+#                    + COPY --from=frontend /app/static
+#                    + COPY --from=sdk <the pruned SDK trees>
+#
+# The runtime stage starts from `base`, NOT from `testing`. That is the whole
+# point of the graph: a child stage inherits every byte of its parent, so
+# "trimming" a child only writes whiteouts — the bytes stay in the ancestor
+# layers and the published image does not shrink. Measured on the pre-#40
+# image: deleting the 184 MB frontend/node_modules from a child of `testing`
+# produced a 2.56 kB layer. Copying the handful of paths the server actually
+# reads out of the build stages keeps them out of the runtime's layer chain
+# entirely, and the bytes that are never copied are never paid for.
+#
+# Concretely, the runtime keeps: the OS, the Chromium runtime libraries, the
+# Hermes SDK *code + venv* (minus its .git / node_modules / Electron app /
+# own test suite), the Playwright Chromium build, the browser-use tool venv,
+# the cua-driver, the hermes state seed, and the prebuilt frontend.
 #
 # Portability constraints (avoid BuildKit-only features):
 #   - No heredoc RUN. No RUN --mount=type=cache|ssh|bind. No --output.
@@ -130,6 +160,7 @@ RUN if [ "A${BUILD_APT_PROXY:-}" != "A" ]; then \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
+# ── The runtime OS package set ───────────────────────────────────────────────
 # Match scripts/install.sh's IN_DOCKER dependency list (grep for
 # `_sys_deps_to_install` — the block moves, so no line numbers here):
 #   - base: apt-utils locales sudo curl rsync openssh-client git gh
@@ -141,9 +172,9 @@ RUN if [ "A${BUILD_APT_PROXY:-}" != "A" ]; then \
 #
 # Note: these intentionally overlap with install.sh's system-deps section.
 # install.sh is idempotent (checks `command -v X` before installing) so the
-# testing stage's later `bash install.sh --deps-only` will skip them. We keep
+# sdk stage's later `bash install.sh --deps-only` will skip them. We keep
 # both because:
-#   - runtime stage (FROM builder) needs these deps and never runs install.sh
+#   - the runtime stage (FROM base) needs these deps and never runs install.sh
 #   - install.sh needs to work standalone on hosts without this Dockerfile
 # `git` is needed by scripts/npm_warmup.sh (which clones hermes-agent via
 # SSH BEFORE install.sh runs). Without it pre-installed here, warmup
@@ -159,29 +190,72 @@ RUN if [ "A${BUILD_APT_PROXY:-}" != "A" ]; then \
 # extra apt repo, keyring or pinned tarball — the same reason every other
 # tool here comes from apt. Version floor: gh 2.45 (noble-updates), which
 # covers the pr/issue/repo/api/run command surface the SDK relies on.
+#
+# What is NOT installed here (issue #40) and why:
+#
+#   build-essential python3.12-dev xz-utils libatomic1
+#       Build-time only. They live in the `toolchain` stage, which the
+#       runtime does not inherit. (libatomic1/xz-utils cost ~0.5 MB and
+#       were purged from the runtime image before #40 as well.)
+#
+#   fcitx5-frontend-gtk4, fcitx5-config-qt
+#       Chrome is a GTK3 app, so the GTK4 input-method frontend is dead
+#       weight; fcitx5-config-qt is only the GUI configurator, and the
+#       desktop is headless (Xvfb + openbox + x11vnc). Both were removed
+#       from the runtime image before #40 as well — but as a *child* of
+#       testing, which only left whiteouts behind. Dropping them here
+#       actually removes the bytes.
+#
+#   fonts-unifont, fonts-wqy-zenhei, fonts-urw-base35, fonts-freefont-ttf,
+#   fonts-ipafont-gothic, fonts-tlwg-loma-otf
+#       Playwright's `install-deps` font set. With --no-install-recommends
+#       (below) fontconfig-config only *depends* on fonts-dejavu-core and
+#       fonts-dejavu-mono; the rest are recommends and stay out. What we
+#       keep is deliberate: fonts-wqy-microhei (CJK, the agent's own
+#       requirement — install.sh checks for it), fonts-liberation (the
+#       metric-compatible Arial/Helvetica/Times clone Chrome asks for) and
+#       fonts-noto-color-emoji (Chrome's emoji rendering).
+#
+# What IS installed here that the SDK stage used to bring in:
+#
+#   The Chromium shared libraries
+#       `npx playwright install-deps chromium` installs them, but that ran
+#       in the SDK stage — a stage the runtime no longer inherits. Chrome
+#       dies at startup without them, so they are listed explicitly here.
+#       The list is Playwright 1.64's own ubuntu24.04-x64 chromium set
+#       plus the pieces the desktop already needs (gtk3 via fcitx5, the
+#       X11 client libs via xvfb/x11vnc). The sdk stage asserts with ldd
+#       that the downloaded Chromium has no unresolved shared library —
+#       so a future Playwright that needs one more lib fails the BUILD
+#       instead of the browser.
+#
+#   ffmpeg
+#       The SDK's installer adds ffmpeg "for TTS voice messages" — with
+#       plain `apt-get install -y ffmpeg`, i.e. WITH recommends, which drags
+#       in pocketsphinx-en-us (36 MB), intel-media-va-driver (13 MB),
+#       humanity-icon-theme (20 MB) and the rest of the VA-driver stack
+#       (~100 MB). Pre-installing ffmpeg here with --no-install-recommends
+#       makes the SDK's installer skip it (it checks `command -v ffmpeg`),
+#       so the TTS feature keeps working and the recommends never land.
 RUN apt-get update -y --fix-missing --no-install-recommends \
     && apt-get install -y --no-install-recommends \
         apt-utils locales sudo curl rsync openssh-client git gh \
-        python3.12 python3.12-venv python3.12-dev \
-        libatomic1 xz-utils build-essential \
+        python3.12 python3.12-venv \
         xvfb x11vnc openbox wmctrl xterm \
-        fcitx5 fcitx5-chinese-addons fcitx5-frontend-gtk3 fcitx5-frontend-gtk4 \
-        fcitx5-config-qt \
+        fcitx5 fcitx5-chinese-addons fcitx5-frontend-gtk3 \
         dbus-x11 python3-dbus \
-        fonts-wqy-microhei \
-    # fcitx5-config-qt ships two desktop entries with the same visible name
-    # "Fcitx 5 Configuration" (fcitx5-configtool.desktop and
-    # org.fcitx.fcitx5-config-qt.desktop). openbox's obamenu ignores the
-    # latter's NoDisplay=true, so both appear under Applications — keep only
-    # the canonical fcitx5-configtool entry.
-    && rm -f /usr/share/applications/org.fcitx.fcitx5-config-qt.desktop \
+        fonts-wqy-microhei fonts-liberation fonts-noto-color-emoji \
+        ffmpeg \
+        libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 \
+        libcairo2 libcairo-gobject2 libcups2t64 libdbus-1-3 libdrm2 libdrm-common \
+        libfontconfig1 libfreetype6 libgbm1 libglib2.0-0t64 libnspr4 libnss3 \
+        libpango-1.0-0 libpangocairo-1.0-0 \
+        libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxdamage1 libxext6 \
+        libxfixes3 libxkbcommon0 libxrandr2 libxrender1 libxshmfence1 libxtst6 \
+        libvulkan1 xdg-utils \
     && apt-get upgrade -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
-
-# Node.js 22 LTS is NOT installed here — install.sh handles it via
-# NodeSource in its system-deps section (idempotent, see install.sh
-# line 574-590). Keeping it there keeps the canonical-installer promise.
 
 # UTF-8 + Chinese locale
 RUN localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8 \
@@ -351,15 +425,167 @@ RUN /bin/bash -c 'set -euo pipefail && \
     env UV_INSTALL_DIR=/usr/local/bin sh /tmp/uv-install.sh && \
     rm -f /tmp/uv-install.sh'
 
+# ── Snapshot the base /usr/local/bin ────────────────────────────────────────
+# The runtime stage starts from `base`, so it inherits exactly the binaries
+# listed here (uv, uvx). Everything ELSE that ends up in /usr/local/bin
+# during the build — the console scripts of the backend's Python deps (idna,
+# pygmentize) and the command wrappers the hermes-agent installer drops
+# (hermes, hermes-agent, hermes-acp, agent-browser) — is staged separately
+# by the `sdk` stage and copied in explicitly.
+#
+# Copying the whole directory instead would write a second copy of the
+# 37 MB uv binary into the runtime layer, and copying only a hand-written
+# file list would silently miss whatever the installer adds next. Diffing
+# against this snapshot does neither.
+RUN mkdir -p /usr/local/share/leap-aide \
+    && ls -1 /usr/local/bin | LC_ALL=C sort > /usr/local/share/leap-aide/bin-base.txt \
+    && echo "=== base /usr/local/bin:" \
+    && cat /usr/local/share/leap-aide/bin-base.txt
+
 # Marker file used by install.sh is_docker() detection
 RUN touch /.within_container
+
+# ── Make /root traversable ──────────────────────────────────────────────────
+# The runtime image carries root-owned state under /root: the Playwright
+# Chromium (/root/.cache/ms-playwright), the browser-use tool venv
+# (/root/.local/share/uv/tools) and the cua-driver (/root/.cua-driver).
+# The server does NOT run as root — it runs as leap-aide (or
+# leap-aide-init), and Ubuntu's /root is mode 700 by default, so without
+# this the browser desktop cannot exec the Chromium binary at all.
+RUN chmod 755 /root
 
 # Cleanup
 RUN rm -rf /var/lib/apt/lists/* /etc/apt/apt.conf.d/01proxy \
     && apt-get clean
 
-# ---- app: source + baked deps -------------------------------------------
-FROM base AS app
+# ---- toolchain: build chain + Node.js (build-time only) ---------------------
+# Everything the build stages need and the runtime must NOT carry: a C/C++
+# toolchain, the Python headers, xz (Node.js ships .tar.xz) and Node.js
+# itself. The runtime stage derives from `base`, so none of this reaches the
+# published image — which is the point of #40: before it, the runtime stage
+# inherited all of this and then "removed" it with apt-get purge, which only
+# wrote whiteouts over ~250 MB of ancestor layers.
+FROM base AS toolchain
+
+# Build-time proxy (see base stage): ARG-only so RUN steps can reach the
+# network without the keys ever landing in the image config. Re-declared here
+# because ARG scope stops at FROM. Lowercase mirrors the uppercase values
+# (build.sh forwards all six --build-args explicitly).
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+
+USER root
+
+# Native build tools + the Python headers the SDK's wheels compile against.
+# build-essential is what node-pty and friends link against; python3.12-dev
+# provides the headers for any sdist the SDK's installer builds.
+RUN apt-get update -y --fix-missing --no-install-recommends \
+    && apt-get install -y --no-install-recommends \
+        build-essential python3.12-dev xz-utils libatomic1 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Node.js 22 LTS ───────────────────────────────────────────────────────────
+# hermes-agent 1.0.0 requires Node >= 22.22 and npm >= 11.17 (see its
+# package.json engines); Ubuntu's stock nodejs is 18.x — too old. The SDK's
+# own installer would do this (scripts/install.sh, NodeSource signed repo),
+# but the SDK stage is not the only one that needs Node: the `frontend`
+# stage builds the web assets with vite, and it must use the SAME Node
+# version the SDK's own npm install used, or the two builds disagree.
+# Installing it once here makes install.sh's NodeSource step a no-op
+# (it checks `command -v node`) and keeps a single source of truth.
+#
+# The setup script is downloaded to a file and executed, never piped into a
+# shell: `curl … | bash` swallows curl's exit status, and a failed download
+# would then install an empty repository list.
+#
+# The whole thing is retried, and the RESULT is verified — the script itself
+# is not a reliable failure signal. It downloads its signing key with a plain
+# curl; when that connection resets, the key import fails, the script still
+# exits 0, and apt then installs Ubuntu's stock nodejs 18 — which has no npm
+# at all. The build would die much later with a bare "npm: not found" and no
+# hint about the real cause. So: retry the setup, then assert the version
+# install.sh would accept (node >= 22, npm >= 10). A flaky mirror now fails
+# the build HERE, with a message that names the problem.
+RUN set -eu; \
+    _ok=0; \
+    for _try in 1 2 3; do \
+        echo "== NodeSource setup attempt $_try"; \
+        rm -f /etc/apt/sources.list.d/nodesource.list; \
+        if curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors \
+                -o /tmp/nodesource_setup.sh \
+                https://deb.nodesource.com/setup_22.x \
+           && bash /tmp/nodesource_setup.sh \
+           && apt-get install -y --no-install-recommends nodejs; then \
+            _node=$(node --version 2>/dev/null || true); \
+            _npm=$(npm --version 2>/dev/null || true); \
+            if [ -n "$_node" ] && [ -n "$_npm" ] \
+               && printf '%s' "$_node" | grep -qE '^v(2[2-9]|[3-9][0-9])' \
+               && printf '%s' "$_npm" | grep -qE '^(1[0-9]|[2-9][0-9])\.'; then \
+                _ok=1; break; \
+            fi; \
+            echo "++ got node=${_node:-<none>} npm=${_npm:-<none>} — not the Node 22 the SDK needs"; \
+        else \
+            echo "++ the NodeSource setup script failed"; \
+        fi; \
+        apt-get remove -y --purge nodejs npm >/dev/null 2>&1 || true; \
+        rm -rf /var/lib/apt/lists/*; \
+        sleep 10; \
+    done; \
+    [ "$_ok" = 1 ] \
+      || { echo "++ could not install Node.js 22 (the SDK needs node >=22 and npm >=10)"; exit 1; }; \
+    rm -f /tmp/nodesource_setup.sh; \
+    rm -rf /var/lib/apt/lists/*; \
+    apt-get clean; \
+    node --version; \
+    npm --version
+
+# npm configuration shared by every build stage that runs npm (the SDK
+# install, the frontend build). The runtime stage derives from `base` and
+# therefore carries NONE of these — before #40 the runtime inherited them
+# from `testing` and had to blank them one by one.
+#
+# Persist npm registry mirror as ENV (both lower- and uppercase variants —
+# some npm forks only check one). Without this, install.sh's
+# `npm config set registry` only writes to /root/.npmrc; USER leap-aide-init
+# has empty /home/leap-aide-init/.npmrc and no env var, so npm falls back
+# to registry.npmjs.org for frontend ci + playwright installs.
+#
+# Also persist fetch timeout/retry as ENV so the values apply to ALL npm/npx
+# calls in the image (install.sh's npm deps, npx playwright install, frontend
+# npm ci) — not just the immediate `npm ci` invocation. Defaults: 5-min fetch-
+# timeout × 2 retries is too lenient for flaky CDNs (npmmirror cache miss
+# observed at ~43s/pack); 60s × 5 retries with 10–60s backoff surfaces
+# transient failures quickly instead of stacking into minutes of total wait.
+ARG BUILD_NPM_REGISTRY=
+ENV npm_config_registry="${BUILD_NPM_REGISTRY}" \
+    NPM_CONFIG_REGISTRY="${BUILD_NPM_REGISTRY}" \
+    npm_config_fetch_timeout=60000 \
+    npm_config_fetch_retries=5 \
+    npm_config_fetch_retry_mintimeout=10000 \
+    npm_config_fetch_retry_maxtimeout=60000
+
+# electron / electron-builder postinstall downloads (electron's `node install.js`,
+# electron-builder's `code-sign` helper) fetch binaries from GitHub releases by
+# default. From China this routinely hangs/fails for the full ~150MB Electron
+# zip. Mirror URLs are build-args (overridable from outside, same pattern as
+# BUILD_NPM_REGISTRY / BUILD_PLAYWRIGHT_DOWNLOAD_HOST) so test-build-*.sh can
+# set them per build. We set both the canonical env var (ELECTRON_MIRROR) and
+# npm's auto-prefixed variant (npm_config_electron_mirror) to cover all
+# electron versions and downstream forks.
+ARG BUILD_ELECTRON_MIRROR=
+ARG BUILD_ELECTRON_BUILDER_BINARIES_MIRROR=
+ENV ELECTRON_MIRROR="${BUILD_ELECTRON_MIRROR}" \
+    ELECTRON_BUILDER_BINARIES_MIRROR="${BUILD_ELECTRON_BUILDER_BINARIES_MIRROR}" \
+    npm_config_electron_mirror="${BUILD_ELECTRON_MIRROR}" \
+    npm_config_electron_builder_binaries_mirror="${BUILD_ELECTRON_BUILDER_BINARIES_MIRROR}"
+
+# ---- app: source + baked deps -----------------------------------------------
+FROM toolchain AS app
 
 # Build-time proxy (see base stage): ARG-only so RUN steps can reach the
 # network without the keys ever landing in the image config. Re-declared here
@@ -405,8 +631,8 @@ RUN _trusted="--trusted-host pypi.org --trusted-host files.pythonhosted.org"; \
         "hindsight-client>=0.4.22" \
         $_trusted
 
-# ---- testing: test + build image -----------------------------------------------
-FROM app AS testing
+# ---- sdk: the hermes-agent SDK + the prune that makes the runtime small ----
+FROM app AS sdk
 
 # Build-time proxy (see base stage): ARG-only, re-declared at this FROM
 # boundary so every network RUN here (install.sh, npm ci, npm_warmup) sees the
@@ -422,39 +648,6 @@ ARG no_proxy
 # BUILD_UV_PYTHON_MIRROR pattern). Empty = upstream.
 ARG BUILD_NPM_REGISTRY=
 ARG BUILD_PLAYWRIGHT_DOWNLOAD_HOST=
-# Persist npm registry mirror as ENV (both lower- and uppercase variants —
-# some npm forks only check one). Without this, install.sh's
-# `npm config set registry` only writes to /root/.npmrc; USER leap-aide-init
-# has empty /home/leap-aide-init/.npmrc and no env var, so npm falls back
-# to registry.npmjs.org for frontend ci + playwright installs.
-#
-# Also persist fetch timeout/retry as ENV so the values apply to ALL npm/npx
-# calls in the image (install.sh's npm deps, npx playwright install, frontend
-# npm ci) — not just the immediate `npm ci` invocation. Defaults: 5-min fetch-
-# timeout × 2 retries is too lenient for flaky CDNs (npmmirror cache miss
-# observed at ~43s/pack); 60s × 5 retries with 10–60s backoff surfaces
-# transient failures quickly instead of stacking into minutes of total wait.
-ENV npm_config_registry="${BUILD_NPM_REGISTRY}" \
-    NPM_CONFIG_REGISTRY="${BUILD_NPM_REGISTRY}" \
-    npm_config_fetch_timeout=60000 \
-    npm_config_fetch_retries=5 \
-    npm_config_fetch_retry_mintimeout=10000 \
-    npm_config_fetch_retry_maxtimeout=60000
-
-# electron / electron-builder postinstall downloads (electron's `node install.js`,
-# electron-builder's `code-sign` helper) fetch binaries from GitHub releases by
-# default. From China this routinely hangs/fails for the full ~150MB Electron
-# zip. Mirror URLs are build-args (overridable from outside, same pattern as
-# BUILD_NPM_REGISTRY / BUILD_PLAYWRIGHT_DOWNLOAD_HOST) so test-build-*.sh can
-# set them per build. We set both the canonical env var (ELECTRON_MIRROR) and
-# npm's auto-prefixed variant (npm_config_electron_mirror) to cover all
-# electron versions and downstream forks.
-ARG BUILD_ELECTRON_MIRROR=
-ARG BUILD_ELECTRON_BUILDER_BINARIES_MIRROR=
-ENV ELECTRON_MIRROR="${BUILD_ELECTRON_MIRROR}" \
-    ELECTRON_BUILDER_BINARIES_MIRROR="${BUILD_ELECTRON_BUILDER_BINARIES_MIRROR}" \
-    npm_config_electron_mirror="${BUILD_ELECTRON_MIRROR}" \
-    npm_config_electron_builder_binaries_mirror="${BUILD_ELECTRON_BUILDER_BINARIES_MIRROR}"
 
 # npm postinstall pre-warm toggle (scripts/npm_warmup.sh). OFF by default.
 #   --build-arg BUILD_NPM_WARMUP=1   → run the warmup before install.sh
@@ -473,15 +666,6 @@ ENV ELECTRON_MIRROR="${BUILD_ELECTRON_MIRROR}" \
 # same flag: running --clean without a warmup would only delete caches
 # install.sh legitimately produced.
 ARG BUILD_NPM_WARMUP=0
-
-# Pre-warm scratch dir. Used by scripts/npm_warmup.sh to clone
-# hermes-agent and curl pre-fetch electron binaries ahead of the install.sh
-# RUN. The same path is read by install.sh's WARMUP_DIR detection so the
-# warmup clone is also reused as the installer source (eliminates the
-# `curl https://hermes-agent.nousresearch.com/install.sh` network call).
-# The actual directory is removed at the end of the install.sh RUN via
-# `npm_warmup.sh --clean`, so it doesn't bloat the image.
-ENV WARMUP_DIR=/tmp/hermes-agent-warmup
 
 # Custom hermes-agent git URL (e.g. private mirror / fork). Empty = upstream
 # NousResearch/hermes-agent. Read by hermes-agent installer as
@@ -510,6 +694,28 @@ ENV HERMES_INSTALLER_MIRROR=${HERMES_INSTALLER_MIRROR}
 ARG HERMES_HOME=/var/lib/leap-aide/hermes-seed
 ENV HERMES_HOME=${HERMES_HOME}
 
+# Knobs read directly by the hermes-agent installer's Node phase. Both are set
+# here, in the sdk stage only: `runtime` is FROM base and inherits neither, and
+# nothing they tune survives the sdk-stage prune below.
+#
+# NODE_DEPS_TIMEOUT — the installer wraps its workspace `npm install` in
+# `run_with_timeout "$NODE_DEPS_TIMEOUT"` (upstream default 600 s) and SIGTERMs
+# the whole npm process group when the budget runs out. Through a busy build
+# proxy the registry fetches retry at ~35 s each, so the install overran 600 s,
+# electron's postinstall died first, `install_node_deps || return` skipped
+# `copy_config_templates`, and the seed came out without a config.yaml. This is
+# the installer's own documented escape hatch for slow links, not a patch.
+#
+# ELECTRON_SKIP_BINARY_DOWNLOAD — electron's `npm/install.js` does
+# `if (process.env.ELECTRON_SKIP_BINARY_DOWNLOAD) process.exit(0)`. The ~150 MB
+# zip it would otherwise fetch is pure waste in this image: the sdk stage
+# prunes `apps/`, `node_modules/` and `~/.cache/electron` before `testing` or
+# `runtime` ever see them, and LeapAide never runs the Electron GUI. It is also
+# the single slowest download in the phase, which is what pushed NODE_DEPS over
+# its budget in the first place.
+ENV NODE_DEPS_TIMEOUT=3600 \
+    ELECTRON_SKIP_BINARY_DOWNLOAD=1
+
 USER root
 
 # install-wrappers.sh hardcodes /root/.cache/ms-playwright
@@ -520,12 +726,19 @@ USER root
 # agent-browser (the wrapper redirects to the global desktop receptionist).
 RUN chmod 755 /root
 
-# Re-COPY backend/tests/ on top of the /app/backend/tests/ already populated
-# by the earlier COPY . /app, so the testing image always has tests/ even if
-# .dockerignore ever grows a rule that would drop them. Path mirrors the repo
-# layout (backend/tests/) so conftest.py's REPO_ROOT discovery resolves the
-# server.py location correctly.
-COPY --chown=leap-aide-init:leap-aide-init backend/tests /app/backend/tests
+# ── Snapshot /usr/local/bin before the installer runs ────────────────────────
+# The installer drops the command wrappers (hermes, hermes-agent, hermes-acp,
+# agent-browser) into /usr/local/bin. The runtime stage cannot copy that whole
+# directory: it already holds the 37 MB uv binary from `base`, and a COPY of
+# the directory would write a SECOND copy of uv into the runtime layer.
+# Instead the sdk stage stages the installer-provided wrappers in their own
+# directory, and the runtime copies that. Deriving the list by diffing
+# /usr/local/bin against a pre-install snapshot keeps it honest: a wrapper the
+# installer adds later is picked up automatically, and node/npm/npx (installed
+# by the toolchain stage, before this snapshot) are correctly excluded.
+RUN ls -1 /usr/local/bin | LC_ALL=C sort > /usr/local/share/leap-aide/bin-before-install.txt \
+    && echo "=== /usr/local/bin before the installer runs:" \
+    && cat /usr/local/share/leap-aide/bin-before-install.txt
 
 # ---- DEBUG: verify mirror + connectivity before install.sh runs ----
 # Temporary debug block — confirms proxy + registry reachability. Once the
@@ -639,6 +852,8 @@ RUN echo "=== proxy + registry config ===" \
 # the real npm install's electron postinstall looks there and skips the
 # network round-trip when both files are present. Non-empty `ls` + non-zero
 # size = warmup took effect; absence = install.sh will hit the mirror.
+ENV WARMUP_DIR=/tmp/hermes-agent-warmup
+
 RUN --mount=type=secret,id=git_identity_key,dst=/root/.ssh/id_ed25519_install,mode=0400,required=false \
     case "${BUILD_NPM_WARMUP:-0}" in 1|true|yes|on) _warmup=1 ;; *) _warmup=0 ;; esac; \
     if [ "$_warmup" = "1" ]; then \
@@ -754,6 +969,177 @@ RUN set -e; \
     done; \
     echo "layout assertions OK"
 
+# ── Assert the Chromium binary has no unresolved shared library ────────────
+# The runtime stage no longer inherits the SDK stage's `playwright
+# install-deps` apt layer, so the Chromium runtime libraries are installed
+# explicitly in `base`. If a future Playwright release needs one more shared
+# library, Chrome would die at startup with a bare "error while loading
+# shared libraries" and nobody would know why. Check it HERE, where the
+# Chromium binary and the SDK's node are both available.
+RUN set -e; \
+    _chrome=""; \
+    for _c in /root/.cache/ms-playwright/chromium-*/chrome-linux64/chrome \
+             /root/.cache/ms-playwright/chromium-*/chrome-linux/chrome \
+             /root/.cache/ms-playwright/chromium-*/chrome-linux/chrome-headless-shell; do \
+        [ -x "$_c" ] && { _chrome="$_c"; break; }; \
+    done; \
+    if [ -z "$_chrome" ]; then \
+        echo "++ no Playwright Chromium binary found — the browser desktop would not work"; \
+        exit 1; \
+    fi; \
+    echo "== checking shared libraries of $_chrome"; \
+    _missing=$(ldd "$_chrome" 2>/dev/null | grep "not found" || true); \
+    if [ -n "$_missing" ]; then \
+        echo "++ Chromium has unresolved shared libraries — add them to the base stage:"; \
+        echo "$_missing"; \
+        exit 1; \
+    fi; \
+    echo "Chromium shared libraries OK"
+
+# ── Stage the /usr/local/bin entries the runtime needs ─────────────────────
+# The runtime stage derives from `base`, so it already has uv + uvx in
+# /usr/local/bin. Everything else that landed there during the build must be
+# copied in explicitly:
+#
+#   idna, pygmentize   console scripts of the backend's Python deps
+#                      (aiohttp → yarl → idna, hindsight-client → pygments),
+#                      installed system-wide by the `app` stage
+#   hermes, hermes-agent, hermes-acp, agent-browser
+#                      command wrappers written by the hermes-agent installer
+#
+# The list is derived by diffing /usr/local/bin against the BASE snapshot
+# (taken in the `base` stage right after uv was installed), not against a
+# hard-coded list: a wrapper the installer adds later is picked up
+# automatically, and uv/uvx are correctly excluded (copying them would
+# duplicate 37 MB).
+RUN set -e; \
+    mkdir -p /opt/leap-aide/bin; \
+    ls -1 /usr/local/bin | LC_ALL=C sort > /tmp/bin-after-install.txt; \
+    LC_ALL=C comm -13 /usr/local/share/leap-aide/bin-base.txt \
+        /tmp/bin-after-install.txt > /tmp/bin-new.txt; \
+    while IFS= read -r _f; do \
+        [ -n "$_f" ] || continue; \
+        cp -a "/usr/local/bin/$_f" /opt/leap-aide/bin/; \
+    done < /tmp/bin-new.txt; \
+    rm -f /tmp/bin-after-install.txt /tmp/bin-new.txt; \
+    echo "=== staged /usr/local/bin entries:"; \
+    ls -la /opt/leap-aide/bin/
+
+# ── Prune the SDK tree ──────────────────────────────────────────────────────
+# This is the single biggest lever of issue #40. Everything removed here is
+# unreachable from the running server:
+#
+#   .git             638 MB — the update checker degrades gracefully without
+#                    it (backend/app/api/updates.py returns None when the
+#                    path is absent) and the entrypoint's commit check is
+#                    guarded by `[ -d "$_agent_src/.git" ]`.
+#   node_modules     1.1 GB — the runtime image ships no node/npm/npx, so
+#                    the SDK's Node side (agent-browser, electron) cannot
+#                    run anyway; browser_tool.py resolves it through
+#                    `shutil.which("node")` and skips it.
+#   apps/             352 MB — the Electron desktop GUI. Server-side unused
+#                    (the only Python references are comments).
+#   tests/ website/   65 MB — the SDK's own test suite and docs site.
+#   docs/ evals/ nix/ contributors/ default.tar.gz — development artifacts.
+#   web/node_modules   13 MB — the Hermes WebUI's own node_modules.
+#
+# The venv (280 MB) and the SDK's Python sources stay: they ARE the agent.
+RUN rm -rf /usr/local/lib/hermes-agent/.git \
+           /usr/local/lib/hermes-agent/node_modules \
+           /usr/local/lib/hermes-agent/apps \
+           /usr/local/lib/hermes-agent/tests \
+           /usr/local/lib/hermes-agent/tests-js \
+           /usr/local/lib/hermes-agent/website \
+           /usr/local/lib/hermes-agent/docs \
+           /usr/local/lib/hermes-agent/evals \
+           /usr/local/lib/hermes-agent/nix \
+           /usr/local/lib/hermes-agent/contributors \
+           /usr/local/lib/hermes-agent/default.tar.gz \
+           /usr/local/lib/hermes-agent/sqlite_leak_fix.png \
+           /usr/local/lib/hermes-agent/web/node_modules \
+           /root/.cache/electron \
+           /root/.cache/node-gyp \
+           /usr/local/lib/node_modules \
+           /usr/local/include/node \
+           /usr/local/share/man/man1/node* \
+           /usr/local/share/doc/*node* \
+           /root/.cache/node \
+           /root/.cache/npm \
+           /root/.cache/pip \
+           /root/.cache/uv \
+           /root/.npm/_cacache \
+           /root/.npm/_logs \
+           /root/.npm/_temp \
+           /root/.npm/_update-notifier-last-checked \
+           /root/.npm/_cacache-content
+
+# ── Prune the Playwright cache ──────────────────────────────────────────────
+#   chromium_headless_shell-*  273 MB — the SDK drives the full Chromium
+#     build; backend/app/api/global_desktop.py globs for a binary literally
+#     named `chrome`/`chrome.real`, which the headless shell does not
+#     provide.
+#   locales/*.pak              50 MB — 220 language bundles; only en-US and
+#     zh-CN are reachable from a zh_CN.UTF-8 desktop.
+#   WidevineCdm                21 MB — the DRM plugin; useless here.
+RUN set -e; \
+    _pw=/root/.cache/ms-playwright; \
+    rm -rf "$_pw"/chromium_headless_shell-*; \
+    for _locales in "$_pw"/chromium-*/chrome-linux64/locales "$_pw"/chromium-*/chrome-linux/locales; do \
+        [ -d "$_locales" ] || continue; \
+        find "$_locales" -maxdepth 1 -type f ! -name 'en-US.pak' ! -name 'zh-CN.pak' -delete; \
+    done; \
+    rm -rf "$_pw"/chromium-*/chrome-linux64/WidevineCdm "$_pw"/chromium-*/chrome-linux/WidevineCdm; \
+    echo "=== Playwright cache after the prune:"; \
+    du -sh "$_pw"/* 2>/dev/null || true
+
+# ── Prune the Google API discovery documents ────────────────────────────────
+# google-api-python-client ships 580 Google API discovery documents — 95 MB
+# in the SDK venv. The Google Workspace skill only ever builds seven
+# services: gmail, drive, calendar, docs, sheets, people and chat, so the
+# other 573 are dead weight that makes the image bigger for no benefit.
+#
+# The browser-use tool venv is swept by the same loop. It does not carry
+# google-api-python-client in today's install (the loop skips a path that
+# does not exist), but a future tool bump that adds one would be caught
+# here instead of silently putting ~95 MB back into the image.
+#
+# The keep-list is asserted for every path that exists (the files must be
+# present and parse), so a renamed discovery document fails the build
+# instead of silently breaking the workspace skill at runtime.
+RUN set -e; \
+    _keep="calendar.v3 docs.v1 drive.v3 gmail.v1 people.v1 sheets.v4 chat.v1"; \
+    for _docs in \
+        /usr/local/lib/hermes-agent/venv/lib/python*/site-packages/googleapiclient/discovery_cache/documents \
+        /root/.local/share/uv/tools/browser-use/lib/python*/site-packages/googleapiclient/discovery_cache/documents ; do \
+        [ -d "$_docs" ] || continue; \
+        for _f in "$_docs"/*.json; do \
+            [ -e "$_f" ] || continue; \
+            _n=$(basename "$_f" .json); \
+            case " $_keep " in *" $_n "*) ;; *) rm -f "$_f" ;; esac; \
+        done; \
+        for _k in $_keep; do \
+            test -f "$_docs/$_k.json" || { echo "++ missing discovery document: $_k"; exit 1; }; \
+            python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$_docs/$_k.json"; \
+        done; \
+        echo "=== $_docs: $(ls "$_docs" | wc -l) discovery documents left"; \
+    done
+
+# ---- testing: test + build image -------------------------------------------
+FROM sdk AS testing
+
+# The npm registry mirror is an ARG (ARG scope stops at FROM) — the ENV that
+# carries it to every npm/npx call was set in the `toolchain` stage and is
+# inherited, but the ARG itself has to be re-declared here for the `npm ci`
+# below to be able to `npm config set registry` explicitly.
+ARG BUILD_NPM_REGISTRY=
+
+# Re-COPY backend/tests/ on top of the /app/backend/tests/ already populated
+# by the earlier COPY . /app, so the testing image always has tests/ even if
+# .dockerignore ever grows a rule that would drop them. Path mirrors the repo
+# layout (backend/tests/) so conftest.py's REPO_ROOT discovery resolves the
+# server.py location correctly.
+COPY --chown=leap-aide-init:leap-aide-init backend/tests /app/backend/tests
+
 # install.sh installs backend/requirements.txt (pyyaml) but NOT pytest —
 # pytest is a test framework, not a runtime dep. Add it on top, system-wide.
 USER root
@@ -767,18 +1153,19 @@ RUN _trusted="--trusted-host pypi.org --trusted-host files.pythonhosted.org"; \
 # static/ is excluded from the build context (.dockerignore), so nothing
 # copies it in — the frontend build below has to create it. That needs write
 # permission on /app, and /app is root:root 755: it was created by
-# `WORKDIR /app` (line ~171) running as root, and `COPY --chown` only
-# chowns the entries it copies, not a destination directory that already
-# exists. So `mkdir /app/static` from leap-aide-init fails with EACCES.
-# Create it here, as root, and hand it over. (Before static/ was excluded
-# this never showed up: the copied static/ entry was chowned correctly.)
+# `WORKDIR /app` running as root, and `COPY --chown` only chowns the entries
+# it copies, not a destination directory that already exists. So `mkdir
+# /app/static` from leap-aide-init fails with EACCES. Create it here, as
+# root, and hand it over. (Before static/ was excluded this never showed up:
+# the copied static/ entry was chowned correctly.)
 RUN mkdir -p /app/static && chown leap-aide-init:leap-aide-init /app/static
 USER leap-aide-init
 
 # Frontend deps (vitest, vite, tsc, postcss, tailwindcss) for tests + static
 # build. install.sh doesn't touch frontend. Drop to leap-aide-init since npm ≥7
-# refuses root installs. Timeout/retry is set as testing-stage ENV (above) so it
-# applies here AND to install.sh's npm/npx calls; no per-invocation flags needed.
+# refuses root installs. Timeout/retry is set as a toolchain-stage ENV (above)
+# so it applies here AND to install.sh's npm/npx calls; no per-invocation
+# flags needed.
 RUN cd /app/frontend \
     && if [ -n "${BUILD_NPM_REGISTRY:-}" ]; then npm config set registry "${BUILD_NPM_REGISTRY}"; fi \
     && npm ci --no-audit --no-fund \
@@ -788,18 +1175,18 @@ RUN cd /app/frontend \
 # Build the frontend once, bake the artifacts (static/) into the image.
 # Doing this in testing (not runtime) because:
 #   * testing already has node + npm + frontend/node_modules (from `npm ci`
-#     above); runtime stage purges them (Dockerfile:521-545), so it can't
-#     run `npm run build` on its own.
-#   * runtime stage derives FROM testing, so /app/static/ is inherited
-#     automatically. One bake, both images.
-# Without this step, runtime's `COPY . /app` (Dockerfile:231) would pick
-# up whatever stale static/ happens to be in the build context — empty on
-# clean CI, stale on local devs — and the served frontend would 404 or
-# load JS with hashes that no longer match index.html.
+#     above); the runtime stage copies the prebuilt static/ out of the
+#     `frontend` stage, so it never needs node at all.
+#   * the assets are identical in both images — they are built from the same
+#     frontend/ sources by the same vite version.
+# Without this step, runtime's `COPY . /app` (which now happens in the `app`
+# stage) would pick up whatever stale static/ happens to be in the build
+# context — empty on clean CI, stale on local devs — and the served frontend
+# would 404 or load JS with hashes that no longer match index.html.
 #
 # Drop the vite cache + tsbuildinfo after build (rebuildable on demand);
 # keep frontend/src/ — testing still runs vitest on it. Keep node_modules —
-# runtime trims it later.
+# the frontend test suite needs it.
 #
 # static/ is excluded from the build context (.dockerignore), so a stale host
 # copy never reaches the image — every file under it is regenerated here:
@@ -834,38 +1221,64 @@ WORKDIR /app
 #   command=["pytest"]               args=["backend/tests/", "-v"]
 #   command=["bash", "-c"]           args=["cd frontend && npm run build"]
 
-# ---- runtime: production image (default) — trimmed FROM testing ---------------
-# Derived from testing so every released runtime image is a derivative of a
-# testing build that has passed validation. Cleans dev/test artifacts that the
-# server does not need at runtime (frontend deps, build toolchain, pytest).
-FROM testing AS runtime
+# ---- frontend: the prebuilt web assets for the runtime image ----------------
+# A second, INDEPENDENT frontend build: it starts from `app`, so it does not
+# carry the SDK, and it produces exactly the tree the runtime copies into
+# /app/static. Keeping it separate means the runtime image never inherits
+# the SDK's layer chain, and the two builds can run in parallel with the SDK
+# install.
+FROM app AS frontend
+
+ARG BUILD_NPM_REGISTRY=
 
 USER root
+RUN mkdir -p /app/static && chown leap-aide-init:leap-aide-init /app/static
+USER leap-aide-init
 
-# Blank build-time-only env vars that testing stage inherited but runtime
-# should not leak. Empty string is equivalent to unset for npm / curl / uv.
-# Note: HTTP_PROXY / HTTPS_PROXY / NO_PROXY need no entry here — they are
-# build-arg-scoped ARGs since the base stage, so the keys never enter the
-# image config (adding `ENV HTTP_PROXY=` would just reintroduce empty keys).
-ENV npm_config_registry= \
-    NPM_CONFIG_REGISTRY= \
-    npm_config_fetch_timeout= \
-    npm_config_fetch_retries= \
-    npm_config_fetch_retry_mintimeout= \
-    npm_config_fetch_retry_maxtimeout= \
-    BUILD_PLAYWRIGHT_DOWNLOAD_HOST= \
-    ELECTRON_MIRROR= \
-    ELECTRON_BUILDER_BINARIES_MIRROR= \
-    npm_config_electron_mirror= \
-    npm_config_electron_builder_binaries_mirror= \
-    WARMUP_DIR=
+RUN cd /app/frontend \
+    && if [ -n "${BUILD_NPM_REGISTRY:-}" ]; then npm config set registry "${BUILD_NPM_REGISTRY}"; fi \
+    && npm ci --no-audit --no-fund \
+    && npm cache clean --force \
+    && rm -rf node_modules/.cache
 
-# Preserve these from the testing stage — runtime still consumes them:
-#   HERMES_AGENT_COMMIT  — warn-only consistency check in entrypoint
-#   HERMES_AGENT_REPO_URL — forwarded by entrypoint scripts
-#
-# HERMES_HOME is NOT preserved: the testing stage points it at the build-time
-# seed dir. Runtime re-points it at the state dir (the compose volume).
+# Same build the testing stage runs (scripts/build.sh --frontend → vite).
+# The static/ tree is what the runtime image serves; see the `testing` stage
+# for the details on why the assets are rebuilt inside the image.
+RUN rm -rf /app/static/assets /app/static/index.html \
+    && bash /app/scripts/build.sh --frontend \
+    && rm -rf /app/frontend/.vite /app/frontend/.tsbuildinfo
+
+# ---- runtime: production image (default) — built from `base`, not `testing` ---
+# The stage graph is the fix for issue #40. `runtime` derives from `base`, so
+# the runtime image's layer chain contains ONLY: the OS, the backend deps, the
+# prebuilt frontend and the pruned SDK trees. It never contains the build
+# chain, node, npm's cache, the Playwright headless shell, the SDK's .git or
+# its Electron app — none of which were ever copied in.
+FROM base AS runtime
+
+# Build-time proxy / mirror ARGs are re-declared for the values the runtime
+# image must remember (the hermes-agent commit pin and repo URL). The proxy
+# vars themselves stay ARG-only, so the published image carries no
+# HTTP_PROXY keys at all — Dockerfile has no way to unset an ENV, which is
+# exactly why they were never ENVs to begin with.
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+
+# hermes-agent pin (commit SHA) and repository URL. The entrypoint warns
+# when the running SDK does not match the pin; the repo URL is forwarded to
+# the SDK's own tooling.
+ARG HERMES_AGENT_COMMIT=
+ENV HERMES_AGENT_COMMIT=${HERMES_AGENT_COMMIT}
+ARG HERMES_AGENT_REPO_URL=
+ENV HERMES_AGENT_REPO_URL=${HERMES_AGENT_REPO_URL}
+
+# HERMES_HOME points at the STATE dir (the compose volume), not at the
+# build-time seed dir (/var/lib/leap-aide/hermes-seed). The entrypoint copies
+# the seed into it on first boot.
 ENV HERMES_HOME=/home/leap-aide/.hermes
 
 # gh keeps its auth state (hosts.yml / config.yml) under $GH_CONFIG_DIR,
@@ -890,91 +1303,91 @@ ENV GH_CONFIG_DIR=/home/leap-aide/.hermes/gh
 # -e HERMES_DISABLE_LAZY_INSTALLS=0.
 ENV HERMES_DISABLE_LAZY_INSTALLS=1
 
-# ── Trim test framework ──────────────────────────────────────────────────────
-# testing stage installs pytest+pytest-timeout for tests. Remove them from runtime.
-RUN _trusted="--trusted-host pypi.org --trusted-host files.pythonhosted.org"; \
-    case "${UV_INDEX_URL:-}" in \
-        *tuna.tsinghua*) _trusted="$_trusted --trusted-host pypi.tuna.tsinghua.edu.cn --trusted-host files.tuna.tsinghua.edu.cn" ;; \
-    esac; \
-    uv pip uninstall --system pytest pytest-timeout $_trusted || true
+# Default to binding all interfaces (required for container networking)
+ENV HERMES_WEBUI_HOST=0.0.0.0 \
+    HERMES_WEBUI_PORT=8787
 
-# ── Trim apt build chain ─────────────────────────────────────────────────────
-# testing base stage installs these for hermes-agent wheels + frontend deps.
-# Runtime does not compile or run Node/Python dev tools.
-RUN apt-get purge -y --auto-remove \
-        build-essential python3.12-dev xz-utils libatomic1 \
-    && apt-get remove -y --purge nodejs npm \
-    && apt-get autoremove -y --purge \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb /var/cache/apt/pkgcache.bin /var/cache/apt/srcpkgcache.bin
+USER root
 
-# ── Trim frontend build artifacts ───────────────────────────────────────────
-# frontend/node_modules (~300MB+) was installed by testing for vitest+npm ci.
-# Runtime only needs the prebuilt static/ assets — frontend source tree is not
-# required.
-# /app/.venv: stale second venv from older install flows. The single Python
-# env is the agent venv (/usr/local/lib/hermes-agent/venv); if /app/.venv ever
-# reappears at runtime that is a regression alarm (bootstrap should never need
-# to create one).
-RUN rm -rf /app/frontend/node_modules \
-           /app/frontend/dist \
-           /app/frontend/.vite \
-           /app/frontend/.cache \
-           /app/frontend/.tsbuildinfo \
-           /app/.venv
+# ── The application source ──────────────────────────────────────────────────
+# Straight from the `app` stage: the repo tree plus the backend's
+# system-wide Python deps (pyyaml, aiohttp, hindsight-client). The frontend
+# source tree comes along — it is ~1 MB and the SDK's own tooling reads it.
+COPY --from=app --chown=leap-aide-init:leap-aide-init /app /app
 
-# ── Trim docs and agent instructions ────────────────────────────────────────
-# The testing image needs these: backend/tests/test_docs_i18n_pairing.py
-# verifies docs/ against their *.i18n.yaml records and reads the repo-root
-# bilingual pair (AGENTS.md / AGENTS.zh-CN.md / AGENTS.i18n.yaml) plus
-# .gitignore. The runtime image reads none of it, and the shipped image
-# should not carry it either — drop it so the runtime stage stays exactly
-# as small as it was before the bilingual-pair gate landed.
+# The backend's system-wide dist-packages. Copied separately from /app
+# because `uv pip install --system` writes to /usr/local/lib/python3.12/…,
+# outside the /app tree.
+COPY --from=app /usr/local/lib/python3.12/dist-packages /usr/local/lib/python3.12/dist-packages
+
+# The prebuilt frontend. Served from /app/static by the server
+# (backend/app/api/routes.py resolves it relative to the repo root).
+COPY --from=frontend --chown=leap-aide-init:leap-aide-init /app/static /app/static
+
+# ── The Hermes Agent SDK ────────────────────────────────────────────────────
+# Already pruned in the `sdk` stage: no .git, no node_modules, no Electron
+# app, no test suite. What remains is the agent's Python code and its venv.
+COPY --from=sdk /usr/local/lib/hermes-agent /usr/local/lib/hermes-agent
+
+# The uv-managed CPython the agent venv was built against. The venv's
+# bin/python is a symlink into /usr/local/share/uv/python/…, so without this
+# the venv is a dead directory and the entrypoint's fail-fast check on
+# venv/bin/python would never even get to run.
+COPY --from=sdk /usr/local/share/uv/python /usr/local/share/uv/python
+COPY --from=sdk /usr/local/share/uv/bin /usr/local/share/uv/bin
+
+# Playwright's Chromium — the browser desktop's browser. Pruned to the full
+# Chromium build (no headless shell), two locales and no Widevine.
+COPY --from=sdk /root/.cache/ms-playwright /root/.cache/ms-playwright
+
+# The browser-use tool venv and the cua-driver launcher symlink. The seed's
+# bin/browser-use symlinks point straight into the tool venv, so the path has
+# to match exactly.
+COPY --from=sdk /root/.local /root/.local
+
+# cua-driver — the SDK's computer-use backend (~/.cua-driver).
+COPY --from=sdk /root/.cua-driver /root/.cua-driver
+
+# uv's install receipt. uv reads it to decide whether it has to fetch itself
+# again; without it a `uv` invocation in the container would try to
+# re-download the binary.
+COPY --from=sdk /root/.config/uv /root/.config/uv
+
+# The hermes-agent state seed. The entrypoint copies it into
+# $HERMES_HOME (/home/leap-aide/.hermes) on first boot: config.yaml with
+# display.show_reasoning=true, .env, SOUL.md, skills/ and the managed bin/
+# (uv, the browser-use launchers).
+COPY --from=sdk /var/lib/leap-aide/hermes-seed /var/lib/leap-aide/hermes-seed
+
+# The installer's command wrappers (hermes, hermes-agent, hermes-acp,
+# agent-browser). Staged in their own directory by the sdk stage so the
+# runtime does not have to copy the whole /usr/local/bin (which would carry
+# a second copy of the 37 MB uv binary).
+COPY --from=sdk /opt/leap-aide/bin/ /usr/local/bin/
+
+# ── Trim the docs and agent instructions ────────────────────────────────────
+# The runtime image reads none of them: the bilingual-pair gate
+# (backend/tests/test_docs_i18n_pairing.py) runs in the testing image, and
+# the shipped image should not carry the repository's own documentation.
+#
+# The build/test shell scripts go with them: the runtime never invokes them
+# (the image is built, not built-from), and install.sh in particular is a
+# host installer too — shipping it inside the image only invites someone to
+# run it there.
 RUN rm -rf /app/docs \
            /app/AGENTS.md \
            /app/AGENTS.zh-CN.md \
            /app/AGENTS.i18n.yaml \
-           /app/.gitignore
+           /app/.gitignore \
+    && rm -f /app/scripts/install.sh \
+             /app/scripts/build.sh \
+             /app/scripts/run-test.sh \
+             /app/scripts/cmd-util.sh
 
-# ── Trim npm caches ──────────────────────────────────────────────────────────
-# Preserve /root/.npm/_npx/ — backend/scripts/agent-browser-wrapper.sh looks up
-# agent-browser in this cache (line 90) as the primary path; only falls back to
-# `npx` (now removed) if the lookup misses. Also preserve /home/leap-aide-init
-# npm layout for consistency.
-RUN rm -rf /root/.npm/_cacache /root/.npm/_logs /root/.npm/_temp /root/.npm/_update-notifier-last-checked \
-           /root/.npm/_cacache-content \
-           /home/leap-aide-init/.npm/_cacache /home/leap-aide-init/.npm/_logs /home/leap-aide-init/.npm/_temp \
-           /usr/local/lib/node_modules /usr/local/include/node /usr/local/share/man/man1/node* /usr/local/share/doc/*node* \
-           /root/.cache/node /root/.cache/npm /root/.cache/pip /root/.cache/uv /home/leap-aide-init/.cache/pip
-
-# ── Trim build/test shell scripts ────────────────────────────────────────────
-# testing stage keeps these for build+test convenience; runtime does not invoke
-# them. Repo source remains unchanged (in scripts/), only the /app/scripts/
-# copies are removed.
-RUN rm -f /app/scripts/install.sh \
-          /app/scripts/build.sh \
-          /app/scripts/run-test.sh \
-          /app/scripts/cmd-util.sh
-
-# ── Defensive cleanup ────────────────────────────────────────────────────────
-# Strip any SSH scaffolding testing stage left from secret mounts (always present
-# because install.sh may clone hermes-agent via SSH even when secrets are
-# absent). Also strip any stray archives or shell history outside ms-playwright
-# (which the VNC observer still needs).
-RUN rm -rf /root/.ssh /root/.bash_history /root/.lesshst /root/.viminfo /root/.wget-hsts /root/.gitconfig \
-    && find / -xdev -maxdepth 4 -type f \( -name "*.zip" -o -name "*.tar.gz" -o -name "*.tgz" -o -name "*.tar.xz" \) \
-        -not -path "/root/.cache/ms-playwright/*" \
-        -delete 2>/dev/null || true
-
-# Restore runtime user. testing stage ended at USER leap-aide-init; restoring here
-# means the ENTRYPOINT bash runs as the right user.
+# Restore runtime user. The entrypoint bash runs as the right user.
 USER leap-aide-init
 
 COPY --chmod=555 backend/scripts/docker-entrypoint.sh /leap-aide-entrypoint.sh
-
-# Default to binding all interfaces (required for container networking)
-ENV HERMES_WEBUI_HOST=0.0.0.0 \
-    HERMES_WEBUI_PORT=8787
 
 EXPOSE 8787
 

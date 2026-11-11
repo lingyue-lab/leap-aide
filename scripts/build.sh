@@ -226,7 +226,7 @@ build_frontend() {
   # backed up by parallel layer-commit work, making per-file gzip take
   # 10-60+ seconds. The runtime server compresses on the fly if .gz files
   # are missing, so skipping here is safe — just slower at request time.
-  # /.within_container is the marker written by Dockerfile:219.
+  # /.within_container is the marker written by Dockerfile:446.
   if [ -f "/.within_container" ]; then
     warn "Skipping gzip pre-compression inside container (fuse-overlayfs may stall); runtime will compress on the fly"
   elif command -v gzip >/dev/null 2>&1; then
@@ -276,17 +276,24 @@ build_backend() {
 # here. See --help.
 #
 # Every Dockerfile ARG is forwarded as a --build-arg of the same name, always
-# explicitly, even when empty: the testing stage's ARGs inherit into the runtime
-# stage and must be cleared or they leak into the runtime layer's image config
-# (see the comment around Dockerfile:95). Exception: the six proxy ARGs are
-# fed from the BUILD_HTTP_PROXY/BUILD_HTTPS_PROXY/BUILD_NO_PROXY inputs (see
-# below) — plain HTTP_PROXY/HTTPS_PROXY/NO_PROXY are host/runtime toolchain
-# names and deliberately do not drive the build.
+# explicitly, even when empty: the runtime stage declares the ARGs it wants
+# (the hermes-agent pin, the mirror hosts) and an ARG that is declared in
+# one stage but not in another simply stays unset there — forwarding it
+# everywhere keeps the value identical across the stages that need it.
+# Exception: the six proxy ARGs are fed from the
+# BUILD_HTTP_PROXY/BUILD_HTTPS_PROXY/BUILD_NO_PROXY inputs (see below) —
+# plain HTTP_PROXY/HTTPS_PROXY/NO_PROXY are host/runtime toolchain names and
+# deliberately do not drive the build.
 #
-# Secrets: only `git_identity_key` is mounted (Dockerfile:471,483). There is
+# The runtime stage derives from `base`, not from `testing` (issue #40):
+# the published image must not inherit the build chain, Node.js or the
+# Playwright headless shell, and deleting them in a later stage would only
+# write whiteouts over bytes that stay in the ancestor layers.
+#
+# Secrets: only `git_identity_key` is mounted (Dockerfile:805,817). There is
 # deliberately no `git_host_key` — the build sets StrictHostKeyChecking=
 # accept-new so SSH writes its own known_hosts, and a read-only host-key mount
-# would only block that write (Dockerfile:459-464). Key bytes never enter an
+# would only block that write (Dockerfile:822-831). Key bytes never enter an
 # image layer: --mount=type=secret keeps them out of the filesystem snapshot.
 
 # Container-build log file; assigned by build_container_image() before use.

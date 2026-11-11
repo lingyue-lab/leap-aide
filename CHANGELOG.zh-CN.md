@@ -21,6 +21,9 @@ title: 更新日志
 - 发布说明不再硬折行：渲染器把更新日志的散文接成一段一行、一个列表项一行，发布说明因此铺满页面宽度，而不是停在更新日志的列宽上。
 - 仓库里的 Markdown 也不再硬折行：所有文档改为一个段落一行、一个列表项一行。
 - 发布页上的语言标签改为标题：折叠条默认用正文字号，"English" 与 "中文" 看着像说明文字上方的题注，而不是它们本来的小节标题。
+- **运行时镜像缩小到原来的三分之一** —— `leap-aide-runtime` 从约 5.9 GB 降到约 1.9 GB，压缩后的下载体积从约 2.5 GB 降到约 0.9 GB。runtime 阶段不再从 testing 阶段派生：在后一层里删除文件只会写下白障，编译工具链、Node.js、Playwright 的 headless shell、SDK 的 `.git` 仓库和 Electron 应用仍然留在发布出去的层里。现在 runtime 阶段从一个干净的 base 起步，只拷贝服务端真正会读取的路径。
+- 镜像不再携带 Playwright 的 headless shell、220 个 Chromium 语言包中的 218 个（只保留 `en-US` 与 `zh-CN`）、Widevine DRM 插件、electron 下载缓存，以及 573 份用不到的 Google API discovery 文档。`ffmpeg` 以不安装可选依赖的方式装入，用不到的字体集也已移除。
+- 每日构建与发布构建的 workflow 现在会把逐层体积报告写进 job summary，不用在本地重新构建就能发现体积回退。
 
 ## [0.1.0] - 2026-11-09
 

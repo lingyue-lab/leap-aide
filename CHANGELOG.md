@@ -21,6 +21,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - The release notes are no longer hard-wrapped: the renderer joins the changelog prose into one line per paragraph and per list item, so the notes fill the width of the release page instead of stopping at the changelog's column.
 - Markdown in the repository is no longer hard-wrapped either: every document is now written one line per paragraph and per list item.
 - The language label on the release page is now a heading: a disclosure summary renders in the body font size, which made "English" and "中文" read as captions above the notes instead of the section titles they are.
+- **The runtime image is about three times smaller** — `leap-aide-runtime` drops from ~5.9 GB to ~1.9 GB, and the compressed download from ~2.5 GB to ~0.9 GB. The runtime stage no longer derives from the test stage: deleting files in a later stage only wrote whiteouts, so the build chain, Node.js, the Playwright headless shell, the SDK's `.git` repository and its Electron app stayed in the published layers. The runtime stage now starts from a clean base and copies in only the paths the server actually reads.
+- The image no longer ships the Playwright headless shell, 218 of the 220 Chromium language bundles (only `en-US` and `zh-CN` remain), the Widevine DRM plugin, the electron download cache and 573 unused Google API discovery documents. `ffmpeg` is installed without its optional extras, and the unused font sets are gone.
+- The daily and release image workflows now publish a per-layer size report in the job summary, so a size regression is visible without rebuilding locally.
 
 ## [0.1.0] - 2026-11-09
 
