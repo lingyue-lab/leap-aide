@@ -1479,6 +1479,17 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                                     child_session._is_placeholder = False
                             except (KeyError, Exception):
                                 pass  # keep placeholder if DB load fails
+                        # The child's row exists by now — the SDK creates it
+                        # inside the child thread, so the title could not be
+                        # written when subagent.start fired. Write it now, so
+                        # the name survives a sidebar reload.
+                        try:
+                            from app.api.models import persist_child_title as _persist_child_title
+                            if _persist_child_title(child_session, child_session_id):
+                                from app.api.models import _notify_session_event as _notify_child
+                                _notify_child('upsert_session', child_session)
+                        except Exception:
+                            pass  # a missing title must never break the close
                         stream_manager.end_stream(child_session)
 
                     def _poll():
@@ -1542,7 +1553,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
 
                     # ── Create child stream on subagent.start ──
                     if event_type == 'subagent.start':
-                        from app.api.models import Session as _Session, LOCK as _MODELS_LOCK, SESSIONS as _SESSIONS, _notify_session_event as _notify
+                        from app.api.models import Session as _Session, LOCK as _MODELS_LOCK, SESSIONS as _SESSIONS, _notify_session_event as _notify, set_child_title as _set_child_title
                         goal = cb_kwargs.get('goal', '')
 
                         # Try to load real session from state.db (get_session
@@ -1570,7 +1581,13 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                             with _MODELS_LOCK:
                                 _SESSIONS[child_sid] = _child_session
                                 _SESSIONS.move_to_end(child_sid)
-                            _notify('upsert_session', _child_session)
+
+                        # Name the child after its goal. The SDK never titles a
+                        # subagent session (they are hidden from every picker),
+                        # but the WebUI lists them in the sidebar — a list of
+                        # unnamed children cannot be told apart.
+                        _set_child_title(_child_session, child_sid, goal)
+                        _notify('upsert_session', _child_session)
 
                         # Create stream (triggers begin_stream notify)
                         stream_manager.begin_stream(_child_session)

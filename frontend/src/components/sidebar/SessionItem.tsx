@@ -625,8 +625,8 @@ function DelegateChildItem({ child, isActive, onClick }: {
           <span className={`sidebar-item-child-icon${childStreaming ? ' streaming' : ''}`} data-tooltip={t('sessions.subagent_session')}>
             <Icon name="account_tree" size={16} />
           </span>
-          <span className="sidebar-item-title">
-            {t('sessions.subagent')}
+          <span className="sidebar-item-title" title={child.title || undefined}>
+            {child.title || t('sessions.subagent')}
           </span>
         </div>
       </div>
