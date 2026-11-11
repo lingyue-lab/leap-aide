@@ -224,6 +224,47 @@ Two extra reapers cover what a clean close does not reach:
 
 ---
 
+## Supervised development loops
+
+A supervised development run takes a GitHub issue to a reviewed pull request without stopping until the pull request carries an LGTM. LeapAide runs it as a **skill** — `skills/leap-aide/supervise-fix-issue/` — not as a new service and not as a workflow engine.
+
+The loop has four phases, and each phase is one `delegate_task` call to a sub-session with `role="leaf"`:
+
+| Phase | Role | Produces |
+|---|---|---|
+| Plan | `planner` | The implementation plan, posted on the issue. |
+| Implement | `implementer` | The change on `fix/issue-<N>`, committed, pushed and opened as a pull request. |
+| Test | `tester` | The test run and its outcome. |
+| Review | `reviewer` | The verdict, posted on the pull request. |
+
+Three properties hold the loop together:
+
+- **The issue and the pull request are the channel.** Every phase leaves a comment, so the development history outlives the session that produced it, and a human can read the whole run without the logs.
+- **The loop state is a file.** `supervise_state.py` keeps the phase, the attempt counts, the branch and the pull request number in `<workspace>/.leap-aide/supervise/state.json`, written atomically. The SDK's standing goal is the heartbeat that keeps the session alive between phases — it is not the driver, because the SDK judges goal continuation at the end of the top-level turn, and a delegate child has no turn of its own to judge.
+- **Each role has its own credential.** The five roles authenticate separately, so a comment says which phase wrote it. The credential is injected as an environment variable and never enters the model's context.
+
+### How this compares
+
+The shape is not new — it is the orchestrator-worker pattern — and the differences matter for what it costs to maintain:
+
+| Approach | Where the plan lives | What fences a phase | What it costs to keep |
+|---|---|---|---|
+| **Orchestrator-worker** (LangGraph, AutoGen) | A graph or a class in the host program. | The host program's own state machine. | A runtime, a state store and a graph definition to version and debug. |
+| **Supervisor** (LangGraph) | A supervisor node that routes to workers. | The supervisor's routing code. | The same runtime, plus a routing policy written as code. |
+| **GroupChat** (AutoGen) | A shared conversation every agent reads. | The conversation itself. | A transcript that grows and gets expensive to replay. |
+| **Ralph loop** | A single prompt, re-injected into one agent on every iteration. | The loop counter. | Almost nothing — which is the point, and also its limit. |
+| **This loop** (a skill) | A markdown body, plus JSON schemas and a state file. | The skill's rules, plus the SDK's `output_schema` validation. | Nothing to deploy: the skill ships with the product and is read, not executed. |
+
+The trade-off is deliberate. A skill-driven loop is **lighter** than a workflow engine — no new dependency, no new service, no graph to draw; the whole loop is a document an operator can read and change. What it gives up is **strictness**:
+
+- **No enforced DAG.** The phase order is a rule the supervisor follows, not a structure the runtime rejects. A wrong transition is possible, and the state file records it after the fact rather than preventing it.
+- **No per-role profile isolation.** Every role shares the session's profile, model and settings. A programmatic loop can give each worker its own provider, budget and tool set; a skill cannot, except across the credential boundary.
+- **No cross-session resume.** The state file records where the run was, and the standing goal keeps the session alive while it runs, but a run that outlives its session has to be picked up from the recorded state by hand.
+
+Those three gaps are roadmap items, not accidents: they are the places where a programmatic loop would earn its dependency.
+
+---
+
 ## Database
 
 - Both LeapAide and the Hermes Agent SDK use state.db; the default path is `${HERMES_HOME}/state.db`.
@@ -302,3 +343,8 @@ Each entry records one historical decision and its current status.
 - **Decision:** TBD
 - **Rationale:** TBD
 - **Status:** TBD
+
+### ADR-002: The supervised development loop is a skill
+- **Decision:** The supervised development loop ships as a skill (`skills/leap-aide/supervise-fix-issue/`), not as a workflow engine, a service, or a change to the Hermes Agent SDK.
+- **Rationale:** The loop is a policy, not a runtime. As a skill it costs nothing to ship and nothing to run: it is read, not executed, so there is no dependency to pin, no graph to draw and no second process to operate. Its gaps are known and accepted for now — no enforced DAG, no per-role profile isolation, no cross-session resume — and they are tracked on the roadmap as the places where a programmatic loop would earn its dependency.
+- **Status:** Accepted (2026-11-11)

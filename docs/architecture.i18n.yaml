@@ -45,6 +45,12 @@
 /leapaide-architecture-guide/data-flow-full-chat-path:
   en: c8181b582a88ecd4
   zh: 612d55b160a25da9
+/leapaide-architecture-guide/supervised-development-loops:
+  en: 59f9a9ceea2f16d5
+  zh: edf65c256d4c439f
+/leapaide-architecture-guide/supervised-development-loops/how-this-compares:
+  en: f9100e0f92611bd6
+  zh: d12dcc3c4f8e6571
 /leapaide-architecture-guide/database:
   en: 90638c14485bcdc9
   zh: 4e446332be87d702
@@ -63,3 +69,6 @@
 /leapaide-architecture-guide/architecture-decision-records-adr/adr-001-example:
   en: f0c1cb4e934b88c8
   zh: c06e01c75a52c04a
+/leapaide-architecture-guide/architecture-decision-records-adr/adr-002-the-supervised-development-loop-is-a-skill:
+  en: 95cab54c65234010
+  zh: c0d416e345627212
