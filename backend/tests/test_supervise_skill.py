@@ -114,6 +114,9 @@ def test_skill_files_exist():
     assert (REFERENCES_DIR / "github-skill-map.md").is_file()
     assert (REFERENCES_DIR / "github-skill-map.zh-CN.md").is_file()
     assert (REFERENCES_DIR / "github-skill-map.i18n.yaml").is_file()
+    assert (REFERENCES_DIR / "role-tokens.md").is_file()
+    assert (REFERENCES_DIR / "role-tokens.zh-CN.md").is_file()
+    assert (REFERENCES_DIR / "role-tokens.i18n.yaml").is_file()
 
 
 def test_scripts_compile():
@@ -172,6 +175,7 @@ def test_chinese_companion_mirrors_frontmatter_and_switcher():
 @pytest.mark.parametrize("anchor", [
     SKILL_MD,
     REFERENCES_DIR / "github-skill-map.md",
+    REFERENCES_DIR / "role-tokens.md",
 ])
 def test_bilingual_pairing_gate_passes(anchor):
     """check_translation_pairing.py verify mode exits 0 for the pair."""
@@ -192,6 +196,41 @@ def test_skills_tree_is_complete():
     )
     assert proc.returncode == 0, (
         f"--check-tree skills failed:\n{proc.stderr or proc.stdout}")
+
+
+def test_the_skill_points_at_the_role_token_reference():
+    """The credentials section links to the reference that details them."""
+    en = SKILL_MD.read_text(encoding="utf-8")
+    assert "references/role-tokens.md" in en, (
+        "the skill must link to the role-token reference")
+    zh = SKILL_ZH.read_text(encoding="utf-8")
+    assert "references/role-tokens.zh-CN.md" in zh, (
+        "the Chinese companion must link to the Chinese reference")
+
+
+def test_the_role_token_reference_documents_the_credential_contract():
+    """The reference states the rules the loop depends on."""
+    text = (REFERENCES_DIR / "role-tokens.md").read_text(encoding="utf-8")
+    for fragment in (
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_CONFIG_DIR",
+        "kind: pat",
+        "kind: app",
+        "gh token generate",
+        "--installation-id",
+    ):
+        assert fragment in text, (
+            f"the role-token reference must mention {fragment}")
+
+
+def test_the_skill_map_states_the_sdk_rules():
+    """The skill map says why the SDK and its bundled skills stay untouched."""
+    text = (REFERENCES_DIR / "github-skill-map.md").read_text(encoding="utf-8")
+    assert ".bundled_manifest" in text, (
+        "the skill map must explain the bundled-skill freeze")
+    assert "external dependency" in text, (
+        "the skill map must state that the SDK is an external dependency")
 
 
 # ── the role schemas ─────────────────────────────────────────────────────

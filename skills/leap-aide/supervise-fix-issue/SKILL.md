@@ -60,6 +60,8 @@ Each role authenticates separately, so the comments a phase leaves are attributa
 
 Read them only through the wrapper script. Never `cat` the config, never paste a token into a message, never write a token into a file that is not under `.leap-aide/`.
 
+What each role needs permission for, how a personal access token differs from a GitHub App installation, and how to rotate a credential are written down in [Role tokens](references/role-tokens.md).
+
 ## Procedure
 
 ### Step 0 — Preflight

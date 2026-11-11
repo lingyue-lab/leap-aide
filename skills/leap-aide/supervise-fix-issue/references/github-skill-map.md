@@ -24,6 +24,16 @@ The Hermes Agent SDK ships a set of GitHub skills under `skills/github/`. The su
 | `github-issue-to-pr` | A whole issue-to-PR discipline for one agent. | Not borrowed — it overlaps the loop. |
 | `codebase-inspection` | LOC and language metrics with `pygount`. | Not borrowed — no phase needs them. |
 
+## The reuse decisions
+
+**The SDK is an external dependency.** The Hermes Agent SDK is an installed package, not part of this repository. A change inside it is not a change to LeapAide: it is a change somebody has to reinstall, and LeapAide cannot ship it. The loop therefore never edits an SDK file, and everything the loop needs lives under `skills/leap-aide/` in this repository instead.
+
+**A bundled skill is not a place to put a change.** The SDK records every skill it installed in `~/.hermes/skills/.bundled_manifest`, keyed by a hash of the file it shipped. Edit the copy, and the SDK marks it as a user modification and freezes it — the next SDK update no longer overwrites it, so the modification silently outlives the version it was written for. Overwriting a bundled skill is a worse outcome than not having the change at all.
+
+**The environment is the seam.** A bundled skill is reached through what it reads: its environment variables, its scripts, the `gh` CLI. Satisfy those and the skill works unchanged. The loop arranges the environment and leaves the file alone — that is why the four borrowed skills need no patch.
+
+The table above therefore reads as four borrows and three refusals, and every refusal has the same reason: the loop already covers what that skill would add.
+
 ## What the loop borrows
 
 ### `github-auth`
@@ -69,6 +79,8 @@ Each one has a job:
 - **`GH_CONFIG_DIR`** points `gh` at a directory private to this role. `gh auth login` writes there instead of into the user's own `~/.config/gh`, so the loop never overwrites the login the human already has.
 
 Because `gh auth status` succeeds on `GH_TOKEN`, the borrowed skills take their first branch and report the role's identity — `GH_USER` is the role's account, not the human's.
+
+Where each token comes from, and what a role needs permission for, is written down in [Role tokens](role-tokens.md).
 
 ## What the loop does not borrow
 
