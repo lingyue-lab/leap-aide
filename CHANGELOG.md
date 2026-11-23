@@ -22,6 +22,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Markdown in the repository is no longer hard-wrapped either: every document is now written one line per paragraph and per list item.
 - The language label on the release page is now a heading: a disclosure summary renders in the body font size, which made "English" and "中文" read as captions above the notes instead of the section titles they are.
 
+### Fixed
+
+- Workspaces Panel git history now works on directories owned by another user: each backend git read injects the workspace path as a per-invocation `safe.directory`, so the branch and commit history show up without first running `git config --global --add safe.directory` by hand.
+
 ## [0.1.0] - 2026-11-09
 
 First public release. A chat front end with a shared, observable browser desktop, a workspace file browser, scheduled tasks, and one-click access to the mainstream LLM providers.
