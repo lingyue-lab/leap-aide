@@ -705,6 +705,14 @@ def _ensure_process_loop(session, session_id):
 
 def _drain_process_notifications_for_session(session, session_id):
     """Drain completion events, spawn new agent thread for each."""
+    if stream_manager.get_stream_id(session_id) is not None:
+        # A turn is already streaming for this session. Popping the completion
+        # here would consume its durable claim and drop the only in-process
+        # copy (issue #75) — leave it in the shared queue and retry next tick.
+        # Refresh the idle clock: nothing else touches it during a long turn,
+        # so the 3600s idle timeout would otherwise kill the poller mid-turn.
+        session._process_loop_last_active = time.time()
+        return
     try:
         from tools.process_registry import process_registry
         from tools.async_delegation import claim_event_delivery, complete_event_delivery
