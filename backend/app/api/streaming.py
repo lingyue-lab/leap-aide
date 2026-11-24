@@ -719,6 +719,16 @@ def _abandon_completion_delivery(event, claim, session, stream_id=None):
     process_registry.completion_queue.put(event)
 
 
+def _cleanup_stream_after_run(session, stream_id):
+    """End the stream even when the session could not be loaded."""
+    if session is not None:
+        stream_manager.end_stream(session, stream_id)
+    else:
+        # end_stream digs into session.session_id and would raise a second
+        # AttributeError that masks the original failure and leaks the maps.
+        stream_manager.cleanup_by_stream_id(stream_id)
+
+
 def _drain_process_notifications_for_session(session, session_id):
     """Deliver at most one completion event per tick; requeue the rest."""
     if stream_manager.get_stream_id(session_id) is not None:
@@ -3086,7 +3096,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
             _ckpt_thread.join(timeout=15)
         _clear_thread_env()  # TD1: always clear thread-local context
         # End the stream via StreamManager (handles ReplayableStream.close())
-        stream_manager.end_stream(s, stream_id)
+        _cleanup_stream_after_run(s, stream_id)
         with STREAMS_LOCK:
             CANCEL_FLAGS.pop(stream_id, None)
             AGENT_INSTANCES.pop(stream_id, None)  # Clean up agent instance reference

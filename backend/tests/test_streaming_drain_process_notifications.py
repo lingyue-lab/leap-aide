@@ -383,3 +383,20 @@ def test_begin_stream_notify_failure_keeps_stream_registered(monkeypatch, caplog
     assert stream_id is not None
     assert manager.get_stream_id(SESSION_ID) == stream_id
     assert any(r.levelname == "WARNING" for r in caplog.records)
+
+
+from app.api.streaming import _cleanup_stream_after_run
+
+
+def test_cleanup_stream_after_run_with_no_session(harness):
+    """session is None (get_session failed): fall back to cleanup_by_stream_id."""
+    _cleanup_stream_after_run(None, "sid-1234")
+
+    assert harness.calls == ["cleanup"]
+
+
+def test_cleanup_stream_after_run_ends_stream_for_session(harness):
+    """Loaded session keeps the normal end_stream path (callbacks, counts)."""
+    _cleanup_stream_after_run(harness.session, "sid-1234")
+
+    assert harness.calls == ["end_stream"]
