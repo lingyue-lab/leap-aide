@@ -723,9 +723,8 @@ def set_provider_key(provider_id: str, api_key: str | None) -> dict[str, Any]:
             "error": f"Cannot configure API key for '{model_catalog.provider_display(provider_id)}'. "
                      f"This provider does not have a known env var mapping.",
         }
-    # Multi-var providers (e.g. minimax: MINIMAX_API_KEY + MINIMAX_CN_API_KEY)
-    # write to the first declared name; the remaining names are alternate
-    # spellings scanned for key detection only.
+    # Multi-var providers write to the first declared name; the remaining
+    # names are alternate spellings scanned for key detection only.
     env_var = env_vars[0]
 
     # Validate API key format (basic sanity check)
