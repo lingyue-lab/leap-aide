@@ -150,3 +150,38 @@ class StreamManager:
 
 
 stream_manager = StreamManager()
+
+
+def filter_replay_history(history: list[tuple[str, dict | None]]) -> list[tuple[str, dict | None]]:
+    """Filter a replay snapshot before sending it to a reconnecting client.
+
+    Drops historical ``title`` events (the client re-fetches the
+    authoritative title over HTTP on refresh, so a replayed title is always
+    stale), ``clarify``/``approval`` events the user already answered or
+    decided, and their internal ``*_resolved`` markers.
+    Only replay snapshots pass through here; live events are never filtered.
+    """
+    resolved_clarify_ids: set = set()
+    resolved_approval_ids: set = set()
+    for event, data in history:
+        if event == "clarify_resolved":
+            cid = (data or {}).get("clarify_id")
+            if cid:
+                resolved_clarify_ids.add(cid)
+        elif event == "approval_resolved":
+            aid = (data or {}).get("approval_id")
+            if aid:
+                resolved_approval_ids.add(aid)
+
+    filtered: list[tuple[str, dict | None]] = []
+    for event, data in history:
+        if event == "title":
+            continue  # stale; the authoritative title comes from HTTP
+        if event in ("clarify_resolved", "approval_resolved"):
+            continue  # internal marker, not for the client
+        if event == "clarify" and (data or {}).get("clarify_id") in resolved_clarify_ids:
+            continue  # user already answered; don't re-prompt
+        if event == "approval" and (data or {}).get("approval_id") in resolved_approval_ids:
+            continue  # user already decided; don't re-prompt
+        filtered.append((event, data))
+    return filtered

@@ -12,6 +12,11 @@ import pathlib
 
 REPO_ROOT = pathlib.Path(__file__).parent.parent.resolve()
 
+import sys
+sys.path.insert(0, str(REPO_ROOT))
+
+from app.api.stream_manager import filter_replay_history
+
 ROUTES_SRC = (REPO_ROOT / "app" / "api" / "routes.py").read_text(encoding="utf-8")
 STREAMING_SRC = (REPO_ROOT / "app" / "api" / "streaming.py").read_text(encoding="utf-8")
 
@@ -53,3 +58,71 @@ def test_stream_marker_write_uses_active_stream_id():
     """Both respond handlers must look up the session's active_stream_id to find the stream."""
     assert "active_stream_id" in ROUTES_SRC, \
         "Respond handlers must use active_stream_id to find the ReplayableStream"
+
+
+def test_filter_drops_resolved_clarify_and_marker():
+    history = [
+        ("message", {"role": "user", "content": "hi"}),
+        ("clarify", {"clarify_id": "c1", "question": "pick one"}),
+        ("clarify_resolved", {"clarify_id": "c1"}),
+        ("token", {"t": "x"}),
+    ]
+    assert filter_replay_history(history) == [
+        ("message", {"role": "user", "content": "hi"}),
+        ("token", {"t": "x"}),
+    ]
+
+
+def test_filter_keeps_unresolved_clarify():
+    history = [("clarify", {"clarify_id": "c2", "question": "still open"})]
+    assert filter_replay_history(history) == history
+
+
+def test_filter_drops_historical_title():
+    history = [
+        ("title", {"session_id": "s1", "title": "A", "source": "llm"}),
+        ("token", {"t": "x"}),
+    ]
+    assert filter_replay_history(history) == [("token", {"t": "x"})]
+
+
+def test_filter_drops_resolved_approval_keeps_unresolved():
+    history = [
+        ("approval", {"approval_id": "a1"}),
+        ("approval_resolved", {"approval_id": "a1"}),
+        ("approval", {"approval_id": "a2"}),
+    ]
+    assert filter_replay_history(history) == [("approval", {"approval_id": "a2"})]
+
+
+def test_filter_marker_before_event_order():
+    history = [
+        ("clarify_resolved", {"clarify_id": "c1"}),
+        ("clarify", {"clarify_id": "c1"}),
+    ]
+    assert filter_replay_history(history) == []
+
+
+def test_filter_partial_resolution_keeps_other_cards():
+    history = [
+        ("clarify", {"clarify_id": "c1"}),
+        ("clarify_resolved", {"clarify_id": "c1"}),
+        ("clarify", {"clarify_id": "c2"}),
+    ]
+    assert filter_replay_history(history) == [("clarify", {"clarify_id": "c2"})]
+
+
+def test_filter_tolerates_none_data():
+    history = [
+        ("title", None),
+        ("clarify", None),
+        ("token", {"t": "x"}),
+    ]
+    assert filter_replay_history(history) == [
+        ("clarify", None),
+        ("token", {"t": "x"}),
+    ]
+
+
+def test_filter_empty_history():
+    assert filter_replay_history([]) == []
