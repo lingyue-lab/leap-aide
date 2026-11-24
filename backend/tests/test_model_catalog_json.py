@@ -603,7 +603,11 @@ class TestLoaderValidation:
     def test_env_vars_map(self):
         envs = mc.catalog_env_vars()
         assert "ARK_API_KEY" in envs.get("ark", [])
-        assert set(envs.get("minimax", [])) == {"MINIMAX_API_KEY", "MINIMAX_CN_API_KEY"}
+        # The minimax card now declares exactly one var; the China gateway
+        # key lives on the separate minimax-cn card (the map normalizes the
+        # singular env_var to a one-element list).
+        assert set(envs.get("minimax", [])) == {"MINIMAX_API_KEY"}
+        assert envs.get("minimax-cn") == ["MINIMAX_CN_API_KEY"]
         assert "GLM_API_KEY" in envs.get("zai", [])
 
 
@@ -807,9 +811,11 @@ class TestGatewayVariantValidation:
         catalog = mc.load_catalog(force=True)
         assert "variant" not in catalog["providers"]
 
-    def test_self_reference_ignored(self, tmp_path):
+    def test_self_reference_kept(self, tmp_path):
+        # A self-referential sdk_provider (WebUI slug == SDK id, e.g.
+        # minimax-cn) is kept: the field is what marks the entry as a
+        # gateway variant so chat gets explicit base_url/key translation.
         self._write_variant(tmp_path, "variant")
         mc.load_catalog(force=True)
-        # Entry kept but the alias is cleared — behaves like a regular entry.
         assert mc.get_provider_record("variant") is not None
-        assert mc.provider_sdk_provider("variant") is None
+        assert mc.provider_sdk_provider("variant") == "variant"

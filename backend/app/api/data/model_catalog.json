@@ -167,15 +167,38 @@
     "minimax": {
       "display_name": "MiniMax",
       "is_custom": false,
-      "auth": {"type": "api_key", "env_vars": ["MINIMAX_API_KEY", "MINIMAX_CN_API_KEY"]},
+      "auth": {"type": "api_key", "env_vars": ["MINIMAX_API_KEY"]},
       "endpoint": {"base_url": "https://api.minimax.chat/v1", "models_path": "/models"},
       "refresh": {"mode": "api", "membership": "replace"},
       "models": [
+        {"id": "MiniMax-M3", "label": "MiniMax M3"},
+        {"id": "MiniMax-M3.1-Flash", "label": "MiniMax M3.1 Flash"},
         {"id": "MiniMax-M2.7", "label": "MiniMax M2.7"},
         {"id": "MiniMax-M2.7-highspeed", "label": "MiniMax M2.7 Highspeed"},
         {"id": "MiniMax-M2.5", "label": "MiniMax M2.5"},
         {"id": "MiniMax-M2.5-highspeed", "label": "MiniMax M2.5 Highspeed"},
         {"id": "MiniMax-M2.1", "label": "MiniMax M2.1"}
+      ]
+    },
+    "minimax-cn": {
+      "display_name": "MiniMax (China)",
+      "is_custom": false,
+      "auth": {"type": "api_key", "env_var": "MINIMAX_CN_API_KEY"},
+      "endpoint": {
+        "base_url": "https://api.minimax.chat/v1",
+        "chat_base_url": "https://api.minimaxi.com/anthropic",
+        "models_path": "/models"
+      },
+      "sdk_provider": "minimax-cn",
+      "refresh": {"mode": "api", "membership": "replace"},
+      "models": [
+        {"id": "@minimax-cn:MiniMax-M3.1-Flash", "label": "MiniMax M3.1 Flash"},
+        {"id": "@minimax-cn:MiniMax-M3", "label": "MiniMax M3"},
+        {"id": "@minimax-cn:MiniMax-M2.7", "label": "MiniMax M2.7"},
+        {"id": "@minimax-cn:MiniMax-M2.7-highspeed", "label": "MiniMax M2.7 Highspeed"},
+        {"id": "@minimax-cn:MiniMax-M2.5", "label": "MiniMax M2.5"},
+        {"id": "@minimax-cn:MiniMax-M2.5-highspeed", "label": "MiniMax M2.5 Highspeed"},
+        {"id": "@minimax-cn:MiniMax-M2.1", "label": "MiniMax M2.1"}
       ]
     },
     "copilot": {

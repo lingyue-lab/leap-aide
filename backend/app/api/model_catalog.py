@@ -179,12 +179,11 @@ def _validate_provider(slug: str, rec: object) -> dict | None:
             )
             return None
         sdk_provider = sdk_provider.strip()
-        if sdk_provider == slug:
-            logger.warning(
-                "model_catalog: provider %r sdk_provider points at itself; ignored",
-                slug,
-            )
-            sdk_provider = None
+        # A self-referential value is kept: an entry whose catalog slug equals
+        # its SDK id (e.g. minimax-cn, a second gateway of an SDK-known
+        # provider where the WebUI slug and the SDK slug coincide) still needs
+        # the field to trigger gateway-variant translation (explicit
+        # base_url/key); the slug alone cannot mark it as a variant.
 
     # Custom endpoint: the provider is the user's own server rather than a
     # vendor API (ollama, lmstudio).  Such a provider needs no API key and

@@ -352,16 +352,18 @@ class TestProviderEnvVars:
 
     The env var names are read from model_catalog.json (auth.env_var /
     auth.env_vars) so catalog-only edits need no Python change.  These tests
-    pin the lookup contract: card-id folding, multi-var providers, the copilot
-    token-flow exception, and the key-detection paths that consume it.
+    pin the lookup contract: card-id folding, the singular vs list auth
+    forms, the copilot token-flow exception, and the key-detection paths
+    that consume it.
     """
 
     def test_env_vars_come_from_catalog(self):
-        """Multi-var catalog providers must expose every declared name."""
+        """Catalog-declared names, one entry per gateway card after the
+        minimax / minimax-cn env split (MINIMAX_CN_API_KEY moved to the
+        China card's own record)."""
         from app.api.providers import _provider_env_vars
-        assert _provider_env_vars("minimax") == [
-            "MINIMAX_API_KEY", "MINIMAX_CN_API_KEY",
-        ]
+        assert _provider_env_vars("minimax") == ["MINIMAX_API_KEY"]
+        assert _provider_env_vars("minimax-cn") == ["MINIMAX_CN_API_KEY"]
         assert _provider_env_vars("xiaomi") == ["XIAOMI_API_KEY"]
         assert _provider_env_vars("deepseek") == ["DEEPSEEK_API_KEY"]
 
@@ -388,11 +390,12 @@ class TestProviderEnvVars:
         assert _provider_env_vars("acme") == []
         assert _provider_env_vars("meta-llama") == []  # auth.type=none
 
-    def test_has_key_detects_secondary_env_var(self, monkeypatch, tmp_path):
-        """Regression: MINIMAX_CN_API_KEY alone in .env must count as a
-        configured key.  The old hardcoded _PROVIDER_ENV_VAR map only knew
-        MINIMAX_API_KEY, so CN-only setups showed as unconfigured here while
-        config.py's catalog scan already detected them."""
+    def test_has_key_cn_only_env_var_lights_cn_card(self, monkeypatch, tmp_path):
+        """Regression, post env-split: MINIMAX_CN_API_KEY alone in .env must
+        count as a configured key for the minimax-cn card — and must NOT
+        light the global minimax card.  The old hardcoded _PROVIDER_ENV_VAR
+        map only knew MINIMAX_API_KEY, so CN-only setups showed as
+        unconfigured while config.py's catalog scan already detected them."""
         _install_fake_hermes_cli(monkeypatch)
         monkeypatch.setattr(profiles, "get_active_hermes_home", lambda: tmp_path)
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -400,8 +403,16 @@ class TestProviderEnvVars:
             monkeypatch.delenv(var, raising=False)
         (tmp_path / ".env").write_text("MINIMAX_CN_API_KEY=cn-test-key-12345678\n")
 
+        old_cfg = dict(config.cfg)
+        config.cfg.clear()
+        config.cfg["model"] = {}
         from app.api.providers import _provider_has_key
-        assert _provider_has_key("minimax") is True
+        try:
+            assert _provider_has_key("minimax-cn") is True
+            assert _provider_has_key("minimax") is False
+        finally:
+            config.cfg.clear()
+            config.cfg.update(old_cfg)
 
     def test_has_key_false_when_nothing_configured(self, monkeypatch, tmp_path):
         """No .env entry and no process env → no key, despite a known mapping."""
@@ -522,6 +533,49 @@ class TestXiaomiGatewayVariantKeys:
         finally:
             config.cfg.clear()
             config.cfg.update(old_cfg)
+
+
+class TestMinimaxGatewayVariantKeys:
+    """Pattern B: minimax api and minimax-cn (China Code Plan) keep
+    independent keys.
+
+    Each gateway is its own catalog entry with its own env var, so a key set
+    on one card must never light up (or overwrite) the other.
+    """
+
+    def test_set_minimax_cn_key_writes_cn_env_var(self, monkeypatch, tmp_path):
+        """Saving the CN card's key lands in MINIMAX_CN_API_KEY, not MINIMAX_API_KEY."""
+        _install_fake_hermes_cli(monkeypatch)
+        monkeypatch.setattr(profiles, "get_active_hermes_home", lambda: tmp_path)
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        for var in ("MINIMAX_API_KEY", "MINIMAX_CN_API_KEY"):
+            monkeypatch.delenv(var, raising=False)
+
+        old_cfg = dict(config.cfg)
+        old_mtime = config._cfg_mtime
+        config.cfg.clear()
+        config.cfg["model"] = {}
+        try:
+            config._cfg_mtime = config.Path(config._get_config_path()).stat().st_mtime
+        except Exception:
+            config._cfg_mtime = 0.0
+
+        from app.api.providers import set_provider_key
+        try:
+            result = set_provider_key("minimax-cn", "sk-cn-123")
+            assert result["ok"] is True
+            # The CN key lands in the CN var...
+            assert os.environ["MINIMAX_CN_API_KEY"] == "sk-cn-123"
+            # ...and the global card's var stays unset (kept deleted above).
+            assert "MINIMAX_API_KEY" not in os.environ
+            content = (tmp_path / ".env").read_text()
+            assert "MINIMAX_CN_API_KEY=sk-cn-123" in content
+            # Must not touch the global card's var.
+            assert "MINIMAX_API_KEY=" not in content
+        finally:
+            config.cfg.clear()
+            config.cfg.update(old_cfg)
+            config._cfg_mtime = old_mtime
 
 
 class TestSetProviderKeyLiveValidation:
