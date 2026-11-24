@@ -19,6 +19,7 @@ from app.api.stream_manager import filter_replay_history
 
 ROUTES_SRC = (REPO_ROOT / "app" / "api" / "routes.py").read_text(encoding="utf-8")
 STREAMING_SRC = (REPO_ROOT / "app" / "api" / "streaming.py").read_text(encoding="utf-8")
+WS_EVENTS_SRC = (REPO_ROOT / "app" / "api" / "ws_events.py").read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -126,3 +127,9 @@ def test_filter_tolerates_none_data():
 
 def test_filter_empty_history():
     assert filter_replay_history([]) == []
+
+
+def test_ws_replay_filters_snapshot_only():
+    """WS replay must run the shared filter over the replay() snapshot (the live _drain_queue path does not.)"""
+    assert "filter_replay_history(stream.replay())" in WS_EVENTS_SRC, \
+        "_subscribe_replay must filter the replay() snapshot via filter_replay_history"
