@@ -185,3 +185,23 @@ def test_event_delivered_on_next_tick_after_busy(harness):
     assert harness.calls.count("complete") == 1
     assert len(harness.th.created) == 1
     assert harness.registry.completion_queue.qsize() == 0
+
+
+from app.api.streaming import _abandon_completion_delivery
+
+
+def test_abandon_delivery_order_with_stream(harness):
+    """Rollback order is cleanup -> release -> requeue; nothing else."""
+    event = _event()
+    _abandon_completion_delivery(event, "claim-1", harness.session, stream_id="sid-1234")
+
+    assert harness.calls == ["cleanup", "release", "requeue"]
+    assert harness.registry.completion_queue.get_nowait() is event
+
+
+def test_abandon_delivery_order_without_stream(harness):
+    """Without a stream there is nothing to clean; release still precedes requeue."""
+    event = _event()
+    _abandon_completion_delivery(event, "claim-1", harness.session)
+
+    assert harness.calls == ["release", "requeue"]

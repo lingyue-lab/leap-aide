@@ -703,6 +703,22 @@ def _ensure_process_loop(session, session_id):
     session._process_loop_thread.start()
 
 
+def _abandon_completion_delivery(event, claim, session, stream_id=None):
+    """Undo a claimed-but-undelivered completion. Order matters.
+
+    Requeueing before releasing would let another consumer pop the copy while
+    our claim is still fresh, so it would look like a duplicate and be dropped.
+    Imports are local so this stays usable without a live SDK registry.
+    """
+    from tools.process_registry import process_registry
+    from tools.async_delegation import release_event_delivery
+
+    if stream_id:
+        stream_manager.cleanup_by_stream_id(stream_id)
+    release_event_delivery(event, claim)
+    process_registry.completion_queue.put(event)
+
+
 def _drain_process_notifications_for_session(session, session_id):
     """Drain completion events, spawn new agent thread for each."""
     if stream_manager.get_stream_id(session_id) is not None:
