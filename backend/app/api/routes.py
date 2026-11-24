@@ -77,7 +77,7 @@ from app.api.helpers import (
     redact_session_data,
     _redact_text,
 )
-from app.api.stream_manager import stream_manager
+from app.api.stream_manager import filter_replay_history, stream_manager
 
 # How long the chat-start path waits for the cold model catalog to become
 # warm before refusing a turn.  The catalog is built by the boot prewarm on a
@@ -3171,36 +3171,15 @@ def _handle_session_stream_replay(handler, parsed):
 
     sq = stream.subscribe()
     try:
-        # Replay history
+        # Replay history — shared two-pass filter (same helper as the WS
+        # replay path): drop resolved clarify/approval dialogs and their
+        # internal markers, and drop historical title events (the client
+        # re-fetches the authoritative title over HTTP on refresh).
         history = stream.replay()
         if history:
-            # First pass: collect IDs of dialogs the user has already
-            # resolved, so we don't replay prompts that were answered
-            # before the client disconnected.
-            resolved_clarify_ids = set()
-            resolved_approval_ids = set()
-            for event, data in history:
-                if event == "clarify_resolved":
-                    cid = (data or {}).get("clarify_id")
-                    if cid:
-                        resolved_clarify_ids.add(cid)
-                elif event == "approval_resolved":
-                    aid = (data or {}).get("approval_id")
-                    if aid:
-                        resolved_approval_ids.add(aid)
-
-            # Second pass: forward events, dropping resolved dialogs
-            # and their internal *_resolved markers.
-            _sse(handler, 'replay_start', {'count': len(history)})
-            for event, data in history:
-                if event in ("clarify_resolved", "approval_resolved"):
-                    continue  # internal marker, not for the client
-                if event == "clarify" \
-                        and (data or {}).get("clarify_id") in resolved_clarify_ids:
-                    continue  # user already answered; don't re-prompt
-                if event == "approval" \
-                        and (data or {}).get("approval_id") in resolved_approval_ids:
-                    continue  # user already decided; don't re-prompt
+            filtered = filter_replay_history(history)
+            _sse(handler, 'replay_start', {'count': len(filtered)})
+            for event, data in filtered:
                 _sse(handler, event, data)
             _sse(handler, 'replay_end', {})
 

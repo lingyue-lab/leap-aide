@@ -38,15 +38,17 @@ def test_approval_resolved_marker_written_in_respond_handler():
         "_handle_approval_respond must write approval_resolved event to ReplayableStream"
 
 
+STREAM_MANAGER_SRC = (REPO_ROOT / "app" / "api" / "stream_manager.py").read_text(encoding="utf-8")
+
+
 def test_replay_handler_two_pass_filter():
-    """Replay handler must implement two-pass filtering to skip resolved events."""
+    """The two-pass filter lives in the shared helper; the SSE replay segment calls it."""
     assert "clarify_resolved" in ROUTES_SRC, \
-        "Replay handler must handle clarify_resolved events in filter logic"
-    # Two-pass pattern: collect IDs then filter
-    assert "resolved_clarify_ids" in ROUTES_SRC or "resolved_ids" in ROUTES_SRC, \
-        "Replay handler must collect resolved event IDs for filtering"
-    assert "continue" in ROUTES_SRC, \
-        "Replay handler must skip (continue) resolved events during replay"
+        "_handle_clarify_respond must still write the clarify_resolved marker"
+    assert "resolved_clarify_ids" in STREAM_MANAGER_SRC, \
+        "two-pass collection must live in filter_replay_history"
+    assert "filter_replay_history(history)" in ROUTES_SRC, \
+        "SSE replay must call the shared filter"
 
 
 def test_clarify_id_in_streaming_data():
@@ -133,3 +135,11 @@ def test_ws_replay_filters_snapshot_only():
     """WS replay must run the shared filter over the replay() snapshot (the live _drain_queue path does not.)"""
     assert "filter_replay_history(stream.replay())" in WS_EVENTS_SRC, \
         "_subscribe_replay must filter the replay() snapshot via filter_replay_history"
+
+
+def test_sse_replay_uses_shared_filter():
+    """SSE side imports the helper exactly once and calls it once, with the call inside the replay segment (the live loop does not go through the filter)."""
+    assert ROUTES_SRC.count("filter_replay_history") == 2, \
+        "routes.py must import the helper once and call it once"
+    replay_seg = ROUTES_SRC.split("def _handle_session_stream_replay", 1)[1]
+    assert "filter_replay_history(history)" in replay_seg
