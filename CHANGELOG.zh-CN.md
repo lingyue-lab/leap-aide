@@ -25,6 +25,7 @@ title: 更新日志
 ### Fixed
 
 - Workspaces Panel 的 git 历史现在在属主不一致的目录上也能工作：后端每次 git 读取都按调用注入 workspace 路径作为 `safe.directory`，分支与提交历史直接显示，无需先手动执行 `git config --global --add safe.directory`。
+- 后台委派（子 Agent）的完成摘要不再在会话仍在回复时被静默丢弃：事件会先留在队列中，等当前这一轮结束后再作为独立的一条摘要回复送达。
 
 ## [0.1.0] - 2026-11-09
 

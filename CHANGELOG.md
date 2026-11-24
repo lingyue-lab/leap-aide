@@ -25,6 +25,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Fixed
 
 - Workspaces Panel git history now works on directories owned by another user: each backend git read injects the workspace path as a per-invocation `safe.directory`, so the branch and commit history show up without first running `git config --global --add safe.directory` by hand.
+- Background delegation (subagent) completion summaries are no longer silently dropped when they arrive while the session is still replying: the event now waits in the queue and is delivered as its own summary turn once the current turn finishes.
 
 ## [0.1.0] - 2026-11-09
 
