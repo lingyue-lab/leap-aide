@@ -794,7 +794,7 @@ def _drain_process_notifications_for_session(session, session_id):
             )
             _abandon_completion_delivery(event, claim, session)
             return
-        if not sid:
+        if sid is None:
             session._process_loop_last_active = time.time()
             logger.info(
                 "[drain] session busy, completion requeued delegation_id=%s session=%s",

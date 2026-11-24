@@ -56,9 +56,17 @@ class FakeRegistry:
         if self.raise_on_drain is not None:
             raise self.raise_on_drain
         drained = []
+        foreign = []
         while not self.completion_queue.empty():
             evt = self.completion_queue.get_nowait()
-            drained.append((evt, f"msg:{evt.get('delegation_id')}"))
+            if owns_event is None or owns_event(evt):
+                drained.append((evt, f"msg:{evt.get('delegation_id')}"))
+            else:
+                foreign.append(evt)
+        for evt in foreign:
+            # Unrecorded put: leaving another session's event queued is not a
+            # requeue, and must not show up in the call order.
+            queue.Queue.put(self.completion_queue, evt)
         return drained
 
 
@@ -87,7 +95,8 @@ class FakeStreamManager:
 
 
 class FakeThread:
-    def __init__(self, target=None, args=(), daemon=None, name=None):
+    def __init__(self, calls, target=None, args=(), daemon=None, name=None):
+        self.calls = calls
         self.target = target
         self.args = args
         self.daemon = daemon
@@ -96,17 +105,19 @@ class FakeThread:
         self.start_calls = 0
 
     def start(self):
+        self.calls.append("thread_start")
         self.start_calls += 1
         if self.start_error is not None:
             raise self.start_error
 
 
 class FakeThreading:
-    def __init__(self):
+    def __init__(self, calls):
+        self.calls = calls
         self.created = []
 
     def Thread(self, **kwargs):
-        thread = FakeThread(**kwargs)
+        thread = FakeThread(self.calls, **kwargs)
         self.created.append(thread)
         return thread
 
@@ -114,10 +125,11 @@ class FakeThreading:
 @pytest.fixture
 def harness(monkeypatch):
     calls = []
+    delivery_calls = []
     session = FakeSession()
     registry = FakeRegistry(calls)
     sm = FakeStreamManager(calls)
-    th = FakeThreading()
+    th = FakeThreading(calls)
     knobs = {"claim": "claim-1", "complete_error": None, "release_error": None}
 
     def claim_event_delivery(event, consumer):
@@ -126,11 +138,13 @@ def harness(monkeypatch):
 
     def complete_event_delivery(event, claim):
         calls.append("complete")
+        delivery_calls.append(("complete", claim))
         if knobs["complete_error"] is not None:
             raise knobs["complete_error"]
 
     def release_event_delivery(event, claim):
         calls.append("release")
+        delivery_calls.append(("release", claim))
         if knobs["release_error"] is not None:
             raise knobs["release_error"]
 
@@ -142,16 +156,17 @@ def harness(monkeypatch):
     monkeypatch.setattr(streaming, "threading", SimpleNamespace(Thread=th.Thread))
     return SimpleNamespace(
         calls=calls, session=session, registry=registry, sm=sm, th=th,
+        delivery_calls=delivery_calls,
         knobs=knobs, monkeypatch=monkeypatch,
     )
 
 
-def _event(delegation_id=DELEGATION_ID):
+def _event(delegation_id=DELEGATION_ID, origin_session=SESSION_ID):
     return {
         "type": "async_delegation",
         "delegation_id": delegation_id,
-        "session_key": f"agent:main:webui:dm:{SESSION_ID}",
-        "origin_ui_session_id": SESSION_ID,
+        "session_key": f"agent:main:webui:dm:{origin_session}",
+        "origin_ui_session_id": origin_session,
         "session_id": "child-1",
     }
 
@@ -196,6 +211,7 @@ def test_abandon_delivery_order_with_stream(harness):
     _abandon_completion_delivery(event, "claim-1", harness.session, stream_id="sid-1234")
 
     assert harness.calls == ["cleanup", "release", "requeue"]
+    assert harness.delivery_calls == [("release", "claim-1")]
     assert harness.registry.completion_queue.get_nowait() is event
 
 
@@ -205,10 +221,11 @@ def test_abandon_delivery_order_without_stream(harness):
     _abandon_completion_delivery(event, "claim-1", harness.session)
 
     assert harness.calls == ["release", "requeue"]
+    assert harness.delivery_calls == [("release", "claim-1")]
 
 
 def test_single_event_delivers_once(harness):
-    """Happy path: claim once, begin once, start one thread, ack once."""
+    """Happy path: claim, begin, start one thread, then ack its claim token."""
     event = _event()
     harness.registry.completion_queue.put(event)
     harness.calls.clear()
@@ -216,8 +233,11 @@ def test_single_event_delivers_once(harness):
     _drain_process_notifications_for_session(harness.session, SESSION_ID)
 
     assert harness.calls == [
-        "get_stream_id", "drain", "claim", "begin_stream", "complete",
+        "get_stream_id", "drain", "claim", "begin_stream", "thread_start", "complete",
     ]
+    # The ack carries the token claim_event_delivery handed back, and it must
+    # come after the thread started (the delivery is only real once it runs).
+    assert harness.delivery_calls == [("complete", "claim-1")]
     assert len(harness.th.created) == 1
     thread = harness.th.created[0]
     assert thread.start_calls == 1
@@ -230,30 +250,70 @@ def test_single_event_delivers_once(harness):
 
 
 def test_extra_events_requeued_before_claim(harness):
-    """Two events in one tick: only the first is delivered; the second is back
-    in the queue, in order, before the first claim happens."""
-    first, second = _event("deleg-1"), _event("deleg-2")
+    """Three events queued at once are delivered one per tick, in FIFO order,
+    each exactly once; the extras go back before the claim, never lost."""
+    first, second, third = _event("deleg-1"), _event("deleg-2"), _event("deleg-3")
     harness.registry.completion_queue.put(first)
     harness.registry.completion_queue.put(second)
+    harness.registry.completion_queue.put(third)
     harness.calls.clear()
 
     _drain_process_notifications_for_session(harness.session, SESSION_ID)
 
+    # Both extras are back in the queue, order preserved, before any claim.
     assert harness.calls.index("requeue") < harness.calls.index("claim")
     assert harness.calls.count("claim") == 1
     assert harness.calls.count("complete") == 1
+    assert harness.registry.completion_queue.qsize() == 2
+    assert harness.th.created[0].args[1] == "msg:deleg-1"
+
+    # Second tick: the next event only, with the last one back in the queue.
+    harness.calls.clear()
+    harness.sm.begin_result = "sid-2"
+    _drain_process_notifications_for_session(harness.session, SESSION_ID)
+
+    assert harness.calls == [
+        "get_stream_id", "drain", "requeue", "claim", "begin_stream",
+        "thread_start", "complete",
+    ]
+    assert harness.th.created[-1].args[1] == "msg:deleg-2"
     assert harness.registry.completion_queue.qsize() == 1
-    assert harness.registry.completion_queue.get_nowait() is second
+    assert harness.registry.completion_queue.get_nowait() is third
+    # Same object back in the queue; restore it for the last tick.
+    queue.Queue.put(harness.registry.completion_queue, third)
+
+    # Third tick: the last event, and the queue drains empty.
+    harness.calls.clear()
+    harness.sm.begin_result = "sid-3"
+    _drain_process_notifications_for_session(harness.session, SESSION_ID)
+
+    assert harness.calls == [
+        "get_stream_id", "drain", "claim", "begin_stream", "thread_start", "complete",
+    ]
+    assert harness.th.created[-1].args[1] == "msg:deleg-3"
+    assert [t.args[1] for t in harness.th.created] == [
+        "msg:deleg-1", "msg:deleg-2", "msg:deleg-3",
+    ]
+    assert len(harness.th.created) == 3
+    assert all(t.start_calls == 1 for t in harness.th.created)
+    assert harness.registry.completion_queue.qsize() == 0
+    assert harness.calls.count("complete") == 1
 
 
 def test_empty_drain_does_nothing(harness):
     """Queue holding only other sessions' events: no claim, no thread, no warning."""
+    foreign = _event("deleg-foreign", origin_session="sess-other")
+    harness.registry.completion_queue.put(foreign)
     harness.calls.clear()
 
     _drain_process_notifications_for_session(harness.session, SESSION_ID)
 
     assert harness.calls == ["get_stream_id", "drain"]
     assert harness.th.created == []
+    assert harness.delivery_calls == []
+    # The foreign event is left where it was, not requeued and not dropped.
+    assert harness.registry.completion_queue.qsize() == 1
+    assert harness.registry.completion_queue.get_nowait() is foreign
 
 
 def test_claim_held_elsewhere_drops_local_copy(harness):
@@ -282,6 +342,8 @@ def test_non_persistent_event_delivers_with_empty_claim(harness):
     assert "begin_stream" in harness.calls
     assert "complete" in harness.calls
     assert "release" not in harness.calls
+    # A non-persistent event is acked with the empty token, never a fake claim.
+    assert harness.delivery_calls == [("complete", "")]
     assert len(harness.th.created) == 1
 
 
