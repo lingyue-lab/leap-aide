@@ -783,10 +783,19 @@ def read_file_content(workspace: Path, rel: str) -> dict:
 # ── Git detection ──────────────────────────────────────────────────────────
 
 def _run_git(args, cwd, timeout=3):
-    """Run a git command and return stdout, or None on failure."""
+    """Run a git command and return stdout, or None on failure.
+
+    Injects -c safe.directory=<realpath(cwd)> per invocation so reads
+    of workspaces owned by another uid (dubious ownership, issue #30)
+    succeed without touching any gitconfig.
+    """
     try:
+        realpath = os.path.realpath(str(cwd))
+        safe_args = ['-c', f'safe.directory={realpath}']
+        if (Path(realpath) / '.git').is_dir():
+            safe_args += ['-c', f'safe.directory={realpath}/.git']
         r = subprocess.run(
-            ['git'] + args, cwd=str(cwd), capture_output=True,
+            ['git'] + safe_args + args, cwd=str(cwd), capture_output=True,
             text=True, timeout=timeout,
         )
         return r.stdout.strip() if r.returncode == 0 else None

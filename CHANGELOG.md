@@ -25,6 +25,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - The image no longer ships the Playwright headless shell, 218 of the 220 Chromium language bundles (only `en-US` and `zh-CN` remain), the Widevine DRM plugin, the electron download cache and 573 unused Google API discovery documents. `ffmpeg` is installed without its optional extras, and the unused font sets are gone.
 - The daily and release image workflows now publish a per-layer size report in the job summary, so a size regression is visible without rebuilding locally.
 
+### Fixed
+
+- Workspaces Panel git history now works on directories owned by another user: each backend git read injects the workspace path as a per-invocation `safe.directory`, so the branch and commit history show up without first running `git config --global --add safe.directory` by hand.
+- Background delegation (subagent) completion summaries are no longer silently dropped when they arrive while the session is still replying: the event now waits in the queue and is delivered as its own summary turn once the current turn finishes.
+
 ## [0.1.0] - 2026-11-09
 
 First public release. A chat front end with a shared, observable browser desktop, a workspace file browser, scheduled tasks, and one-click access to the mainstream LLM providers.

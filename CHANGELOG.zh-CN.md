@@ -25,6 +25,11 @@ title: 更新日志
 - 镜像不再携带 Playwright 的 headless shell、220 个 Chromium 语言包中的 218 个（只保留 `en-US` 与 `zh-CN`）、Widevine DRM 插件、electron 下载缓存，以及 573 份用不到的 Google API discovery 文档。`ffmpeg` 以不安装可选依赖的方式装入，用不到的字体集也已移除。
 - 每日构建与发布构建的 workflow 现在会把逐层体积报告写进 job summary，不用在本地重新构建就能发现体积回退。
 
+### Fixed
+
+- Workspaces Panel 的 git 历史现在在属主不一致的目录上也能工作：后端每次 git 读取都按调用注入 workspace 路径作为 `safe.directory`，分支与提交历史直接显示，无需先手动执行 `git config --global --add safe.directory`。
+- 后台委派（子 Agent）的完成摘要不再在会话仍在回复时被静默丢弃：事件会先留在队列中，等当前这一轮结束后再作为独立的一条摘要回复送达。
+
 ## [0.1.0] - 2026-11-09
 
 首个公开发布版。聊天前端配一套共享且可观察的浏览器桌面，另有工作区文件浏览、定时任务，以及对主流 LLM 提供商的一键接入。
