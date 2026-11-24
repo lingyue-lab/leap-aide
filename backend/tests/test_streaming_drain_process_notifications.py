@@ -205,3 +205,160 @@ def test_abandon_delivery_order_without_stream(harness):
     _abandon_completion_delivery(event, "claim-1", harness.session)
 
     assert harness.calls == ["release", "requeue"]
+
+
+def test_single_event_delivers_once(harness):
+    """Happy path: claim once, begin once, start one thread, ack once."""
+    event = _event()
+    harness.registry.completion_queue.put(event)
+    harness.calls.clear()
+
+    _drain_process_notifications_for_session(harness.session, SESSION_ID)
+
+    assert harness.calls == [
+        "get_stream_id", "drain", "claim", "begin_stream", "complete",
+    ]
+    assert len(harness.th.created) == 1
+    thread = harness.th.created[0]
+    assert thread.start_calls == 1
+    assert thread.args[0] == SESSION_ID
+    assert thread.args[1] == f"msg:{DELEGATION_ID}"
+    assert thread.args[4] == "sid-1234"
+    assert thread.args[6] is True
+    assert harness.registry.completion_queue.qsize() == 0
+    assert harness.session._process_loop_last_active > 0
+
+
+def test_extra_events_requeued_before_claim(harness):
+    """Two events in one tick: only the first is delivered; the second is back
+    in the queue, in order, before the first claim happens."""
+    first, second = _event("deleg-1"), _event("deleg-2")
+    harness.registry.completion_queue.put(first)
+    harness.registry.completion_queue.put(second)
+    harness.calls.clear()
+
+    _drain_process_notifications_for_session(harness.session, SESSION_ID)
+
+    assert harness.calls.index("requeue") < harness.calls.index("claim")
+    assert harness.calls.count("claim") == 1
+    assert harness.calls.count("complete") == 1
+    assert harness.registry.completion_queue.qsize() == 1
+    assert harness.registry.completion_queue.get_nowait() is second
+
+
+def test_empty_drain_does_nothing(harness):
+    """Queue holding only other sessions' events: no claim, no thread, no warning."""
+    harness.calls.clear()
+
+    _drain_process_notifications_for_session(harness.session, SESSION_ID)
+
+    assert harness.calls == ["get_stream_id", "drain"]
+    assert harness.th.created == []
+
+
+def test_claim_held_elsewhere_drops_local_copy(harness):
+    """claim is None: our copy is a duplicate — drop it, no begin, no release."""
+    harness.registry.completion_queue.put(_event())
+    harness.knobs["claim"] = None
+    harness.calls.clear()
+
+    _drain_process_notifications_for_session(harness.session, SESSION_ID)
+
+    assert "begin_stream" not in harness.calls
+    assert "release" not in harness.calls
+    assert "complete" not in harness.calls
+    assert harness.th.created == []
+    assert harness.registry.completion_queue.qsize() == 0
+
+
+def test_non_persistent_event_delivers_with_empty_claim(harness):
+    """claim == "" means "no durable row" — it is a success, not a duplicate."""
+    harness.registry.completion_queue.put(_event())
+    harness.knobs["claim"] = ""
+    harness.calls.clear()
+
+    _drain_process_notifications_for_session(harness.session, SESSION_ID)
+
+    assert "begin_stream" in harness.calls
+    assert "complete" in harness.calls
+    assert "release" not in harness.calls
+    assert len(harness.th.created) == 1
+
+
+def test_begin_stream_race_rolls_back(harness):
+    """begin_stream returns None: release strictly before requeue, no thread."""
+    event = _event()
+    harness.registry.completion_queue.put(event)
+    harness.sm.begin_result = None
+    harness.calls.clear()
+
+    _drain_process_notifications_for_session(harness.session, SESSION_ID)
+
+    assert harness.calls.index("release") < harness.calls.index("requeue")
+    assert "complete" not in harness.calls
+    assert harness.th.created == []
+    assert harness.registry.completion_queue.get_nowait() is event
+
+
+def test_begin_stream_exception_rolls_back(harness):
+    """begin_stream raising (not just returning None) must not lose the event."""
+    event = _event()
+    harness.registry.completion_queue.put(event)
+    harness.sm.begin_error = RuntimeError("lock broken")
+    harness.calls.clear()
+
+    _drain_process_notifications_for_session(harness.session, SESSION_ID)
+
+    assert harness.calls.index("release") < harness.calls.index("requeue")
+    assert harness.registry.completion_queue.get_nowait() is event
+
+
+def test_thread_start_failure_rolls_back_with_warning(harness, caplog):
+    """start() raising: cleanup -> release -> requeue, warning carries the delegation id."""
+    event = _event()
+    harness.registry.completion_queue.put(event)
+    original_thread_factory = harness.th.Thread
+
+    def failing_factory(**kwargs):
+        thread = original_thread_factory(**kwargs)
+        thread.start_error = RuntimeError("can't start new thread")
+        return thread
+
+    harness.monkeypatch.setattr(streaming, "threading", SimpleNamespace(Thread=failing_factory))
+    harness.calls.clear()
+
+    with caplog.at_level("WARNING"):
+        _drain_process_notifications_for_session(harness.session, SESSION_ID)
+
+    assert harness.calls.index("cleanup") < harness.calls.index("release") < harness.calls.index("requeue")
+    assert harness.registry.completion_queue.get_nowait() is event
+    assert DELEGATION_ID in caplog.text
+    assert any(r.levelname == "WARNING" for r in caplog.records)
+
+
+def test_complete_failure_does_not_roll_back(harness, caplog):
+    """The ack failing after the thread started must not requeue: delivery happened."""
+    harness.registry.completion_queue.put(_event())
+    harness.knobs["complete_error"] = RuntimeError("db locked")
+    harness.calls.clear()
+
+    with caplog.at_level("WARNING"):
+        _drain_process_notifications_for_session(harness.session, SESSION_ID)
+
+    assert "release" not in harness.calls
+    assert "requeue" not in harness.calls
+    assert harness.registry.completion_queue.qsize() == 0
+    assert DELEGATION_ID in caplog.text
+
+
+def test_outer_exception_logs_warning_with_session_id(harness, caplog):
+    """A crash inside the drain is a warning carrying the session id, not debug."""
+    harness.registry.raise_on_drain = RuntimeError("boom")
+
+    with caplog.at_level("WARNING"):
+        _drain_process_notifications_for_session(harness.session, SESSION_ID)
+
+    assert any(
+        r.levelname == "WARNING" and SESSION_ID in r.getMessage()
+        for r in caplog.records
+    )

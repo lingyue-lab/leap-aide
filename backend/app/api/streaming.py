@@ -720,7 +720,7 @@ def _abandon_completion_delivery(event, claim, session, stream_id=None):
 
 
 def _drain_process_notifications_for_session(session, session_id):
-    """Drain completion events, spawn new agent thread for each."""
+    """Deliver at most one completion event per tick; requeue the rest."""
     if stream_manager.get_stream_id(session_id) is not None:
         # A turn is already streaming for this session. Popping the completion
         # here would consume its durable claim and drop the only in-process
@@ -748,23 +748,52 @@ def _drain_process_notifications_for_session(session, session_id):
         if queue_size > 0:
             logger.debug("[drain] session=%s queue_size=%d", session_id[:12], queue_size)
 
-        for event, synthetic_message in process_registry.drain_notifications(
+        drained = process_registry.drain_notifications(
             session_key=session_key,
             owns_event=_owns_current_session_event,
-        ):
-            evt_type = event.get("type", "?")
-            evt_sid = event.get("session_id", "?")[:12]
-            logger.debug("[drain] event type=%s child=%s session=%s", evt_type, evt_sid, session_id[:12])
-            claim = claim_event_delivery(event, "webui-process-loop")
-            if claim is None:
-                logger.debug("[drain] claim failed, skipping")
-                continue
-            # Start stream via StreamManager
+        )
+        if not drained:
+            return
+        # Hand back every event we are not delivering this tick before any
+        # fallible work: the queue is the single source of truth (issue #75).
+        for extra_event, _extra_text in drained[1:]:
+            process_registry.completion_queue.put(extra_event)
+        event, synthetic_message = drained[0]
+        delegation_id = str(event.get("delegation_id") or "?")
+        logger.debug(
+            "[drain] event type=%s child=%s session=%s",
+            event.get("type", "?"),
+            str(event.get("session_id", "?"))[:12],
+            session_id[:12],
+        )
+
+        claim = claim_event_delivery(event, "webui-process-loop")
+        if claim is None:
+            # Another consumer holds a fresh claim; our copy is a duplicate.
+            logger.debug(
+                "[drain] claim held elsewhere, dropping local copy delegation_id=%s",
+                delegation_id,
+            )
+            return
+
+        try:
             sid = stream_manager.begin_stream(session)
-            if not sid:
-                logger.debug("[drain] begin_stream failed, skipping")
-                continue
-            logger.debug("[drain] spawning _run_agent_streaming for session=%s new_stream=%s", session_id[:12], sid[:8])
+        except Exception:
+            logger.warning(
+                "[drain] begin_stream raised delegation_id=%s", delegation_id, exc_info=True
+            )
+            _abandon_completion_delivery(event, claim, session)
+            return
+        if not sid:
+            session._process_loop_last_active = time.time()
+            logger.info(
+                "[drain] session busy, completion requeued delegation_id=%s session=%s",
+                delegation_id, session_id[:12],
+            )
+            _abandon_completion_delivery(event, claim, session)
+            return
+
+        try:
             # Normalize model — same logic as _handle_chat_start.
             # Bare names (e.g. "deepseek-v4-flash") lose the provider hint,
             # causing resolve_runtime_provider to fall back to OpenRouter.
@@ -786,12 +815,24 @@ def _drain_process_notifications_for_session(session, session_id):
                 daemon=True,
             )
             thr.start()
-            session._process_loop_last_active = time.time()
+        except Exception:
+            logger.warning(
+                "[drain] failed to start stream delegation_id=%s", delegation_id, exc_info=True
+            )
+            _abandon_completion_delivery(event, claim, session, stream_id=sid)
+            return
+
+        session._process_loop_last_active = time.time()
+        try:
             complete_event_delivery(event, claim)
+        except Exception:
+            logger.warning(
+                "[drain] ack failed delegation_id=%s", delegation_id, exc_info=True
+            )
     except ImportError:
         pass
     except Exception as e:
-        logger.debug("[drain] error: %s", e)
+        logger.warning("[drain] error for session=%s: %s", session_id[:12], e)
 
 
 def _on_session_title(
