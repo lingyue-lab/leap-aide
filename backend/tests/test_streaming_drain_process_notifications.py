@@ -362,3 +362,24 @@ def test_outer_exception_logs_warning_with_session_id(harness, caplog):
         r.levelname == "WARNING" and SESSION_ID in r.getMessage()
         for r in caplog.records
     )
+
+
+from app.api.stream_manager import StreamManager
+
+
+def test_begin_stream_notify_failure_keeps_stream_registered(monkeypatch, caplog):
+    """A failing notify must not leave the session half-registered with no id."""
+    import app.api.models as models
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("notify exploded")
+
+    monkeypatch.setattr(models, "_notify_session_event", boom)
+    manager = StreamManager()
+
+    with caplog.at_level("WARNING"):
+        stream_id = manager.begin_stream(FakeSession())
+
+    assert stream_id is not None
+    assert manager.get_stream_id(SESSION_ID) == stream_id
+    assert any(r.levelname == "WARNING" for r in caplog.records)

@@ -43,8 +43,17 @@ class StreamManager:
         logger.debug("[begin_stream] session=%s stream=%s",
                      session_id[:12], stream_id[:8])
         # Push notify outside lock to avoid deadlocks
-        from app.api.models import _notify_session_event
-        _notify_session_event('begin_stream', session, stream_id)
+        try:
+            from app.api.models import _notify_session_event
+            _notify_session_event('begin_stream', session, stream_id)
+        except Exception:
+            # The session is already registered as busy; raising here would hand
+            # the caller no stream_id and no way to roll back, wedging the
+            # session for every later turn and completion (issue #75).
+            logger.warning(
+                "[begin_stream] notify failed for session=%s stream=%s",
+                session_id[:12], stream_id[:8], exc_info=True,
+            )
         return stream_id
 
     def end_stream(self, session, stream_id: str = None) -> str | None:
