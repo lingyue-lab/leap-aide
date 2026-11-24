@@ -1564,13 +1564,24 @@ def _all_sessions_from_json(active_session_ids):
 
 
 def _get_all_delegate_children_map(db) -> dict[str, list[dict]]:
-    """批量查询所有委托子 agent session，返回 parent_id -> children 映射。
+    """Batch-query delegate subagent sessions: parent_id -> children map.
 
-    一次查询获取所有子 session 关系，避免 N+1 查询问题。
-    只返回带有 _delegate_from 标记的子 session，排除压缩延续。
+    One query fetches all child-session relations, avoiding an N+1 query
+    problem. Only rows carrying the _delegate_from marker are returned so
+    compressed continuations are excluded.
 
-    返回的 message_count 只统计 user + assistant 消息（不含 tool/system），
-    与前端 msg-row 的渲染逻辑保持一致。
+    Merge semantics (Issue #77): DB rows win — any session id that already
+    has a state.db row is never re-entered through the cache (so the
+    _delegate_from filter cannot be bypassed); cache-only placeholder
+    children (created by subagent.start, not yet persisted) are synthesized
+    from the in-memory SESSIONS cache and appended after the DB rows in
+    SESSIONS insertion order, making the list share the delegate badge's
+    real-time data source. Returned entry keys are fixed to id, title,
+    model, started_at, ended_at, message_count (parent_session_id is
+    dropped).
+
+    message_count counts only user + assistant messages (never tool/system),
+    matching the frontend msg-row rendering logic.
     """
     try:
         rows = db._conn.execute(
@@ -1594,6 +1605,50 @@ def _get_all_delegate_children_map(db) -> dict[str, list[dict]]:
             if parent_id not in children_map:
                 children_map[parent_id] = []
             children_map[parent_id].append(row_dict)
+
+        # Merge in-memory placeholder children that have no state.db row yet.
+        # Snapshot + attribute reads (memory-only, microseconds) happen under
+        # LOCK; the sqlite row-existence query runs outside the lock so no
+        # I/O is done while holding it. The function groups by every parent,
+        # so each candidate is bucketed under its own parent_session_id.
+        with LOCK:
+            cached_candidates = []
+            for s in SESSIONS.values():
+                if not getattr(s, 'is_subagent_session', False):
+                    continue
+                parent_id = getattr(s, 'parent_session_id', None)
+                if not parent_id:
+                    continue
+                cached_candidates.append((parent_id, {
+                    'id': s.session_id,
+                    'title': getattr(s, 'title', None) or '',
+                    'model': getattr(s, 'model', None),
+                    # Fallback must be a unix float (time.time()): state.db
+                    # stores started_at as REAL, frontend types it as number,
+                    # and clear-delegates sorts with c.get('started_at', 0) —
+                    # an ISO string would TypeError and silently no-op.
+                    'started_at': getattr(s, 'started_at', None) or time.time(),
+                    'ended_at': None,
+                    'message_count': sum(
+                        1 for m in (getattr(s, 'messages', None) or [])
+                        if isinstance(m, dict) and m.get('role') in ('user', 'assistant')
+                    ),
+                }))
+
+        if cached_candidates:
+            ids = [entry['id'] for _, entry in cached_candidates]
+            existing_rows = db._conn.execute(
+                "SELECT id FROM sessions WHERE id IN (%s)"
+                % ",".join("?" * len(ids)),
+                ids,
+            ).fetchall()
+            existing_ids = {r['id'] for r in existing_rows}
+            for parent_id, entry in cached_candidates:
+                # A row existing at all (marker or not) means the DB result
+                # already governs this id — never let the cache re-introduce it.
+                if entry['id'] in existing_ids:
+                    continue
+                children_map.setdefault(parent_id, []).append(entry)
 
         return children_map
     except Exception:
