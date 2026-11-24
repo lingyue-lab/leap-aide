@@ -428,10 +428,10 @@ RUN /bin/bash -c 'set -euo pipefail && \
 # ── Snapshot the base /usr/local/bin ────────────────────────────────────────
 # The runtime stage starts from `base`, so it inherits exactly the binaries
 # listed here (uv, uvx). Everything ELSE that ends up in /usr/local/bin
-# during the build — the console scripts of the backend's Python deps (idna,
-# pygmentize) and the command wrappers the hermes-agent installer drops
-# (hermes, hermes-agent, hermes-acp, agent-browser) — is staged separately
-# by the `sdk` stage and copied in explicitly.
+# during the build — the console scripts of the backend's Python deps (idna)
+# and the command wrappers the hermes-agent installer drops (hermes,
+# hermes-agent, hermes-acp, agent-browser) — is staged separately by the
+# `sdk` stage and copied in explicitly.
 #
 # Copying the whole directory instead would write a second copy of the
 # 37 MB uv binary into the runtime layer, and copying only a hand-written
@@ -726,20 +726,6 @@ USER root
 # agent-browser (the wrapper redirects to the global desktop receptionist).
 RUN chmod 755 /root
 
-# ── Snapshot /usr/local/bin before the installer runs ────────────────────────
-# The installer drops the command wrappers (hermes, hermes-agent, hermes-acp,
-# agent-browser) into /usr/local/bin. The runtime stage cannot copy that whole
-# directory: it already holds the 37 MB uv binary from `base`, and a COPY of
-# the directory would write a SECOND copy of uv into the runtime layer.
-# Instead the sdk stage stages the installer-provided wrappers in their own
-# directory, and the runtime copies that. Deriving the list by diffing
-# /usr/local/bin against a pre-install snapshot keeps it honest: a wrapper the
-# installer adds later is picked up automatically, and node/npm/npx (installed
-# by the toolchain stage, before this snapshot) are correctly excluded.
-RUN ls -1 /usr/local/bin | LC_ALL=C sort > /usr/local/share/leap-aide/bin-before-install.txt \
-    && echo "=== /usr/local/bin before the installer runs:" \
-    && cat /usr/local/share/leap-aide/bin-before-install.txt
-
 # ---- DEBUG: verify mirror + connectivity before install.sh runs ----
 # Temporary debug block — confirms proxy + registry reachability. Once the
 # build is stable, this block can be removed (or kept as a guard that fails
@@ -970,12 +956,17 @@ RUN set -e; \
     echo "layout assertions OK"
 
 # ── Assert the Chromium binary has no unresolved shared library ────────────
+# EARLY check only — this runs in the `sdk` stage, which has the full
+# `playwright install-deps` apt layer in its ancestry, so a library missing
+# from `base` can be masked here. The authoritative assertion against the
+# actually-published layers runs in the `runtime` stage; keep this one only
+# to fail fast during the build.
+#
 # The runtime stage no longer inherits the SDK stage's `playwright
 # install-deps` apt layer, so the Chromium runtime libraries are installed
 # explicitly in `base`. If a future Playwright release needs one more shared
 # library, Chrome would die at startup with a bare "error while loading
-# shared libraries" and nobody would know why. Check it HERE, where the
-# Chromium binary and the SDK's node are both available.
+# shared libraries" and nobody would know why.
 RUN set -e; \
     _chrome=""; \
     for _c in /root/.cache/ms-playwright/chromium-*/chrome-linux64/chrome \
@@ -1001,9 +992,9 @@ RUN set -e; \
 # /usr/local/bin. Everything else that landed there during the build must be
 # copied in explicitly:
 #
-#   idna, pygmentize   console scripts of the backend's Python deps
-#                      (aiohttp → yarl → idna, hindsight-client → pygments),
-#                      installed system-wide by the `app` stage
+#   idna               console script of the backend's Python deps
+#                      (aiohttp → yarl → idna), installed system-wide by
+#                      the `app` stage
 #   hermes, hermes-agent, hermes-acp, agent-browser
 #                      command wrappers written by the hermes-agent installer
 #
@@ -1383,6 +1374,34 @@ RUN rm -rf /app/docs \
              /app/scripts/build.sh \
              /app/scripts/run-test.sh \
              /app/scripts/cmd-util.sh
+
+# ── Assert the published Chromium has no unresolved shared library ──────────
+# The authoritative version of the sdk-stage check: this runs AFTER every
+# COPY in `runtime`, on exactly the layers that get published. The sdk-stage
+# copy cannot stand in for it — that stage has the full `playwright
+# install-deps` apt layer in its ancestry, which masks a library missing from
+# `base`. `ldd` itself comes from base's libc-bin, so it is present here.
+# If a future Playwright needs one more lib, the BUILD fails with the missing
+# soname named instead of the container dying at Chrome startup.
+RUN set -e; \
+    _chrome=""; \
+    for _c in /root/.cache/ms-playwright/chromium-*/chrome-linux64/chrome \
+             /root/.cache/ms-playwright/chromium-*/chrome-linux/chrome \
+             /root/.cache/ms-playwright/chromium-*/chrome-linux/chrome-headless-shell; do \
+        [ -x "$_c" ] && { _chrome="$_c"; break; }; \
+    done; \
+    if [ -z "$_chrome" ]; then \
+        echo "++ no Playwright Chromium binary found — the browser desktop would not work"; \
+        exit 1; \
+    fi; \
+    echo "== runtime: checking shared libraries of $_chrome"; \
+    _missing=$(ldd "$_chrome" 2>/dev/null | grep "not found" || true); \
+    if [ -n "$_missing" ]; then \
+        echo "++ published Chromium has unresolved shared libraries — add them to the base stage:"; \
+        echo "$_missing"; \
+        exit 1; \
+    fi; \
+    echo "runtime Chromium shared libraries OK"
 
 # Restore runtime user. The entrypoint bash runs as the right user.
 USER leap-aide-init
