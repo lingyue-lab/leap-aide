@@ -65,6 +65,7 @@ jobs:
       # `latest` stay in release-runtime-image.yml. Single arch (linux/amd64) —
       # the runner's native arch, same as scripts/build.sh --docker-image.
       - name: Build and push daily runtime image
+        id: build
         env:
           # Point the buildah store at the host bind-mount (ext4). The job
           # container's root is overlayfs, which the kernel refuses as an
@@ -101,3 +102,116 @@ jobs:
           "${ba[@]}" tag "${image}:${archive_tag}" "${image}:daily"
           "${ba[@]}" push "${image}:${archive_tag}"
           "${ba[@]}" push "${image}:daily"
+
+          # The report step below reads the image out of this store.
+          echo "image=${image}:${archive_tag}" >> "$GITHUB_OUTPUT"
+
+      # Per-layer size report (issue #40).
+      #
+      # The Dockerfile's stage graph decides the published size, and the
+      # per-layer breakdown is the only way to tell WHICH stage grew when
+      # the number moves. The report is written to the job summary and
+      # uploaded as an artifact so two runs can be compared later.
+      #
+      # NON-BLOCKING on purpose: this step only OBSERVES an image that was
+      # already built and pushed. A buildah version that lacks a subcommand,
+      # a mount that fails, a `du` that takes too long — none of that may
+      # fail a publish that already succeeded. Every section is guarded and
+      # the step itself carries continue-on-error.
+      - name: Report the per-layer image sizes
+        id: layer-report
+        continue-on-error: true
+        env:
+          BUILDAH_ROOT: ${{ runner.temp }}/buildah-store
+          BUILDAH_RUNROOT: ${{ runner.temp }}/buildah-runroot
+        run: |
+          set -u
+          image="${{ steps.build.outputs.image }}"
+          ba=(buildah --root "$BUILDAH_ROOT" --runroot "$BUILDAH_RUNROOT")
+          report="${RUNNER_TEMP}/image-size-report.txt"
+          : > "$report"
+
+          {
+            echo "# Runtime image size report"
+            echo
+            echo "Image: \`${image}\`"
+            echo
+
+            echo "## Total size"
+            echo
+            echo '```'
+            "${ba[@]}" images "$image" 2>&1 || echo "(buildah images failed)"
+            echo '```'
+            echo
+
+            # Per-layer sizes. `buildah history` is the canonical source but
+            # only exists in newer buildah; the CI builder image pins
+            # Ubuntu 24.04's buildah, which does not have it yet. Fall back
+            # to the image's build history (one entry per layer, with the
+            # command that created it) so the breakdown is still usable.
+            echo "## Layers"
+            echo
+            echo '```'
+            if "${ba[@]}" history "$image" >/dev/null 2>&1; then
+              "${ba[@]}" history "$image" 2>&1 || true
+            else
+              echo "(buildah history is unavailable in this buildah version —"
+              echo " showing the build history instead; it lists the command"
+              echo " per layer but not the per-layer size)"
+              echo
+              "${ba[@]}" inspect --type image "$image" 2>/dev/null \
+                | grep -o '"created_by":[^,]*' || true
+            fi
+            echo '```'
+            echo
+
+            # Per-path breakdown of the image filesystem. This is the part
+            # that actually drives the next size decision: it says which
+            # tree (the SDK, the Playwright cache, the browser-use venv,
+            # the frontend build) is worth pruning next.
+            echo "## Filesystem breakdown"
+            echo
+            echo '```'
+            ctr=""
+            mnt=""
+            cleanup() {
+              [ -n "$mnt" ] && "${ba[@]}" umount "$ctr" >/dev/null 2>&1 || true
+              [ -n "$ctr" ] && "${ba[@]}" rm "$ctr" >/dev/null 2>&1 || true
+              return 0
+            }
+            trap cleanup EXIT
+            if ctr=$("${ba[@]}" from "$image" 2>/dev/null) \
+               && mnt=$("${ba[@]}" mount "$ctr" 2>/dev/null); then
+              du -sh \
+                "$mnt/app" \
+                "$mnt/usr/local/lib/hermes-agent" \
+                "$mnt/usr/local/lib/python3.12" \
+                "$mnt/usr/local/share/uv" \
+                "$mnt/root/.cache/ms-playwright" \
+                "$mnt/root/.local/share/uv/tools" \
+                "$mnt/root/.cua-driver" \
+                "$mnt/var/lib/leap-aide/hermes-seed" \
+                "$mnt/usr/local/bin" \
+                2>&1 | sort -h || true
+              echo
+              echo "chromium locales:"
+              du -sh "$mnt"/root/.cache/ms-playwright/chromium-*/chrome-linux64/locales \
+                2>&1 || true
+              echo
+              echo "system packages (top 15):"
+              du -sh "$mnt"/usr/lib/*/ 2>/dev/null | sort -h | tail -15 || true
+            else
+              echo "(could not mount the image — the breakdown is skipped)"
+            fi
+            echo '```'
+          } | tee -a "$report"
+
+          cat "$report" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the image size report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-image-size-report
+          path: ${{ runner.temp }}/image-size-report.txt
+          if-no-files-found: warn
