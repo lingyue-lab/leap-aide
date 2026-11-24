@@ -819,3 +819,16 @@ class TestGatewayVariantValidation:
         mc.load_catalog(force=True)
         assert mc.get_provider_record("variant") is not None
         assert mc.provider_sdk_provider("variant") == "variant"
+
+
+def test_find_gateway_variant_uses_chat_base_url():
+    """Reverse lookup compares the persisted chat endpoint, both sides same source."""
+    assert (
+        mc.find_gateway_variant("minimax-cn", "https://api.minimaxi.com/anthropic")
+        == "minimax-cn"
+    )
+    # xiaomi-token-plan regression anchor (value unchanged by this task).
+    assert (
+        mc.find_gateway_variant("xiaomi", "https://token-plan-cn.xiaomimimo.com/v1")
+        == "xiaomi-token-plan"
+    )

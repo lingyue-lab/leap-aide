@@ -422,7 +422,7 @@ def find_gateway_variant(sdk_provider: str, base_url: str) -> str | None:
         rec = get_provider_record(slug)
         if rec is None or rec.get("sdk_provider") != sdk_provider:
             continue
-        if (provider_base_url(slug) or "").rstrip("/") == want:
+        if (provider_chat_base_url(slug) or "").rstrip("/") == want:
             return slug
     return None
 

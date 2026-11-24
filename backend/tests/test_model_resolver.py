@@ -814,6 +814,130 @@ def test_config_only_fields_remap_variant_active_provider(_variant_env, monkeypa
         config._cfg_mtime = old_mtime
 
 
+def test_shape1_minimax_cn_translates_to_cn_endpoint_and_key(
+    _variant_env, monkeypatch
+):
+    """@minimax-cn: passes the chat endpoint and its own key explicitly."""
+    import sys
+    import types
+
+    captured = {}
+
+    def fake_resolve(
+        requested=None, explicit_api_key=None, explicit_base_url=None, **kw
+    ):
+        captured.update(
+            requested=requested,
+            explicit_api_key=explicit_api_key,
+            explicit_base_url=explicit_base_url,
+        )
+        return {
+            "provider": requested,
+            "api_base": explicit_base_url,
+            "api_mode": "anthropic_messages",
+            "api_key": explicit_api_key,
+        }
+
+    # Install hermes_cli.runtime_provider the same way _stub_runtime_provider
+    # does — config.py imports it inside the function body, so the
+    # sys.modules stub takes effect at call time.
+    pkg = types.ModuleType("hermes_cli")
+    pkg.__path__ = []
+    mod = types.ModuleType("hermes_cli.runtime_provider")
+    mod.resolve_runtime_provider = fake_resolve
+    monkeypatch.setitem(sys.modules, "hermes_cli", pkg)
+    monkeypatch.setitem(sys.modules, "hermes_cli.runtime_provider", mod)
+    monkeypatch.setenv("MINIMAX_CN_API_KEY", "sk-cn-live")
+
+    runtime, provider, base_url = config.resolve_runtime_for_provider(
+        "minimax-cn", None
+    )
+    assert provider == "minimax-cn"
+    assert base_url == "https://api.minimaxi.com/anthropic"
+    assert captured["requested"] == "minimax-cn"
+    assert captured["explicit_base_url"] == "https://api.minimaxi.com/anthropic"
+    assert captured["explicit_api_key"] == "sk-cn-live"
+    assert runtime["api_mode"] == "anthropic_messages"
+
+
+def test_shape2_cn_persisted_default_recovers_variant(_variant_env, monkeypatch):
+    """provider=minimax-cn + chat endpoint in config.yaml recovers the variant."""
+    import app.api.model_catalog as mc
+
+    assert (
+        mc.find_gateway_variant("minimax-cn", "https://api.minimaxi.com/anthropic")
+        == "minimax-cn"
+    )
+    monkeypatch.setenv("MINIMAX_CN_API_KEY", "sk-cn-live")
+    calls = {}
+    _stub_runtime_provider(monkeypatch, calls)
+    runtime, provider, base_url = config.resolve_runtime_for_provider(
+        "minimax-cn", "https://api.minimaxi.com/anthropic"
+    )
+    assert calls["requested"] == "minimax-cn"
+    assert calls["explicit_base_url"] == "https://api.minimaxi.com/anthropic"
+    assert calls["explicit_api_key"] == "sk-cn-live"
+    assert provider == "minimax-cn"
+    assert base_url == "https://api.minimaxi.com/anthropic"
+
+
+def test_shape2_plain_minimax_with_probe_endpoint_does_not_match(
+    _variant_env, monkeypatch
+):
+    """The global card must never absorb the probe endpoint as a variant."""
+    import app.api.model_catalog as mc
+
+    assert mc.find_gateway_variant("minimax", "https://api.minimax.chat/v1") is None
+    calls = {}
+    _stub_runtime_provider(monkeypatch, calls)
+    runtime, provider, base_url = config.resolve_runtime_for_provider(
+        "minimax", "https://api.minimax.chat/v1"
+    )
+    assert calls["requested"] == "minimax"
+    assert calls["explicit_base_url"] is None
+    assert calls["explicit_api_key"] is None
+    assert provider == "minimax"
+    assert base_url == "https://api.minimax.chat/v1"
+
+
+def test_set_default_model_persists_cn_endpoint_for_minimax_cn_variant(
+    _variant_env, monkeypatch, tmp_path
+):
+    """@minimax-cn default persists provider=minimax-cn + chat endpoint (spec §5.5 step 6)."""
+    import yaml
+
+    monkeypatch.delenv("MINIMAX_CN_API_KEY", raising=False)
+    monkeypatch.setenv("MINIMAX_CN_API_KEY", "sk-cn-live")
+
+    cfgfile = tmp_path / "config.yaml"
+    cfgfile.write_text(
+        "model:\n  provider: anthropic\n  default: claude-sonnet-4.6\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "_get_config_path", lambda: cfgfile)
+    old_cfg = dict(config.cfg)
+    old_mtime = config._cfg_mtime
+    try:
+        config.reload_config()
+        result = config.set_hermes_default_model("@minimax-cn:MiniMax-M3.1-Flash")
+        assert result["ok"] is True
+        saved = yaml.safe_load(cfgfile.read_text(encoding="utf-8"))
+        assert saved["model"]["provider"] == "minimax-cn"
+        assert saved["model"]["base_url"] == "https://api.minimaxi.com/anthropic"
+        assert saved["model"]["default"] == "MiniMax-M3.1-Flash"
+        # Shape 2 round-trip: the persisted shape recovers the CN key.
+        calls = {}
+        _stub_runtime_provider(monkeypatch, calls)
+        config.resolve_runtime_for_provider(
+            "minimax-cn", "https://api.minimaxi.com/anthropic"
+        )
+        assert calls["explicit_api_key"] == "sk-cn-live"
+    finally:
+        config.cfg.clear()
+        config.cfg.update(old_cfg)
+        config._cfg_mtime = old_mtime
+
+
 # ── Auth-failure hiding (bad key must not show baseline models) ────────────
 
 
