@@ -745,9 +745,9 @@ def is_user_defined_provider(provider_id: str) -> bool:
 
     Accepts the WebUI slug (``ollama1``), the provider name as written and
     the SDK's canonical id (``custom:ollama1``) — the three spellings the
-    same entry travels under.  A catalog custom endpoint (``ollama``,
-    ``lmstudio``, the synthetic ``local``) counts too: the user's own
-    server, not a vendor API.
+    same entry travels under.  A catalog card without a built-in engine
+    (``provider_in_sdk == "none"``: ``ollama``, plus the synthetic
+    ``local``) counts too: the user's own server, not a vendor API.
     """
     raw = str(provider_id or "").strip().lower()
     if not raw:
@@ -756,29 +756,30 @@ def is_user_defined_provider(provider_id: str) -> bool:
         raw = raw.split(":", 1)[1].strip()
     if named_custom_provider(raw) is not None:
         return True
-    try:
-        from app.api import model_catalog
+    sdk = model_catalog.provider_in_sdk(raw)
+    if sdk == "none":
+        return True
+    if sdk is None:
+        return model_catalog.is_synthetic_custom_slug(raw)
+    return False
 
-        return model_catalog.is_custom_provider(raw)
-    except Exception:
-        return False
 
+def _is_keyless_endpoint_slug(provider_id: str) -> bool:
+    """Return True when *provider_id* names an endpoint that needs no API key.
 
-def _is_custom_endpoint_slug(provider_id: str) -> bool:
-    """Return True when *provider_id* names a user-side custom endpoint.
-
-    The catalog owns the answer (``is_custom`` on the provider record);
-    the synthetic ``local`` slug the WebUI infers for an unrecognized
-    private endpoint counts as well.  A custom endpoint is the user's own
-    server: it needs no API key and keeps the base_url the user configured.
+    The catalog owns the answer (``auth.type == "none"`` — the user's own
+    OpenAI-compatible server); the synthetic ``local`` slug the WebUI
+    infers for an unrecognized private endpoint counts as well.
     """
     slug = str(provider_id or "").strip().lower()
     if not slug:
         return False
     try:
-        from app.api import model_catalog
-
-        return model_catalog.is_custom_provider(slug)
+        auth_type = model_catalog.provider_auth_type(slug)
+        if auth_type is None:
+            # Unknown slug — only the synthetic local endpoint is keyless.
+            return model_catalog.is_synthetic_custom_slug(slug)
+        return auth_type == "none"
     except Exception:
         return False
 
@@ -846,26 +847,30 @@ def resolve_gateway_variant(provider_hint: str) -> tuple | None:
 
     Some vendors expose multiple gateways that the Hermes SDK models as a
     single provider (xiaomi api vs xiaomi token-plan both route through the
-    SDK's ``xiaomi`` provider with different base_urls). LeapAide's catalog
-    lists each gateway as its own provider entry — separate env var, separate
-    Settings card, separately usable at the same time — and marks the entry
-    with ``sdk_provider``. The SDK registry knows nothing about the variant
-    slug (``xiaomi-token-plan``) or its private env var
-    (``XIAOMI_TOKEN_PLAN_API_KEY``), so callers must translate before
+    SDK's ``xiaomi`` provider with different chat endpoints). LeapAide's
+    catalog lists each gateway as its own provider entry — separate env var,
+    separate Settings card, separately usable at the same time — and declares
+    the SDK provider it routes through (``provider_in_sdk``) plus its own
+    chat endpoint (``endpoint.inference_url``). The SDK registry knows
+    nothing about the variant slug (``xiaomi-token-plan``) or its private env
+    var (``XIAOMI_TOKEN_PLAN_API_KEY``), so callers must translate before
     invoking the SDK and pass the returned base_url / api_key as explicit
     arguments.
 
     Returns ``(sdk_provider, base_url, api_key)`` or None when
-    *provider_hint* is not a gateway variant.  ``api_key`` may be "" when the
-    variant's env var is unset; the SDK explicit path then falls back to the
-    base provider's own credentials.
+    *provider_hint* is not a gateway variant — a card without an
+    ``inference_url`` keeps the SDK registry's own chat endpoint.  ``api_key``
+    may be "" when the variant's env var is unset; the SDK explicit path then
+    falls back to the base provider's own credentials.
     """
     if not provider_hint:
         return None
-    sdk_provider = model_catalog.provider_sdk_provider(provider_hint)
-    if not sdk_provider:
+    sdk_provider = model_catalog.provider_in_sdk(provider_hint)
+    if not sdk_provider or sdk_provider == "none":
         return None
-    base_url = model_catalog.provider_base_url(provider_hint) or ""
+    base_url = model_catalog.provider_inference_url(provider_hint) or ""
+    if not base_url:
+        return None
     api_key = model_catalog.provider_api_key(provider_hint)
     return sdk_provider, base_url, api_key
 
@@ -877,9 +882,12 @@ def resolve_runtime_for_provider(
     """Resolve SDK runtime parts, translating gateway variants (Pattern B).
 
     Wraps the SDK's ``resolve_runtime_provider`` for every WebUI call site
-    that turns a provider slug into API credentials. Handles the two shapes
-    a gateway variant (catalog entry with ``sdk_provider``, e.g.
-    ``xiaomi-token-plan`` → ``xiaomi``) can arrive in:
+    that turns a provider slug into API credentials. The catalog declares
+    which SDK provider a card routes through (``provider_in_sdk``), so the
+    slug the WebUI knows is translated into the id the SDK registry knows.
+    The two shapes a gateway variant (a card that also declares its own
+    ``endpoint.inference_url``, e.g. ``xiaomi-token-plan`` → ``xiaomi``) can
+    arrive in:
 
     1. The provider slug itself is the variant (session stored
        ``@xiaomi-token-plan:model``) — translate to the SDK provider and
@@ -893,51 +901,60 @@ def resolve_runtime_for_provider(
 
     Returns ``(runtime_dict, provider, base_url)`` — the same triple the
     call sites previously assembled by hand around
-    ``resolve_runtime_provider``. ``provider``/``base_url`` are only
-    filled in for the variant translation; for regular providers the
-    caller keeps its existing fill-from-runtime logic, preserving prior
-    behavior exactly.
+    ``resolve_runtime_provider``. ``provider`` is the SDK provider the
+    runtime was asked for; ``base_url`` is only filled in for the variant
+    translation, for regular providers the caller keeps its existing
+    fill-from-runtime logic, preserving prior behavior exactly.
     """
     from hermes_cli.runtime_provider import resolve_runtime_provider
 
-    sdk_provider = (provider_hint or "").strip() or None
+    requested = provider_hint
     variant_key = ""
     variant_base = None
     try:
         if provider_hint:
-            sdk = model_catalog.provider_sdk_provider(provider_hint)
-            if sdk:
-                # Shape 1: slug is the variant itself.
-                sdk_provider = sdk
-                variant_base = model_catalog.provider_base_url(provider_hint)
-                variant_key = model_catalog.provider_api_key(provider_hint)
-            elif base_url_hint:
+            engine = model_catalog.provider_in_sdk(provider_hint)
+            if engine and engine != "none":
+                # The card names the SDK provider it routes through.
+                requested = engine
+                # A card that declares its own chat endpoint overrides the
+                # registry default for that provider (gateway variants).
+                # Without one the registry's own endpoint *and* credential
+                # are used — the plain-card path stays byte-identical.
+                inference_url = model_catalog.provider_inference_url(provider_hint)
+                if inference_url:
+                    variant_base = inference_url
+                    variant_key = model_catalog.provider_api_key(provider_hint)
+            if variant_base is None and base_url_hint:
                 # Shape 2: SDK slug + config base_url pointing at a variant.
                 variant_slug = model_catalog.find_gateway_variant(
                     provider_hint, base_url_hint
                 )
                 if variant_slug:
                     variant_base = (
-                        model_catalog.provider_base_url(variant_slug)
+                        model_catalog.provider_inference_url(variant_slug)
                         or str(base_url_hint)
                     )
                     variant_key = model_catalog.provider_api_key(variant_slug)
+                    requested = (
+                        model_catalog.provider_in_sdk(variant_slug) or requested
+                    )
     except Exception as _e:
         print(f"[webui] WARNING: gateway variant lookup failed: {_e}", flush=True)
-        sdk_provider = (provider_hint or "").strip() or None
+        requested = provider_hint
         variant_key = ""
         variant_base = None
 
     if variant_base or variant_key:
         runtime = resolve_runtime_provider(
-            requested=sdk_provider,
+            requested=requested,
             explicit_api_key=variant_key or None,
             explicit_base_url=variant_base,
         )
-        return runtime, sdk_provider, variant_base or str(base_url_hint or "") or None
+        return runtime, requested, variant_base or str(base_url_hint or "") or None
 
-    runtime = resolve_runtime_provider(requested=provider_hint)
-    return runtime, provider_hint, base_url_hint
+    runtime = resolve_runtime_provider(requested=requested)
+    return runtime, requested, base_url_hint
 
 
 def resolve_model_provider(model_id: str) -> tuple:
@@ -2334,10 +2351,10 @@ def _build_available_models_uncached() -> dict:
     # providers (e.g. ark / ARK_API_KEY) are detected without Python
     # changes (issue #10).  Providers with an empty baseline and
     # refresh.mode=none have nothing to render, so they are skipped
-    # here (e.g. meta-llama) — their env vars remain available for key
-    # management via providers.py.  api-mode providers with empty
-    # baselines (ark, ollama, huggingface, ollama-cloud) are NOT
-    # skipped: their models come from the live query once a key exists.
+    # here — their env vars remain available for key management via
+    # providers.py.  api-mode providers with empty baselines (ark,
+    # ollama, huggingface, ollama-cloud) are NOT skipped: their models
+    # come from the live query once a key exists.
     for _slug, _env_vars in model_catalog.catalog_env_vars().items():
         _rec = model_catalog.get_provider_record(_slug)
         if _rec is not None and not _rec["models"] and _rec["refresh"]["mode"] != "api":
@@ -2452,7 +2469,7 @@ def _build_available_models_uncached() -> dict:
                     api_key = (all_env.get(key) or os.getenv(key) or "").strip()
                     if api_key:
                         break
-            if not api_key and not _is_custom_endpoint_slug(provider):
+            if not api_key and not _is_keyless_endpoint_slug(provider):
                 # Public endpoint without API key — skip model fetch
                 # to avoid listing models that would fail at runtime.
                 raise ValueError(f"No API key configured for {base_url}")
