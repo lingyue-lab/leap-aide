@@ -34,17 +34,25 @@ class TestProviderDetectionEnvVars:
             assert env_vars, f"catalog_env_vars() entry {slug!r} has no env vars"
 
     def test_env_scan_skips_empty_none_refresh_providers(self):
-        """Providers with an empty baseline and refresh.mode=none (e.g.
-        meta-llama) are skipped by the env scan — they have nothing to
-        render.  api-mode providers with empty baselines (ark, ollama,
-        huggingface, ollama-cloud) must NOT be skipped: their models
-        come from the live query once a key is configured."""
-        rec = model_catalog.get_provider_record("meta-llama")
-        assert rec is not None, "meta-llama missing from catalog"
-        assert not rec["models"], "meta-llama baseline unexpectedly non-empty"
-        assert rec["refresh"]["mode"] != "api", (
-            "meta-llama is refresh.mode=api and would not be skipped"
+        """Providers with an empty baseline and refresh.mode=none are skipped
+        by the env scan — they have nothing to render.  api-mode providers
+        with empty baselines (ark, ollama, lmstudio, huggingface,
+        ollama-cloud) must NOT be skipped: their models come from the live
+        query once a key is configured.
+
+        The packaged catalog carries no such card any more — the empty
+        meta-llama shell was removed with the #88 schema migration — so the
+        skip rule is pinned on the scan itself."""
+        import inspect
+
+        import app.api.config as config
+
+        src = inspect.getsource(config._build_available_models_uncached)
+        assert 'not _rec["models"] and _rec["refresh"]["mode"] != "api"' in src, (
+            "the env scan must skip cards with no baseline and no live refresh"
         )
+        # The retired empty shell is gone from the catalog (#88).
+        assert model_catalog.get_provider_record("meta-llama") is None
         for slug in ("ark", "ollama", "lmstudio", "huggingface", "ollama-cloud"):
             rec = model_catalog.get_provider_record(slug)
             assert rec is not None, f"{slug} missing from catalog"

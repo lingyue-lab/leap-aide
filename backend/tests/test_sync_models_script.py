@@ -80,7 +80,8 @@ def test_build_draft_echoes_existing_entry_wiring():
     existing_entry = {
         "display_name": "OpenRouter",
         "auth": {"type": "api_key", "env_var": "OPENROUTER_API_KEY"},
-        "endpoint": {"base_url": "https://openrouter.ai/api/v1", "models_path": "/models"},
+        "endpoint": {"models_probe_url": "https://openrouter.ai/api/v1/models"},
+        "provider_in_sdk": "openrouter",
         "refresh": {"mode": "api", "membership": "curated", "timeout_s": 10},
     }
     draft = sync_models.build_draft(
@@ -91,6 +92,7 @@ def test_build_draft_echoes_existing_entry_wiring():
     )
     assert draft["refresh"] == {"mode": "api", "membership": "curated", "timeout_s": 10}
     assert draft["endpoint"] == existing_entry["endpoint"]
+    assert draft["provider_in_sdk"] == "openrouter"
 
 
 def test_main_never_writes_catalog(tmp_path, capsys):

@@ -9,8 +9,8 @@ catalog (9 models: gpt-5.5, gpt-5.4, codex-specific variants, etc.)
 but no automatic detection path.
 
 Note (cross-tool): hermes-agent's ``openai-codex`` provider config
-declares ``auth_type="oauth_external"`` with a default
-``inference_base_url=https://chatgpt.com/backend-api/codex`` — the same
+declares ``auth_type="oauth_external"`` with a default chat endpoint of
+``https://chatgpt.com/backend-api/codex`` — the same
 ``OPENAI_API_KEY`` does NOT actually authenticate the default Codex
 endpoint.  Users without an OAuth state will see codex models in the
 picker but hit auth errors at use time.  The fix is still net-positive

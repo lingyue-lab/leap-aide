@@ -89,7 +89,7 @@ def _subscribe_replay(
     replay_subs: dict[str, queue.Queue],
 ) -> None:
     """Subscribe to a session's streaming replay."""
-    from app.api.stream_manager import stream_manager
+    from app.api.stream_manager import filter_replay_history, stream_manager
 
     # Check subscription limit
     if len(replay_subs) >= WS_MAX_REPLAY_SUBS:
@@ -134,7 +134,7 @@ def _subscribe_replay(
         "event": "replay_start",
         "data": None,
     })
-    for event, data in stream.replay():
+    for event, data in filter_replay_history(stream.replay()):
         _ws_send_json(sock, {
             "channel": "replay",
             "session_id": session_id,

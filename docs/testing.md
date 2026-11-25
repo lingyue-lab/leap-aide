@@ -35,6 +35,12 @@ CI runs the same suites inside the testing image built from the repo `Dockerfile
 
 Every push to a ready PR targeting `main` runs them automatically, and so does every push to `main` itself. Draft PRs are skipped, and a PR with a merge conflict gets no run at all. This check is not yet required to merge — it reports, it does not block.
 
+### Test Batching
+
+`--batch-size=N` groups N test files into a single pytest invocation, and each invocation starts and stops the session-scoped testing server once. The CLI flag `--batch-size=N` takes precedence over the `BATCH_SIZE` environment variable, which takes precedence over the default of 1.
+
+CI runs `backend full` with `--batch-size=20`: 136 files become 7 batches, so the testing server starts and stops 7 times instead of 136 and the per-invocation overhead no longer dominates the suite. Local runs keep the default of 1 (one file per invocation) unless you pass the flag or set `BATCH_SIZE`. Per-batch junit XML naming is unchanged — one `junit-<level>-batchNN-<timestamp>.xml` per batch, aggregated into `junit-<level>-<timestamp>.xml`.
+
 Useful environment overrides:
 
 - `DRY_RUN=1` — print the commands without executing them

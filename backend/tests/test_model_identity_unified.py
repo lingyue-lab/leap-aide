@@ -134,14 +134,16 @@ def test_is_user_defined_provider_accepts_both_spellings(custom_providers):
 
 
 def test_is_user_defined_provider_covers_catalog_custom_endpoints():
-    """The catalog's ``is_custom`` flag marks user-side endpoints.
+    """The catalog marks user-side endpoints by their engine declaration.
 
-    A user-defined provider is the user's own server, not a vendor API:
-    it needs no API key and keeps its configured base_url.
+    A card without a built-in engine (``provider_in_sdk == "none"``) keeps
+    the user's own base_url when the default model changes; the synthetic
+    ``local`` slug counts too.
     """
     assert config.is_user_defined_provider("ollama") is True
-    assert config.is_user_defined_provider("lmstudio") is True
     assert config.is_user_defined_provider("local") is True
+    # lmstudio has its own SDK engine — it needs no base_url of its own.
+    assert config.is_user_defined_provider("lmstudio") is False
     # Vendor providers stay vendor providers.
     assert config.is_user_defined_provider("anthropic") is False
     assert config.is_user_defined_provider("deepseek") is False

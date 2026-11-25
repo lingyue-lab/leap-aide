@@ -10,6 +10,9 @@ Covers:
 import os
 import pytest
 import app.api.config as config
+import app.api.model_catalog as mc
+import app.api.profiles as profiles
+from tests.test_provider_management import _install_fake_hermes_cli
 
 
 @pytest.fixture(autouse=True)
@@ -45,20 +48,20 @@ def _resolve_with_config(model_id, provider=None, base_url=None):
 
 # ── JSON catalog baseline (issue #10) ─────────────────────────────────────────
 
-def test_minimax_baseline_has_bare_ids():
-    """The catalog's minimax baseline must keep bare model ids (no @minimax:
-    prefix) — minimax is the one provider whose dropdown ids are unprefixed."""
+def test_minimax_baseline_has_prefixed_ids():
+    """The catalog's minimax baseline uses the picker-wide ``@minimax:`` prefix
+    — every id the user sees is ``@provider:model``."""
     from app.api import model_catalog
     ids = [m['id'] for m in model_catalog.provider_baseline_models('minimax')]
-    assert 'MiniMax-M2.7' in ids, (
+    assert '@minimax:MiniMax-M2.7' in ids, (
         f"MiniMax-M2.7 missing from catalog minimax baseline. Found: {ids}"
     )
-    assert 'MiniMax-M2.7-highspeed' in ids, (
+    assert '@minimax:MiniMax-M2.7-highspeed' in ids, (
         f"MiniMax-M2.7-highspeed missing from catalog minimax baseline. Found: {ids}"
     )
     for mid in ids:
-        assert not mid.startswith('@'), (
-            f"minimax baseline ids must be bare (no @provider: prefix): {mid}"
+        assert mid.startswith('@minimax:'), (
+            f"minimax baseline ids must carry the @minimax: prefix: {mid}"
         )
 
 
@@ -68,20 +71,76 @@ def test_minimax_display_name():
     assert model_catalog.provider_display('minimax') == 'MiniMax'
 
 
+def test_minimax_cn_card_shape():
+    """The China card declares its gateway variant, split endpoints, and model ids."""
+    rec = mc.get_provider_record("minimax-cn")
+    assert rec is not None, "minimax-cn record missing from catalog"
+    assert rec["display_name"] == "MiniMax (China)"
+    assert rec["provider_in_sdk"] == "minimax-cn"
+    # Declared as the singular env_var; the normalizing map side is covered
+    # by test_env_vars_map in test_model_catalog_json.py.
+    assert rec["auth"]["env_var"] == "MINIMAX_CN_API_KEY"
+    assert rec["endpoint"]["models_probe_url"] == "https://api.minimax.chat/v1/models"
+    assert rec["endpoint"]["inference_url"] == "https://api.minimaxi.com/anthropic"
+    ids = [m["id"] for m in rec["models"]]
+    assert ids[0] == "@minimax-cn:MiniMax-M3.1-Flash"
+    assert "@minimax-cn:MiniMax-M3" in ids
+    assert all(i.startswith("@minimax-cn:") for i in ids)
+
+
+def test_minimax_baseline_gains_m3_family_ids():
+    """Offline fallback keeps the reporter's model selectable on both cards."""
+    old_ids = [m["id"] for m in mc.get_provider_record("minimax")["models"]]
+    assert "@minimax:MiniMax-M3" in old_ids and "@minimax:MiniMax-M3.1-Flash" in old_ids
+    assert all(i.startswith("@minimax:") for i in old_ids)  # prefixed-id rule holds
+
+
+def test_only_cn_key_lights_cn_card_not_global_card(monkeypatch, tmp_path):
+    """env split: a CN-only user must not see the global MiniMax card as configured."""
+    # Same fake-hermes-home pattern as the gateway-variant key tests in
+    # test_provider_management.py (_install_fake_hermes_cli +
+    # get_active_hermes_home -> tmp_path) so no residual config.yaml token
+    # can light either card.
+    _install_fake_hermes_cli(monkeypatch)
+    monkeypatch.setattr(profiles, "get_active_hermes_home", lambda: tmp_path)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    for var in ("MINIMAX_API_KEY", "MINIMAX_CN_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("MINIMAX_CN_API_KEY", "sk-cn-test")
+
+    old_cfg = dict(config.cfg)
+    config.cfg.clear()
+    config.cfg["model"] = {}
+    from app.api import providers
+    try:
+        assert providers._provider_has_key("minimax-cn") is True
+        assert providers._provider_has_key("minimax") is False
+    finally:
+        config.cfg.clear()
+        config.cfg.update(old_cfg)
+
+
 # ── MINIMAX_API_KEY env var detection ─────────────────────────────────────────
 
 def test_minimax_env_vars_declared_in_catalog():
-    """The catalog must declare MINIMAX_API_KEY / MINIMAX_CN_API_KEY so the
-    env scan (driven by catalog_env_vars()) detects the provider without
-    editing ~/.hermes/.env."""
+    """The catalog declares MINIMAX_API_KEY on the minimax card; the China
+    gateway key MINIMAX_CN_API_KEY belongs to the separate minimax-cn card,
+    so the env scan (driven by catalog_env_vars()) lights each card with its
+    own key only, without editing ~/.hermes/.env."""
     from app.api import model_catalog
     env_vars = model_catalog.catalog_env_vars().get('minimax', [])
     assert 'MINIMAX_API_KEY' in env_vars, (
         f"MINIMAX_API_KEY not declared in catalog minimax record. Found: {env_vars}"
     )
-    assert 'MINIMAX_CN_API_KEY' in env_vars, (
-        f"MINIMAX_CN_API_KEY not declared in catalog minimax record. Found: {env_vars}"
+    assert 'MINIMAX_CN_API_KEY' not in env_vars, (
+        f"MINIMAX_CN_API_KEY must be declared by the minimax-cn card, not by "
+        f"minimax. Found: {env_vars}"
     )
+    cn_auth = mc.get_provider_record("minimax-cn")["auth"]
+    # The loader keeps singular env_var and list env_vars as separate fields
+    # (model_catalog.py:224-225); this record declares the singular env_var.
+    assert cn_auth["env_var"] == "MINIMAX_CN_API_KEY"
+    assert cn_auth["env_vars"] in (None, [])
 
 
 def test_minimax_detected_from_os_environ(monkeypatch):
@@ -130,6 +189,16 @@ def test_provider_hint_minimax_highspeed():
     )
     assert model == 'MiniMax-M2.7-highspeed'
     assert provider == 'minimax'
+
+
+def test_minimax_cn_prefix_routes_to_minimax_cn():
+    """@minimax-cn: bare-model routing mirrors the @minimax: shape."""
+    model, provider, base_url = _resolve_with_config(
+        "@minimax-cn:MiniMax-M3.1-Flash", provider="anthropic",
+    )
+    assert model == "MiniMax-M3.1-Flash"
+    assert provider == "minimax-cn"
+    assert base_url is None
 
 
 def test_minimax_slash_format_routes_openrouter_when_not_active():
