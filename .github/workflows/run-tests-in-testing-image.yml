@@ -440,7 +440,7 @@ jobs:
             --volume "$BACKEND_RESULTS:/app/backend/tests/.results" \
             --env DEEPSEEK_API_KEY \
             --env TEST_USING_LIVE_KEY \
-            "$cid" ./scripts/run-test.sh backend full
+            "$cid" ./scripts/run-test.sh backend full --batch-size=20
 
       # !cancelled(), not always(): mirror of the same guard in
       # run-tests-on-pulled-image — a
@@ -580,7 +580,7 @@ jobs:
             --env DEEPSEEK_API_KEY \
             --env TEST_USING_LIVE_KEY \
             "$IMAGE_REF" \
-            ./scripts/run-test.sh backend full
+            ./scripts/run-test.sh backend full --batch-size=20
 
       # !cancelled(), not always(): a multi-hour backend failure should not
       # also deny the much shorter frontend signal, but a cancelled run need
