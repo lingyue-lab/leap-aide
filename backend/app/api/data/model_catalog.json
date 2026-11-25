@@ -186,8 +186,10 @@
       "auth": {"type": "api_key", "env_var": "MINIMAX_CN_API_KEY"},
       "endpoint": {
         "base_url": "https://api.minimax.chat/v1",
+        "chat_base_url": "https://api.minimaxi.com/anthropic",
         "models_path": "/models"
       },
+      "sdk_provider": "minimax-cn",
       "refresh": {"mode": "api", "membership": "replace"},
       "models": [
         {"id": "@minimax-cn:MiniMax-M3.1-Flash", "label": "MiniMax M3.1 Flash"},

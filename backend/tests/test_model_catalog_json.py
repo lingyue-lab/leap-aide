@@ -252,6 +252,43 @@ class TestBaseUrlEnvOverride:
         assert mc.provider_base_url("test") == "https://api.test.example/v1"
 
 
+class TestChatBaseUrl:
+    """endpoint.chat_base_url: chat endpoint split + fallback to base_url."""
+
+    def test_chat_base_url_parsed_and_normalized(self, tmp_path):
+        """Loader keeps endpoint.chat_base_url, stripped of whitespace and trailing slash."""
+        path = tmp_path / "model_catalog.json"
+        path.write_text(json.dumps({"schema_version": 1, "providers": {"probe-chat-split": {
+            "display_name": "Probe Chat Split",
+            "auth": {"type": "api_key", "env_var": "PROBE_SPLIT_API_KEY"},
+            "endpoint": {"base_url": "https://probe.example.com/v1",
+                         "chat_base_url": " https://chat.example.com/anthropic/ "},
+            "models": [{"id": "m1", "label": "M1"}],
+        }}}), encoding="utf-8")
+        mc.CATALOG_PATH = path  # restored by the autouse fixture (lines 26/34); no manual restore
+        rec = mc.load_catalog(force=True)["providers"]["probe-chat-split"]
+        assert rec["endpoint"]["chat_base_url"] == "https://chat.example.com/anthropic"
+        assert mc.provider_chat_base_url("probe-chat-split") == "https://chat.example.com/anthropic"
+        assert mc.provider_base_url("probe-chat-split") == "https://probe.example.com/v1"
+
+    def test_chat_base_url_absent_falls_back_to_base_url(self):
+        """Entries without chat_base_url keep byte-identical chat semantics."""
+        for slug in ("deepseek", "xiaomi", "minimax"):
+            assert mc.provider_chat_base_url(slug) == mc.provider_base_url(slug)
+
+    def test_chat_base_url_blank_string_is_treated_as_absent(self, tmp_path):
+        """Whitespace-only chat_base_url normalizes to absent, never emitted as a URL."""
+        path = tmp_path / "model_catalog.json"
+        path.write_text(json.dumps({"schema_version": 1, "providers": {"blank-chat": {
+            "display_name": "Blank Chat",
+            "auth": {"type": "api_key", "env_var": "BLANK_CHAT_API_KEY"},
+            "endpoint": {"base_url": "https://b.example.com/v1", "chat_base_url": "   "},
+            "models": [{"id": "m1", "label": "M1"}],
+        }}}), encoding="utf-8")
+        mc.CATALOG_PATH = path
+        assert mc.provider_chat_base_url("blank-chat") == "https://b.example.com/v1"
+
+
 # ── 2. Alias resolution ─────────────────────────────────────────────────────
 
 
@@ -774,9 +811,24 @@ class TestGatewayVariantValidation:
         catalog = mc.load_catalog(force=True)
         assert "variant" not in catalog["providers"]
 
-    def test_self_reference_ignored(self, tmp_path):
+    def test_self_reference_kept(self, tmp_path):
+        # A self-referential sdk_provider (WebUI slug == SDK id, e.g.
+        # minimax-cn) is kept: the field is what marks the entry as a
+        # gateway variant so chat gets explicit base_url/key translation.
         self._write_variant(tmp_path, "variant")
         mc.load_catalog(force=True)
-        # Entry kept but the alias is cleared — behaves like a regular entry.
         assert mc.get_provider_record("variant") is not None
-        assert mc.provider_sdk_provider("variant") is None
+        assert mc.provider_sdk_provider("variant") == "variant"
+
+
+def test_find_gateway_variant_uses_chat_base_url():
+    """Reverse lookup compares the persisted chat endpoint, both sides same source."""
+    assert (
+        mc.find_gateway_variant("minimax-cn", "https://api.minimaxi.com/anthropic")
+        == "minimax-cn"
+    )
+    # xiaomi-token-plan regression anchor (value unchanged by this task).
+    assert (
+        mc.find_gateway_variant("xiaomi", "https://token-plan-cn.xiaomimimo.com/v1")
+        == "xiaomi-token-plan"
+    )
