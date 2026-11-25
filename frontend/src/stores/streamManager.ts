@@ -604,6 +604,10 @@ export function handleReplayEvent(sessionId: string, event: string, data: any): 
     }
 
     case 'done': {
+      // Stream is over — dismiss any open ClarifyCard silently.
+      window.dispatchEvent(new CustomEvent('clarify-resolved', {
+        detail: { reason: 'stream-ended', _session_id: sessionId },
+      }));
       // Always clear useChatStore.busy — even if StreamManager state was
       // already cleared by subscribe_success's stale-cleaning, the done event
       // means the backend has finished and the UI must not stay stuck.
@@ -700,6 +704,10 @@ export function handleReplayEvent(sessionId: string, event: string, data: any): 
     }
 
     case 'cancel': {
+      // Stream is over — dismiss any open ClarifyCard silently.
+      window.dispatchEvent(new CustomEvent('clarify-resolved', {
+        detail: { reason: 'stream-ended', _session_id: sessionId },
+      }));
       _dismissCompressing(sessionId);
       _sessionStates.set(sessionId, {
         ...s, busy: false, streaming: false, completedAt: Date.now(),
@@ -719,6 +727,13 @@ export function handleReplayEvent(sessionId: string, event: string, data: any): 
     case 'clarify': {
       data._session_id = sessionId;
       window.dispatchEvent(new CustomEvent('clarify-required', { detail: data }));
+      break;
+    }
+
+    case 'clarify_resolved': {
+      // Backend resolved this prompt (timeout or answer): forward so
+      // ClarifyCard can dismiss now instead of waiting for its timer.
+      window.dispatchEvent(new CustomEvent('clarify-resolved', { detail: { ...data, _session_id: sessionId } }));
       break;
     }
 

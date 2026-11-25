@@ -1316,6 +1316,15 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     _clear_clarify_pending(sid)
+                    # Issue #21: the prompt is dead — stamp the stream so a
+                    # later replay cannot re-serve it and clients dismiss now.
+                    try:
+                        put_event('clarify_resolved', {
+                            'clarify_id': data['clarify_id'],
+                            'reason': 'timeout',
+                        })
+                    except Exception:
+                        pass  # best-effort; never block the fallback return
                     return (
                         "The user did not provide a response within the time limit. "
                         "Use your best judgement to make the choice and proceed."
