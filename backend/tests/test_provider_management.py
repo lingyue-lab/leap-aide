@@ -388,7 +388,7 @@ class TestProviderEnvVars:
         from app.api.providers import _provider_env_vars
         assert _provider_env_vars("") == []
         assert _provider_env_vars("acme") == []
-        assert _provider_env_vars("meta-llama") == []  # auth.type=none
+        assert _provider_env_vars("meta-llama") == []  # no catalog record
 
     def test_has_key_cn_only_env_var_lights_cn_card(self, monkeypatch, tmp_path):
         """Regression, post env-split: MINIMAX_CN_API_KEY alone in .env must

@@ -2351,10 +2351,10 @@ def _build_available_models_uncached() -> dict:
     # providers (e.g. ark / ARK_API_KEY) are detected without Python
     # changes (issue #10).  Providers with an empty baseline and
     # refresh.mode=none have nothing to render, so they are skipped
-    # here (e.g. meta-llama) — their env vars remain available for key
-    # management via providers.py.  api-mode providers with empty
-    # baselines (ark, ollama, huggingface, ollama-cloud) are NOT
-    # skipped: their models come from the live query once a key exists.
+    # here — their env vars remain available for key management via
+    # providers.py.  api-mode providers with empty baselines (ark,
+    # ollama, huggingface, ollama-cloud) are NOT skipped: their models
+    # come from the live query once a key exists.
     for _slug, _env_vars in model_catalog.catalog_env_vars().items():
         _rec = model_catalog.get_provider_record(_slug)
         if _rec is not None and not _rec["models"] and _rec["refresh"]["mode"] != "api":
