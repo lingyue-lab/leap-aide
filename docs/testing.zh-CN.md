@@ -35,6 +35,12 @@ CI 会在由仓库 `Dockerfile` 构建出的 testing 镜像里跑同样的套件
 
 每次向目标为 `main` 的 ready PR 推送、以及每次向 `main` 本身的推送，都会自动运行；草稿 PR 会跳过，存在合并冲突的 PR 则完全不会运行。该检查目前还不是合并的必需项—— 它只报告结果，不阻塞合并。
 
+### 测试批处理
+
+`--batch-size=N` 把 N 个测试文件合并为一次 pytest 调用，每次调用会启停一次会话级 testing server。命令行参数 `--batch-size=N` 优先于 `BATCH_SIZE` 环境变量，环境变量又优先于默认值 1。
+
+CI 以 `--batch-size=20` 运行 `backend full`：136 个文件合并为 7 个 batch，testing server 因此只启停 7 次而不是 136 次，单次启停开销不再主导整个套件。本地运行仍保持默认值 1（每次调用一个文件），除非显式传入该 flag 或设置 `BATCH_SIZE`。每批 junit XML 的命名不变 —— 每批一个 `junit-<level>-batchNN-<timestamp>.xml`，再聚合成 `junit-<level>-<timestamp>.xml`。
+
 常用环境变量覆盖：
 
 - `DRY_RUN=1` —— 只打印命令不执行
