@@ -72,16 +72,20 @@ def test_minimax_display_name():
 
 
 def test_minimax_cn_card_shape():
-    """The China card declares its gateway variant, split endpoints, and model ids."""
+    """The China card is a plain SDK-registry-backed card: probe endpoint,
+    split env var, and prefixed model ids — no gateway-variant fields."""
     rec = mc.get_provider_record("minimax-cn")
     assert rec is not None, "minimax-cn record missing from catalog"
     assert rec["display_name"] == "MiniMax (China)"
-    assert rec["sdk_provider"] == "minimax-cn"
+    # Plain card: chat falls through to the hermes SDK registry default
+    # (https://api.minimaxi.com/anthropic + MINIMAX_CN_API_KEY); the card
+    # declares no sdk_provider of its own.
+    assert mc.provider_sdk_provider("minimax-cn") is None
     # Declared as the singular env_var; the normalizing map side is covered
     # by test_env_vars_map in test_model_catalog_json.py.
     assert rec["auth"]["env_var"] == "MINIMAX_CN_API_KEY"
+    # Probe endpoint (model list + save validation), evidence-backed.
     assert rec["endpoint"]["base_url"] == "https://api.minimax.chat/v1"
-    assert rec["endpoint"]["chat_base_url"] == "https://api.minimaxi.com/anthropic"
     ids = [m["id"] for m in rec["models"]]
     assert ids[0] == "@minimax-cn:MiniMax-M3.1-Flash"
     assert "@minimax-cn:MiniMax-M3" in ids

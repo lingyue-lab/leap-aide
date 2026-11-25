@@ -179,11 +179,12 @@ def _validate_provider(slug: str, rec: object) -> dict | None:
             )
             return None
         sdk_provider = sdk_provider.strip()
-        # A self-referential value is kept: an entry whose catalog slug equals
-        # its SDK id (e.g. minimax-cn, a second gateway of an SDK-known
-        # provider where the WebUI slug and the SDK slug coincide) still needs
-        # the field to trigger gateway-variant translation (explicit
-        # base_url/key); the slug alone cannot mark it as a variant.
+        if sdk_provider == slug:
+            logger.warning(
+                "model_catalog: provider %r sdk_provider points at itself; ignored",
+                slug,
+            )
+            sdk_provider = None
 
     # Custom endpoint: the provider is the user's own server rather than a
     # vendor API (ollama, lmstudio).  Such a provider needs no API key and
@@ -241,7 +242,6 @@ def _validate_provider(slug: str, rec: object) -> dict | None:
             # for regional gateways like token-plan-cn.xiaomimimo.com).
             "base_url_env": str(endpoint.get("base_url_env") or "").strip() or None,
             "models_path": str(endpoint.get("models_path") or "/models"),
-            "chat_base_url": str(endpoint.get("chat_base_url") or "").strip().rstrip("/") or None,
             "trust_local": bool(endpoint.get("trust_local", False)),
         }
     return out
@@ -422,7 +422,7 @@ def find_gateway_variant(sdk_provider: str, base_url: str) -> str | None:
         rec = get_provider_record(slug)
         if rec is None or rec.get("sdk_provider") != sdk_provider:
             continue
-        if (provider_chat_base_url(slug) or "").rstrip("/") == want:
+        if (provider_base_url(slug) or "").rstrip("/") == want:
             return slug
     return None
 
@@ -497,22 +497,6 @@ def provider_base_url(slug: str) -> str | None:
         if override:
             base = override.rstrip("/")
     return base or None
-
-
-def provider_chat_base_url(slug: str) -> str | None:
-    """Return the chat/inference base URL for *slug*.
-
-    Falls back to ``provider_base_url`` when the record declares no
-    ``endpoint.chat_base_url``, so entries without the field keep
-    byte-identical chat semantics.
-    """
-    rec = get_provider_record(slug)
-    if not rec:
-        return None
-    chat = str((rec.get("endpoint") or {}).get("chat_base_url") or "").strip()
-    if chat:
-        return chat.rstrip("/")
-    return provider_base_url(slug)
 
 
 def provider_endpoint(slug: str) -> str | None:
