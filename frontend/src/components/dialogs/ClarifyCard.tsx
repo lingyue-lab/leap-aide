@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { clarifyService } from '@/services/api';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 import { showInfoCard } from '@/components/dialogs/InfoCard';
+import i18n from '@/i18n/config';
 import type { ClarifyRequest } from '@/types';
 
 // Per-session Map for clarify state storage.
@@ -13,6 +14,28 @@ interface StoredClarify {
   receivedAt: number;
 }
 const _clarifications = new Map<string, StoredClarify>();
+
+// Bounded per-session memory of clarify ids that can no longer answer
+// (dismissed, responded, or resolved) so replay cannot resurrect them.
+const _dismissed = new Map<string, string[]>();
+const DISMISSED_CAP = 50;
+
+/** Remember a clarify id as no longer answerable for this session. */
+function _recordDismissed(sid: string, id: string): void {
+  let list = _dismissed.get(sid);
+  if (!list) {
+    list = [];
+    _dismissed.set(sid, list);
+  }
+  if (list.includes(id)) return;
+  list.push(id);
+  while (list.length > DISMISSED_CAP) list.shift();
+}
+
+/** True when this clarify id can no longer answer for this session. */
+function _isDismissed(sid: string, id: string): boolean {
+  return (_dismissed.get(sid) ?? []).includes(id);
+}
 
 // Current session ID
 let _currentSessionId: string | null = null;
@@ -59,7 +82,19 @@ function _handleClarify(e: CustomEvent) {
   const detail = e.detail as ClarifyRequest;
   const sid = detail._session_id || '';
 
-  // Always store — even if the component is unmounted
+  // A dismissed/responded/resolved id can never answer again — never
+  // re-store or re-show it on replay.
+  if (detail.clarify_id && _isDismissed(sid, detail.clarify_id)) return;
+
+  // Same id already stored → duplicate delivery. Leave receivedAt and
+  // rendering untouched so the countdown stays anchored to first delivery.
+  const existing = _clarifications.get(sid);
+  if (existing && detail.clarify_id && existing.detail.clarify_id === detail.clarify_id) {
+    return;
+  }
+
+  // Store — even if the component is unmounted. A genuinely new id simply
+  // replaces the stored entry (no dismissal recorded for the old one).
   _clarifications.set(sid, { detail, receivedAt: Date.now() });
 
   // Only display if for the current session AND the component is mounted
@@ -71,6 +106,28 @@ function _handleClarify(e: CustomEvent) {
 }
 
 window.addEventListener('clarify-required', _handleClarify as EventListener);
+
+// Dismiss a clarify card as soon as the backend resolves it (responded,
+// cancelled, or timed out) so the UI never lingers past its lifecycle.
+function _handleResolved(e: CustomEvent) {
+  const detail = e.detail as { _session_id?: string; clarify_id?: string; reason?: string };
+  const sid = detail._session_id || '';
+  const stored = _clarifications.get(sid);
+  const matches = stored && (!detail.clarify_id || !stored.detail.clarify_id
+    || stored.detail.clarify_id === detail.clarify_id);
+  if (detail.clarify_id) _recordDismissed(sid, detail.clarify_id);
+  if (!matches) return;
+  _clarifications.delete(sid);
+  if (sid === _currentSessionId) {
+    _renderClarify?.(null);
+    _renderVisible?.(false);
+    _onVisibleChange?.(false);
+    if (detail.reason === 'timeout') {
+      showInfoCard(sid, i18n.t('chat:clarify.timeout'));
+    }
+  }
+}
+window.addEventListener('clarify-resolved', _handleResolved as EventListener);
 // ────────────────────────────────────────────────────────────────────────
 
 export default function ClarifyCard() {
@@ -109,6 +166,7 @@ export default function ClarifyCard() {
     setLoading(true);
     try {
       await clarifyService.respond(clarify._session_id || '', choice, clarify.clarify_id);
+      if (clarify.clarify_id) _recordDismissed(clarify._session_id || '', clarify.clarify_id);
       _clarifications.delete(clarify._session_id || '');
       setVisible(false);
       setClarify(null);
@@ -126,6 +184,7 @@ export default function ClarifyCard() {
     setLoading(true);
     try {
       await clarifyService.respond(clarify._session_id || '', input.trim(), clarify.clarify_id);
+      if (clarify.clarify_id) _recordDismissed(clarify._session_id || '', clarify.clarify_id);
       _clarifications.delete(clarify._session_id || '');
       setVisible(false);
       setClarify(null);
@@ -177,6 +236,7 @@ export default function ClarifyCard() {
       }
       dismissedRef.current = true;
       const sessionId = sid || _currentSessionId || '';
+      if (clarify.clarify_id) _recordDismissed(sid, clarify.clarify_id);
       _clarifications.delete(sid);
       setVisible(false);
       setClarify(null);
