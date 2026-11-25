@@ -47,7 +47,8 @@ def _minimal_catalog(**provider_overrides):
     provider = {
         "display_name": "Test",
         "auth": {"type": "api_key", "env_var": "TEST_API_KEY"},
-        "endpoint": {"base_url": "https://api.test.example/v1", "models_path": "/models"},
+        "endpoint": {"models_probe_url": "https://api.test.example/v1/models"},
+        "provider_in_sdk": "test",
         "refresh": {"mode": "api", "membership": "replace"},
         "models": [{"id": "@test:base-1", "label": "Base 1"}],
     }
@@ -106,7 +107,7 @@ class TestPackagedCatalog:
     def test_zai_endpoint_is_fixed(self):
         # Old hardcoded table pointed at api.z.ai/v1 (404).  The catalog
         # must carry the corrected intl endpoint.
-        url = mc.provider_endpoint("zai")
+        url = mc.provider_models_probe_url("zai")
         assert url == "https://api.z.ai/api/paas/v4/models"
 
     def test_ark_is_a_new_api_provider(self):
@@ -115,7 +116,7 @@ class TestPackagedCatalog:
         assert rec["display_name"] == "Volcano Ark"
         assert rec["refresh"]["mode"] == "api"
         assert rec["auth"]["env_var"] == "ARK_API_KEY"
-        assert mc.provider_endpoint("ark") == "https://ark.cn-beijing.volces.com/api/v3/models"
+        assert mc.provider_models_probe_url("ark") == "https://ark.cn-beijing.volces.com/api/v3/models"
 
     def test_tencent_tokenhub_is_an_api_provider(self):
         rec = mc.get_provider_record("tencent-tokenhub")
@@ -123,17 +124,17 @@ class TestPackagedCatalog:
         assert rec["display_name"] == "Tencent TokenHub"
         assert rec["refresh"]["mode"] == "api"
         assert rec["auth"]["env_var"] == "TOKENHUB_API_KEY"
-        assert mc.provider_endpoint("tencent-tokenhub") == (
+        assert mc.provider_models_probe_url("tencent-tokenhub") == (
             "https://tokenhub.tencentmaas.com/v1/models"
         )
         # Hermes-compatible aliases must resolve to the canonical slug.
         assert mc.resolve_alias("tokenhub") == "tencent-tokenhub"
         assert mc.resolve_alias("tencent") == "tencent-tokenhub"
 
-    def test_minimax_keeps_bare_ids(self):
+    def test_minimax_ids_are_provider_prefixed(self):
         ids = [m["id"] for m in mc.provider_baseline_models("minimax")]
-        assert "MiniMax-M2.7" in ids
-        assert all(not i.startswith("@") for i in ids)
+        assert "@minimax:MiniMax-M2.7" in ids
+        assert all(i.startswith("@minimax:") for i in ids)
 
     def test_anthropic_keeps_prefixed_ids(self):
         ids = [m["id"] for m in mc.provider_baseline_models("anthropic")]
@@ -148,7 +149,7 @@ class TestPackagedCatalog:
 
     def test_oauth_providers_have_no_endpoint(self):
         for slug in ("copilot", "nous", "openai-codex"):
-            assert mc.provider_endpoint(slug) is None
+            assert mc.provider_models_probe_url(slug) is None
             assert mc.get_provider_record(slug)["refresh"]["mode"] == "none"
 
     def test_local_services_trust_local_and_keyless(self):
@@ -163,67 +164,70 @@ class TestPackagedCatalog:
         assert mc.provider_auth_header("anthropic") == "x-api-key"
         assert mc.provider_auth_header("deepseek") == "Bearer"
 
-    def test_xiaomi_declares_base_url_env_override(self):
+    def test_xiaomi_declares_probe_url_env_override(self):
         # Regional gateways (token-plan-cn.xiaomimimo.com) issue keys that
         # are rejected by the packaged default endpoint — the catalog must
         # advertise the SDK's XIAOMI_BASE_URL override var.
         rec = mc.get_provider_record("xiaomi")
-        assert rec["endpoint"]["base_url_env"] == "XIAOMI_BASE_URL"
-        assert rec["endpoint"]["base_url"] == "https://api.xiaomimimo.com/v1"
+        assert rec["endpoint"]["models_probe_url_env"] == "XIAOMI_BASE_URL"
+        assert rec["endpoint"]["models_probe_url"] == "https://api.xiaomimimo.com/v1/models"
 
-    def test_is_custom_defaults_to_false(self):
-        # Every provider declares the flag; only the user's own servers are
-        # custom.  A vendor API is never one.
-        for slug, rec in mc.load_catalog()["providers"].items():
-            assert isinstance(rec["is_custom"], bool), slug
-        for slug in ("anthropic", "openai", "deepseek", "openrouter", "ollama-cloud"):
-            assert mc.get_provider_record(slug)["is_custom"] is False, slug
-
-    def test_local_endpoints_are_marked_custom(self):
-        # ollama / lmstudio are the user's own OpenAI-compatible server.
+    def test_keyless_cards_are_declared_by_auth_type(self):
+        # The "needs no API key" answer is data: auth.type == "none" marks
+        # the user's own OpenAI-compatible server.
         for slug in ("ollama", "lmstudio"):
-            assert mc.get_provider_record(slug)["is_custom"] is True, slug
-            assert mc.is_custom_provider(slug) is True, slug
-        assert mc.is_custom_provider("anthropic") is False
-        assert mc.is_custom_provider("no-such-provider") is False
+            assert mc.get_provider_record(slug)["auth"]["type"] == "none", slug
+            assert mc.provider_is_keyless(slug) is True, slug
+        for slug in ("anthropic", "openai", "deepseek", "openrouter", "ollama-cloud"):
+            assert mc.provider_is_keyless(slug) is False, slug
 
-    def test_synthetic_local_slug_counts_as_custom(self):
+    def test_synthetic_local_slug_counts_as_keyless(self):
         # The WebUI infers "local" for a private endpoint no catalog record
-        # covers — it behaves like the catalog's custom providers.
-        assert mc.is_custom_provider("local") is True
+        # covers — it behaves like the catalog's keyless cards.
+        assert mc.provider_is_keyless("local") is True
+        assert mc.is_synthetic_custom_slug("local") is True
+        assert mc.provider_is_keyless("no-such-provider") is False
 
-    def test_invalid_is_custom_type_falls_back_to_false(self, tmp_path):
-        # A typo in the flag must not take the provider down — warn and
-        # treat the provider as a normal one.
-        payload = _minimal_catalog(is_custom="yes")
-        _write_catalog(tmp_path, payload)
-        rec = mc.get_provider_record("test")
-        assert rec is not None
-        assert rec["is_custom"] is False
-        assert mc.is_custom_provider("test") is False
+    def test_every_card_declares_provider_in_sdk(self):
+        # Required on every record: the SDK registry id the chat layer
+        # requests, or the "none" sentinel for a card without an engine.
+        for slug, rec in mc.load_catalog()["providers"].items():
+            assert isinstance(rec["provider_in_sdk"], str), slug
+            assert rec["provider_in_sdk"].strip(), slug
+
+    def test_provider_in_sdk_values(self):
+        assert mc.provider_in_sdk("anthropic") == "anthropic"
+        assert mc.provider_in_sdk("openai") == "openai-api"
+        assert mc.provider_in_sdk("google") == "gemini"
+        assert mc.provider_in_sdk("qwen") == "alibaba"
+        assert mc.provider_in_sdk("x-ai") == "xai"
+        # "none" is a sentinel, not a missing value.
+        assert mc.provider_in_sdk("ollama") == "none"
+        assert mc.provider_in_sdk("mistralai") == "none"
+        assert mc.provider_in_sdk("ark") == "none"
+        assert mc.provider_in_sdk("no-such-provider") is None
 
 
-class TestBaseUrlEnvOverride:
-    """endpoint.base_url_env: env/.env override beats the packaged default."""
+class TestModelsProbeUrlEnvOverride:
+    """endpoint.models_probe_url_env: env/.env override beats the packaged default."""
 
     def _write_override_catalog(self, tmp_path):
         payload = _minimal_catalog()
-        payload["providers"]["test"]["endpoint"]["base_url_env"] = "TEST_BASE_URL"
+        payload["providers"]["test"]["endpoint"]["models_probe_url_env"] = "TEST_BASE_URL"
         return _write_catalog(tmp_path, payload)
 
     def test_default_when_env_unset(self, tmp_path):
         self._write_override_catalog(tmp_path)
         mc.load_catalog(force=True)
-        assert mc.provider_base_url("test") == "https://api.test.example/v1"
-        assert mc.provider_endpoint("test") == "https://api.test.example/v1/models"
+        assert mc.provider_models_probe_url("test") == "https://api.test.example/v1/models"
+        assert mc.provider_models_probe_url("test") == "https://api.test.example/v1/models"
 
     def test_env_override_wins(self, tmp_path, monkeypatch):
         self._write_override_catalog(tmp_path)
         monkeypatch.setenv("TEST_BASE_URL", "https://gw.example.cn/v1")
         mc.load_catalog(force=True)
-        assert mc.provider_base_url("test") == "https://gw.example.cn/v1"
-        # models_path still joins onto the override.
-        assert mc.provider_endpoint("test") == "https://gw.example.cn/v1/models"
+        # The var holds a base URL — the models path is appended to it.
+        assert mc.provider_models_probe_url("test") == "https://gw.example.cn/v1/models"
 
     def test_env_file_override_wins(self, tmp_path, monkeypatch):
         # The backend process environ often lacks hermes .env values —
@@ -236,57 +240,64 @@ class TestBaseUrlEnvOverride:
 
         monkeypatch.setattr(providers, "_get_hermes_home", lambda: tmp_path)
         mc.load_catalog(force=True)
-        assert mc.provider_base_url("test") == "https://from-env-file.example/v1"
+        assert (
+            mc.provider_models_probe_url("test")
+            == "https://from-env-file.example/v1/models"
+        )
 
     def test_trailing_slash_stripped(self, tmp_path, monkeypatch):
         self._write_override_catalog(tmp_path)
         monkeypatch.setenv("TEST_BASE_URL", "https://gw.example.cn/v1/")
         mc.load_catalog(force=True)
-        assert mc.provider_base_url("test") == "https://gw.example.cn/v1"
+        assert mc.provider_models_probe_url("test") == "https://gw.example.cn/v1/models"
 
     def test_provider_without_override_field_unaffected(self, tmp_path, monkeypatch):
         # Packaged-default providers ignore any same-named env var.
         _write_catalog(tmp_path, _minimal_catalog())
         monkeypatch.setenv("TEST_BASE_URL", "https://ignored.example/v1")
         mc.load_catalog(force=True)
-        assert mc.provider_base_url("test") == "https://api.test.example/v1"
+        assert mc.provider_models_probe_url("test") == "https://api.test.example/v1/models"
 
 
-class TestInferenceBaseUrl:
-    """endpoint.inference_base_url: chat endpoint split + fallback to base_url."""
+class TestInferenceUrl:
+    """endpoint.inference_url: chat endpoint split, no fallback to the probe URL."""
 
-    def test_inference_base_url_parsed_and_normalized(self, tmp_path):
-        """Loader keeps endpoint.inference_base_url, stripped of whitespace and trailing slash."""
+    def test_inference_url_parsed_and_normalized(self, tmp_path):
+        """Loader keeps endpoint.inference_url, stripped of whitespace and trailing slash."""
         path = tmp_path / "model_catalog.json"
         path.write_text(json.dumps({"schema_version": 1, "providers": {"probe-chat-split": {
             "display_name": "Probe Chat Split",
             "auth": {"type": "api_key", "env_var": "PROBE_SPLIT_API_KEY"},
-            "endpoint": {"base_url": "https://probe.example.com/v1",
-                         "inference_base_url": " https://chat.example.com/anthropic/ "},
+            "endpoint": {"models_probe_url": "https://probe.example.com/v1/models",
+                         "inference_url": " https://chat.example.com/anthropic/ "},
+            "provider_in_sdk": "probe",
             "models": [{"id": "m1", "label": "M1"}],
         }}}), encoding="utf-8")
         mc.CATALOG_PATH = path  # restored by the autouse fixture (lines 26/34); no manual restore
         rec = mc.load_catalog(force=True)["providers"]["probe-chat-split"]
-        assert rec["endpoint"]["inference_base_url"] == "https://chat.example.com/anthropic"
-        assert mc.provider_inference_base_url("probe-chat-split") == "https://chat.example.com/anthropic"
-        assert mc.provider_base_url("probe-chat-split") == "https://probe.example.com/v1"
+        assert rec["endpoint"]["inference_url"] == "https://chat.example.com/anthropic"
+        assert mc.provider_inference_url("probe-chat-split") == "https://chat.example.com/anthropic"
+        assert mc.provider_models_probe_url("probe-chat-split") == "https://probe.example.com/v1/models"
 
-    def test_inference_base_url_absent_falls_back_to_base_url(self):
-        """Entries without inference_base_url keep byte-identical chat semantics."""
-        for slug in ("deepseek", "xiaomi", "minimax"):
-            assert mc.provider_inference_base_url(slug) == mc.provider_base_url(slug)
+    def test_inference_url_absent_means_registry_default(self):
+        """Entries without inference_url keep byte-identical chat semantics:
+        the SDK registry's own endpoint is used."""
+        for slug in ("deepseek", "xiaomi", "minimax", "anthropic"):
+            assert mc.provider_inference_url(slug) is None
 
-    def test_inference_base_url_blank_string_is_treated_as_absent(self, tmp_path):
-        """Whitespace-only inference_base_url normalizes to absent, never emitted as a URL."""
+    def test_inference_url_blank_string_is_treated_as_absent(self, tmp_path):
+        """Whitespace-only inference_url normalizes to absent, never emitted as a URL."""
         path = tmp_path / "model_catalog.json"
         path.write_text(json.dumps({"schema_version": 1, "providers": {"blank-chat": {
             "display_name": "Blank Chat",
             "auth": {"type": "api_key", "env_var": "BLANK_CHAT_API_KEY"},
-            "endpoint": {"base_url": "https://b.example.com/v1", "inference_base_url": "   "},
+            "endpoint": {"models_probe_url": "https://b.example.com/v1/models",
+                         "inference_url": "   "},
+            "provider_in_sdk": "blank",
             "models": [{"id": "m1", "label": "M1"}],
         }}}), encoding="utf-8")
         mc.CATALOG_PATH = path
-        assert mc.provider_inference_base_url("blank-chat") == "https://b.example.com/v1"
+        assert mc.provider_inference_url("blank-chat") is None
 
 
 # ── 2. Alias resolution ─────────────────────────────────────────────────────
@@ -575,6 +586,15 @@ class TestLoaderValidation:
         catalog = mc.load_catalog(force=True)
         assert "test" not in catalog["providers"]
 
+    def test_endpoint_without_models_probe_url_drops_provider(self, tmp_path):
+        # The endpoint block exists, so the complete models URL is required.
+        _write_catalog(
+            tmp_path,
+            _minimal_catalog(endpoint={"trust_local": True}),
+        )
+        catalog = mc.load_catalog(force=True)
+        assert "test" not in catalog["providers"]
+
     def test_missing_file_yields_empty_catalog(self, tmp_path):
         mc.CATALOG_PATH = tmp_path / "absent.json"
         catalog = mc.load_catalog(force=True)
@@ -590,6 +610,7 @@ class TestLoaderValidation:
         payload["providers"]["second"] = {
             "display_name": "Second",
             "auth": {"type": "none"},
+            "provider_in_sdk": "second",
             "refresh": {"mode": "none"},
             "models": [],
         }
@@ -695,7 +716,7 @@ class TestLiveQueryPlumbing:
             return _fake_response({"data": [{"id": "glm-6", "name": "GLM 6"}]})
 
         # Use the real packaged catalog so the zai endpoint is exercised
-        # end-to-end (base_url + models_path join).
+        # end-to-end (the complete models URL is fetched verbatim).
         packaged = Path(__file__).resolve().parent.parent / "app" / "api" / "data" / "model_catalog.json"
         mc.CATALOG_PATH = packaged
         mc.load_catalog(force=True)
@@ -718,19 +739,21 @@ class TestGatewayVariantCatalog:
     """Packaged catalog: xiaomi api and xiaomi token-plan coexist.
 
     Pattern B — each gateway is a full catalog entry (own env var, own
-    Settings card, usable at the same time) with an ``sdk_provider``
-    routing alias so the WebUI can drive both through the SDK's single
-    ``xiaomi`` provider.
+    Settings card, usable at the same time) that declares the SDK provider
+    it routes through (``provider_in_sdk``) plus its own chat endpoint
+    (``endpoint.inference_url``), so the WebUI can drive both through the
+    SDK's single ``xiaomi`` provider.
     """
 
     def test_xiaomi_token_plan_packaged_entry(self):
         rec = mc.get_provider_record("xiaomi-token-plan")
         assert rec is not None
-        assert rec["sdk_provider"] == "xiaomi"
+        assert rec["provider_in_sdk"] == "xiaomi"
         assert rec["auth"]["env_var"] == "XIAOMI_TOKEN_PLAN_API_KEY"
-        assert rec["endpoint"]["base_url"] == "https://token-plan-cn.xiaomimimo.com/v1"
-        # Fixed token-plan endpoint — no base_url_env override var.
-        assert not rec["endpoint"].get("base_url_env")
+        assert rec["endpoint"]["models_probe_url"] == "https://token-plan-cn.xiaomimimo.com/v1/models"
+        assert rec["endpoint"]["inference_url"] == "https://token-plan-cn.xiaomimimo.com/v1"
+        # Fixed token-plan endpoint — no probe-url override var.
+        assert not rec["endpoint"].get("models_probe_url_env")
 
     def test_both_gateways_have_distinct_env_vars(self):
         envs = mc.catalog_env_vars()
@@ -738,9 +761,12 @@ class TestGatewayVariantCatalog:
         assert envs.get("xiaomi-token-plan") == ["XIAOMI_TOKEN_PLAN_API_KEY"]
 
     def test_plain_xiaomi_is_not_a_variant(self):
-        assert mc.provider_sdk_provider("xiaomi") is None
-        assert mc.provider_sdk_provider("anthropic") is None
-        assert mc.provider_sdk_provider("some-unknown") is None
+        # The plain gateway declares the same SDK provider but no chat
+        # endpoint of its own — it falls back to the registry default.
+        assert mc.provider_in_sdk("xiaomi") == "xiaomi"
+        assert mc.provider_inference_url("xiaomi") is None
+        assert mc.provider_in_sdk("anthropic") == "anthropic"
+        assert mc.provider_in_sdk("some-unknown") is None
 
     def test_find_gateway_variant_reverse_lookup(self):
         # config.yaml persists the variant as SDK slug + base_url; the
@@ -778,50 +804,68 @@ class TestGatewayVariantCatalog:
         assert mc.provider_api_key("xiaomi") == ""
 
 
-class TestGatewayVariantValidation:
-    """sdk_provider field validation in the loader."""
+class TestProviderInSdkValidation:
+    """provider_in_sdk field validation in the loader."""
 
-    def _write_variant(self, tmp_path, sdk_provider):
+    def _write_variant(self, tmp_path, provider_in_sdk):
         payload = _minimal_catalog()
         payload["providers"]["variant"] = {
             "display_name": "Variant",
             "auth": {"type": "api_key", "env_var": "VARIANT_API_KEY"},
             "endpoint": {
-                "base_url": "https://variant.test.example/v1",
-                "models_path": "/models",
+                "models_probe_url": "https://variant.test.example/v1/models",
             },
-            "sdk_provider": sdk_provider,
+            "provider_in_sdk": provider_in_sdk,
             "refresh": {"mode": "api", "membership": "replace"},
             "models": [{"id": "@variant:base-1", "label": "Base 1"}],
         }
         return _write_catalog(tmp_path, payload)
 
-    def test_valid_sdk_provider_kept(self, tmp_path):
+    def test_valid_provider_in_sdk_kept(self, tmp_path):
         self._write_variant(tmp_path, "base-provider")
         mc.load_catalog(force=True)
-        assert mc.provider_sdk_provider("variant") == "base-provider"
+        assert mc.provider_in_sdk("variant") == "base-provider"
 
-    def test_non_string_sdk_provider_drops_provider(self, tmp_path):
+    def test_none_sentinel_is_kept(self, tmp_path):
+        # "none" is a value, not a missing key — the sentinel survives
+        # validation and reaches the chat layer.
+        self._write_variant(tmp_path, "none")
+        mc.load_catalog(force=True)
+        assert mc.provider_in_sdk("variant") == "none"
+
+    def test_non_string_provider_in_sdk_drops_provider(self, tmp_path):
         self._write_variant(tmp_path, 123)
         catalog = mc.load_catalog(force=True)
         assert "variant" not in catalog["providers"]
 
-    def test_blank_sdk_provider_drops_provider(self, tmp_path):
+    def test_blank_provider_in_sdk_drops_provider(self, tmp_path):
         self._write_variant(tmp_path, "   ")
         catalog = mc.load_catalog(force=True)
         assert "variant" not in catalog["providers"]
 
+    def test_missing_provider_in_sdk_drops_provider(self, tmp_path):
+        payload = _minimal_catalog()
+        payload["providers"]["variant"] = {
+            "display_name": "Variant",
+            "auth": {"type": "api_key", "env_var": "VARIANT_API_KEY"},
+            "endpoint": {"models_probe_url": "https://variant.test.example/v1/models"},
+            "refresh": {"mode": "api", "membership": "replace"},
+            "models": [],
+        }
+        _write_catalog(tmp_path, payload)
+        catalog = mc.load_catalog(force=True)
+        assert "variant" not in catalog["providers"]
+
     def test_self_reference_kept(self, tmp_path):
-        # A self-referential sdk_provider (WebUI slug == SDK id, e.g.
-        # minimax-cn) is kept: the field is what marks the entry as a
-        # gateway variant so chat gets explicit base_url/key translation.
+        # A self-referential provider_in_sdk (WebUI slug == SDK id, e.g.
+        # minimax-cn) is kept: the card is still routed through the SDK.
         self._write_variant(tmp_path, "variant")
         mc.load_catalog(force=True)
         assert mc.get_provider_record("variant") is not None
-        assert mc.provider_sdk_provider("variant") == "variant"
+        assert mc.provider_in_sdk("variant") == "variant"
 
 
-def test_find_gateway_variant_uses_inference_base_url():
+def test_find_gateway_variant_uses_inference_url():
     """Reverse lookup compares the persisted chat endpoint, both sides same source."""
     assert (
         mc.find_gateway_variant("minimax-cn", "https://api.minimaxi.com/anthropic")

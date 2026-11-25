@@ -391,13 +391,17 @@ def _maybe_kick_stale_probes(providers: list[dict]) -> None:
 
 
 def _resolve_probe_endpoint(provider_id: str | None) -> tuple[str, str, str] | None:
-    """Resolve ``(base_url, api_key, provider_id)`` for the connectivity probe.
+    """Resolve ``(models_url, api_key, provider_id)`` for the connectivity probe.
 
-    base_url chain: ``providers.<id>.base_url`` → ``model.base_url`` (only
+    models_url chain: ``providers.<id>.base_url`` → ``model.base_url`` (only
     when this provider is the active one) → ``custom_providers[].base_url``
     → the well-known OpenAI-compatible endpoint declared by the JSON model
     catalog (issue #10 — replaces the old routes.py hardcoded table and
     carries the corrected Z.ai endpoint).
+
+    The first three are user-configured *base* URLs, so the models path is
+    appended to them; the catalog declares the complete models URL and is
+    used verbatim.
 
     Returns ``None`` when no endpoint can be resolved — the probe is
     skipped rather than guessing a URL.
@@ -441,22 +445,26 @@ def _resolve_probe_endpoint(provider_id: str | None) -> tuple[str, str, str] | N
         if cp is not None:
             base_url = str(cp.get("base_url") or "").strip()
     # 4. Well-known OpenAI-compatible endpoint from the JSON catalog.
-    #    The probe appends "/models" itself, so use the raw base_url rather
-    #    than model_catalog.provider_endpoint() (which joins models_path).
-    #    provider_base_url() honors a user override (e.g. XIAOMI_BASE_URL
-    #    for regional gateways) before falling back to the packaged default.
-    if not base_url:
+    #    The catalog declares the complete models URL, so it is used
+    #    verbatim — no "/models" is appended here.
+    #    provider_models_probe_url() honors a user override (e.g.
+    #    XIAOMI_BASE_URL for regional gateways) before falling back to the
+    #    packaged default.
+    models_url = ""
+    if base_url:
+        models_url = base_url.rstrip("/") + "/models"
+    else:
         try:
             from app.api import model_catalog as _model_catalog
 
-            base_url = _model_catalog.provider_base_url(pid) or ""
+            models_url = _model_catalog.provider_models_probe_url(pid) or ""
         except Exception:
-            base_url = ""
-    if not base_url:
+            models_url = ""
+    if not models_url:
         return None
 
     api_key = _resolve_probe_key(cfg, pid, model_cfg)
-    return base_url.rstrip("/"), api_key, pid
+    return models_url, api_key, pid
 
 
 def _resolve_probe_key(cfg: dict, provider_id: str, model_cfg: dict) -> str:
@@ -499,7 +507,7 @@ def _resolve_probe_key(cfg: dict, provider_id: str, model_cfg: dict) -> str:
 
 
 def probe_provider_connectivity(provider_id: str | None = None, *, timeout: float = 5.0) -> str:
-    """Lightweight reachability/key probe: ``GET <base_url>/models`` (issue #8).
+    """Lightweight reachability/key probe: ``GET <models_url>`` (issue #8).
 
     Runs ONLY from background threads (boot prewarm, post key-save) so an
     unreachable provider or a bad key surfaces in the log at startup or at
@@ -524,13 +532,13 @@ def probe_provider_connectivity(provider_id: str | None = None, *, timeout: floa
             logger.debug("Connectivity probe skipped: no endpoint for provider %s",
                          provider_id or "(active)")
             return "skipped"
-        base_url, api_key, pid = resolved
+        models_url, api_key, pid = resolved
 
         import urllib.error
         import urllib.request
 
         req = urllib.request.Request(
-            base_url + "/models",
+            models_url,
             headers={"Accept": "application/json"},
         )
         if api_key:

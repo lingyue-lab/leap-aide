@@ -48,20 +48,20 @@ def _resolve_with_config(model_id, provider=None, base_url=None):
 
 # ── JSON catalog baseline (issue #10) ─────────────────────────────────────────
 
-def test_minimax_baseline_has_bare_ids():
-    """The catalog's minimax baseline must keep bare model ids (no @minimax:
-    prefix) — minimax is the one provider whose dropdown ids are unprefixed."""
+def test_minimax_baseline_has_prefixed_ids():
+    """The catalog's minimax baseline uses the picker-wide ``@minimax:`` prefix
+    — every id the user sees is ``@provider:model``."""
     from app.api import model_catalog
     ids = [m['id'] for m in model_catalog.provider_baseline_models('minimax')]
-    assert 'MiniMax-M2.7' in ids, (
+    assert '@minimax:MiniMax-M2.7' in ids, (
         f"MiniMax-M2.7 missing from catalog minimax baseline. Found: {ids}"
     )
-    assert 'MiniMax-M2.7-highspeed' in ids, (
+    assert '@minimax:MiniMax-M2.7-highspeed' in ids, (
         f"MiniMax-M2.7-highspeed missing from catalog minimax baseline. Found: {ids}"
     )
     for mid in ids:
-        assert not mid.startswith('@'), (
-            f"minimax baseline ids must be bare (no @provider: prefix): {mid}"
+        assert mid.startswith('@minimax:'), (
+            f"minimax baseline ids must carry the @minimax: prefix: {mid}"
         )
 
 
@@ -76,23 +76,23 @@ def test_minimax_cn_card_shape():
     rec = mc.get_provider_record("minimax-cn")
     assert rec is not None, "minimax-cn record missing from catalog"
     assert rec["display_name"] == "MiniMax (China)"
-    assert rec["sdk_provider"] == "minimax-cn"
+    assert rec["provider_in_sdk"] == "minimax-cn"
     # Declared as the singular env_var; the normalizing map side is covered
     # by test_env_vars_map in test_model_catalog_json.py.
     assert rec["auth"]["env_var"] == "MINIMAX_CN_API_KEY"
-    assert rec["endpoint"]["base_url"] == "https://api.minimax.chat/v1"
-    assert rec["endpoint"]["inference_base_url"] == "https://api.minimaxi.com/anthropic"
+    assert rec["endpoint"]["models_probe_url"] == "https://api.minimax.chat/v1/models"
+    assert rec["endpoint"]["inference_url"] == "https://api.minimaxi.com/anthropic"
     ids = [m["id"] for m in rec["models"]]
     assert ids[0] == "@minimax-cn:MiniMax-M3.1-Flash"
     assert "@minimax-cn:MiniMax-M3" in ids
     assert all(i.startswith("@minimax-cn:") for i in ids)
 
 
-def test_minimax_baseline_gains_m3_family_bare_ids():
+def test_minimax_baseline_gains_m3_family_ids():
     """Offline fallback keeps the reporter's model selectable on both cards."""
     old_ids = [m["id"] for m in mc.get_provider_record("minimax")["models"]]
-    assert "MiniMax-M3" in old_ids and "MiniMax-M3.1-Flash" in old_ids
-    assert all(not i.startswith("@") for i in old_ids)  # existing bare-id rule holds
+    assert "@minimax:MiniMax-M3" in old_ids and "@minimax:MiniMax-M3.1-Flash" in old_ids
+    assert all(i.startswith("@minimax:") for i in old_ids)  # prefixed-id rule holds
 
 
 def test_only_cn_key_lights_cn_card_not_global_card(monkeypatch, tmp_path):

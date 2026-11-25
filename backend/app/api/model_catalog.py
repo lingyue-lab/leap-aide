@@ -58,8 +58,8 @@ _KNOWN_LOCAL_HOST_MARKERS = ("ollama", "localhost", "127.0.0.1", "lmstudio", "lm
 
 # Synthetic custom slugs: the WebUI infers them for a user-side endpoint
 # that no catalog record covers (a private/loopback base_url that is
-# neither ollama nor lmstudio).  They behave like the catalog's
-# ``is_custom`` providers: no API key, the user's base_url is kept.
+# neither ollama nor lmstudio).  They behave like the catalog's keyless
+# cards (``auth.type == "none"``): no API key, the user's base_url is kept.
 _SYNTHETIC_CUSTOM_SLUGS = frozenset({"local"})
 
 _VALID_AUTH_TYPES = ("api_key", "oauth", "none")
@@ -147,7 +147,7 @@ def _validate_provider(slug: str, rec: object) -> dict | None:
 
     endpoint = rec.get("endpoint")
     if endpoint is not None:
-        if not isinstance(endpoint, dict) or not str(endpoint.get("base_url") or "").strip():
+        if not isinstance(endpoint, dict) or not str(endpoint.get("models_probe_url") or "").strip():
             logger.warning("model_catalog: provider %r has invalid endpoint; skipped", slug)
             return None
 
@@ -168,37 +168,21 @@ def _validate_provider(slug: str, rec: object) -> dict | None:
         )
         return None
 
-    # Gateway variant: this catalog entry is a second gateway of an
-    # SDK-known provider (e.g. xiaomi-token-plan → xiaomi), each with its
-    # own base_url and env var so both gateways can be configured at once.
-    sdk_provider = rec.get("sdk_provider")
-    if sdk_provider is not None:
-        if not isinstance(sdk_provider, str) or not sdk_provider.strip():
-            logger.warning(
-                "model_catalog: provider %r has invalid sdk_provider; skipped", slug
-            )
-            return None
-        sdk_provider = sdk_provider.strip()
-        # A self-referential value is kept: an entry whose catalog slug equals
-        # its SDK id (e.g. minimax-cn, a second gateway of an SDK-known
-        # provider where the WebUI slug and the SDK slug coincide) still needs
-        # the field to trigger gateway-variant translation (explicit
-        # base_url/key); the slug alone cannot mark it as a variant.
-
-    # Custom endpoint: the provider is the user's own server rather than a
-    # vendor API (ollama, lmstudio).  Such a provider needs no API key and
-    # the base_url the user configured must survive a change of the default
-    # model — the catalog is the single source of truth for that flag.
-    # A wrong type is a catalog authoring mistake: warn and treat the
-    # provider as a normal one instead of dropping the whole record.
-    is_custom = rec.get("is_custom", False)
-    if not isinstance(is_custom, bool):
+    # Engine declaration: the Hermes SDK provider id the chat layer has to
+    # request for this card.  Required on every record — the key must exist
+    # and be a string.  The sentinel ``"none"`` marks a card with no
+    # built-in engine (the chat layer keeps the slug's own resolution path).
+    # A gateway variant (e.g. xiaomi-token-plan → xiaomi) declares the id
+    # of the provider it is routed through.
+    provider_in_sdk = rec.get("provider_in_sdk")
+    if not isinstance(provider_in_sdk, str) or not provider_in_sdk.strip():
         logger.warning(
-            "model_catalog: provider %r has invalid is_custom %r; treated as false",
+            "model_catalog: provider %r has invalid provider_in_sdk %r; skipped",
             slug,
-            is_custom,
+            provider_in_sdk,
         )
-        is_custom = False
+        return None
+    provider_in_sdk = provider_in_sdk.strip()
 
     raw_models = rec.get("models") or []
     if not isinstance(raw_models, list):
@@ -216,7 +200,6 @@ def _validate_provider(slug: str, rec: object) -> dict | None:
 
     out = {
         "display_name": display_name.strip(),
-        "is_custom": is_custom,
         "aliases": [str(a) for a in (rec.get("aliases") or []) if str(a).strip()],
         "auth": {
             "type": auth_type,
@@ -231,17 +214,19 @@ def _validate_provider(slug: str, rec: object) -> dict | None:
             "timeout_s": float(refresh.get("timeout_s") or _DEFAULT_QUERY_TIMEOUT_S),
         },
         "default_model": str(rec.get("default_model") or "") or None,
-        "sdk_provider": sdk_provider,
+        "provider_in_sdk": provider_in_sdk,
         "models": models,
     }
     if isinstance(endpoint, dict):
         out["endpoint"] = {
-            "base_url": str(endpoint.get("base_url") or "").strip().rstrip("/"),
+            # The complete models-list URL — the probe fetches it verbatim.
+            "models_probe_url": str(endpoint.get("models_probe_url") or "").strip().rstrip("/"),
             # Optional SDK-style base-URL override var (e.g. XIAOMI_BASE_URL
-            # for regional gateways like token-plan-cn.xiaomimimo.com).
-            "base_url_env": str(endpoint.get("base_url_env") or "").strip() or None,
-            "models_path": str(endpoint.get("models_path") or "/models"),
-            "inference_base_url": str(endpoint.get("inference_base_url") or "").strip().rstrip("/") or None,
+            # for regional gateways like token-plan-cn.xiaomimimo.com).  The
+            # var holds a *base* URL; the models path is appended to it.
+            "models_probe_url_env": str(endpoint.get("models_probe_url_env") or "").strip() or None,
+            # Optional chat endpoint that overrides the SDK registry default.
+            "inference_url": str(endpoint.get("inference_url") or "").strip().rstrip("/") or None,
             "trust_local": bool(endpoint.get("trust_local", False)),
         }
     return out
@@ -359,19 +344,40 @@ def provider_display(slug: str) -> str:
     return str(slug).title()
 
 
-def is_custom_provider(slug: str) -> bool:
-    """Return True when *slug* is a user-side custom endpoint.
+def is_synthetic_custom_slug(slug: str) -> bool:
+    """Return True for the synthetic slugs the WebUI infers for user endpoints.
 
-    Custom providers (ollama, lmstudio) are the user's own OpenAI-compatible
-    server, not a vendor API: they need no API key, and the ``base_url`` the
-    user configured for them must survive a change of the default model.
-    The flag lives in the catalog JSON so the answer is data, not a
-    hardcoded slug list.
+    ``local`` is used when a private/loopback ``base_url`` matches no
+    catalog card; it behaves like a keyless card (no API key, the user's
+    ``base_url`` is kept).
+    """
+    return str(slug or "").strip().lower() in _SYNTHETIC_CUSTOM_SLUGS
+
+
+def provider_auth_type(slug: str) -> str | None:
+    """Return the catalog auth type for *slug*, or None when unknown.
+
+    ``"api_key"`` (credential in the declared env var), ``"oauth"`` (the SDK
+    owns the sign-in flow) and ``"none"`` (the user's own server — no
+    credential exists to configure).
     """
     rec = get_provider_record(slug)
     if rec is None:
-        return str(slug or "").strip().lower() in _SYNTHETIC_CUSTOM_SLUGS
-    return bool(rec.get("is_custom"))
+        return None
+    return (rec.get("auth") or {}).get("type", "none")
+
+
+def provider_is_keyless(slug: str) -> bool:
+    """Return True when *slug* needs no API key.
+
+    The catalog answers this with ``auth.type == "none"`` — the user's own
+    OpenAI-compatible server (ollama, lmstudio), not a vendor API.  The
+    synthetic ``local`` slug counts too.
+    """
+    rec = get_provider_record(slug)
+    if rec is None:
+        return is_synthetic_custom_slug(slug)
+    return (rec.get("auth") or {}).get("type", "none") == "none"
 
 
 def provider_baseline_models(slug: str) -> list[dict]:
@@ -390,22 +396,23 @@ def provider_default_model(slug: str) -> str | None:
     return rec.get("default_model")
 
 
-def provider_sdk_provider(slug: str) -> str | None:
-    """Return the SDK provider slug for a gateway-variant catalog entry.
+def provider_in_sdk(slug: str) -> str | None:
+    """Return the Hermes SDK provider id the chat layer requests for *slug*.
 
-    Entries that declare ``sdk_provider`` are WebUI-only aliases for a
-    second gateway of an SDK-known provider (e.g. ``xiaomi-token-plan``
-    routes through the SDK's ``xiaomi`` provider with an explicit
-    base_url and its own key).  Regular entries return None.
+    Every card declares it (``provider_in_sdk``): the SDK registry id, or
+    the sentinel ``"none"`` for a card with no built-in engine (the chat
+    layer then keeps the slug's own resolution path).  A gateway variant
+    (e.g. ``xiaomi-token-plan``) declares the id of the provider it is
+    routed through.
     """
     rec = get_provider_record(slug)
     if rec is None:
         return None
-    return rec.get("sdk_provider")
+    return rec.get("provider_in_sdk")
 
 
 def find_gateway_variant(sdk_provider: str, base_url: str) -> str | None:
-    """Return the gateway-variant slug whose endpoint matches *base_url*.
+    """Return the gateway-variant slug whose chat endpoint matches *base_url*.
 
     config.yaml persists a gateway variant as its SDK provider plus an
     explicit ``base_url`` (the hermes CLI only understands SDK slugs), so
@@ -420,9 +427,9 @@ def find_gateway_variant(sdk_provider: str, base_url: str) -> str | None:
         return None
     for slug in catalog_providers():
         rec = get_provider_record(slug)
-        if rec is None or rec.get("sdk_provider") != sdk_provider:
+        if rec is None or rec.get("provider_in_sdk") != sdk_provider:
             continue
-        if (provider_inference_base_url(slug) or "").rstrip("/") == want:
+        if (provider_inference_url(slug) or "").rstrip("/") == want:
             return slug
     return None
 
@@ -465,21 +472,23 @@ def provider_api_key(slug: str) -> str:
     return ""
 
 
-def provider_base_url(slug: str) -> str | None:
-    """Return the effective base URL for *slug*, honoring a user override.
+def provider_models_probe_url(slug: str) -> str | None:
+    """Return the complete models-list URL for *slug*, honoring an override.
 
-    When the catalog endpoint declares ``base_url_env`` (SDK-style override
-    var, e.g. ``XIAOMI_BASE_URL`` for regional gateways such as
+    The catalog declares the full URL (``endpoint.models_probe_url``) — the
+    probe fetches it verbatim, no base/path joining.  When the record
+    declares ``endpoint.models_probe_url_env`` (SDK-style override var, e.g.
+    ``XIAOMI_BASE_URL`` for regional gateways such as
     token-plan-cn.xiaomimimo.com), a non-empty value from the process
-    environment or the hermes ``.env`` file wins over the packaged
-    ``base_url``.  Otherwise the catalog default applies.
+    environment or the hermes ``.env`` file wins; the var holds a *base*
+    URL, so the models path is appended to it.
     """
     rec = get_provider_record(slug)
     if rec is None or rec.get("endpoint") is None:
         return None
     ep = rec["endpoint"]
-    base = ep["base_url"]
-    env_var = ep.get("base_url_env")
+    url = ep["models_probe_url"]
+    env_var = ep.get("models_probe_url_env")
     if env_var:
         override = str(os.environ.get(env_var) or "").strip()
         if not override:
@@ -495,36 +504,24 @@ def provider_base_url(slug: str) -> str | None:
             except Exception:
                 override = ""
         if override:
-            base = override.rstrip("/")
-    return base or None
+            url = override.rstrip("/") + "/models"
+    return url or None
 
 
-def provider_inference_base_url(slug: str) -> str | None:
-    """Return the chat/inference base URL for *slug*.
+def provider_inference_url(slug: str) -> str | None:
+    """Return the chat/inference URL declared for *slug*, or None.
 
-    Falls back to ``provider_base_url`` when the record declares no
-    ``endpoint.inference_base_url``, so entries without the field keep
-    byte-identical chat semantics.
+    Only a card that declares ``endpoint.inference_url`` has one: a card
+    without the field falls back to the Hermes SDK registry's own default
+    for the provider it routes through.  There is deliberately no fallback
+    to the probe URL — the models endpoint and the chat endpoint are
+    different things.
     """
     rec = get_provider_record(slug)
     if not rec:
         return None
-    chat = str((rec.get("endpoint") or {}).get("inference_base_url") or "").strip()
-    if chat:
-        return chat.rstrip("/")
-    return provider_base_url(slug)
-
-
-def provider_endpoint(slug: str) -> str | None:
-    """Return the full models-endpoint URL (base_url + models_path) or None."""
-    base = provider_base_url(slug)
-    if base is None:
-        return None
-    rec = get_provider_record(slug)
-    path = rec["endpoint"]["models_path"] if rec else "/models"
-    if not path:
-        return base
-    return base + "/" + path.lstrip("/")
+    chat = str((rec.get("endpoint") or {}).get("inference_url") or "").strip()
+    return chat.rstrip("/") if chat else None
 
 
 def provider_auth_header(slug: str) -> str:
@@ -732,7 +729,7 @@ def query_live_models(
     rec = get_provider_record(slug)
     if rec is None or not rec.get("endpoint"):
         raise ValueError(f"model_catalog: no endpoint configured for provider {slug!r}")
-    url = provider_endpoint(slug)
+    url = provider_models_probe_url(slug)
     if not url:
         raise ValueError(f"model_catalog: no endpoint configured for provider {slug!r}")
     ep = rec["endpoint"]

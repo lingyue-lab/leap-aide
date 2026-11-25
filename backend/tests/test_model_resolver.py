@@ -650,11 +650,40 @@ def test_resolve_runtime_for_provider_plain_path_unchanged(_variant_env, monkeyp
     runtime, provider, base_url = config.resolve_runtime_for_provider("deepseek", None)
     assert calls["requested"] == "deepseek"
     assert calls["explicit_api_key"] is None
+    # No inference_url on the card — the SDK registry's own chat endpoint
+    # is used, so no base_url is passed explicitly.
     assert calls["explicit_base_url"] is None
     assert runtime["api_key"] == "fallback-key"
     # Passthrough preserves the caller's fill-from-runtime logic.
     assert provider == "deepseek"
     assert base_url is None
+
+
+def test_resolve_runtime_for_provider_uses_engine_id(_variant_env, monkeypatch):
+    """A card that names another SDK provider is requested under that id."""
+    calls = {}
+    _stub_runtime_provider(monkeypatch, calls)
+    runtime, provider, base_url = config.resolve_runtime_for_provider("openai", None)
+    assert calls["requested"] == "openai-api"
+    assert provider == "openai-api"
+
+
+def test_resolve_runtime_for_provider_none_sentinel_stays_plain(_variant_env, monkeypatch):
+    """A card without a built-in engine keeps the slug's own resolution path."""
+    calls = {}
+    _stub_runtime_provider(monkeypatch, calls)
+    for slug in ("ollama", "mistralai", "ark"):
+        calls.clear()
+        runtime, provider, base_url = config.resolve_runtime_for_provider(slug, None)
+        assert calls["requested"] == slug, slug
+        assert provider == slug, slug
+
+
+def test_resolve_gateway_variant_ignores_none_sentinel(_variant_env):
+    """The "none" sentinel is not a gateway variant."""
+    assert config.resolve_gateway_variant("ollama") is None
+    assert config.resolve_gateway_variant("mistralai") is None
+    assert config.resolve_gateway_variant("ark") is None
 
 
 def test_resolve_runtime_for_provider_empty_hint(_variant_env, monkeypatch):
@@ -727,9 +756,10 @@ def test_set_default_model_back_to_plain_gateway_clears_stale_base_url(
 def test_set_default_model_to_custom_endpoint_keeps_base_url(monkeypatch, tmp_path):
     """Switching the default to a catalog custom endpoint keeps the base_url.
 
-    ``ollama`` is the user's own server (the catalog marks it ``is_custom``),
-    so the base_url they configured for it must survive the switch — dropping
-    it would point the agent at the SDK's built-in endpoint instead.
+    ``ollama`` is the user's own server (the catalog gives it no built-in
+    engine — ``provider_in_sdk`` is ``"none"``), so the base_url they
+    configured for it must survive the switch — dropping it would point the
+    agent at the SDK's built-in endpoint instead.
     """
     import yaml
 

@@ -85,9 +85,9 @@ def build_draft(
 
     With *map_labels*, ids already present in the catalog keep their curated
     label; only genuinely new ids get the API-provided name.  *existing_entry*
-    (when given) supplies the display_name / auth / endpoint / refresh fields
-    so the draft mirrors the catalog's current wiring instead of inventing a
-    stale ``mode=none`` refresh block.
+    (when given) supplies the display_name / auth / endpoint / provider_in_sdk
+    / refresh fields so the draft mirrors the catalog's current wiring
+    instead of inventing a stale ``mode=none`` refresh block.
     """
     models_out: list[dict] = []
     for m in models:
@@ -101,6 +101,7 @@ def build_draft(
         "display_name": entry.get("display_name") or "OpenRouter",
         "auth": entry.get("auth") or {"type": "api_key", "env_var": "OPENROUTER_API_KEY"},
         **({"endpoint": entry["endpoint"]} if entry.get("endpoint") else {}),
+        "provider_in_sdk": entry.get("provider_in_sdk") or "openrouter",
         "refresh": entry.get("refresh") or {"mode": "none"},
         "models": models_out,
     }
