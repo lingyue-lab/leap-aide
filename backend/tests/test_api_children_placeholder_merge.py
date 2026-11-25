@@ -23,8 +23,12 @@ def _make_db():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.execute(
+        # started_at REAL mirrors production state.db: the sort key mixes
+        # DB floats with time.time() cache floats, and a TEXT-affinity
+        # column would coerce 1000.0 to '1000.0' (str), making the newest-
+        # first sort raise TypeError (silently swallowed -> {}).
         "CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, model TEXT, "
-        "started_at TEXT, ended_at TEXT, model_config TEXT, parent_session_id TEXT)"
+        "started_at REAL, ended_at TEXT, model_config TEXT, parent_session_id TEXT)"
     )
     conn.execute("CREATE TABLE messages (session_id TEXT, role TEXT)")
     return types.SimpleNamespace(_conn=conn)
@@ -117,6 +121,23 @@ def test_db_only_response_unchanged():
     )  # no _delegate_from marker
     got = models._get_all_delegate_children_map(db)["p-1"]
     assert [c["id"] for c in got] == ["keep-1"]   # same as pre-fix behavior
+
+
+def test_newest_first_ordering_mixed_and_cache_only():
+    """Newest (streaming placeholder) must be FIRST — human PR feedback."""
+    db = _make_db()
+    _seed_delegate_row(db, "old-1", "p-1")
+    # Mirror production: started_at is a REAL unix float (the helper's ISO
+    # string is a fixture shortcut this test overrides).
+    db._conn.execute("UPDATE sessions SET started_at = 1000.0 WHERE id = 'old-1'")
+    models.SESSIONS["new-ph"] = _cache_child("new-ph", "p-1", started_at=2000.0)
+    models.SESSIONS["mid-ph"] = _cache_child("mid-ph", "p-1", started_at=1500.0)
+    try:
+        got = models._get_all_delegate_children_map(db)["p-1"]
+    finally:
+        del models.SESSIONS["new-ph"]
+        del models.SESSIONS["mid-ph"]
+    assert [c["id"] for c in got] == ["new-ph", "mid-ph", "old-1"]
 
 
 def test_message_count_counts_user_and_assistant_only():

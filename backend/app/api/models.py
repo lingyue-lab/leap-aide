@@ -1574,9 +1574,10 @@ def _get_all_delegate_children_map(db) -> dict[str, list[dict]]:
     has a state.db row is never re-entered through the cache (so the
     _delegate_from filter cannot be bypassed); cache-only placeholder
     children (created by subagent.start, not yet persisted) are synthesized
-    from the in-memory SESSIONS cache and appended after the DB rows in
-    SESSIONS insertion order, making the list share the delegate badge's
-    real-time data source. Returned entry keys are fixed to id, title,
+    from the in-memory SESSIONS cache and merged into their parent's list,
+    making the list share the delegate badge's real-time data source. Each
+    parent's list is then sorted newest-first by started_at descending
+    (missing/None treated as 0). Returned entry keys are fixed to id, title,
     model, started_at, ended_at, message_count (parent_session_id is
     dropped).
 
@@ -1649,6 +1650,19 @@ def _get_all_delegate_children_map(db) -> dict[str, list[dict]]:
                 if entry['id'] in existing_ids:
                     continue
                 children_map.setdefault(parent_id, []).append(entry)
+
+        # Newest-first ordering (Issue #77 iteration 2): the DB half arrives
+        # SQL-DESC, but cache-only placeholders were appended after it in
+        # SESSIONS insertion order, so the streaming placeholder rendered at
+        # the bottom. Re-sort every parent's list by started_at descending
+        # (Python's stable sort keeps the SQL-DESC relative order for DB
+        # rows). `or 0` guards None/missing started_at; DB rows are REAL
+        # floats and synthesized entries are time.time() floats, so the key
+        # is a uniform type.
+        for pid in children_map:
+            children_map[pid].sort(
+                key=lambda c: c.get("started_at") or 0, reverse=True
+            )
 
         return children_map
     except Exception:
