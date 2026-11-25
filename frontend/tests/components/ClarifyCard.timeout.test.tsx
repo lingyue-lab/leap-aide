@@ -250,7 +250,7 @@ describe('ClarifyCard resolution handling (issue #21)', () => {
 
     expect(document.querySelector('.bg-task-card')).toBeInTheDocument();
 
-    dispatchResolved({ _session_id: 'sess-other-y', clarify_id: 'cid-other-y' });
+    dispatchResolved({ _session_id: 'sess-other-y', clarify_id: 'cid-current-x' });
 
     expect(document.querySelector('.bg-task-card')).toBeInTheDocument();
   });
