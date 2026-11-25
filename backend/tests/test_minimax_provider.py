@@ -81,7 +81,7 @@ def test_minimax_cn_card_shape():
     # by test_env_vars_map in test_model_catalog_json.py.
     assert rec["auth"]["env_var"] == "MINIMAX_CN_API_KEY"
     assert rec["endpoint"]["base_url"] == "https://api.minimax.chat/v1"
-    assert rec["endpoint"]["chat_base_url"] == "https://api.minimaxi.com/anthropic"
+    assert rec["endpoint"]["inference_base_url"] == "https://api.minimaxi.com/anthropic"
     ids = [m["id"] for m in rec["models"]]
     assert ids[0] == "@minimax-cn:MiniMax-M3.1-Flash"
     assert "@minimax-cn:MiniMax-M3" in ids

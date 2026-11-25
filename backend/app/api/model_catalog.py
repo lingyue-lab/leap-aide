@@ -241,7 +241,7 @@ def _validate_provider(slug: str, rec: object) -> dict | None:
             # for regional gateways like token-plan-cn.xiaomimimo.com).
             "base_url_env": str(endpoint.get("base_url_env") or "").strip() or None,
             "models_path": str(endpoint.get("models_path") or "/models"),
-            "chat_base_url": str(endpoint.get("chat_base_url") or "").strip().rstrip("/") or None,
+            "inference_base_url": str(endpoint.get("inference_base_url") or "").strip().rstrip("/") or None,
             "trust_local": bool(endpoint.get("trust_local", False)),
         }
     return out
@@ -422,7 +422,7 @@ def find_gateway_variant(sdk_provider: str, base_url: str) -> str | None:
         rec = get_provider_record(slug)
         if rec is None or rec.get("sdk_provider") != sdk_provider:
             continue
-        if (provider_chat_base_url(slug) or "").rstrip("/") == want:
+        if (provider_inference_base_url(slug) or "").rstrip("/") == want:
             return slug
     return None
 
@@ -499,17 +499,17 @@ def provider_base_url(slug: str) -> str | None:
     return base or None
 
 
-def provider_chat_base_url(slug: str) -> str | None:
+def provider_inference_base_url(slug: str) -> str | None:
     """Return the chat/inference base URL for *slug*.
 
     Falls back to ``provider_base_url`` when the record declares no
-    ``endpoint.chat_base_url``, so entries without the field keep
+    ``endpoint.inference_base_url``, so entries without the field keep
     byte-identical chat semantics.
     """
     rec = get_provider_record(slug)
     if not rec:
         return None
-    chat = str((rec.get("endpoint") or {}).get("chat_base_url") or "").strip()
+    chat = str((rec.get("endpoint") or {}).get("inference_base_url") or "").strip()
     if chat:
         return chat.rstrip("/")
     return provider_base_url(slug)

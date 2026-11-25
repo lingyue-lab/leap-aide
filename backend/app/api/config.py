@@ -865,7 +865,7 @@ def resolve_gateway_variant(provider_hint: str) -> tuple | None:
     sdk_provider = model_catalog.provider_sdk_provider(provider_hint)
     if not sdk_provider:
         return None
-    base_url = model_catalog.provider_chat_base_url(provider_hint) or ""
+    base_url = model_catalog.provider_inference_base_url(provider_hint) or ""
     api_key = model_catalog.provider_api_key(provider_hint)
     return sdk_provider, base_url, api_key
 
@@ -909,7 +909,7 @@ def resolve_runtime_for_provider(
             if sdk:
                 # Shape 1: slug is the variant itself.
                 sdk_provider = sdk
-                variant_base = model_catalog.provider_chat_base_url(provider_hint)
+                variant_base = model_catalog.provider_inference_base_url(provider_hint)
                 variant_key = model_catalog.provider_api_key(provider_hint)
             elif base_url_hint:
                 # Shape 2: SDK slug + config base_url pointing at a variant.
@@ -918,7 +918,7 @@ def resolve_runtime_for_provider(
                 )
                 if variant_slug:
                     variant_base = (
-                        model_catalog.provider_chat_base_url(variant_slug)
+                        model_catalog.provider_inference_base_url(variant_slug)
                         or str(base_url_hint)
                     )
                     variant_key = model_catalog.provider_api_key(variant_slug)

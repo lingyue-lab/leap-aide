@@ -186,7 +186,7 @@
       "auth": {"type": "api_key", "env_var": "MINIMAX_CN_API_KEY"},
       "endpoint": {
         "base_url": "https://api.minimax.chat/v1",
-        "chat_base_url": "https://api.minimaxi.com/anthropic",
+        "inference_base_url": "https://api.minimaxi.com/anthropic",
         "models_path": "/models"
       },
       "sdk_provider": "minimax-cn",
