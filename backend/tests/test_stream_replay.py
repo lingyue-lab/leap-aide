@@ -53,3 +53,25 @@ def test_stream_marker_write_uses_active_stream_id():
     """Both respond handlers must look up the session's active_stream_id to find the stream."""
     assert "active_stream_id" in ROUTES_SRC, \
         "Respond handlers must use active_stream_id to find the ReplayableStream"
+
+
+def test_clarify_resolved_marker_written_on_timeout():
+    """_clarify_callback_impl must write clarify_resolved when it gives up (issue #21)."""
+    assert "clarify_resolved" in STREAMING_SRC, \
+        "streaming.py must emit clarify_resolved so replay cannot re-serve a timed-out prompt"
+    # The emission must live in the timeout branch: after `remaining <= 0`
+    # and its _clear_clarify_pending call, before the fallback return.
+    fn_start = STREAMING_SRC.find("def _clarify_callback_impl")
+    assert fn_start != -1, "clarify bridge must exist in streaming.py"
+    timeout_idx = STREAMING_SRC.find("if remaining <= 0:", fn_start)
+    assert timeout_idx != -1, "timeout branch must exist in _clarify_callback_impl"
+    branch = STREAMING_SRC[timeout_idx:timeout_idx + 700]
+    assert "_clear_clarify_pending" in branch
+    assert "clarify_resolved" in branch
+    assert "'reason': 'timeout'" in branch or '"reason": "timeout"' in branch
+
+
+def test_backend_clarify_timeout_unchanged():
+    """The backend clarify wait stays at 120s (issue #21 scope ruling)."""
+    assert "timeout = 120" in STREAMING_SRC, \
+        "the hardcoded backend clarify timeout must not change with this fix"
