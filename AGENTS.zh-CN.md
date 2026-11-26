@@ -20,7 +20,30 @@ title: LeapAide 开发指南
 
 ---
 
-## 构建与开发命令
+## 构建与开发
+
+构建、开发、调试只能在新创建的调试容器中，避免污染本地环境（你自身所处的宿主机/宿主容器环境）。创建新的调试容器使用 podman (没有先安装)。
+
+参考下列步骤新启动一个调试容器进行构建、开发、调试——构建开发命令只在这个新容器内执行。
+
+- 创建如下内容的临时文件 `docker-compose.debug.yml`，该文件将 workspace 映射到容器内的 `/app` 目录 (LeapAide 启动目录)，workspace 作为目标工作目录包含了所有项目改动。
+
+```yml
+services:
+  leap-aide:
+    entrypoint: ["bash", "/app/backend/scripts/docker-entrypoint.sh"]
+    volumes:
+      - <workspace>:/app
+```
+
+- 在根目录下执行 `bash scripts/ctl.sh start-docker -f /path/to/docker-compose.debug.yml <image-name>` 启动容器，容器启动后 LeapAide 自动拉起。
+
+可用镜像：
+
+- `ghcr.io/lingyue-lab/leap-aide-testing`：用于回归测试，体积较大，包含 node、npm、pytest 等完整工具依赖，`/app` 替换后可用于前后端构建、调试。
+- `ghcr.io/lingyue-lab/leap-aide-runtime`：最终产品镜像，体积较小，工具依赖不完整，`/app` 替换后可用于最终产品效果的验证。
+
+进入新容器（`podman exec -it <容器名> bash`）执行构建开发命令：
 
 ```bash
 # Start the server
@@ -29,6 +52,11 @@ bash scripts/ctl.sh restart
 # Build the service
 bash scripts/build.sh
 ```
+
+**警告：`ctl.sh stop` / `ctl.sh restart` 只能在新启动的调试容器内执行；禁止在宿主机上执行，也禁止在承载运行中 agent 会话的容器内（宿主容器）执行。**
+
+- 纯前端改动无需重启调试容器：在宿主机/宿主容器仓库根目录执行 `podman run -v "$(pwd):/app" -u root --rm --entrypoint /bin/bash ghcr.io/lingyue-lab/leap-aide-testing:sha-c762d0f -c "bash scripts/build.sh --frontend"` 生成新的 `static/`（已在调试容器内则直接 `bash scripts/build.sh --frontend`）；`static/` 每次请求都从磁盘读取，浏览器硬刷新即可生效。
+- 后端改动需要重启调试容器时，从宿主机/宿主容器执行 `podman restart <容器名>`（或删除旧的调试容器重新创建）。
 
 ---
 
