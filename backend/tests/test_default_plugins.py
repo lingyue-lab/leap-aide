@@ -483,3 +483,121 @@ def test_scan_toggle_restored(tmp_path):
         "plugins.scan_on_install: true must be restored after the install: "
         + fx_b.config_text()
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 2: Dockerfile — sdk-stage github_token secret mount for plugin install.
+# Spec: docs/superpowers/plans/install-default-plugins.md Task 2 (brief:
+# .superpowers/sdd/install-default-plugins/task-2-brief.md). Pure stdlib.
+#
+# Static tests: they read the RUN block whose body invokes
+# `bash /app/scripts/install.sh` and assert (a) the github_token secret
+# mount is appended to the existing git_identity_key mount, (b) the RUN body
+# conditionally exports HERMES_GITHUB_TOKEN_FILE from that mount path, and
+# (c) no --build-arg line mentions TOKEN (credentials must never enter the
+# image config/history).
+# ---------------------------------------------------------------------------
+
+DOCKERFILE = REPO_ROOT / "Dockerfile"
+
+
+def _dockerfile() -> str:
+    """Read the Dockerfile (cached, lazy — mirrors _install_sh)."""
+    if "Dockerfile" not in _read_cache:
+        assert DOCKERFILE.is_file(), f"Dockerfile is missing under {REPO_ROOT}"
+        _read_cache["Dockerfile"] = DOCKERFILE.read_text(encoding="utf-8")
+    return _read_cache["Dockerfile"]
+
+
+def _install_sh_run() -> str:
+    """The RUN instruction whose body invokes `bash /app/scripts/install.sh`.
+
+    Walks the Dockerfile from every ``RUN `` line and follows backslash
+    continuations; full-line ``#`` comments inside a continuation remain
+    part of the instruction (matching BuildKit's parser, which strips them
+    before execution but keeps the instruction open). Returns the first
+    block containing the install.sh invocation.
+    """
+    lines = _dockerfile().splitlines()
+    index = 0
+    while index < len(lines):
+        if not lines[index].startswith("RUN "):
+            index += 1
+            continue
+        block = [lines[index]]
+        index += 1
+        if block[0].rstrip().endswith("\\"):
+            while index < len(lines):
+                line = lines[index]
+                block.append(line)
+                index += 1
+                if line.strip().startswith("#"):
+                    continue  # comment inside a continuation stays in-block
+                if not line.rstrip().endswith("\\"):
+                    break
+        text = "\n".join(block)
+        if "bash /app/scripts/install.sh" in text:
+            return text
+    raise AssertionError(
+        "no Dockerfile RUN block invokes `bash /app/scripts/install.sh`"
+    )
+
+
+def test_dockerfile_github_token_mount():
+    """install.sh's RUN mounts github_token in addition to git_identity_key."""
+    block = _install_sh_run()
+    token_mount = (
+        "--mount=type=secret,id=github_token,"
+        "dst=/run/secrets/leap-aide-github-token,mode=0400,required=false"
+    )
+    key_mount = (
+        "--mount=type=secret,id=git_identity_key,"
+        "dst=/root/.ssh/id_ed25519_install,mode=0400,required=false"
+    )
+    assert token_mount in block, (
+        "the RUN invoking install.sh must mount the github_token secret at "
+        "/run/secrets/leap-aide-github-token (mode=0400, required=false); "
+        f"block was:\n{block}"
+    )
+    assert key_mount in block, (
+        "the github_token mount must be APPENDED to the existing "
+        f"id=git_identity_key mount, not replace it; block was:\n{block}"
+    )
+    assert block.index(key_mount) < block.index(token_mount), (
+        "the github_token mount must come after the git_identity_key mount "
+        "(append, do not replace)"
+    )
+
+
+def test_dockerfile_exports_token_file_conditionally():
+    """Same RUN body: guarded conditional export of HERMES_GITHUB_TOKEN_FILE."""
+    block = _install_sh_run()
+    assert "[ -f /run/secrets/leap-aide-github-token ] &&" in block, (
+        "the install.sh RUN must guard the export with the literal "
+        "`[ -f /run/secrets/leap-aide-github-token ] &&` so a secret-less "
+        f"build leaves the variable empty; block was:\n{block}"
+    )
+    assert (
+        "export HERMES_GITHUB_TOKEN_FILE=/run/secrets/leap-aide-github-token"
+        in block
+    ), (
+        "the install.sh RUN must export HERMES_GITHUB_TOKEN_FILE to the "
+        f"secret path when the file exists; block was:\n{block}"
+    )
+    assert 'export HERMES_GITHUB_TOKEN_FILE=""' in block, (
+        "HERMES_GITHUB_TOKEN_FILE must default to the empty string when the "
+        f"secret was not provided; block was:\n{block}"
+    )
+
+
+def test_no_token_build_arg():
+    """No --build-arg may share a line with TOKEN — creds never in history."""
+    offenders = [
+        (number, line)
+        for number, line in enumerate(_dockerfile().splitlines(), 1)
+        if "--build-arg" in line and "TOKEN" in line.upper()
+    ]
+    assert not offenders, (
+        "credentials must never be passed as --build-arg (they land in the "
+        f"image config/history); offending lines: {offenders}"
+    )

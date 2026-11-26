@@ -853,6 +853,9 @@ RUN --mount=type=secret,id=git_identity_key,dst=/root/.ssh/id_ed25519_install,mo
     fi
 
 RUN --mount=type=secret,id=git_identity_key,dst=/root/.ssh/id_ed25519_install,mode=0400,required=false \
+    --mount=type=secret,id=github_token,dst=/run/secrets/leap-aide-github-token,mode=0400,required=false \
+    export HERMES_GITHUB_TOKEN_FILE=""; \
+    [ -f /run/secrets/leap-aide-github-token ] && export HERMES_GITHUB_TOKEN_FILE=/run/secrets/leap-aide-github-token; \
     export PLAYWRIGHT_DOWNLOAD_HOST="${BUILD_PLAYWRIGHT_DOWNLOAD_HOST}" \
     && mkdir -p -m 700 /root/.ssh \
     && [ -f /root/.ssh/id_ed25519_install ] && chmod 600 /root/.ssh/id_ed25519_install || true \
