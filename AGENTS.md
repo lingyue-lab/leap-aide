@@ -55,7 +55,7 @@ bash scripts/build.sh
 
 **Warning: `ctl.sh stop` / `ctl.sh restart` may only run inside a freshly started debug container; they are forbidden on the host, and also forbidden inside the container that hosts live agent sessions (the host-container).**
 
-- Frontend-only changes need no restart of the debug container: from the repo root on the host or host-container, run `podman run -v "$(pwd):/app" -u root --rm --entrypoint /bin/bash ghcr.io/lingyue-lab/leap-aide-testing:sha-c762d0f -c "bash scripts/build.sh --frontend"` to produce a new `static/` (if you are already inside the host-container, just run `bash scripts/build.sh --frontend`); `static/` is read from disk on every request, so a hard browser refresh is enough.
+- Frontend-only changes need no restart of the debug container: from the repo root on the host or host-container, run `podman run -v "$(pwd):/app" -u root --rm --entrypoint /bin/bash ghcr.io/lingyue-lab/leap-aide-testing:sha-c762d0f -c "bash scripts/build.sh --frontend"` to produce a new `static/` (if you are already inside the debug container, just run `bash scripts/build.sh --frontend`); `static/` is read from disk on every request, so a hard browser refresh is enough.
 - If a backend change requires restarting the debug container, run `podman restart <container-name>` from the host or host-container (or delete the old debug container and recreate it).
 
 ---
