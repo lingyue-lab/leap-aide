@@ -11,6 +11,7 @@ import json
 from app.api.subagent_status import (
     delegate_result_is_error,
     effective_subagent_status,
+    fix_completion_status,
     is_failure_summary,
 )
 
@@ -132,3 +133,119 @@ class TestDelegateResultIsError:
     def test_none_and_empty(self):
         assert not delegate_result_is_error(None)
         assert not delegate_result_is_error("")
+
+
+# ── fix_completion_status — anchored rewrite of SDK completion messages ──
+# Fixtures mirror the exact formatter shapes in hermes-agent
+# tools/process_registry.py (verified against a real deleg_411b6caa message).
+
+BATCH_MSG = """[ASYNC DELEGATION BATCH COMPLETE — deleg_x]
+A background fan-out of 2 subagent(s) you dispatched earlier has finished.
+
+Dispatched: 2026-11-25 05:52:58 (6m31s ago)
+Role: leaf   Model: ?   Total duration: 400.0s
+
+--- ✓ TASK 1/2: write the spec  (status=completed, api_calls=3, 40.0s) ---
+- Spec compliance: 4/4
+
+--- ⚠ TASK 2/2: write the review  (status=completed, api_calls=5, 391.03s, TRUNCATED: hit max_iterations — work may be incomplete) ---
+[TRUNCATED — subagent hit its iteration cap; the summary below may be incomplete. Verify before relying on it, or re-dispatch the unfinished part.]
+API call failed after 3 retries: Non-streaming API call timed out after 90s with no response (threshold: 90s)"""
+
+BATCH_EVENT = {
+    "type": "async_delegation",
+    "status": "completed",  # batch-level label is also optimistic
+    "results": [
+        {"task_index": 0, "status": "completed", "summary": "- Spec compliance: 4/4"},
+        {"task_index": 1, "status": "completed", "summary": RETRY_SUMMARY},
+    ],
+}
+
+SINGLE_MSG = """[ASYNC DELEGATION COMPLETE — deleg_y]
+A background subagent you dispatched earlier has finished.
+Dispatched: 2026-11-25 05:52:58 (6m31s ago)
+Original goal: review the diff
+Role: leaf   Model: ?
+Status: completed   API calls: 5   Duration: 391.03s [TRUNCATED: hit max_iterations — work may be incomplete]
+--- RESULT ---
+[TRUNCATED — subagent hit its iteration cap; the summary below may be incomplete. Verify before relying on it, or re-dispatch the unfinished part.]
+API call failed after 3 retries: Non-streaming API call timed out after 90s with no response (threshold: 90s)"""
+
+SINGLE_EVENT = {
+    "type": "async_delegation",
+    "status": "completed",
+    "summary": RETRY_SUMMARY,
+    "api_calls": 5,
+}
+
+
+class TestFixCompletionStatus:
+    def test_batch_rewrites_only_failed_task_footer(self):
+        out = fix_completion_status(BATCH_MSG, BATCH_EVENT)
+        # The failed task's status token is corrected...
+        assert "(status=error, api_calls=5, 391.03s" in out
+        # ...while the genuinely completed task keeps its label.
+        assert "(status=completed, api_calls=3, 40.0s)" in out
+        # Body text is untouched.
+        assert RETRY_SUMMARY in out
+        assert "- Spec compliance: 4/4" in out
+
+    def test_batch_no_failure_is_identity(self):
+        event = {
+            "results": [
+                {"task_index": 0, "status": "completed", "summary": "all green"},
+                {"task_index": 1, "status": "completed", "summary": "also green"},
+            ],
+        }
+        out = fix_completion_status(BATCH_MSG, event)
+        assert out == BATCH_MSG
+        assert "(status=completed, api_calls=5, 391.03s" in out
+
+    def test_batch_entry_already_labeled_failure_is_not_rewritten(self):
+        # SDK already rendered "(status=timeout" for this entry — no-op.
+        msg = BATCH_MSG.replace(
+            "(status=completed, api_calls=5, 391.03s",
+            "(status=timeout, api_calls=5, 391.03s",
+        )
+        event = {
+            "results": [
+                {"task_index": 0, "status": "completed", "summary": "ok"},
+                {"task_index": 1, "status": "timeout", "summary": RETRY_SUMMARY},
+            ],
+        }
+        out = fix_completion_status(msg, event)
+        assert out == msg
+
+    def test_single_rewrites_status_line(self):
+        out = fix_completion_status(SINGLE_MSG, SINGLE_EVENT)
+        assert "Status: error   API calls: 5" in out
+        assert "Status: completed" not in out
+        # Only the label line — body untouched.
+        assert RETRY_SUMMARY in out
+
+    def test_single_success_is_identity(self):
+        event = {"status": "completed", "summary": "- Ready to merge: Yes"}
+        out = fix_completion_status(SINGLE_MSG, event)
+        assert out == SINGLE_MSG
+
+    def test_single_error_field_forces_rewrite(self):
+        event = {"status": "completed", "summary": None, "error": "boom"}
+        out = fix_completion_status(SINGLE_MSG, event)
+        assert "Status: error   API calls: 5" in out
+
+    def test_failure_status_event_is_identity(self):
+        # Already-correct labels are never touched.
+        msg = SINGLE_MSG.replace("Status: completed", "Status: timeout")
+        event = {"status": "timeout", "summary": RETRY_SUMMARY}
+        assert fix_completion_status(msg, event) == msg
+
+    def test_sdk_format_change_degrades_to_noop(self):
+        # Anchored shapes missing → return unchanged, never raise.
+        weird = "Status value is completed somewhere else\nno anchors"
+        event = {"status": "completed", "summary": RETRY_SUMMARY}
+        assert fix_completion_status(weird, event) == weird
+
+    def test_non_string_or_non_dict_event_is_safe(self):
+        assert fix_completion_status(None, BATCH_EVENT) is None
+        assert fix_completion_status(BATCH_MSG, None) == BATCH_MSG
+        assert fix_completion_status("", SINGLE_EVENT) == ""

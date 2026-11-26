@@ -29,7 +29,11 @@ from app.api.config import (
 from app.api.helpers import redact_session_data
 from app.api.stream_manager import stream_manager
 from app.api.metering import meter
-from app.api.subagent_status import delegate_result_is_error, effective_subagent_status
+from app.api.subagent_status import (
+    delegate_result_is_error,
+    effective_subagent_status,
+    fix_completion_status,
+)
 
 # Global lock for os.environ writes. Per-session locks (_agent_lock) prevent
 # concurrent runs of the SAME session, but two DIFFERENT sessions can still
@@ -771,6 +775,12 @@ def _drain_process_notifications_for_session(session, session_id):
             process_registry.completion_queue.put(extra_event)
         event, synthetic_message = drained[0]
         delegation_id = str(event.get("delegation_id") or "?")
+        # The SDK builds the completion message from the same optimistic
+        # statuses delegate_tool produces, so a child that died on exhausted
+        # API retries is rendered as "(status=completed ...)". Rewrite only
+        # the mislabeled status tokens (anchored to the SDK's exact label
+        # shapes) before the message is injected into the parent turn (#94).
+        synthetic_message = fix_completion_status(synthetic_message, event)
         logger.debug(
             "[drain] event type=%s child=%s session=%s",
             event.get("type", "?"),
