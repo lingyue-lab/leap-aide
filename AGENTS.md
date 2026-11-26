@@ -22,7 +22,7 @@ The backend is Python standard library (no web framework); the frontend is React
 
 ## Build & Development
 
-Build, development, and debugging may only run in a container (you are on the host) to avoid polluting the local environment. Podman is the recommended container runtime (install it first if missing).
+Build, development, and debugging may only run in a newly created debug container, to avoid polluting the local environment (the host/container environment you are in). Create the debug container with podman (install it first if missing).
 
 Follow the steps below to start a fresh debug container for building, developing, and debugging — all build/development commands run only inside this new container.
 
@@ -56,7 +56,7 @@ bash scripts/build.sh
 **Warning: `ctl.sh stop` / `ctl.sh restart` may only run inside a freshly started debug container; they are forbidden on the host, and also forbidden inside a container that hosts live agent sessions.**
 
 - Frontend-only changes need no restart of any container: on the host, from the repo root, run `podman run -v "$(pwd):/app" -u root --rm --entrypoint /bin/bash ghcr.io/lingyue-lab/leap-aide-testing:sha-c762d0f -c "bash scripts/build.sh --frontend"` to produce a new `static/` (if you are already inside a container, just run `bash scripts/build.sh --frontend`); `static/` is read from disk on every request, so a hard browser refresh is enough.
-- If a backend change requires restarting the LeapAide instance that hosts sessions, do it from the host (`podman restart <container-name>`, or delete the old container and recreate it); an agent inside the container cannot do this itself — hand it to the user.
+- If a backend change requires restarting the debug container, run `podman restart <container-name>` from the host (or delete the old debug container and recreate it).
 
 ---
 
