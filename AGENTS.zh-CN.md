@@ -20,7 +20,28 @@ title: LeapAide 开发指南
 
 ---
 
-## 构建与开发命令
+## 构建与开发
+
+构建、开发、调试需要在容器环境中，避免污染本地环境。推荐的容器环境为 podman。参考下列步骤启动测试容器进行构建、开发、调试。
+
+- 创建如下内容的临时 docker compose 文件 `docker-compose.debug.yml`，该文件将 workspace 映射到容器内的 `/app` 目录 (LeapAide 启动目录)，workspace 作为目标工作目录包含了所有项目改动。
+
+```yml
+services:
+  leap-aide:
+    entrypoint: ["bash", "/app/backend/scripts/docker-entrypoint.sh"]
+    volumes:
+      - <workspace>:/app
+```
+
+- 执行 `bash scripts/ctl.sh start-docker -f /path/to/docker-compose.debug.yml <image-name>` 启动容器。
+
+可用镜像：
+
+- `ghcr.io/lingyue-lab/leap-aide-testing`：用于回归测试，体积较大，包含 node、npm、pytest 等完整工具依赖，`/app` 替换后可用于前后端构建、调试。
+- `ghcr.io/lingyue-lab/leap-aide-runtime`：最终产品镜像，体积较小，工具依赖不完整，`/app` 替换后可用于最终产品效果的验证。
+
+容器中构建开发命令如下：
 
 ```bash
 # Start the server
@@ -29,6 +50,11 @@ bash scripts/ctl.sh restart
 # Build the service
 bash scripts/build.sh
 ```
+
+**警告：正在运行的 agent 会话（主会话或子代理）内禁止执行 `ctl.sh stop` / `ctl.sh restart`。** 会话宿主就是容器内的 `app.server` 进程，该命令会先 SIGTERM 掉它，导致当前会话中途死亡；若是子代理执行的重启，新拉起的 server/gateway 还会继承 `HERMES_DELEGATED_CHILD_CONTEXT=1`，使 kanban dispatcher 每次 tick 都报 `PermissionError`。
+
+- 纯前端改动无需重启：`bash scripts/build.sh` 写入的 `static/` 每次请求都从磁盘读取，浏览器硬刷新即可生效。
+- 后端改动确需重启时，从容器外部执行（宿主机 `podman restart <容器名>`），或请用户操作。
 
 ---
 

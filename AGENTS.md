@@ -20,7 +20,28 @@ The backend is Python standard library (no web framework); the frontend is React
 
 ---
 
-## Build & Development Commands
+## Build & Development
+
+Build, development, and debugging must run in a container environment to avoid polluting the local environment. Podman is the recommended container runtime. Follow the steps below to start a test container for building, developing, and debugging.
+
+- Create a temporary docker compose file `docker-compose.debug.yml` with the following content; it maps the workspace to the `/app` directory inside the container (LeapAide's startup directory), and the workspace — as the target working directory — contains all project changes.
+
+```yml
+services:
+  leap-aide:
+    entrypoint: ["bash", "/app/backend/scripts/docker-entrypoint.sh"]
+    volumes:
+      - <workspace>:/app
+```
+
+- Run `bash scripts/ctl.sh start-docker -f /path/to/docker-compose.debug.yml <image-name>` to start the container.
+
+Available images:
+
+- `ghcr.io/lingyue-lab/leap-aide-testing`: for regression testing; a large image with the full toolchain (node, npm, pytest, etc.); with `/app` replaced it can be used for frontend and backend builds and debugging.
+- `ghcr.io/lingyue-lab/leap-aide-runtime`: the final product image; a small image with an incomplete toolchain; with `/app` replaced it can be used to verify the final product experience.
+
+Build and development commands inside the container:
 
 ```bash
 # Start the server
@@ -29,6 +50,11 @@ bash scripts/ctl.sh restart
 # Build the service
 bash scripts/build.sh
 ```
+
+**Warning: never run `ctl.sh stop` / `ctl.sh restart` inside a running agent session (main session or subagent).** The session's host is the container's `app.server` process; that command SIGTERMs it first and kills the current session mid-turn. When a subagent performs the restart, the newly started server/gateway also inherits `HERMES_DELEGATED_CHILD_CONTEXT=1`, making the kanban dispatcher fail every tick with `PermissionError`.
+
+- Frontend-only changes need no restart: `static/` written by `bash scripts/build.sh` is read from disk on every request — a hard browser refresh is enough.
+- If a backend change really requires a restart, do it from outside the container (on the host: `podman restart <container-name>`), or ask the user.
 
 ---
 
