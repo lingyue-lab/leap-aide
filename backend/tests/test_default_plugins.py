@@ -601,3 +601,147 @@ def test_no_token_build_arg():
         "credentials must never be passed as --build-arg (they land in the "
         f"image config/history); offending lines: {offenders}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 3: scripts/build.sh — forward the github_token secret to the image
+# build. Spec: docs/superpowers/plans/install-default-plugins.md Task 3
+# (brief: .superpowers/sdd/install-default-plugins/task-3-brief.md). Pure
+# stdlib.
+#
+# Static tests over scripts/build.sh: (a) the secrets array gains
+# `--secret id=github_token,src=<file>` in the same segment as both
+# credential sources (BUILD_GITHUB_TOKEN_FILE, else GITHUB_TOKEN/GH_TOKEN),
+# (b) the env-token temp file is chmod 600 and removed at build end
+# (trap/rm), (c) the build_args block carries no credential TOKEN — the
+# only TOKEN-bearing entry is BUILD_GH_TOKEN_DOWNLOAD_HOST, a download
+# host name the brief keeps untouched.
+# ---------------------------------------------------------------------------
+
+BUILD_SH = REPO_ROOT / "scripts" / "build.sh"
+
+
+def _build_sh() -> str:
+    """Read scripts/build.sh (cached, lazy — mirrors _install_sh)."""
+    if "build.sh" not in _read_cache:
+        assert BUILD_SH.is_file(), f"scripts/build.sh is missing under {REPO_ROOT}"
+        _read_cache["build.sh"] = BUILD_SH.read_text(encoding="utf-8")
+    return _read_cache["build.sh"]
+
+
+def _buildsh_github_token_section() -> str:
+    """The contiguous segment from the first credential source
+    (BUILD_GITHUB_TOKEN_FILE) through the `--secret id=github_token,src=`
+    append line — the 'same segment' the forwarding must live in."""
+    text = _build_sh()
+    start = text.find("BUILD_GITHUB_TOKEN_FILE")
+    assert start != -1, (
+        "build.sh must consume BUILD_GITHUB_TOKEN_FILE as github_token "
+        "credential source #1 (not found)"
+    )
+    marker = "id=github_token,src="
+    end = text.find(marker, start)
+    assert end != -1, (
+        "build.sh must append `--secret id=github_token,src=<file>` after "
+        f"its credential-source logic (marker {marker!r} not found after "
+        "BUILD_GITHUB_TOKEN_FILE)"
+    )
+    line_end = text.find("\n", end)
+    return text[start:] if line_end == -1 else text[start:line_end]
+
+
+def _buildsh_build_args_block() -> str:
+    """The `local -a build_args=( ... )` array literal, verbatim."""
+    lines = _build_sh().splitlines()
+    start = next(
+        (i for i, line in enumerate(lines) if "local -a build_args=(" in line),
+        None,
+    )
+    assert start is not None, "build.sh has no `local -a build_args=( ... )` array"
+    end = next(
+        (i for i in range(start + 1, len(lines)) if lines[i].rstrip() == "  )"),
+        None,
+    )
+    assert end is not None, "build.sh's build_args array has no closing `  )` line"
+    return "\n".join(lines[start : end + 1])
+
+
+def test_buildsh_forwards_github_token_secret():
+    """`--secret id=github_token,src=` must appear in the same segment as
+    both credential sources: BUILD_GITHUB_TOKEN_FILE, else GITHUB_TOKEN/GH_TOKEN."""
+    section = _buildsh_github_token_section()
+    assert '--secret "id=github_token,src=' in section, (
+        "build.sh must append `--secret \"id=github_token,src=<file>\"` to "
+        f"the secrets array in the credential-source segment; section:\n{section}"
+    )
+    # $-anchored so BUILD_GITHUB_TOKEN_FILE's own name cannot satisfy the
+    # GITHUB_TOKEN check; the env vars must actually be referenced.
+    assert re.search(r"\$\{GITHUB_TOKEN:-", section), (
+        "the github_token segment must read GITHUB_TOKEN as a credential "
+        f"source; section:\n{section}"
+    )
+    assert re.search(r"\$\{GH_TOKEN:-", section), (
+        "the github_token segment must read GH_TOKEN as a credential "
+        f"source; section:\n{section}"
+    )
+
+
+def test_buildsh_temp_file_is_0600_and_cleaned():
+    """The GITHUB_TOKEN/GH_TOKEN temp file: mktemp + chmod 600 + removed at
+    build end (trap/rm)."""
+    text = _build_sh()
+    start = text.find("mktemp")
+    assert start != -1, (
+        "build.sh must materialise GITHUB_TOKEN/GH_TOKEN into a mktemp file "
+        "for the --secret src= path (no mktemp call found)"
+    )
+    end = text.find("local -a build_args=(")
+    assert end != -1 and start < end, (
+        "the token temp file must be set up before the build_args array "
+        f"(mktemp@{start}, build_args@{end})"
+    )
+    section = text[start:end]
+    assert re.search(r"\bchmod\s+600\b", section), (
+        "the token temp file must be chmod 600 before it is used as "
+        f"--secret src; section:\n{section}"
+    )
+    trap_lines = [
+        line for line in section.splitlines() if re.search(r"\btrap\b", line)
+    ]
+    assert trap_lines, (
+        "the token temp file must be removed at build end by a registered "
+        f"trap; section:\n{section}"
+    )
+    assert any("EXIT" in line for line in trap_lines), (
+        "the cleanup trap must fire on EXIT (build end): " + str(trap_lines)
+    )
+    assert any(re.search(r"\brm\b", line) for line in trap_lines), (
+        "the EXIT trap must rm the temp file: " + str(trap_lines)
+    )
+
+
+def test_buildsh_no_token_build_arg():
+    """build_args must carry no credential TOKEN: token values never become
+    build-args (they would land in image config/history)."""
+    block = _buildsh_build_args_block()
+    # The only TOKEN-bearing entry is BUILD_GH_TOKEN_DOWNLOAD_HOST — a
+    # download host name, not a credential; the brief keeps build_args
+    # unchanged, so it is the single allowed occurrence.
+    offenders = [
+        line.strip()
+        for line in block.splitlines()
+        if "TOKEN" in line and "BUILD_GH_TOKEN_DOWNLOAD_HOST" not in line
+    ]
+    assert not offenders, (
+        "no credential TOKEN may appear in build_args (build-args land in "
+        f"image history); offending lines: {offenders}"
+    )
+    cred_refs = [
+        line.strip()
+        for line in block.splitlines()
+        if re.search(r"\$\{?(GITHUB_TOKEN|GH_TOKEN)\b", line)
+    ]
+    assert not cred_refs, (
+        "build_args must never expand GITHUB_TOKEN/GH_TOKEN; "
+        f"offending lines: {cred_refs}"
+    )

@@ -290,7 +290,8 @@ build_backend() {
 # Playwright headless shell, and deleting them in a later stage would only
 # write whiteouts over bytes that stay in the ancestor layers.
 #
-# Secrets: only `git_identity_key` is mounted (Dockerfile:805,817). There is
+# Secrets: `git_identity_key` (mounted, Dockerfile:805,817) and `github_token`
+# (forwarded below, only when a credential source exists). There is
 # deliberately no `git_host_key` — the build sets StrictHostKeyChecking=
 # accept-new so SSH writes its own known_hosts, and a read-only host-key mount
 # would only block that write (Dockerfile:822-831). Key bytes never enter an
@@ -361,6 +362,31 @@ build_container_image() {
     [ -f "$id_key" ] \
       || die "HERMES_AGENT_REPO_URL is ssh:// but identity key '$id_key' is missing (set BUILD_GIT_IDENTITY_KEY_FILE)"
     secrets+=(--secret "id=git_identity_key,src=$id_key")
+  fi
+
+  # GitHub token for the private plugin install (issue #79): forwarded as a
+  # buildah secret, never a build-arg — build-args land in image history.
+  # Credential sources, in order: BUILD_GITHUB_TOKEN_FILE (an explicit
+  # credential file), else GITHUB_TOKEN/GH_TOKEN materialised into a 0600
+  # temp file removed at build end by the EXIT trap (covers every exit
+  # path: die, failed build, success). With neither source nothing is
+  # appended, and the Dockerfile's required=false mount keeps the build
+  # credential-less.
+  local gh_token_src=""
+  if [ -n "${BUILD_GITHUB_TOKEN_FILE:-}" ]; then
+    [ -f "$BUILD_GITHUB_TOKEN_FILE" ] \
+      || die "BUILD_GITHUB_TOKEN_FILE is set but '$BUILD_GITHUB_TOKEN_FILE' is missing"
+    gh_token_src="$BUILD_GITHUB_TOKEN_FILE"
+  elif [ -n "${GITHUB_TOKEN:-}${GH_TOKEN:-}" ]; then
+    gh_token_src="$(mktemp)" || die "mktemp failed for the github_token secret file"
+    chmod 600 "$gh_token_src"
+    printf '%s' "${GITHUB_TOKEN:-${GH_TOKEN:-}}" > "$gh_token_src"
+    # Register removal for every exit path (die/failure/success). The path
+    # is expanded now: this local is out of scope by EXIT-trap time.
+    trap "rm -f $(printf '%q' "$gh_token_src")" EXIT
+  fi
+  if [ -n "$gh_token_src" ]; then
+    secrets+=(--secret "id=github_token,src=$gh_token_src")
   fi
 
   local -a build_args=(
