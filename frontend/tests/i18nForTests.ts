@@ -42,6 +42,7 @@ void i18n
           },
           mode: { manual: 'Manual', smart: 'Smart', yolo: 'YOLO' },
           reasoning: {
+            label: 'Reasoning Effort',
             default: 'Default',
             none: 'None',
             minimal: 'Minimal',

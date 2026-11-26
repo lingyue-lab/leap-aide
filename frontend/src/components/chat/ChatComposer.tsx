@@ -987,7 +987,7 @@ export default function ChatComposer({ onSend, onCancel, cardVisible: cardVisibl
             <SingleSelection
               value={effectiveReasoningEffort}
               trigger={
-                <Icon name="exercise" size={18} />
+                <Icon name="psychology" size={18} />
               }
               triggerLabel={t('reasoning.label')}
               disabled={!currentModelSupportsThinking}
