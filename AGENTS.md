@@ -22,9 +22,11 @@ The backend is Python standard library (no web framework); the frontend is React
 
 ## Build & Development
 
-Build, development, and debugging must run in a container environment to avoid polluting the local environment. Podman is the recommended container runtime. Follow the steps below to start a test container for building, developing, and debugging.
+Build, development, and debugging may only run in a container (you are on the host) to avoid polluting the local environment. Podman is the recommended container runtime (install it first if missing).
 
-- Create a temporary docker compose file `docker-compose.debug.yml` with the following content; it maps the workspace to the `/app` directory inside the container (LeapAide's startup directory), and the workspace — as the target working directory — contains all project changes.
+Follow the steps below to start a fresh debug container for building, developing, and debugging — all build/development commands run only inside this new container.
+
+- Create a temporary file `docker-compose.debug.yml` with the following content; it maps the workspace to the `/app` directory inside the container (LeapAide's startup directory), and the workspace — as the target working directory — contains all project changes.
 
 ```yml
 services:
@@ -34,14 +36,14 @@ services:
       - <workspace>:/app
 ```
 
-- Run `bash scripts/ctl.sh start-docker -f /path/to/docker-compose.debug.yml <image-name>` to start the container.
+- From the repo root, run `bash scripts/ctl.sh start-docker -f /path/to/docker-compose.debug.yml <image-name>` to start the container; LeapAide comes up automatically once the container is running.
 
 Available images:
 
 - `ghcr.io/lingyue-lab/leap-aide-testing`: for regression testing; a large image with the full toolchain (node, npm, pytest, etc.); with `/app` replaced it can be used for frontend and backend builds and debugging.
 - `ghcr.io/lingyue-lab/leap-aide-runtime`: the final product image; a small image with an incomplete toolchain; with `/app` replaced it can be used to verify the final product experience.
 
-Build and development commands inside the container:
+Enter the new container (`podman exec -it <container-name> bash`) and run the build/development commands:
 
 ```bash
 # Start the server
@@ -51,10 +53,10 @@ bash scripts/ctl.sh restart
 bash scripts/build.sh
 ```
 
-**Warning: never run `ctl.sh stop` / `ctl.sh restart` inside a running agent session (main session or subagent).** The session's host is the container's `app.server` process; that command SIGTERMs it first and kills the current session mid-turn. When a subagent performs the restart, the newly started server/gateway also inherits `HERMES_DELEGATED_CHILD_CONTEXT=1`, making the kanban dispatcher fail every tick with `PermissionError`.
+**Warning: `ctl.sh stop` / `ctl.sh restart` may only run inside a freshly started debug container; they are forbidden on the host, and also forbidden inside a container that hosts live agent sessions (e.g. the LeapAide instance you use daily).** On the host the PID file holds a container-namespace process id, so `kill` either misses or hits an unrelated host process; inside a session-hosting container the session's host is `app.server`, and the command SIGTERMs it first, killing the current session mid-turn — when a subagent performs the restart, the newly started server/gateway also inherits `HERMES_DELEGATED_CHILD_CONTEXT=1`, making the kanban dispatcher fail every tick with `PermissionError`.
 
-- Frontend-only changes need no restart: `static/` written by `bash scripts/build.sh` is read from disk on every request — a hard browser refresh is enough.
-- If a backend change really requires a restart, do it from outside the container (on the host: `podman restart <container-name>`), or ask the user.
+- Frontend-only changes need no restart of any container: on the host, from the repo root, run `podman run -v "$(pwd):/app" -u root --rm --entrypoint /bin/bash ghcr.io/lingyue-lab/leap-aide-testing:sha-c762d0f -c "bash scripts/build.sh --frontend"` to produce a new `static/` (if you are already inside a container, just run `bash scripts/build.sh --frontend`); `static/` is read from disk on every request, so a hard browser refresh is enough.
+- If a backend change requires restarting the LeapAide instance that hosts sessions, do it from the host (`podman restart <container-name>`, or delete the old container and recreate it); an agent inside the container cannot do this itself — hand it to the user.
 
 ---
 
