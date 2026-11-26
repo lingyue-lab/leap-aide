@@ -55,7 +55,7 @@ bash scripts/build.sh
 
 **警告：`ctl.sh stop` / `ctl.sh restart` 只能在新启动的调试容器内执行；禁止在宿主机上执行，也禁止在承载运行中 agent 会话的容器内（宿主容器）执行。**
 
-- 纯前端改动无需重启调试容器：在宿主机/宿主容器仓库根目录执行 `podman run -v "$(pwd):/app" -u root --rm --entrypoint /bin/bash ghcr.io/lingyue-lab/leap-aide-testing:sha-c762d0f -c "bash scripts/build.sh --frontend"` 生成新的 `static/`（已在容器内则直接 `bash scripts/build.sh --frontend`）；`static/` 每次请求都从磁盘读取，浏览器硬刷新即可生效。
+- 纯前端改动无需重启调试容器：在宿主机/宿主容器仓库根目录执行 `podman run -v "$(pwd):/app" -u root --rm --entrypoint /bin/bash ghcr.io/lingyue-lab/leap-aide-testing:sha-c762d0f -c "bash scripts/build.sh --frontend"` 生成新的 `static/`（已在宿主容器内则直接 `bash scripts/build.sh --frontend`）；`static/` 每次请求都从磁盘读取，浏览器硬刷新即可生效。
 - 后端改动需要重启调试容器时，从宿主机/宿主容器执行 `podman restart <容器名>`（或删除旧的调试容器重新创建）。
 
 ---
