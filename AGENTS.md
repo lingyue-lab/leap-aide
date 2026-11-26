@@ -53,7 +53,7 @@ bash scripts/ctl.sh restart
 bash scripts/build.sh
 ```
 
-**Warning: `ctl.sh stop` / `ctl.sh restart` may only run inside a freshly started debug container; they are forbidden on the host, and also forbidden inside a container that hosts live agent sessions (e.g. the LeapAide instance you use daily).** On the host the PID file holds a container-namespace process id, so `kill` either misses or hits an unrelated host process; inside a session-hosting container the session's host is `app.server`, and the command SIGTERMs it first, killing the current session mid-turn — when a subagent performs the restart, the newly started server/gateway also inherits `HERMES_DELEGATED_CHILD_CONTEXT=1`, making the kanban dispatcher fail every tick with `PermissionError`.
+**Warning: `ctl.sh stop` / `ctl.sh restart` may only run inside a freshly started debug container; they are forbidden on the host, and also forbidden inside a container that hosts live agent sessions.**
 
 - Frontend-only changes need no restart of any container: on the host, from the repo root, run `podman run -v "$(pwd):/app" -u root --rm --entrypoint /bin/bash ghcr.io/lingyue-lab/leap-aide-testing:sha-c762d0f -c "bash scripts/build.sh --frontend"` to produce a new `static/` (if you are already inside a container, just run `bash scripts/build.sh --frontend`); `static/` is read from disk on every request, so a hard browser refresh is enough.
 - If a backend change requires restarting the LeapAide instance that hosts sessions, do it from the host (`podman restart <container-name>`, or delete the old container and recreate it); an agent inside the container cannot do this itself — hand it to the user.

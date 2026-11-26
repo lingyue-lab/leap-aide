@@ -53,7 +53,7 @@ bash scripts/ctl.sh restart
 bash scripts/build.sh
 ```
 
-**警告：`ctl.sh stop` / `ctl.sh restart` 只能在新启动的调试容器内执行；禁止在宿主机上执行，也禁止在承载运行中 agent 会话的容器（例如日常使用的 LeapAide 实例）内执行。** 宿主机上 PID 文件里的进程号属于容器命名空间，`kill` 会打空或误伤宿主机进程；承载会话的容器内，会话宿主就是 `app.server`，该命令会先 SIGTERM 掉它，导致当前会话中途死亡——若是子代理执行的重启，新拉起的 server/gateway 还会继承 `HERMES_DELEGATED_CHILD_CONTEXT=1`，使 kanban dispatcher 每次 tick 都报 `PermissionError`。
+**警告：`ctl.sh stop` / `ctl.sh restart` 只能在新启动的调试容器内执行；禁止在宿主机上执行，也禁止在承载运行中 agent 会话的容器内执行。**
 
 - 纯前端改动无需重启任何容器：在宿主机仓库根目录执行 `podman run -v "$(pwd):/app" -u root --rm --entrypoint /bin/bash ghcr.io/lingyue-lab/leap-aide-testing:sha-c762d0f -c "bash scripts/build.sh --frontend"` 生成新的 `static/`（已在容器内则直接 `bash scripts/build.sh --frontend`）；`static/` 每次请求都从磁盘读取，浏览器硬刷新即可生效。
 - 后端改动需要重启承载会话的 LeapAide 实例时，从宿主机执行 `podman restart <容器名>`（或删除旧容器重新创建）；容器内的 agent 无法自行操作，请交由用户执行。
