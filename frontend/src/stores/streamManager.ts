@@ -621,13 +621,23 @@ export function handleReplayEvent(sessionId: string, event: string, data: any): 
         _safetyTimeouts.delete(sessionId);
       }
       _dismissCompressing(sessionId);
+      // Subagent streams carry an explicit status; a child that died on
+      // exhausted LLM API retries must not render as a plain completion.
+      // The backend downgrades the SDK's mislabeled "completed" to "error"
+      // and attaches the failure summary (see subagent_status.py).
+      const doneStatus = typeof data.status === 'string' ? data.status.toLowerCase() : '';
+      const doneFailed = ['error', 'failed', 'failure', 'timeout'].includes(doneStatus);
       _sessionStates.set(sessionId, {
         ...s,
         busy: false,
         streaming: false,
         completedAt: Date.now(),
         lastUsage: data.usage || null,
+        ...(doneFailed ? { error: String(data.summary || 'Subagent task failed') } : {}),
       });
+      if (doneFailed) {
+        showInfoCard(sessionId, String(data.summary || 'Subagent task failed'));
+      }
       _notifyImmediate(sessionId);
       window.dispatchEvent(new CustomEvent('bg-stream-done', { detail: { sessionId, streamId: s.streamId } }));
 

@@ -256,6 +256,7 @@ Two extra reapers cover what a clean close does not reach:
 | `HERMES_WEBUI_CONNECTIVITY_PROBE` | *(enabled)* | Background provider reachability probe at boot and after saving a key; `=0` disables |
 | `HERMES_WEBUI_CATALOG_QUERY_TIMEOUT_S` | `3.0` | Per-provider timeout (seconds) for live model-list queries during a catalog build |
 | `HERMES_WEBUI_COLD_START_WAIT_S` | `5.0` | Max seconds a chat start waits for the boot model-catalog build before it refuses the turn; `=0` never waits |
+| `HERMES_API_CALL_STALE_TIMEOUT` | `600` | Non-streaming LLM call stale watchdog (seconds), read by the Hermes SDK for every provider; the SDK default of 90s (150/240s scaled by context) kills delegated subagents mid-generation on slow long outputs |
 | `LOG_LEVEL` | `WARNING` | Python logging level |
 
 ---

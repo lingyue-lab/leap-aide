@@ -140,10 +140,12 @@ function SubagentBlock({ events }: SubagentBlockProps) {
   const startEvent = events.find(e => e.event_type === 'subagent.start');
   const goal = startEvent?.goal || '子Agent任务';
 
-  // Check if completed
+  // Check if completed. The SDK emits several failure statuses ("failed",
+  // "timeout", "error"); treat the whole set as failure, not just "error".
   const completeEvent = events.find(e => e.event_type === 'subagent.complete');
   const isComplete = !!completeEvent;
-  const hasError = completeEvent?.status === 'error';
+  const completeStatus = (completeEvent?.status || '').toLowerCase();
+  const hasError = ['error', 'failed', 'failure', 'timeout'].includes(completeStatus);
 
   // Count tool calls
   const toolCalls = events.filter(e => e.event_type === 'subagent.tool');
@@ -255,18 +257,21 @@ function SubagentEventRow({ event }: SubagentEventRowProps) {
         </div>
       );
 
-    case 'subagent.complete':
+    case 'subagent.complete': {
+      const st = (event.status || '').toLowerCase();
+      const failed = ['error', 'failed', 'failure', 'timeout'].includes(st);
       return (
         <div className="subagent-event subagent-complete-event">
           <span className="subagent-event-icon">
-            {event.status === 'error' ? '❌' : '✅'}
+            {failed ? '❌' : '✅'}
           </span>
           <span className="subagent-event-text">
-            {event.status === 'error' ? '失败' : '完成'}
+            {failed ? '失败' : '完成'}
             {event.preview ? `: ${truncate(event.preview, 50)}` : ''}
           </span>
         </div>
       );
+    }
 
     default:
       return null;
