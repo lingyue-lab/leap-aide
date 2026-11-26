@@ -1258,7 +1258,9 @@ _leap_install_one_plugin() {
   local show_out=""
 
   if show_out=$(HERMES_HOME="$home" $cli plugins show "$name" 2>/dev/null); then
-    if printf '%s\n' "$show_out" | grep -qiE 'enabled:[[:space:]]*true'; then
+    # Real CLI prints `Status: enabled` / `Status: not enabled` on its own
+    # line; `not` must never satisfy the enabled check (anchored match).
+    if printf '%s\n' "$show_out" | grep -qiE '^Status:[[:space:]]*enabled[[:space:]]*$'; then
       info "$name already installed and enabled"
       return 0
     fi

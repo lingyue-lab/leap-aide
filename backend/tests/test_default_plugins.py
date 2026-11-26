@@ -83,7 +83,8 @@ fi
 case "${1:-} ${2:-}" in
   "plugins show")
     if [ "${STUB_SHOW_RC:-1}" = "0" ]; then
-      printf 'name: %s\\nenabled: false\\n' "${3:-}"
+      printf '%s v1.0.0\nStatus: %s\nSource: bundled\nKey: stub/plugin\n' \
+        "${3:-}" "${STUB_SHOW_STATUS:-not enabled}"
       exit 0
     fi
     exit 1
@@ -158,6 +159,7 @@ def _fixture(
     tmp_path: Path,
     *,
     show_rc: int = 1,
+    show_status: str = "not enabled",
     gh_rc: int = 0,
     gh_token: str = "gh-stub-token",
 ) -> _Fixture:
@@ -182,6 +184,7 @@ def _fixture(
         PATH=f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
         STUB_LOG=str(log),
         STUB_SHOW_RC=str(show_rc),
+        STUB_SHOW_STATUS=show_status,
         STUB_GH_RC=str(gh_rc),
         STUB_GH_TOKEN=gh_token,
         HERMES_HOME=str(hermes_home),
@@ -425,8 +428,14 @@ def test_credential_scoped_askpass(tmp_path):
 
 
 def test_idempotent_skip(tmp_path):
-    """show rc 0: no install call; installed-but-disabled plugins only get `plugins enable`."""
-    fx = _fixture(tmp_path, show_rc=0)
+    """show rc 0: no install; `Status: not enabled` gets enable, `Status: enabled` does not.
+
+    The stub emits the real CLI format (`Status: enabled` /
+    `Status: not enabled`), so both halves exercise install.sh's actual
+    enabled-detection rather than a format the CLI never prints.
+    """
+    # (a) installed but disabled: bring it up with `plugins enable` only.
+    fx = _fixture(tmp_path / "disabled", show_rc=0, show_status="not enabled")
     fx.env["GITHUB_TOKEN"] = "test-secret-token"
     proc = _install(fx)
     calls = _calls(fx)
@@ -442,8 +451,8 @@ def test_idempotent_skip(tmp_path):
         + str(installs)
     )
     assert enables, (
-        "an installed-but-disabled plugin must be brought up with "
-        "`hermes plugins enable <name>`; observed calls: " + str(calls)
+        "a plugin the CLI reports as `Status: not enabled` must be brought up "
+        "with `hermes plugins enable <name>`; observed calls: " + str(calls)
     )
     others = [
         c
@@ -454,6 +463,36 @@ def test_idempotent_skip(tmp_path):
     ]
     assert not others, f"no other hermes subcommands may run: {others}"
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    # (b) already enabled: no install and NO redundant `plugins enable`.
+    fx2 = _fixture(tmp_path / "enabled", show_rc=0, show_status="enabled")
+    fx2.env["GITHUB_TOKEN"] = "test-secret-token"
+    proc2 = _install(fx2)
+    calls2 = _calls(fx2)
+    shows2 = [c for c in calls2 if " | plugins | show |" in c]
+    enables2 = [c for c in calls2 if " | plugins | enable |" in c]
+    installs2 = [c for c in calls2 if " | plugins | install |" in c]
+    assert shows2, (
+        "the enabled path must still probe with `hermes plugins show <name>`; "
+        f"observed calls: {calls2}"
+    )
+    assert not installs2, (
+        "`plugins install` must be skipped when `plugins show` returns 0, got: "
+        + str(installs2)
+    )
+    assert not enables2, (
+        "a plugin the CLI reports as `Status: enabled` must NOT receive a "
+        "redundant `hermes plugins enable`; observed calls: " + str(calls2)
+    )
+    others2 = [
+        c
+        for c in calls2
+        if " | plugins | show |" not in c
+        and " | plugins | enable |" not in c
+        and " | plugins | install |" not in c
+    ]
+    assert not others2, f"no other hermes subcommands may run: {others2}"
+    assert proc2.returncode == 0, proc2.stdout + proc2.stderr
 
 
 def test_scan_toggle_restored(tmp_path):
