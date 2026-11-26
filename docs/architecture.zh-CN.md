@@ -256,6 +256,7 @@ Chrome 不会直接暴露任何 CDP 调试地址，而是由接待员提供 CDP 
 | `HERMES_WEBUI_CONNECTIVITY_PROBE` | *（默认启用）* | 后台提供商连通性探测（启动时 + 保存 key 后）；`=0` 关闭 |
 | `HERMES_WEBUI_CATALOG_QUERY_TIMEOUT_S` | `3.0` | 目录构建期间每个 provider 实时模型查询的超时（秒） |
 | `HERMES_WEBUI_COLD_START_WAIT_S` | `5.0` | 聊天开始时等待启动期模型目录构建的最长秒数，超时则拒绝本轮；`=0` 不等待 |
+| `HERMES_API_CALL_STALE_TIMEOUT` | `600` | 非流式 LLM 调用的停滞看门狗超时（秒），由 Hermes SDK 对所有 provider 读取；SDK 默认 90s（按上下文放大到 150/240s）会在慢速长输出时把委派子代理掐死在生成中途 |
 | `LOG_LEVEL` | `WARNING` | Python 日志级别 |
 
 ---

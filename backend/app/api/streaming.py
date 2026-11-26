@@ -29,6 +29,7 @@ from app.api.config import (
 from app.api.helpers import redact_session_data
 from app.api.stream_manager import stream_manager
 from app.api.metering import meter
+from app.api.subagent_status import delegate_result_is_error, effective_subagent_status
 
 # Global lock for os.environ writes. Per-session locks (_agent_lock) prevent
 # concurrent runs of the SAME session, but two DIFFERENT sessions can still
@@ -1735,9 +1736,23 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                             child_stream.put('message_start', {'ts': time.time()})
                         elif event_type == 'subagent.complete':
                             _finish_active_child_tool()
-                            child_stream.put('done', {
-                                'status': cb_kwargs.get('status', 'completed'),
-                            })
+                            # The SDK labels a child "completed" whenever the
+                            # summary is non-empty — including an API-retry
+                            # exhaustion message ("API call failed after N
+                            # retries: ..."). Re-derive the status from the
+                            # summary so the frontend never renders a dead
+                            # child as a success (issue: subagent timeout
+                            # hardening).
+                            _sc_summary = str(
+                                cb_kwargs.get('summary') or cb_kwargs.get('preview') or ''
+                            )
+                            _sc_status = effective_subagent_status(
+                                cb_kwargs.get('status', 'completed'), _sc_summary
+                            )
+                            _done_payload = {'status': _sc_status}
+                            if _sc_summary:
+                                _done_payload['summary'] = _sc_summary[:300]
+                            child_stream.put('done', _done_payload)
                             # Defer end_stream until the child agent has finished
                             # writing all messages to state.db. The agent's close()
                             # method sets ended_at after the final message is saved.
@@ -1839,13 +1854,22 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                     try:
                         tid_for_event = ''  # Initialize tid
                         _todos_for_event = None  # Full todos list for write_todo tool
+                        # The SDK passes the tool's actual result via the
+                        # `result` kwarg (preview is None for completed events
+                        # by SDK design).  Read it before marking the card so
+                        # delegate_task results can be sniffed for failures the
+                        # SDK labels "completed" (exhausted API retries).
+                        _tool_result_raw = cb_kwargs.get('result', preview)
+                        _tool_is_error = bool(cb_kwargs.get('is_error', False))
+                        if not _tool_is_error and name == 'delegate_task':
+                            _tool_is_error = delegate_result_is_error(_tool_result_raw)
                         for live_tc in reversed(_live_tool_calls):
                             if live_tc.get('done'):
                                 continue
                             if not name or live_tc.get('name') == name:
                                 live_tc['done'] = True
                                 live_tc['duration'] = cb_kwargs.get('duration')
-                                live_tc['is_error'] = bool(cb_kwargs.get('is_error', False))
+                                live_tc['is_error'] = _tool_is_error
                                 # Extract tid to include in the event for frontend tracking
                                 tid_for_event = live_tc.get('tid', '')
                                 # For todo (write_todo): extract full (untruncated) todos list from args
@@ -1857,11 +1881,6 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                         # Signal the checkpoint thread that new work has completed (Issue #765).
                         # Each completed tool call is a meaningful unit of progress worth persisting.
                         _checkpoint_activity[0] += 1
-                        # The SDK passes the tool's actual result via the
-                        # `result` kwarg (preview is None for completed events
-                        # by SDK design).  Read it so the live tool card's OUT
-                        # region is not blank during streaming.
-                        _tool_result_raw = cb_kwargs.get('result', preview)
                         _tool_output, _tool_output_truncated = _truncate_tool_output(_tool_result_raw)
                         _tool_complete_payload = {
                             'event_type': event_type,
@@ -1871,7 +1890,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                             'preview': preview,
                             'args': args_snap,
                             'duration': cb_kwargs.get('duration'),
-                            'is_error': bool(cb_kwargs.get('is_error', False)),
+                            'is_error': _tool_is_error,
                         }
                         if _todos_for_event is not None:
                             _tool_complete_payload['todos'] = _todos_for_event
@@ -1883,7 +1902,7 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
                             from app.api.cli_viewer import on_tool_completed
                             on_tool_completed(
                                 session_id, name, tid_for_event, preview,
-                                cb_kwargs.get('duration'), bool(cb_kwargs.get('is_error', False)),
+                                cb_kwargs.get('duration'), _tool_is_error,
                             )
                         except Exception:
                             pass
