@@ -1159,6 +1159,447 @@ else
   info "No hermes config found — will use defaults on first run"
 fi
 
+# --- leap default plugins helpers (begin) ---
+# Shared state for the default-plugin helpers below. Initialized when this
+# block is sourced (install.sh execution, or the behaviour tests that
+# sed-extract this block and call install_default_plugins).
+_leap_tmpfiles=()
+_leap_scan_active=false
+_leap_scan_cfg=""
+_leap_scan_state_file=""
+_leap_prev_exit_trap_cmd=""
+
+# Print the hermes CLI prefix to stdout (may be multi-word when the SDK
+# wrapper is unavailable and we fall back to the venv interpreter). Return 1
+# when no usable CLI can be found.
+_leap_hermes_cli() {
+  if command -v hermes >/dev/null 2>&1; then
+    printf '%s\n' "hermes"
+    return 0
+  fi
+  # Fallback: run the SDK entrypoint through its own venv (same form the
+  # installer's wrapper uses). AGENT_DIR is set by Step 2 of install.sh.
+  if [ -n "${AGENT_DIR:-}" ] \
+      && [ -x "${AGENT_DIR}/venv/bin/python" ] \
+      && [ -f "${AGENT_DIR}/hermes" ]; then
+    printf '%s\n' "${AGENT_DIR}/venv/bin/python ${AGENT_DIR}/hermes"
+    return 0
+  fi
+  return 1
+}
+
+# Resolve a GitHub token for the private wiserkit clone. Prints the token to
+# stdout and returns 0 on success; returns 1 with no stdout when nothing is
+# available. Order (spec, do not redesign):
+#   1. HERMES_GITHUB_TOKEN_FILE file content (BuildKit/buildah secret mount)
+#   2. GITHUB_TOKEN env
+#   3. GH_TOKEN env
+#   4. `gh auth token` subprocess
+# An empty file / empty value falls through to the next source.
+_leap_resolve_wiserkit_token() {
+  local token=""
+  if [ -n "${HERMES_GITHUB_TOKEN_FILE:-}" ] && [ -f "${HERMES_GITHUB_TOKEN_FILE}" ]; then
+    token="$(head -n 1 "${HERMES_GITHUB_TOKEN_FILE}" 2>/dev/null | tr -d '\r' || true)"
+    if [ -n "$token" ]; then
+      printf '%s\n' "$token"
+      return 0
+    fi
+  fi
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    printf '%s\n' "$GITHUB_TOKEN"
+    return 0
+  fi
+  if [ -n "${GH_TOKEN:-}" ]; then
+    printf '%s\n' "$GH_TOKEN"
+    return 0
+  fi
+  if command -v gh >/dev/null 2>&1; then
+    token="$(gh auth token 2>/dev/null | tr -d '\r' || true)"
+    if [ -n "$token" ]; then
+      printf '%s\n' "$token"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+# Remove a hermes CLI invocation's temp files and restore the scan toggle.
+# Idempotent; called on the normal path and from the chained EXIT trap so
+# die()/signal paths also clean up.
+_leap_cleanup_all() {
+  # Restore the scan toggle first — it needs its state temp file.
+  if [ "${_leap_scan_active:-false}" = true ]; then
+    _leap_scan_restore
+  fi
+  if [ "${#_leap_tmpfiles[@]}" -gt 0 ]; then
+    local _f
+    for _f in "${_leap_tmpfiles[@]}"; do
+      [ -n "$_f" ] && rm -f "$_f"
+    done
+  fi
+  _leap_tmpfiles=()
+}
+
+# Install one plugin idempotently: probe with `plugins show <name>` first
+# (rc 0 = already installed → only `plugins enable` if not yet enabled),
+# otherwise install with `--enable`. Mode cred wraps the install in a
+# one-shot GIT_ASKPASS scoped to that command only; mode no-cred installs
+# directly (public clones never see credentials).
+_leap_install_one_plugin() {
+  local slug="$1"
+  local name="$2"
+  local mode="$3"
+  local cli
+  if ! cli=$(_leap_hermes_cli); then
+    warn "hermes CLI not available — cannot install $name"
+    return 1
+  fi
+  local home="${HERMES_HOME:-$HOME/.hermes}"
+  local show_out=""
+
+  if show_out=$(HERMES_HOME="$home" $cli plugins show "$name" 2>/dev/null); then
+    if printf '%s\n' "$show_out" | grep -qiE 'enabled:[[:space:]]*true'; then
+      info "$name already installed and enabled"
+      return 0
+    fi
+    # Installed but not enabled (or status unknown) — bring it up.
+    if HERMES_HOME="$home" $cli plugins enable "$name"; then
+      ok "$name enabled"
+      return 0
+    else
+      warn "Failed to enable $name"
+      return 1
+    fi
+  fi
+
+  # Not installed yet.
+  if [ "$mode" = "cred" ]; then
+    _leap_install_with_askpass "$slug" "$name" "$cli"
+  else
+    # superpowers: public repo — no credentials, ever.
+    # Effective command: plugins install obra/superpowers --enable
+    if HERMES_HOME="$home" $cli plugins install "$slug" --enable; then
+      ok "$name installed"
+      return 0
+    else
+      warn "Failed to install $name"
+      return 1
+    fi
+  fi
+}
+
+# Install a private plugin with credentials delivered via a one-shot
+# GIT_ASKPASS helper. The token lives only in a 0600 mktemp file (honors
+# TMPDIR); the askpass script merely cats that file. Both files are removed
+# immediately after the install and again by _leap_cleanup_all / EXIT trap.
+_leap_install_with_askpass() {
+  local slug="$1"
+  local name="$2"
+  local cli="$3"
+  local token
+  if ! token=$(_leap_resolve_wiserkit_token); then
+    warn "No GitHub credentials available — cannot install $name"
+    return 1
+  fi
+  local home="${HERMES_HOME:-$HOME/.hermes}"
+  local token_file askpass
+  if ! token_file=$(mktemp); then
+    warn "mktemp failed for $name token file"
+    return 1
+  fi
+  _leap_tmpfiles+=("$token_file")
+  chmod 600 "$token_file"
+  if ! askpass=$(mktemp); then
+    warn "mktemp failed for $name askpass helper"
+    rm -f "$token_file"
+    return 1
+  fi
+  _leap_tmpfiles+=("$askpass")
+  chmod 700 "$askpass"
+  # Token never appears in the askpass script itself — only the file path.
+  printf '%s' "$token" > "$token_file"
+  printf '#!/bin/sh\ncat "%s"\n' "$token_file" > "$askpass"
+
+  local rc=0
+  # GIT_ASKPASS + HERMES_HOME scoped to this one install command only.
+  GIT_ASKPASS="$askpass" HERMES_HOME="$home" \
+    $cli plugins install "$slug" --enable || rc=$?
+
+  rm -f "$token_file" "$askpass"
+  if [ "$rc" -eq 0 ]; then
+    ok "$name installed"
+  else
+    warn "Failed to install $name"
+  fi
+  return "$rc"
+}
+
+# Gate A (Approval Gate A, mechanisms 1-5): set plugins.scan_on_install to
+# false only while default plugins are installed, then restore the exact
+# prior state on every path (normal return and die/EXIT). Never leaves the
+# toggle in the final seed; does not touch /usr/local/lib/hermes-agent; no
+# global env bypass. State is recorded in a TMPDIR temp file cleaned up
+# with the other install temp files.
+_leap_scan_begin() {
+  local cfg="${HERMES_HOME:-$HOME/.hermes}/config.yaml"
+  _leap_scan_cfg="$cfg"
+  if ! command -v python3 >/dev/null 2>&1; then
+    warn "python3 not available — cannot disable plugins.scan_on_install"
+    return 1
+  fi
+  if ! _leap_scan_state_file=$(mktemp); then
+    warn "mktemp failed for scan-toggle state file"
+    return 1
+  fi
+  _leap_tmpfiles+=("$_leap_scan_state_file")
+  if ! python3 - "$cfg" "$_leap_scan_state_file" <<'PYEOF'
+import json, os, re, sys
+
+cfg, state_path = sys.argv[1], sys.argv[2]
+state = {
+    "file_existed": os.path.isfile(cfg),
+    "key_existed": False,
+    "orig_line": None,
+    "added_plugins_line": False,
+}
+
+if not state["file_existed"]:
+    with open(cfg, "w", encoding="utf-8") as f:
+        f.write("plugins:\n  scan_on_install: false\n")
+    state["added_plugins_line"] = True
+    with open(state_path, "w", encoding="utf-8") as f:
+        json.dump(state, f)
+    sys.exit(0)
+
+with open(cfg, encoding="utf-8") as f:
+    lines = f.readlines()
+
+key_re = re.compile(r"^(\s*)scan_on_install:\s*(.*?)\s*$")
+plugins_re = re.compile(r"^plugins:\s*(#.*)?$")
+
+in_plugins = False
+plugins_idx = None
+key_idx = None
+for i, line in enumerate(lines):
+    if plugins_re.match(line):
+        in_plugins = True
+        plugins_idx = i
+        continue
+    if in_plugins:
+        if line.strip() == "" or line.lstrip().startswith("#"):
+            continue
+        if line[0] in " \t":
+            m = key_re.match(line)
+            if m:
+                key_idx = i
+                state["key_existed"] = True
+                state["orig_line"] = line
+                break
+        else:
+            in_plugins = False
+
+if key_idx is not None:
+    m = key_re.match(lines[key_idx])
+    lines[key_idx] = m.group(1) + "scan_on_install: false\n"
+elif plugins_idx is not None:
+    lines.insert(plugins_idx + 1, "  scan_on_install: false\n")
+else:
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    lines.append("plugins:\n")
+    lines.append("  scan_on_install: false\n")
+    state["added_plugins_line"] = True
+
+with open(cfg, "w", encoding="utf-8") as f:
+    f.writelines(lines)
+with open(state_path, "w", encoding="utf-8") as f:
+    json.dump(state, f)
+PYEOF
+  then
+    warn "Failed to set plugins.scan_on_install=false"
+    rm -f "$_leap_scan_state_file"
+    _leap_scan_state_file=""
+    return 1
+  fi
+  _leap_scan_active=true
+  return 0
+}
+
+# Restore plugins.scan_on_install to the exact pre-toggle state: key did
+# not exist → remove it (and the plugins section we added if now empty);
+# key existed → put the original line back. If the config file itself did
+# not exist before the toggle, delete it only when nothing else remains
+# (plugins.enabled written by the install is preserved).
+_leap_scan_restore() {
+  _leap_scan_active=false
+  local cfg="$_leap_scan_cfg"
+  local state_file="$_leap_scan_state_file"
+  _leap_scan_cfg=""
+  _leap_scan_state_file=""
+  if [ -z "$cfg" ] || [ -z "$state_file" ] || [ ! -f "$state_file" ]; then
+    return 0
+  fi
+  if [ ! -f "$cfg" ]; then
+    rm -f "$state_file"
+    return 0
+  fi
+  if ! python3 - "$cfg" "$state_file" <<'PYEOF'
+import json, os, re, sys
+
+cfg, state_path = sys.argv[1], sys.argv[2]
+with open(state_path, encoding="utf-8") as f:
+    state = json.load(f)
+
+with open(cfg, encoding="utf-8") as f:
+    lines = f.readlines()
+
+key_re = re.compile(r"^\s*scan_on_install:\s*")
+plugins_re = re.compile(r"^plugins:\s*(#.*)?$")
+
+key_idx = None
+for i, line in enumerate(lines):
+    if key_re.match(line):
+        key_idx = i
+        break
+
+if state.get("key_existed") and state.get("orig_line") is not None:
+    if key_idx is not None:
+        lines[key_idx] = state["orig_line"]
+elif key_idx is not None:
+    del lines[key_idx]
+    if state.get("added_plugins_line"):
+        for i, line in enumerate(lines):
+            if plugins_re.match(line):
+                j = i + 1
+                has_content = False
+                while j < len(lines):
+                    s = lines[j]
+                    if s.strip() == "" or s.lstrip().startswith("#"):
+                        j += 1
+                        continue
+                    if s[0] in " \t":
+                        has_content = True
+                        break
+                    break
+                if not has_content:
+                    del lines[i]
+                break
+
+if not state.get("file_existed", True):
+    if not "".join(lines).strip():
+        try:
+            os.remove(cfg)
+        except OSError:
+            pass
+        try:
+            os.remove(state_path)
+        except OSError:
+            pass
+        sys.exit(0)
+
+with open(cfg, "w", encoding="utf-8") as f:
+    f.writelines(lines)
+try:
+    os.remove(state_path)
+except OSError:
+    pass
+PYEOF
+  then
+    warn "Failed to restore plugins.scan_on_install"
+    return 1
+  fi
+  return 0
+}
+
+# Chain onto any EXIT trap install.sh already registered (e.g.
+# trap _restore_sources EXIT) so cleanup runs on die() without clobbering
+# the existing handler. The previous command is captured once and re-run
+# after our cleanup.
+_leap_setup_exit_trap() {
+  _leap_prev_exit_trap_cmd="$(trap -p EXIT | sed -n "s/^trap -- '\(.*\)' EXIT\$/\1/p")"
+  if [ -n "${_leap_prev_exit_trap_cmd:-}" ]; then
+    trap '_leap_cleanup_all; eval "${_leap_prev_exit_trap_cmd:-}"' EXIT
+  else
+    trap '_leap_cleanup_all' EXIT
+  fi
+}
+
+# Orchestrate default plugin installs:
+#   - superpowers (obra/superpowers): public, never receives credentials;
+#     failure dies in Docker (IN_DOCKER=true) and warns on the host.
+#   - wiserkit (lingyue-lab/wiserkit): private; installed only when a
+#     credential resolves, via one-shot GIT_ASKPASS. No credential → warn +
+#     skip (never fails). With credential, failure follows the same
+#     die-in-Docker / warn-on-host policy as superpowers.
+# The Gate A scan toggle wraps the install segment only when at least one
+# plugin still needs installing.
+install_default_plugins() {
+  local cli
+  if ! cli=$(_leap_hermes_cli); then
+    die "hermes CLI not found — cannot install default plugins"
+  fi
+  local home="${HERMES_HOME:-$HOME/.hermes}"
+  local need_install=false
+  local wiserkit_token=""
+
+  # Cheap pre-probe: only toggle the scan when something actually needs
+  # installing (Gate A mechanism 1).
+  if ! HERMES_HOME="$home" $cli plugins show superpowers >/dev/null 2>&1; then
+    need_install=true
+  fi
+  if wiserkit_token=$(_leap_resolve_wiserkit_token); then
+    if ! HERMES_HOME="$home" $cli plugins show wiserkit >/dev/null 2>&1; then
+      need_install=true
+    fi
+  fi
+
+  if [ "$need_install" = true ]; then
+    if _leap_scan_begin; then
+      _leap_setup_exit_trap
+    fi
+  fi
+
+  # superpowers: public clone — never pass credentials.
+  # Effective command: plugins install obra/superpowers --enable
+  if ! _leap_install_one_plugin "obra/superpowers" "superpowers" no-cred; then
+    if [ "${IN_DOCKER:-false}" = true ]; then
+      die "Failed to install obra/superpowers"
+    else
+      warn "Failed to install obra/superpowers — continuing"
+    fi
+  fi
+
+  if [ -n "$wiserkit_token" ]; then
+    # Effective command: plugins install lingyue-lab/wiserkit --enable
+    if ! _leap_install_one_plugin "lingyue-lab/wiserkit" "wiserkit" cred; then
+      if [ "${IN_DOCKER:-false}" = true ]; then
+        die "Failed to install lingyue-lab/wiserkit"
+      else
+        warn "Failed to install lingyue-lab/wiserkit — continuing"
+      fi
+    fi
+  else
+    warn "No GitHub credentials available — skipping lingyue-lab/wiserkit"
+  fi
+
+  # Normal completion: restore scan toggle, drop temp files, unchain trap.
+  _leap_cleanup_all
+  if [ -n "${_leap_prev_exit_trap_cmd:-}" ]; then
+    eval "trap '${_leap_prev_exit_trap_cmd}' EXIT"
+  else
+    trap - EXIT 2>/dev/null || true
+  fi
+  _leap_prev_exit_trap_cmd=""
+  return 0
+}
+
+# --- leap default plugins helpers (end) ---
+
+# ── Step 2c: Install default plugins ──
+say ""
+say "${B}Installing default plugins...${R}"
+install_default_plugins
+
 # ── Step 3: Check our own dependencies ──
 say ""
 say "${B}Checking dependencies...${R}"
