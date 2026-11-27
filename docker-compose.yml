@@ -47,7 +47,7 @@ services:
       # SDK for every provider. Default is 90s (150/240s scaled by context
       # size), which kills delegated subagents mid-generation on slow long
       # outputs. 600s matches the SDK's own reasoning-model floor.
-      - HERMES_API_CALL_STALE_TIMEOUT=${HERMES_API_CALL_STALE_TIMEOUT:-600}
+      - HERMES_API_CALL_STALE_TIMEOUT=600
       - HERMES_WEBUI_PASSWORD=lingyue-lab
       - HERMES_WEBUI_DEFAULT_WORKSPACE=/workspaces
       # GitHub CLI token for the `gh` binary shipped in the image. Empty =
