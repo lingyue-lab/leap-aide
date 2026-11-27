@@ -183,7 +183,8 @@ function _processNotify(event: string, data: any): void {
       // Check if delegate children status changed — if so, bump version to trigger sidebar refresh
       const delegateChanged = existing && (
         (data._has_delegate_children !== undefined && data._has_delegate_children !== existing._has_delegate_children) ||
-        (data._delegate_children_count !== undefined && data._delegate_children_count !== existing._delegate_children_count)
+        (data._delegate_children_count !== undefined && data._delegate_children_count !== existing._delegate_children_count) ||
+        (data._delegate_running_count !== undefined && data._delegate_running_count !== existing._delegate_running_count)
       );
 
       if (existing) {
