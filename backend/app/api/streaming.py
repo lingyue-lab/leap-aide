@@ -671,6 +671,48 @@ def _postprocess_messages(messages, *, start_idx=0,
         _tag_attachments(messages, msg_text, attachments)
 
 
+def _session_has_live_delegations(session_id):
+    """Whether the session still owns delegations that can deliver a completion.
+
+    A live delegation (running / stalling / finalizing) will push its
+    completion onto the shared queue later, and that queue has exactly one
+    consumer per session: the process loop of the owning session. Treating
+    such a session as idle strands the summary until the service restarts,
+    so a failed lookup must not be the reason the loop stops.
+    """
+    try:
+        from tools.async_delegation import has_live_for_session
+        return bool(has_live_for_session(origin_ui_session_id=session_id))
+    except Exception:
+        logger.debug(
+            "[process_loop] live-delegation lookup failed for session=%s",
+            session_id[:12], exc_info=True,
+        )
+        return True
+
+
+def _process_loop_should_exit(session, session_id):
+    """Whether the session's process loop may stop after this tick.
+
+    The idle clock alone is not enough to decide that: it only advances when
+    the session itself does something, so a session that is merely waiting
+    for a long-running delegation looks idle. The loop has to keep polling
+    while that delegation is alive, because its completion arrives on the
+    shared queue and nobody else can deliver it.
+    """
+    try:
+        from app.api.config import get_idle_timeout
+        if time.time() - session._process_loop_last_active <= get_idle_timeout():
+            return False
+    except Exception:
+        logger.debug(
+            "[process_loop] idle-timeout lookup failed for session=%s",
+            session_id[:12], exc_info=True,
+        )
+        return False
+    return not _session_has_live_delegations(session_id)
+
+
 def _ensure_process_loop(session, session_id):
     """Ensure the session has exactly one active process loop."""
     if hasattr(session, '_process_loop_thread') and session._process_loop_thread and session._process_loop_thread.is_alive():
@@ -688,15 +730,19 @@ def _ensure_process_loop(session, session_id):
         _poll_count = 0
         while not session._process_loop_stop.wait(timeout=1.0):
             try:
-                from app.api.config import get_idle_timeout
-                if time.time() - session._process_loop_last_active > get_idle_timeout():
+                _poll_count += 1
+                # Drain before the exit decision: a completion that already
+                # sits on the shared queue has to be picked up before the loop
+                # may stop, otherwise it waits for a service restart to be
+                # replayed. The SDK publishes the event while the delegation
+                # is still finalizing, so draining first never misses one.
+                _drain_process_notifications_for_session(session, session_id)
+                if _process_loop_should_exit(session, session_id):
                     logger.debug("[process_loop] idle timeout for session=%s", session_id[:12])
                     break
-                _poll_count += 1
                 if _poll_count % 30 == 1:  # log every 30s
                     from tools.process_registry import process_registry
                     logger.debug("[process_loop] polling session=%s count=%d queue=%d", session_id[:12], _poll_count, process_registry.completion_queue.qsize())
-                _drain_process_notifications_for_session(session, session_id)
             except Exception as e:
                 logger.warning("[process_loop] error for session=%s: %s", session_id[:12], e)
         logger.debug("[process_loop] exited for session=%s", session_id[:12])
