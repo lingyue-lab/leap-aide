@@ -1303,6 +1303,7 @@
     border: 1px solid var(--border2);
     vertical-align: top;
     overflow-wrap: anywhere;
+    word-break: normal;
   }
 
   :is(.msg-body, .file-view-code .prose) th {
@@ -1311,7 +1312,7 @@
     text-align: left; /* override UA centering; td keeps GFM column alignment */
   }
 
-  /* GFM alignment markers arrive as align="" attributes; restore explicit
+  /* GFM alignment markers arrive as align="…" attributes; restore explicit
      center/right columns for both header and body cells. */
   :is(.msg-body, .file-view-code .prose) th[align="center"],
   :is(.msg-body, .file-view-code .prose) td[align="center"] {
@@ -1331,7 +1332,7 @@
 
   /* Keep inline code readable inside the 0.9em table; typography's 0.875em
      would compound to ~12.6px. */
-  :is(.msg-body, .file-view-code .prose) table code {
+  :is(.msg-body, .file-view-code .prose) table code:not(pre code) {
     font-size: 1em;
   }
 
