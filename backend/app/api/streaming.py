@@ -810,6 +810,12 @@ def _retry_pending_acks(session):
         pending = getattr(session, "_pending_acks", None)
         if not pending:
             return
+        # A completed-but-unacked delegation is not "live", so the idle clock
+        # is the only thing keeping the poller alive during the retry window.
+        # Refresh it here exactly like the busy branch does: without this, a
+        # non-default idle_timeout under T2 (~290s) exits the loop mid retry
+        # and strands the pending ack until the service restarts (issue #82).
+        session._process_loop_last_active = time.time()
         from tools.async_delegation import (
             complete_event_delivery,
             drop_completion_delivery,

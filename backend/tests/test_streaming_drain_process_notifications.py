@@ -565,9 +565,16 @@ def test_pending_ack_unresolved_after_drop_deadline(harness, caplog):
     # T1 over, T2 open: the drop is attempted, fails, entry retained.
     harness.monkeypatch.setattr(streaming, "_PENDING_ACK_T1_SECONDS", 0.0)
     harness.calls.clear()
+    # A completed-but-unacked delegation is not "live", so the idle clock is
+    # the only thing keeping the poller alive during the retry window: age it
+    # far past any idle timeout before this tick (final review Minor 2).
+    harness.session._process_loop_last_active = time.time() - 9999
     _drain_process_notifications_for_session(harness.session, SESSION_ID)
     assert ("drop", DELEGATION_ID, "claim-1") in harness.delivery_calls
     assert len(harness.session._pending_acks) == 1
+    # The retry pass must have refreshed the idle clock, or a non-default
+    # idle_timeout under T2 (~290s) would exit the poller mid retry-window.
+    assert harness.session._process_loop_last_active > time.time() - 5
 
     # T2 over: give up, remove, and leave the final attributable warning.
     harness.monkeypatch.setattr(streaming, "_PENDING_ACK_T2_SECONDS", 0.0)
@@ -587,6 +594,17 @@ def test_pending_ack_unresolved_after_drop_deadline(harness, caplog):
         and DELEGATION_ID in r.getMessage()
         and "attempts=2" in r.getMessage()
         for r in caplog.records
+    )
+
+
+def test_pending_ack_deadlines_stay_inside_claim_window():
+    """T1 and T2 are monkeypatched to 0.0 in the deadline tests, so nothing
+    else enforces the invariant their comment asserts: both deadlines must
+    stay inside the SDK's 300s claim freshness window (final review Minor 3)."""
+    assert (
+        streaming._PENDING_ACK_T1_SECONDS
+        < streaming._PENDING_ACK_T2_SECONDS
+        < 300
     )
 
 
