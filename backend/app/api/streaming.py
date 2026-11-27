@@ -781,6 +781,13 @@ def _cleanup_stream_after_run(session, stream_id):
         stream_manager.cleanup_by_stream_id(stream_id)
 
 
+# Ack retry deadlines, seconds measured from the first failure. Both stay
+# inside the SDK's 300s claim freshness window: T1 ends the `delivered`
+# attempts, T2 hard-stops the `dropped` fallback with headroom to spare.
+_PENDING_ACK_T1_SECONDS = 240.0
+_PENDING_ACK_T2_SECONDS = 290.0
+
+
 @dataclass
 class _PendingAck:
     """A delivered completion whose ack failed; retried across ticks (issue #82)."""
@@ -796,26 +803,54 @@ def _retry_pending_acks(session):
     """Retry acks the drain registered after a failed first attempt (issue #82).
 
     Called at the top of every tick, before the busy early return, so a
-    streaming turn cannot defer the ack. A failure keeps the entry for the
-    next tick; success removes it. Never requeues and never releases the
-    claim (issue #78): the report already reached the user.
+    streaming turn cannot defer the ack. Never requeues and never releases
+    the claim (issue #78): the report already reached the user.
     """
     try:
         pending = getattr(session, "_pending_acks", None)
         if not pending:
             return
-        from tools.async_delegation import complete_event_delivery
+        from tools.async_delegation import (
+            complete_event_delivery,
+            drop_completion_delivery,
+        )
+        now = time.time()
         for ack in list(pending):
-            ack.attempts += 1
-            try:
-                complete_event_delivery(ack.event, ack.claim)
-            except Exception:
-                continue
-            pending.remove(ack)
-            logger.warning(
-                "[drain] ack retried ok delegation_id=%s attempts=%d",
-                ack.delegation_id, ack.attempts,
-            )
+            elapsed = now - ack.first_failed_at
+            if elapsed < _PENDING_ACK_T1_SECONDS:
+                ack.attempts += 1
+                try:
+                    complete_event_delivery(ack.event, ack.claim)
+                except Exception:
+                    continue
+                pending.remove(ack)
+                logger.warning(
+                    "[drain] ack retried ok delegation_id=%s attempts=%d",
+                    ack.delegation_id, ack.attempts,
+                )
+            elif elapsed < _PENDING_ACK_T2_SECONDS:
+                # The report reached the user, so `delivered` is the honest
+                # state and is always tried first. Once T1 proves the write
+                # cannot land, `dropped` is the SDK's explicit "never replay"
+                # terminal: both helpers share the same WHERE predicate, so
+                # dropping only closes the restart-replay window instead of
+                # leaving the row pending forever (issue #82).
+                ack.attempts += 1
+                try:
+                    drop_completion_delivery(ack.delegation_id, ack.claim)
+                except Exception:
+                    continue
+                pending.remove(ack)
+                logger.warning(
+                    "[drain] ack fallback dropped delegation_id=%s attempts=%d",
+                    ack.delegation_id, ack.attempts,
+                )
+            else:
+                pending.remove(ack)
+                logger.warning(
+                    "[drain] ack unresolved delegation_id=%s attempts=%d",
+                    ack.delegation_id, ack.attempts,
+                )
     except ImportError:
         return
     except Exception as e:
