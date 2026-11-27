@@ -1282,12 +1282,14 @@
     color: var(--pre-text);
   }
 
-  /* Markdown tables — file/skill preview (issue #41).
-     Auto layout lets columns follow their content. overflow-wrap: anywhere
-     makes a long unbreakable token (an inline-code path) contribute almost
-     nothing to the column's min-content width, so it wraps inside its own
-     cell instead of widening the column and squeezing its neighbours. */
-  .file-view-code .prose table {
+  /* Markdown tables — chat (.msg-body), file preview & skill detail
+     (.file-view-code .prose) share one rule set (issue #54; layout origin
+     issue #41). Auto layout lets columns follow their content; overflow-wrap:
+     anywhere lets a long unbreakable token (an inline-code path) wrap inside
+     its own cell instead of widening the column; colors come from the
+     --border/--border2 theme tokens so light and dark themes both stay
+     visible. */
+  :is(.msg-body, .file-view-code .prose) table {
     table-layout: auto;
     width: 100%;
     border-collapse: collapse;
@@ -1295,39 +1297,41 @@
     font-size: 0.9em;
   }
 
-  .file-view-code .prose th,
-  .file-view-code .prose td {
+  :is(.msg-body, .file-view-code .prose) th,
+  :is(.msg-body, .file-view-code .prose) td {
     padding: 6px 12px;
     border: 1px solid var(--border2);
     vertical-align: top;
     overflow-wrap: anywhere;
   }
 
-  .file-view-code .prose th {
+  :is(.msg-body, .file-view-code .prose) th {
     background: color-mix(in srgb, var(--border) 70%, transparent);
     font-weight: 600;
     text-align: left; /* override UA centering; td keeps GFM column alignment */
   }
 
-  /* GFM alignment markers arrive as align="" attributes. The th rule above
-     forces headers left, so restore explicit center/right columns for both
-     header and body cells. */
-  .file-view-code .prose th[align="center"],
-  .file-view-code .prose td[align="center"] {
+  /* GFM alignment markers arrive as align="" attributes; restore explicit
+     center/right columns for both header and body cells. */
+  :is(.msg-body, .file-view-code .prose) th[align="center"],
+  :is(.msg-body, .file-view-code .prose) td[align="center"] {
     text-align: center;
   }
-  .file-view-code .prose th[align="right"],
-  .file-view-code .prose td[align="right"] {
+  :is(.msg-body, .file-view-code .prose) th[align="right"],
+  :is(.msg-body, .file-view-code .prose) td[align="right"] {
     text-align: right;
   }
 
-  .file-view-code .prose tbody tr:hover td {
+  :is(.msg-body, .file-view-code .prose) tbody tr:nth-child(even) {
+    background: color-mix(in srgb, var(--border) 25%, transparent);
+  }
+  :is(.msg-body, .file-view-code .prose) tbody tr:hover td {
     background: color-mix(in srgb, var(--border) 30%, transparent);
   }
 
   /* Keep inline code readable inside the 0.9em table; typography's 0.875em
      would compound to ~12.6px. */
-  .file-view-code .prose table code {
+  :is(.msg-body, .file-view-code .prose) table code {
     font-size: 1em;
   }
 
@@ -1410,37 +1414,6 @@
     border: none;
     border-top: 1px solid var(--border);
     margin: 14px 0;
-  }
-
-  .msg-body table {
-    table-layout: fixed;
-    border-collapse: collapse;
-    width: 100%;
-    margin: 8px 0;
-    font-size: 14px;
-  }
-
-  .msg-body th {
-    background: rgba(255, 255, 255, 0.07);
-    padding: 6px 10px;
-    text-align: left;
-    font-weight: 600;
-    border: 1px solid var(--border2);
-    word-break: break-word;
-    overflow-wrap: break-word;
-    vertical-align: top;
-  }
-
-  .msg-body td {
-    padding: 6px 10px;
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    word-break: break-word;
-    overflow-wrap: break-word;
-    vertical-align: top;
-  }
-
-  .msg-body tr:nth-child(even) {
-    background: rgba(255, 255, 255, 0.03);
   }
 
   /* Queue status bar */
