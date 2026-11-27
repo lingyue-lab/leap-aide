@@ -1,11 +1,16 @@
 /**
- * Pin the reasoning-effort trigger to the registered M3 glyph so it cannot
+ * Pin the reasoning-effort trigger to the registered glyph so it cannot
  * silently degrade to the "?" fallback again (Issue #43).
  *
  * The trigger used the unregistered icon name "exercise", so Icon warned and
  * fell back to HelpCircle — the composer footer showed a meaningless "?".
- * This test asserts the material-symbols glyph text and the absence of the
- * "Unknown icon name" dev warning at this call site.
+ * The author then ruled the trigger must use "bolt" (lucide Zap, matching the
+ * reasoning-effort menu items) because "psychology" collides with the
+ * memory-panel empty-state illustration.
+ *
+ * Both Zap and the HelpCircle fallback render as SVGs, so this test asserts the
+ * zap-specific lucide class (and the absence of the help-circle one) plus the
+ * absence of the "Unknown icon name" dev warning at this call site.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -98,14 +103,17 @@ describe('ChatComposer — reasoning effort trigger icon', () => {
     ) as unknown as typeof fetch;
   });
 
-  it('renders the psychology material glyph instead of the "?" fallback', async () => {
+  it('renders the zap (lucide Zap) glyph instead of the "?" fallback', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     render(<ChatComposer onSend={() => {}} onCancel={() => {}} />);
 
     const trigger = await screen.findByTitle('Reasoning Effort');
-    const glyph = trigger.querySelector('span.material-symbols-rounded');
-    expect(glyph).not.toBeNull();
-    expect(glyph?.textContent?.trim()).toBe('psychology');
+    // Zap and the HelpCircle fallback are both SVGs — assert the zap-specific
+    // lucide class and the absence of the fallback's marker instead of a bare
+    // "an svg exists" check.
+    const zap = trigger.querySelector('svg.lucide-zap');
+    expect(zap).not.toBeNull();
+    expect(trigger.querySelector('svg.lucide-help-circle')).toBeNull();
     expect(
       warn.mock.calls.map((c) => String(c[0])).join('\n'),
     ).not.toContain('Unknown icon name');
