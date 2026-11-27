@@ -840,6 +840,9 @@ def _drain_process_notifications_for_session(session, session_id):
             # Claim failed: there is no token to release (issue #81) — put the
             # event back and retry on the next tick.
             process_registry.completion_queue.put(event)
+            # Refresh the idle clock: otherwise the 3600s idle timeout would
+            # kill the poller before the next tick redelivers this event.
+            session._process_loop_last_active = time.time()
             logger.warning(
                 "[drain] claim failed, event requeued delegation_id=%s session=%s: %s",
                 delegation_id, session_id, e, exc_info=True,

@@ -6,6 +6,7 @@ driven synchronously and its call order asserted.
 """
 import queue
 import sqlite3
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -361,6 +362,10 @@ def test_claim_failure_requeues_event_and_next_tick_redelivers(harness, caplog):
     assert any(r.levelname == "WARNING" for r in caplog.records)
     assert DELEGATION_ID in caplog.text
     assert SESSION_ID in caplog.text
+
+    # The failed drain refreshed the idle clock so the 3600s idle timeout
+    # cannot kill the poller before the next tick redelivers the event.
+    assert harness.session._process_loop_last_active > time.time() - 5
 
     # Next tick: knob cleared, the event goes through the whole happy path.
     harness.knobs["claim_error"] = None
