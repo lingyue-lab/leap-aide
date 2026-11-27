@@ -133,6 +133,7 @@ def harness(monkeypatch):
     sm = FakeStreamManager(calls)
     th = FakeThreading(calls)
     knobs = {"claim": "claim-1", "claim_error": None, "complete_error": None, "release_error": None}
+    fake_delivery_state = {}
 
     def claim_event_delivery(event, consumer):
         calls.append("claim")
@@ -143,8 +144,11 @@ def harness(monkeypatch):
     def complete_event_delivery(event, claim):
         calls.append("complete")
         delivery_calls.append(("complete", claim))
+        delegation_id = str(event.get("delegation_id") or "")
+        fake_delivery_state.setdefault(delegation_id, "pending")
         if knobs["complete_error"] is not None:
             raise knobs["complete_error"]
+        fake_delivery_state[delegation_id] = "delivered"
 
     def release_event_delivery(event, claim):
         calls.append("release")
@@ -161,6 +165,7 @@ def harness(monkeypatch):
     return SimpleNamespace(
         calls=calls, session=session, registry=registry, sm=sm, th=th,
         delivery_calls=delivery_calls,
+        fake_delivery_state=fake_delivery_state,
         knobs=knobs, monkeypatch=monkeypatch,
     )
 
@@ -447,7 +452,7 @@ def test_thread_start_failure_rolls_back_with_warning(harness, caplog):
 
 
 def test_complete_failure_does_not_roll_back(harness, caplog):
-    """The ack failing after the thread started must not requeue: delivery happened."""
+    """The ack failing after the thread started must not requeue: delivery happened; the failed ack is retried on the next tick."""
     harness.registry.completion_queue.put(_event())
     harness.knobs["complete_error"] = RuntimeError("db locked")
     harness.calls.clear()
@@ -459,6 +464,57 @@ def test_complete_failure_does_not_roll_back(harness, caplog):
     assert "requeue" not in harness.calls
     assert harness.registry.completion_queue.qsize() == 0
     assert DELEGATION_ID in caplog.text
+
+    # The failed ack is registered for cross-tick retry: the row is still
+    # pending, the entry carries the real claim token, and the idle clock
+    # is refreshed so the 3600s timeout cannot kill the poller mid-window.
+    assert harness.fake_delivery_state[DELEGATION_ID] == "pending"
+    assert len(harness.session._pending_acks) == 1
+    ack = harness.session._pending_acks[0]
+    assert ack.delegation_id == DELEGATION_ID
+    assert ack.claim == "claim-1"
+    assert ack.attempts == 1
+    assert harness.session._process_loop_last_active > time.time() - 5
+
+    # Next tick, lock released: the registered ack is retried and lands
+    # delivered without any requeue or release.
+    harness.knobs["complete_error"] = None
+    harness.calls.clear()
+    with caplog.at_level("WARNING"):
+        _drain_process_notifications_for_session(harness.session, SESSION_ID)
+
+    assert harness.fake_delivery_state[DELEGATION_ID] == "delivered"
+    assert harness.session._pending_acks == []
+    assert "requeue" not in harness.calls
+    assert "release" not in harness.calls
+    assert any(
+        r.levelname == "WARNING"
+        and "ack retried ok" in r.getMessage()
+        and DELEGATION_ID in r.getMessage()
+        and "attempts=2" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_pending_ack_retries_before_busy_early_return(harness):
+    """A registered ack is retried at the top of the drain, before the busy
+    early return (issue #82): a streaming turn must not defer the ack."""
+    harness.registry.completion_queue.put(_event())
+    harness.knobs["complete_error"] = RuntimeError("db locked")
+    _drain_process_notifications_for_session(harness.session, SESSION_ID)
+    assert len(harness.session._pending_acks) == 1
+
+    harness.knobs["complete_error"] = None
+    harness.sm.busy_stream_id = "busy-sid"
+    harness.calls.clear()
+    harness.registry.drain_calls.clear()
+    _drain_process_notifications_for_session(harness.session, SESSION_ID)
+
+    # Retry first — before even the busy check — then the busy early return.
+    assert harness.calls == ["complete", "get_stream_id"]
+    assert harness.registry.drain_calls == []
+    assert harness.fake_delivery_state[DELEGATION_ID] == "delivered"
+    assert harness.session._pending_acks == []
 
 
 def test_outer_exception_logs_warning_with_session_id(harness, caplog):

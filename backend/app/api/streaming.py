@@ -13,6 +13,7 @@ import time
 import traceback
 import copy
 import uuid
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Optional
@@ -780,8 +781,50 @@ def _cleanup_stream_after_run(session, stream_id):
         stream_manager.cleanup_by_stream_id(stream_id)
 
 
+@dataclass
+class _PendingAck:
+    """A delivered completion whose ack failed; retried across ticks (issue #82)."""
+
+    event: dict
+    claim: str
+    delegation_id: str
+    first_failed_at: float
+    attempts: int = 1
+
+
+def _retry_pending_acks(session):
+    """Retry acks the drain registered after a failed first attempt (issue #82).
+
+    Called at the top of every tick, before the busy early return, so a
+    streaming turn cannot defer the ack. A failure keeps the entry for the
+    next tick; success removes it. Never requeues and never releases the
+    claim (issue #78): the report already reached the user.
+    """
+    try:
+        pending = getattr(session, "_pending_acks", None)
+        if not pending:
+            return
+        from tools.async_delegation import complete_event_delivery
+        for ack in list(pending):
+            ack.attempts += 1
+            try:
+                complete_event_delivery(ack.event, ack.claim)
+            except Exception:
+                continue
+            pending.remove(ack)
+            logger.warning(
+                "[drain] ack retried ok delegation_id=%s attempts=%d",
+                ack.delegation_id, ack.attempts,
+            )
+    except ImportError:
+        return
+    except Exception as e:
+        logger.warning("[drain] pending ack retry error: %s", e, exc_info=True)
+
+
 def _drain_process_notifications_for_session(session, session_id):
     """Deliver at most one completion event per tick; requeue the rest."""
+    _retry_pending_acks(session)
     if stream_manager.get_stream_id(session_id) is not None:
         # A turn is already streaming for this session. Popping the completion
         # here would consume its durable claim and drop the only in-process
@@ -907,8 +950,26 @@ def _drain_process_notifications_for_session(session, session_id):
             complete_event_delivery(event, claim)
         except Exception:
             logger.warning(
-                "[drain] ack failed delegation_id=%s", delegation_id, exc_info=True
+                "[drain] ack failed delegation_id=%s (attempt=1, retry scheduled)",
+                delegation_id, exc_info=True,
             )
+            # Delivery already happened: never requeue and never release
+            # (issue #78). Register the failed ack so the next tick retries
+            # it instead of leaving the row pending for restart replay
+            # (issue #82).
+            if getattr(session, "_pending_acks", None) is None:
+                session._pending_acks = []
+            session._pending_acks.append(
+                _PendingAck(
+                    event=event,
+                    claim=claim,
+                    delegation_id=delegation_id,
+                    first_failed_at=time.time(),
+                )
+            )
+            # Keep the poller alive across the retry window (issue #82),
+            # matching the claim-failure path above.
+            session._process_loop_last_active = time.time()
     except ImportError:
         pass
     except Exception as e:
