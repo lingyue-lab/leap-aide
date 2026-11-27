@@ -37,6 +37,7 @@ services:
 ```
 
 - From the repo root, run `bash scripts/ctl.sh start-docker -f /path/to/docker-compose.debug.yml <image-name>` to start the container; LeapAide comes up automatically once the container is running.
+- Multiple sessions may start debug containers at the same time; each one binds host port 8787, so take care to avoid port conflicts.
 
 Available images:
 

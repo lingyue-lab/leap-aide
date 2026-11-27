@@ -37,6 +37,7 @@ services:
 ```
 
 - 在根目录下执行 `bash scripts/ctl.sh start-docker -f /path/to/docker-compose.debug.yml <image-name>` 启动容器，容器启动后 LeapAide 自动拉起。
+- 多个 session 可能同时启动调试容器，均绑定宿主机 8787 端口，注意避免端口冲突。
 
 可用镜像：
 
