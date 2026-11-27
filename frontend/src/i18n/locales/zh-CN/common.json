@@ -154,7 +154,7 @@
       "approval_timeout": "审批超时",
       "approval_timeout_hint": "审批卡片自动拒绝的秒数。后端默认值: 60s，建议 ≤ 后端超时",
       "clarify_timeout": "澄清超时",
-      "clarify_timeout_hint": "澄清卡片自动选第一项的秒数。后端默认值: 600s，建议 ≤ 后端超时",
+      "clarify_timeout_hint": "等待用户 N 秒无回复后由模型自行判断继续；该值同时控制后端等待与澄清卡片自动关闭。",
       "default_reasoning_effort": "默认推理力度",
       "default_reasoning_effort_hint": "设置新会话的全局默认推理力度（config.yaml）",
       "sound_effects": "音效",

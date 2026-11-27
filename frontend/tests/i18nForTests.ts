@@ -78,7 +78,7 @@ void i18n
               approval_timeout: 'Approval Timeout',
               approval_timeout_hint: 'Auto-deny after N seconds',
               clarify_timeout: 'Clarify Timeout',
-              clarify_timeout_hint: 'Auto-pick after N seconds',
+              clarify_timeout_hint: 'Wait N seconds; on timeout the model continues on its own',
             },
           },
           add: 'Add',
