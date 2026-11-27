@@ -5,6 +5,8 @@ the stream manager and threading are all faked so a single drain tick can be
 driven synchronously and its call order asserted.
 """
 import queue
+import sqlite3
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -130,10 +132,12 @@ def harness(monkeypatch):
     registry = FakeRegistry(calls)
     sm = FakeStreamManager(calls)
     th = FakeThreading(calls)
-    knobs = {"claim": "claim-1", "complete_error": None, "release_error": None}
+    knobs = {"claim": "claim-1", "claim_error": None, "complete_error": None, "release_error": None}
 
     def claim_event_delivery(event, consumer):
         calls.append("claim")
+        if knobs["claim_error"] is not None:
+            raise knobs["claim_error"]
         return knobs["claim"]
 
     def complete_event_delivery(event, claim):
@@ -328,6 +332,50 @@ def test_claim_held_elsewhere_drops_local_copy(harness):
     assert "release" not in harness.calls
     assert "complete" not in harness.calls
     assert harness.th.created == []
+    assert harness.registry.completion_queue.qsize() == 0
+
+
+def test_claim_failure_requeues_event_and_next_tick_redelivers(harness, caplog):
+    """claim raising (e.g. db locked): requeue with an attributable warning,
+    release nothing, open no stream; the next tick redelivers end to end."""
+    event = _event()
+    harness.registry.completion_queue.put(event)
+    harness.knobs["claim_error"] = sqlite3.OperationalError("database is locked")
+    harness.calls.clear()
+
+    with caplog.at_level("WARNING"):
+        _drain_process_notifications_for_session(harness.session, SESSION_ID)
+
+    # The event is back in the shared queue, not lost in a local variable.
+    assert harness.registry.completion_queue.qsize() == 1
+    assert harness.registry.completion_queue.get_nowait() is event
+    # Same object back in the queue, unrecorded (existing test convention).
+    queue.Queue.put(harness.registry.completion_queue, event)
+
+    # No claim token exists, so nothing may be released and no stream may open.
+    assert "release" not in harness.calls
+    assert "begin_stream" not in harness.calls
+    assert "complete" not in harness.calls
+    assert harness.th.created == []
+
+    # The failure is attributable: WARNING level, delegation id + full session id.
+    assert any(r.levelname == "WARNING" for r in caplog.records)
+    assert DELEGATION_ID in caplog.text
+    assert SESSION_ID in caplog.text
+
+    # The failed drain refreshed the idle clock so the 3600s idle timeout
+    # cannot kill the poller before the next tick redelivers the event.
+    assert harness.session._process_loop_last_active > time.time() - 5
+
+    # Next tick: knob cleared, the event goes through the whole happy path.
+    harness.knobs["claim_error"] = None
+    harness.calls.clear()
+    _drain_process_notifications_for_session(harness.session, SESSION_ID)
+
+    assert harness.calls == [
+        "get_stream_id", "drain", "claim", "begin_stream", "thread_start", "complete",
+    ]
+    assert harness.delivery_calls == [("complete", "claim-1")]
     assert harness.registry.completion_queue.qsize() == 0
 
 
