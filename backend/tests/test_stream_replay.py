@@ -79,10 +79,17 @@ def test_clarify_resolved_marker_written_on_timeout():
     assert "'reason': 'timeout'" in branch or '"reason": "timeout"' in branch
 
 
-def test_backend_clarify_timeout_unchanged():
-    """The backend clarify wait stays at 120s (issue #21 scope ruling)."""
-    assert "timeout = 120" in STREAMING_SRC, \
-        "the hardcoded backend clarify timeout must not change with this fix"
+def test_backend_clarify_timeout_from_settings():
+    """The backend clarify wait comes from clarify_timeout_sec, not a hardcoded 120 (issue #91)."""
+    assert "get_clarify_timeout" in STREAMING_SRC, \
+        "streaming.py must read the clarify timeout from settings"
+    assert "timeout = 120" not in STREAMING_SRC, \
+        "the hardcoded 120s clarify timeout must be gone (issue #91)"
+    fn_start = STREAMING_SRC.find("def _clarify_callback_impl")
+    assert fn_start != -1, "clarify bridge must exist in streaming.py"
+    fn_src = STREAMING_SRC[fn_start:fn_start + 1200]
+    assert "get_clarify_timeout()" in fn_src, \
+        "_clarify_callback_impl must call get_clarify_timeout() on every entry"
 
 
 def test_filter_drops_resolved_clarify_and_marker():
