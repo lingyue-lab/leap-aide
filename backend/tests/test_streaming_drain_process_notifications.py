@@ -408,32 +408,47 @@ def test_non_persistent_event_delivers_with_empty_claim(harness):
     assert len(harness.th.created) == 1
 
 
-def test_begin_stream_race_rolls_back(harness):
+def test_begin_stream_race_rolls_back(harness, caplog):
     """begin_stream returns None: release strictly before requeue, no thread."""
     event = _event()
     harness.registry.completion_queue.put(event)
     harness.sm.begin_result = None
     harness.calls.clear()
 
-    _drain_process_notifications_for_session(harness.session, SESSION_ID)
+    with caplog.at_level("INFO"):
+        _drain_process_notifications_for_session(harness.session, SESSION_ID)
 
     assert harness.calls.index("release") < harness.calls.index("requeue")
     assert "complete" not in harness.calls
     assert harness.th.created == []
     assert harness.registry.completion_queue.get_nowait() is event
+    assert any(
+        r.levelname == "INFO"
+        and "session busy" in r.getMessage()
+        and SESSION_ID[:12] in r.getMessage()
+        for r in caplog.records
+    )
 
 
-def test_begin_stream_exception_rolls_back(harness):
+def test_begin_stream_exception_rolls_back(harness, caplog):
     """begin_stream raising (not just returning None) must not lose the event."""
     event = _event()
     harness.registry.completion_queue.put(event)
     harness.sm.begin_error = RuntimeError("lock broken")
     harness.calls.clear()
 
-    _drain_process_notifications_for_session(harness.session, SESSION_ID)
+    with caplog.at_level("WARNING"):
+        _drain_process_notifications_for_session(harness.session, SESSION_ID)
 
     assert harness.calls.index("release") < harness.calls.index("requeue")
     assert harness.registry.completion_queue.get_nowait() is event
+    assert any(
+        r.levelname == "WARNING"
+        and "begin_stream raised" in r.getMessage()
+        and DELEGATION_ID in r.getMessage()
+        and SESSION_ID[:12] in r.getMessage()
+        for r in caplog.records
+    )
 
 
 def test_thread_start_failure_rolls_back_with_warning(harness, caplog):
@@ -456,6 +471,13 @@ def test_thread_start_failure_rolls_back_with_warning(harness, caplog):
     assert harness.calls.index("cleanup") < harness.calls.index("release") < harness.calls.index("requeue")
     assert harness.registry.completion_queue.get_nowait() is event
     assert DELEGATION_ID in caplog.text
+    assert any(
+        r.levelname == "WARNING"
+        and "failed to start stream" in r.getMessage()
+        and DELEGATION_ID in r.getMessage()
+        and SESSION_ID[:12] in r.getMessage()
+        for r in caplog.records
+    )
     assert any(r.levelname == "WARNING" for r in caplog.records)
 
 
@@ -467,6 +489,13 @@ def test_complete_failure_does_not_roll_back(harness, caplog):
 
     with caplog.at_level("WARNING"):
         _drain_process_notifications_for_session(harness.session, SESSION_ID)
+        assert any(
+            r.levelname == "WARNING"
+            and "ack failed" in r.getMessage()
+            and DELEGATION_ID in r.getMessage()
+            and SESSION_ID[:12] in r.getMessage()
+            for r in caplog.records
+        )
 
     assert "release" not in harness.calls
     assert "requeue" not in harness.calls
