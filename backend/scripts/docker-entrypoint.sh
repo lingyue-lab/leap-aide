@@ -420,6 +420,26 @@ if [ -d /app/skills ]; then
   sudo env HERMES_HOME="$HERMES_HOME" bash /app/backend/scripts/install-skills.sh \
     --source /app/skills || echo "!! WARNING: install-skills.sh failed (continuing)"
 fi
+# LeapAide-managed default plugins (issue #79): merge the image seed's
+# plugins/ tree into $HERMES_HOME/plugins. The seed copy above skips existing
+# top-level entries, so an upgrade volume with its own plugins/ dir would
+# never receive the image's plugins — this runs on every boot instead.
+# Idempotent; respects user-owned (unmanaged) dirs. Same sudo-env pattern as
+# install-skills.sh above (sudo resets the environment).
+if [ -d "$_seed/plugins" ]; then
+  echo "-- Installing LeapAide-managed plugins from $_seed/plugins"
+  sudo env HERMES_HOME="$HERMES_HOME" bash /app/backend/scripts/install-plugins.sh \
+    --source "$_seed/plugins" || echo "!! WARNING: install-plugins.sh failed (continuing)"
+fi
+# plugins.enabled merge: the seed config carries the build-time enabled list,
+# but an upgrade volume keeps its own config.yaml (seed copy never overwrites
+# existing entries) — append the missing names so the copied plugins actually
+# load. Preserves every user entry; rewrites the file only when changed.
+if [ -f "$_seed/config.yaml" ]; then
+  sudo python3 /app/backend/scripts/merge_plugins_config.py \
+    "$_seed/config.yaml" "$HERMES_HOME/config.yaml" \
+    || echo "!! WARNING: merge_plugins_config.py failed (continuing)"
+fi
 # Credential hygiene on the runtime copy (the seed .env is world-readable so
 # the cicd stage can import env_loader without root; the runtime copy must not be).
 [ -f "$HERMES_HOME/.env" ] && sudo chmod 600 "$HERMES_HOME/.env"
