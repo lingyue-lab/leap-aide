@@ -22,6 +22,7 @@ import sys
 import time
 import urllib.request
 import urllib.error
+import warnings
 import pytest
 
 # ── Repo root discovery ────────────────────────────────────────────────────
@@ -404,6 +405,51 @@ def _wait_for_server(base, timeout=20):
         except Exception:
             time.sleep(0.3)
     return False
+
+
+def _warm_models_cache(base: str, budget_s: float = 120.0, poll_s: float = 1.0) -> bool:
+    """Block until GET {base}/api/models reports a fully built catalog.
+
+    Polls the endpoint until the payload is no longer flagged ``building``
+    (issue #16 degrade flag): the server answers a degraded payload after its
+    own 30s wait bound while the build keeps running, so a single GET is not
+    proof of warmth. Soft-fails by design (issue #93 acceptance 4): on
+    network error, HTTP error, or budget exhaustion it emits a
+    RuntimeWarning and returns False -- never raises, never skips anything.
+    A single request may overrun the budget by at most its own timeout
+    (35s > the server's 30s wait bound).
+    """
+    deadline = time.time() + budget_s
+    last_err: Exception | None = None
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(base + "/api/models", timeout=35.0) as r:
+                payload = json.loads(r.read())
+            if not payload.get("building"):
+                return True
+        except Exception as exc:  # soft-fail by design: warn and keep polling
+            last_err = exc
+        time.sleep(poll_s)
+    warnings.warn(
+        f"models warm-up did not complete within {budget_s}s at {base} "
+        f"({last_err or 'still building'}) -- tests continue unwarmed",
+        RuntimeWarning,
+        stacklevel=2,
+    )
+    return False
+
+
+@pytest.fixture
+def models_warmed():
+    """Warm the test server's model catalog before the test (issue #93).
+
+    Function-scoped on purpose: a config change mid-batch invalidates the
+    server-side catalog, and each models-touching test re-warms in that case
+    (a warm GET costs ~ms once the cache is hot). Soft-fail lives inside
+    _warm_models_cache -- setup never fails here (spec section 6-4).
+    """
+    _warm_models_cache(TEST_BASE)
+    yield
 
 
 # ── Session-scoped test server ────────────────────────────────────────────────
