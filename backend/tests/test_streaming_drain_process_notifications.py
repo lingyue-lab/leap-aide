@@ -132,7 +132,8 @@ def harness(monkeypatch):
     registry = FakeRegistry(calls)
     sm = FakeStreamManager(calls)
     th = FakeThreading(calls)
-    knobs = {"claim": "claim-1", "claim_error": None, "complete_error": None, "release_error": None}
+    knobs = {"claim": "claim-1", "claim_error": None, "complete_error": None, "release_error": None, "drop_error": None}
+    fake_delivery_state = {}
 
     def claim_event_delivery(event, consumer):
         calls.append("claim")
@@ -143,8 +144,11 @@ def harness(monkeypatch):
     def complete_event_delivery(event, claim):
         calls.append("complete")
         delivery_calls.append(("complete", claim))
+        delegation_id = str(event.get("delegation_id") or "")
+        fake_delivery_state.setdefault(delegation_id, "pending")
         if knobs["complete_error"] is not None:
             raise knobs["complete_error"]
+        fake_delivery_state[delegation_id] = "delivered"
 
     def release_event_delivery(event, claim):
         calls.append("release")
@@ -152,15 +156,24 @@ def harness(monkeypatch):
         if knobs["release_error"] is not None:
             raise knobs["release_error"]
 
+    def drop_completion_delivery(delegation_id, claim_id):
+        calls.append("drop")
+        delivery_calls.append(("drop", delegation_id, claim_id))
+        if knobs["drop_error"] is not None:
+            raise knobs["drop_error"]
+        fake_delivery_state[delegation_id] = "dropped"
+
     monkeypatch.setattr(process_registry_module, "process_registry", registry)
     monkeypatch.setattr(async_delegation, "claim_event_delivery", claim_event_delivery)
     monkeypatch.setattr(async_delegation, "complete_event_delivery", complete_event_delivery)
     monkeypatch.setattr(async_delegation, "release_event_delivery", release_event_delivery)
+    monkeypatch.setattr(async_delegation, "drop_completion_delivery", drop_completion_delivery)
     monkeypatch.setattr(streaming, "stream_manager", sm)
     monkeypatch.setattr(streaming, "threading", SimpleNamespace(Thread=th.Thread))
     return SimpleNamespace(
         calls=calls, session=session, registry=registry, sm=sm, th=th,
         delivery_calls=delivery_calls,
+        fake_delivery_state=fake_delivery_state,
         knobs=knobs, monkeypatch=monkeypatch,
     )
 
@@ -447,7 +460,7 @@ def test_thread_start_failure_rolls_back_with_warning(harness, caplog):
 
 
 def test_complete_failure_does_not_roll_back(harness, caplog):
-    """The ack failing after the thread started must not requeue: delivery happened."""
+    """The ack failing after the thread started must not requeue: delivery happened; the failed ack is retried on the next tick."""
     harness.registry.completion_queue.put(_event())
     harness.knobs["complete_error"] = RuntimeError("db locked")
     harness.calls.clear()
@@ -459,6 +472,140 @@ def test_complete_failure_does_not_roll_back(harness, caplog):
     assert "requeue" not in harness.calls
     assert harness.registry.completion_queue.qsize() == 0
     assert DELEGATION_ID in caplog.text
+
+    # The failed ack is registered for cross-tick retry: the row is still
+    # pending, the entry carries the real claim token, and the idle clock
+    # is refreshed so the 3600s timeout cannot kill the poller mid-window.
+    assert harness.fake_delivery_state[DELEGATION_ID] == "pending"
+    assert len(harness.session._pending_acks) == 1
+    ack = harness.session._pending_acks[0]
+    assert ack.delegation_id == DELEGATION_ID
+    assert ack.claim == "claim-1"
+    assert ack.attempts == 1
+    assert harness.session._process_loop_last_active > time.time() - 5
+
+    # Next tick, lock released: the registered ack is retried and lands
+    # delivered without any requeue or release.
+    harness.knobs["complete_error"] = None
+    harness.calls.clear()
+    with caplog.at_level("WARNING"):
+        _drain_process_notifications_for_session(harness.session, SESSION_ID)
+
+    assert harness.fake_delivery_state[DELEGATION_ID] == "delivered"
+    assert harness.session._pending_acks == []
+    assert "requeue" not in harness.calls
+    assert "release" not in harness.calls
+    assert any(
+        r.levelname == "WARNING"
+        and "ack retried ok" in r.getMessage()
+        and DELEGATION_ID in r.getMessage()
+        and "attempts=2" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_pending_ack_retries_before_busy_early_return(harness):
+    """A registered ack is retried at the top of the drain, before the busy
+    early return (issue #82): a streaming turn must not defer the ack."""
+    harness.registry.completion_queue.put(_event())
+    harness.knobs["complete_error"] = RuntimeError("db locked")
+    _drain_process_notifications_for_session(harness.session, SESSION_ID)
+    assert len(harness.session._pending_acks) == 1
+
+    harness.knobs["complete_error"] = None
+    harness.sm.busy_stream_id = "busy-sid"
+    harness.calls.clear()
+    harness.registry.drain_calls.clear()
+    _drain_process_notifications_for_session(harness.session, SESSION_ID)
+
+    # Retry first — before even the busy check — then the busy early return.
+    assert harness.calls == ["complete", "get_stream_id"]
+    assert harness.registry.drain_calls == []
+    assert harness.fake_delivery_state[DELEGATION_ID] == "delivered"
+    assert harness.session._pending_acks == []
+
+
+def test_complete_failure_falls_back_to_drop_after_deadline(harness, caplog):
+    """Past T1 with complete still failing: fall back to the terminal drop
+    using the real claim token; the row leaves pending for good (issue #82)."""
+    harness.registry.completion_queue.put(_event())
+    harness.knobs["complete_error"] = RuntimeError("db locked")
+    _drain_process_notifications_for_session(harness.session, SESSION_ID)
+    assert harness.fake_delivery_state[DELEGATION_ID] == "pending"
+
+    # The delivered window (T1) is over; the drop window (T2) is open.
+    harness.monkeypatch.setattr(streaming, "_PENDING_ACK_T1_SECONDS", 0.0)
+    harness.calls.clear()
+    with caplog.at_level("WARNING"):
+        _drain_process_notifications_for_session(harness.session, SESSION_ID)
+
+    assert ("drop", DELEGATION_ID, "claim-1") in harness.delivery_calls
+    assert harness.fake_delivery_state[DELEGATION_ID] == "dropped"
+    assert harness.session._pending_acks == []
+    assert "complete" not in harness.calls  # past T1: stop trying delivered
+    assert "requeue" not in harness.calls
+    assert "release" not in harness.calls
+    assert any(
+        r.levelname == "WARNING"
+        and "ack fallback dropped" in r.getMessage()
+        and DELEGATION_ID in r.getMessage()
+        and "attempts=2" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_pending_ack_unresolved_after_drop_deadline(harness, caplog):
+    """Past T2 with drop still failing: remove the entry and log the final
+    warning instead of accumulating retries forever (issue #82, spec 6.3)."""
+    harness.registry.completion_queue.put(_event())
+    harness.knobs["complete_error"] = RuntimeError("db locked")
+    harness.knobs["drop_error"] = RuntimeError("db locked")
+    _drain_process_notifications_for_session(harness.session, SESSION_ID)
+
+    # T1 over, T2 open: the drop is attempted, fails, entry retained.
+    harness.monkeypatch.setattr(streaming, "_PENDING_ACK_T1_SECONDS", 0.0)
+    harness.calls.clear()
+    # A completed-but-unacked delegation is not "live", so the idle clock is
+    # the only thing keeping the poller alive during the retry window: age it
+    # far past any idle timeout before this tick (final review Minor 2).
+    harness.session._process_loop_last_active = time.time() - 9999
+    _drain_process_notifications_for_session(harness.session, SESSION_ID)
+    assert ("drop", DELEGATION_ID, "claim-1") in harness.delivery_calls
+    assert len(harness.session._pending_acks) == 1
+    # The retry pass must have refreshed the idle clock, or a non-default
+    # idle_timeout under T2 (~290s) would exit the poller mid retry-window.
+    assert harness.session._process_loop_last_active > time.time() - 5
+
+    # T2 over: give up, remove, and leave the final attributable warning.
+    harness.monkeypatch.setattr(streaming, "_PENDING_ACK_T2_SECONDS", 0.0)
+    harness.calls.clear()
+    with caplog.at_level("WARNING"):
+        _drain_process_notifications_for_session(harness.session, SESSION_ID)
+
+    assert harness.session._pending_acks == []
+    assert harness.fake_delivery_state[DELEGATION_ID] == "pending"
+    assert "complete" not in harness.calls
+    assert "drop" not in harness.calls
+    assert "requeue" not in harness.calls
+    assert "release" not in harness.calls
+    assert any(
+        r.levelname == "WARNING"
+        and "ack unresolved" in r.getMessage()
+        and DELEGATION_ID in r.getMessage()
+        and "attempts=2" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_pending_ack_deadlines_stay_inside_claim_window():
+    """T1 and T2 are monkeypatched to 0.0 in the deadline tests, so nothing
+    else enforces the invariant their comment asserts: both deadlines must
+    stay inside the SDK's 300s claim freshness window (final review Minor 3)."""
+    assert (
+        streaming._PENDING_ACK_T1_SECONDS
+        < streaming._PENDING_ACK_T2_SECONDS
+        < 300
+    )
 
 
 def test_outer_exception_logs_warning_with_session_id(harness, caplog):
