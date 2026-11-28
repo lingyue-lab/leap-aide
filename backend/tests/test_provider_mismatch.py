@@ -100,7 +100,7 @@ class TestStreamingAuthErrorDetection:
 
 # ── 2. /api/models: active_provider in response ──────────────────────────────
 
-def test_api_models_includes_active_provider():
+def test_api_models_includes_active_provider(models_warmed):
     """/api/models must include 'active_provider' key in response."""
     with urllib.request.urlopen(BASE + "/api/models", timeout=10) as r:
         data = json.loads(r.read())

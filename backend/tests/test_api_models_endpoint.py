@@ -4,8 +4,14 @@ response shape, default_model, no-duplicate-ids, unlisted-model preservation.
 """
 import json, pathlib, urllib.error, urllib.request, urllib.parse
 
+import pytest
+
 from tests._pytest_port import BASE
 from tests._test_helpers import get, post
+
+# Warm the server-side catalog build before every test in this module
+# (issue #93): the shared 10s get() budget must not absorb the cold build.
+pytestmark = pytest.mark.usefixtures("models_warmed")
 
 
 # ── /api/models endpoint ──────────────────────────────────────────────────

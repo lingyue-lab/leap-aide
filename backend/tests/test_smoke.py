@@ -16,7 +16,12 @@ Run via:
     ./scripts/run-test.sh smoke         # anywhere else — auto ssh-jumps
 
 These tests must each complete in well under a second and must not depend
-on hermes-agent SDK modules (so they are guaranteed to run on every machine).
+on hermes-agent SDK modules (so they are guaranteed to run on every
+machine) — with one explicit exception: `test_models_endpoint_responds` is
+this file's only network-dependent case. It requests /api/models, which is
+pre-warmed via the `models_warmed` fixture and may legitimately take
+several seconds (issue #93); every other test here stays sub-second and off
+the external network.
 """
 import json
 import os
@@ -94,8 +99,11 @@ def test_session_create_then_delete(cleanup_test_sessions):
     assert fetched["session"]["session_id"] == sid
 
 
-def test_models_endpoint_responds():
-    """GET /api/models responds (shape may vary — just confirm 200)."""
+def test_models_endpoint_responds(models_warmed):
+    """GET /api/models responds (shape may vary — just confirm 200).
+
+    models_warmed pre-warms the cold catalog build before the 5s assertion (issue #93).
+    """
     data, status = _get("/api/models")
     assert status == 200, f"/api/models returned {status}: {data}"
     # response is an object (provider -> list mapping)
