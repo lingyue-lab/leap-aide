@@ -1458,7 +1458,11 @@ def _run_agent_streaming(session_id, msg_text, model, workspace, stream_id, atta
 
         def _clarify_callback_impl(question, choices, sid, cancel_evt, put_event):
             """Bridge Hermes clarify prompts to the WebUI."""
-            timeout = 120
+            # Issue #91: clarify_timeout_sec is the single source of truth;
+            # re-read on every entry so settings changes take effect without
+            # a restart. get_clarify_timeout() falls back to 600 on bad values.
+            from app.api.config import get_clarify_timeout
+            timeout = get_clarify_timeout()
             choices_list = [str(choice) for choice in (choices or [])]
             data = {
                 'question': str(question or ''),

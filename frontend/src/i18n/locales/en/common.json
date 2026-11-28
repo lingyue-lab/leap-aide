@@ -154,7 +154,7 @@
       "approval_timeout": "Approval Timeout",
       "approval_timeout_hint": "Auto-deny after N seconds. Backend default: 60s. Keep this ≤ backend timeout.",
       "clarify_timeout": "Clarify Timeout",
-      "clarify_timeout_hint": "Auto-pick first choice after N seconds. Backend default: 600s. Keep this ≤ backend timeout.",
+      "clarify_timeout_hint": "Wait N seconds for a reply; on timeout the model continues on its own. Same value drives the backend wait and the card's auto-dismiss.",
       "default_reasoning_effort": "Default Reasoning Effort",
       "default_reasoning_effort_hint": "Set the global default reasoning effort for new sessions (config.yaml)",
       "sound_effects": "Sound effects",

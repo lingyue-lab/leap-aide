@@ -3437,6 +3437,7 @@ _SETTINGS_DEFAULTS = {
     "password_hash": None,  # PBKDF2-HMAC-SHA256 hash; None = auth disabled
     "default_mode": "manual",  # approval mode for new sessions: manual | smart | yolo
     "session_ttl": "86400",  # login cookie TTL in seconds (default 24h)
+    "clarify_timeout_sec": "600",  # clarify prompt wait in seconds (issue #91)
 }
 # Keys never served again: each belonged to a feature that has been removed.
 # They are dropped on read and purged from settings.json.
@@ -3606,6 +3607,21 @@ def load_settings() -> dict:
         return result
 
 
+def get_clarify_timeout() -> int:
+    """Clarify prompt wait in seconds; clarify_timeout_sec is the single source of truth (issue #91).
+
+    Falls back to 600 on missing/invalid values and clamps to 86400 so a
+    hand-edited settings.json can never crash or hang the clarify callback.
+    """
+    try:
+        value = int(load_settings().get("clarify_timeout_sec", "600"))
+    except (ImportError, ValueError, TypeError):
+        return 600
+    if value < 1:
+        return 600
+    return min(value, 86400)
+
+
 # 默认 idle 时长：60分钟
 DEFAULT_IDLE_TIMEOUT = 3600  # 秒
 
@@ -3690,6 +3706,15 @@ def save_settings(settings: dict) -> dict:
                     if ttl_int < 300 or ttl_int > 2592000:
                         continue
                     v = str(ttl_int)
+                except (ValueError, TypeError):
+                    continue
+            # Validate clarify_timeout_sec: integer seconds, 1 to 86400 (issue #91)
+            if k == "clarify_timeout_sec":
+                try:
+                    ct_int = int(v)
+                    if ct_int < 1 or ct_int > 86400:
+                        continue
+                    v = str(ct_int)
                 except (ValueError, TypeError):
                     continue
             # Coerce bool keys
