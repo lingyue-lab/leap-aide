@@ -225,7 +225,7 @@ from app.api.streaming import _abandon_completion_delivery
 def test_abandon_delivery_order_with_stream(harness):
     """Rollback order is cleanup -> release -> requeue; nothing else."""
     event = _event()
-    _abandon_completion_delivery(event, "claim-1", harness.session, stream_id="sid-1234")
+    _abandon_completion_delivery(event, "claim-1", stream_id="sid-1234")
 
     assert harness.calls == ["cleanup", "release", "requeue"]
     assert harness.delivery_calls == [("release", "claim-1")]
@@ -235,7 +235,7 @@ def test_abandon_delivery_order_with_stream(harness):
 def test_abandon_delivery_order_without_stream(harness):
     """Without a stream there is nothing to clean; release still precedes requeue."""
     event = _event()
-    _abandon_completion_delivery(event, "claim-1", harness.session)
+    _abandon_completion_delivery(event, "claim-1")
 
     assert harness.calls == ["release", "requeue"]
     assert harness.delivery_calls == [("release", "claim-1")]

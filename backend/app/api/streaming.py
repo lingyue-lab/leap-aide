@@ -755,7 +755,7 @@ def _ensure_process_loop(session, session_id):
     session._process_loop_thread.start()
 
 
-def _abandon_completion_delivery(event, claim, session, stream_id=None):
+def _abandon_completion_delivery(event, claim, stream_id=None):
     """Undo a claimed-but-undelivered completion. Order matters.
 
     Requeueing before releasing would let another consumer pop the copy while
@@ -946,7 +946,7 @@ def _drain_process_notifications_for_session(session, session_id):
             logger.warning(
                 "[drain] begin_stream raised delegation_id=%s", delegation_id, exc_info=True
             )
-            _abandon_completion_delivery(event, claim, session)
+            _abandon_completion_delivery(event, claim)
             return
         if sid is None:
             session._process_loop_last_active = time.time()
@@ -954,7 +954,7 @@ def _drain_process_notifications_for_session(session, session_id):
                 "[drain] session busy, completion requeued delegation_id=%s session=%s",
                 delegation_id, session_id[:12],
             )
-            _abandon_completion_delivery(event, claim, session)
+            _abandon_completion_delivery(event, claim)
             return
 
         try:
@@ -983,7 +983,7 @@ def _drain_process_notifications_for_session(session, session_id):
             logger.warning(
                 "[drain] failed to start stream delegation_id=%s", delegation_id, exc_info=True
             )
-            _abandon_completion_delivery(event, claim, session, stream_id=sid)
+            _abandon_completion_delivery(event, claim, stream_id=sid)
             return
 
         session._process_loop_last_active = time.time()
